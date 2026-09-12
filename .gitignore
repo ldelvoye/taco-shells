@@ -1,0 +1,5 @@
+# Throwaway build tree: VSCodium clone, vscode checkout, build output.
+# Rebuildable from upstream.json at any time.
+.build/
+
+.DS_Store
