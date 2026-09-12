@@ -1,0 +1,13 @@
+version: 2
+
+# Taqueria has no dependency manifest of its own: the npm tree lives inside the
+# throwaway vscode checkout under .build/, regenerated from upstream.json each
+# build. The only versions this repo actually owns are the actions its workflows
+# pin. The VSCodium pin itself is watched by check-upstream.yml instead.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore

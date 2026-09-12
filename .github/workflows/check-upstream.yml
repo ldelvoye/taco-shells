@@ -1,0 +1,60 @@
+# Taqueria pins a VSCodium release in upstream.json. Nothing else watches that
+# pin, so this opens an issue when VSCodium ships a newer stable release.
+name: Check upstream VSCodium
+
+on:
+  schedule:
+    # Weekly. VSCodium tracks VS Code's roughly monthly stable cadence.
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Compare the pin against VSCodium's latest stable
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          pinned=$(jq -r '.vscodium.tag' upstream.json)
+          latest=$(gh release view --repo VSCodium/vscodium --json tagName --jq '.tagName')
+
+          echo "pinned: ${pinned}"
+          echo "latest: ${latest}"
+
+          if [ "${pinned}" = "${latest}" ]; then
+            echo "Up to date."
+            exit 0
+          fi
+
+          # One open issue per version, so a weekly run does not pile up duplicates.
+          open_count=$(gh issue list --state open --search "${latest} in:title" --json number --jq 'length')
+          if [ "${open_count}" != "0" ]; then
+            echo "Issue already open for ${latest}."
+            exit 0
+          fi
+
+          # Built line by line rather than with a heredoc: inside a YAML block
+          # scalar every line is indented, and an indented terminator never ends
+          # a heredoc.
+          {
+            printf '`upstream.json` pins VSCodium `%s`. The latest stable release is `%s`.\n\n' "${pinned}" "${latest}"
+            printf 'Rebasing is elective, since nothing updates unless a build is run. Take it when there is a reason: a terminal feature worth having, or a notable Electron security release.\n\n'
+            printf 'To move the pin:\n\n'
+            printf '1. Bump `.vscodium.tag` in `upstream.json`, and `.vscode` to match that tag'"'"'s `upstream/stable.json`.\n'
+            printf '2. Re-resolve any of our patches that no longer apply. VSCodium'"'"'s `dev/update_patches.sh` walks conflicts one at a time.\n'
+            printf '3. Rebuild and launch-test before keeping it.\n\n'
+            printf '[Release notes](https://github.com/VSCodium/vscodium/releases/tag/%s)\n' "${latest}"
+          } > issue-body.md
+
+          gh issue create \
+            --title "Upstream VSCodium ${latest} is available (pinned: ${pinned})" \
+            --body-file issue-body.md
