@@ -1,0 +1,15 @@
+{
+  "nameShort": "Taqueria",
+  "nameLong": "Taqueria",
+  "applicationName": "taco",
+  "dataFolderName": ".taqueria",
+  "sharedDataFolderName": ".taqueria-shared",
+  "urlProtocol": "taqueria",
+  "darwinBundleIdentifier": "com.ldelvoye.taqueria",
+  "serverApplicationName": "taco-server",
+  "serverDataFolderName": ".taqueria-server",
+  "tunnelApplicationName": "taco-tunnel",
+  "licenseUrl": "https://github.com/ldelvoye/taqueria/blob/main/LICENSE",
+  "reportIssueUrl": "https://github.com/ldelvoye/taqueria/issues/new",
+  "downloadUrl": "https://github.com/ldelvoye/taqueria"
+}
