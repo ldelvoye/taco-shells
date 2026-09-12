@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Taqueria app icon. Full-bleed 1024 artwork including its own rounded shape,
+  because the prompt is knocked through the tortilla to the ground behind it:
+  composited onto VSCodium's template_macos.png the knockout would fall on
+  Apple's squircle instead and the prompt would disappear. Render with
+  build_darwin_main's "no-template" path.
+
+  The corner is a cubic approximation of macOS's continuous-curvature squircle:
+  an 824 icon area inset by 100, a 190 corner extent, and handles at 0.42 of it
+  rather than a circular arc's 0.552. Close at 1024, not identical to Apple's
+  shape.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <clipPath id="squircle">
+      <path d="M290 100 L734 100 C814 100 924 210 924 290 L924 734 C924 814 814 924 734 924 L290 924 C210 924 100 814 100 734 L100 290 C100 210 210 100 290 100 Z"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#squircle)">
+    <!-- Artwork is authored against a full 1024 square, then inset to the 824 icon area. -->
+    <g transform="translate(100 100) scale(0.8047)">
+      <rect width="1024" height="1024" fill="#2B211C"/>
+
+      <!-- Lettuce, riding above the fold -->
+      <circle cx="196" cy="560" r="76" fill="#5E8C28"/>
+      <circle cx="286" cy="466" r="82" fill="#7FB239"/>
+      <circle cx="398" cy="404" r="80" fill="#5E8C28"/>
+      <circle cx="512" cy="382" r="84" fill="#7FB239"/>
+      <circle cx="626" cy="402" r="80" fill="#5E8C28"/>
+      <circle cx="738" cy="466" r="82" fill="#7FB239"/>
+      <circle cx="828" cy="560" r="76" fill="#5E8C28"/>
+
+      <!-- Salsa, above the lettuce line -->
+      <circle cx="232" cy="452" r="38" fill="#C81E5B"/>
+      <circle cx="352" cy="356" r="36" fill="#C81E5B"/>
+      <circle cx="512" cy="308" r="38" fill="#C81E5B"/>
+      <circle cx="672" cy="354" r="36" fill="#C81E5B"/>
+      <circle cx="792" cy="452" r="38" fill="#C81E5B"/>
+
+      <!-- Tortilla: dome with a flat, slightly rounded base -->
+      <path d="M152 690 A360 300 0 0 1 872 690 L872 706 A26 26 0 0 1 846 732 L178 732 A26 26 0 0 1 152 706 Z" fill="#F0902F"/>
+
+      <!-- Toasted specks, kept right of the prompt so they do not crowd it -->
+      <circle cx="704" cy="556" r="20" fill="#FFC24A"/>
+      <circle cx="772" cy="612" r="15" fill="#FFC24A"/>
+      <circle cx="722" cy="664" r="13" fill="#FFC24A"/>
+
+      <!-- The prompt, cut through the tortilla to the ground -->
+      <path d="M352 508 L456 596 L352 684" fill="none" stroke="#2B211C" stroke-width="56" stroke-linecap="round" stroke-linejoin="round"/>
+      <rect x="516" y="644" width="148" height="42" rx="21" fill="#2B211C"/>
+    </g>
+  </g>
+</svg>
