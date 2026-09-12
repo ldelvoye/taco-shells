@@ -24,7 +24,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          pinned=$(jq -r '.vscodium.tag' upstream.json)
+          # -e so a missing key stops here rather than comparing against the
+          # literal string "null" and opening an issue about it.
+          pinned=$(jq -er '.vscodium.tag' upstream.json)
           latest=$(gh release view --repo VSCodium/vscodium --json tagName --jq '.tagName')
 
           echo "pinned: ${pinned}"
