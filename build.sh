@@ -62,6 +62,15 @@ fi
 # git apply refuses an already-patched tree.
 rm -rf "${VSCODIUM}/vscode" "${VSCODIUM}/VSCode-darwin-${VSCODE_ARCH}"
 
+# VSCodium applies patches/user last, after its own and the OS-specific ones.
+# Cleared first so a patch deleted from our repo stops being applied.
+rm -f "${VSCODIUM}"/patches/user/*.patch
+if compgen -G "${ROOT}/patches/*.patch" > /dev/null; then
+  cp "${ROOT}"/patches/*.patch "${VSCODIUM}/patches/user/"
+  staged="$( find "${ROOT}/patches" -maxdepth 1 -name '*.patch' | wc -l | tr -d ' ' )"
+  echo "==> staged ${staged} patches"
+fi
+
 build_icon() {
   local out="${VSCODIUM}/src/stable/resources/darwin"
   local svg="${ROOT}/branding/icons/taqueria.svg"
@@ -119,8 +128,6 @@ printf '%s\n' "${merged}" > product.json
 identity="$( jq -er '.nameLong + " / " + .applicationName + " / " + .dataFolderName' product.json )"
 echo "==> identity: ${identity}"
 
-# The extension cull goes here. Not earlier: VSCodium patches 22 of them.
-
 export NODE_OPTIONS="--max-old-space-size=${MAX_OLD_SPACE_SIZE}"
 export VSCODE_PUBLISH_COUNTER=1
 
@@ -143,6 +150,20 @@ APP="${VSCODIUM}/VSCode-darwin-${VSCODE_ARCH}/${APP_NAME}.app"
 # Around 300MB, and discarded by VSCodium's own release pipeline.
 maps="$( find "${APP}" -name '*.map' -print -delete | wc -l | tr -d ' ' )"
 echo "==> stripped ${maps} source maps"
+
+# Culled from the packaged bundle, not the checkout: gulpfile.extensions.ts holds
+# a literal list of tsconfig paths, so a missing directory breaks the build.
+# A keep-list stays correct when upstream adds extensions. theme-defaults is
+# load-bearing, referenced by workbenchThemeService.ts.
+culled=0
+for dir in "${APP}/Contents/Resources/app/extensions"/*; do
+  case "$( basename "${dir}" )" in
+    theme-*|terminal-suggest) continue ;;
+  esac
+  rm -rf -- "${dir}"
+  culled=$(( culled + 1 ))
+done
+echo "==> culled ${culled} extensions"
 
 # arm64 Gatekeeper refuses unsigned bundles.
 codesign --force --deep --sign - "${APP}"
