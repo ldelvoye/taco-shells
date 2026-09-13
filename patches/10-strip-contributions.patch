@@ -1,5 +1,5 @@
 diff --git a/src/vs/workbench/workbench.common.main.ts b/src/vs/workbench/workbench.common.main.ts
-index 07ae813e..116ac906 100644
+index 07ae813e..3ea6bb33 100644
 --- a/src/vs/workbench/workbench.common.main.ts
 +++ b/src/vs/workbench/workbench.common.main.ts
 @@ -201,14 +201,2 @@ registerSingleton(IAllowedMcpServersService, AllowedMcpServersService, Instantia
@@ -29,20 +29,37 @@ index 07ae813e..116ac906 100644
 -import './contrib/testing/browser/testing.contribution.js';
 -
  // Logs
-@@ -266,5 +245,2 @@ import './contrib/bulkEdit/browser/preview/bulkEdit.contribution.js';
+@@ -257,14 +236,4 @@ import './contrib/quickaccess/browser/quickAccess.contribution.js';
  
+-// Explorer
+-import './contrib/files/browser/explorerViewlet.js';
+-import './contrib/files/browser/fileActions.contribution.js';
+ import './contrib/files/browser/files.contribution.js';
+-
+-// Bulk Edit
+ import './contrib/bulkEdit/browser/bulkEditService.js';
+-import './contrib/bulkEdit/browser/preview/bulkEdit.contribution.js';
+-
 -// Rename Symbol Tracker for Inline completions.
 -import './contrib/inlineCompletions/browser/renameSymbolTrackerService.js';
 -
  // Search
-@@ -273,5 +249,2 @@ import './contrib/search/browser/searchView.js';
+@@ -273,5 +242,2 @@ import './contrib/search/browser/searchView.js';
  
 -// Search Editor
 -import './contrib/searchEditor/browser/searchEditor.contribution.js';
 -
  // Sash
-@@ -287,10 +260,2 @@ import './contrib/scm/browser/scm.service.contribution.js';
+@@ -279,30 +245,2 @@ import './contrib/sash/browser/sash.contribution.js';
  
+-// Git
+-import './contrib/git/browser/git.contributions.js';
+-
+-// SCM
+-import './contrib/scm/browser/scm.contribution.js';
+-import './contrib/scm/browser/quickDiff.contribution.js';
+-import './contrib/scm/browser/scm.service.contribution.js';
+-
 -// Debug
 -import './contrib/debug/browser/debug.contribution.js';
 -import './contrib/debug/browser/debugEditorContribution.js';
@@ -51,9 +68,9 @@ index 07ae813e..116ac906 100644
 -import './contrib/debug/browser/repl.js';
 -import './contrib/debug/browser/debugViewlet.js';
 -
- // Markers
-@@ -298,11 +263,2 @@ import './contrib/markers/browser/markers.contribution.js';
- 
+-// Markers
+-import './contrib/markers/browser/markers.contribution.js';
+-
 -// Process Explorer
 -import './contrib/processExplorer/browser/processExplorer.contribution.js';
 -
@@ -64,25 +81,55 @@ index 07ae813e..116ac906 100644
 -import './contrib/multiDiffEditor/browser/multiDiffEditor.contribution.js';
 -
  // Commands
-@@ -310,5 +266,2 @@ import './contrib/commands/common/commands.contribution.js';
+@@ -310,5 +248,2 @@ import './contrib/commands/common/commands.contribution.js';
  
 -// Comments
 -import './contrib/comments/browser/comments.contribution.js';
 -
  // URL Support
-@@ -352,5 +305,2 @@ import './contrib/remote/browser/remote.contribution.js';
+@@ -316,8 +251,2 @@ import './contrib/url/browser/url.contribution.js';
  
+-// Webview
+-import './contrib/webview/browser/webview.contribution.js';
+-import './contrib/webviewPanel/browser/webviewPanel.contribution.js';
+-import './contrib/webviewView/browser/webviewView.contribution.js';
+-import './contrib/customEditor/browser/customEditor.contribution.js';
+-
+ // External Uri Opener
+@@ -325,10 +254,2 @@ import './contrib/externalUriOpener/common/externalUriOpener.contribution.js';
+ 
+-// Extensions Management
+-import './contrib/extensions/browser/extensions.contribution.js';
+-import './contrib/extensions/browser/extensionsViewlet.js';
+-
+-// Output View
+-import './contrib/output/browser/output.contribution.js';
+-import './contrib/output/browser/outputView.js';
+-
+ // Terminal
+@@ -342,5 +263,2 @@ import './contrib/relauncher/browser/relauncher.contribution.js';
+ 
+-// Modern UI (experimental)
+-import './contrib/modernUI/browser/modernUI.contribution.js';
+-
+ // Tasks
+@@ -348,9 +266,2 @@ import './contrib/tasks/browser/task.contribution.js';
+ 
+-// Remote
+-import './contrib/remote/common/remote.contribution.js';
+-import './contrib/remote/browser/remote.contribution.js';
+-
 -// Emmet
 -import './contrib/emmet/browser/emmet.contribution.js';
 -
  // CodeEditor Contributions
-@@ -358,5 +308,2 @@ import './contrib/codeEditor/browser/codeEditor.contribution.js';
+@@ -358,5 +269,2 @@ import './contrib/codeEditor/browser/codeEditor.contribution.js';
  
 -// Markdown
 -import './contrib/markdown/browser/markdown.contribution.js';
 -
  // Keybindings Contributions
-@@ -364,17 +311,2 @@ import './contrib/keybindings/browser/keybindings.contribution.js';
+@@ -364,17 +272,2 @@ import './contrib/keybindings/browser/keybindings.contribution.js';
  
 -// Snippets
 -import './contrib/snippets/browser/snippets.contribution.js';
@@ -100,8 +147,11 @@ index 07ae813e..116ac906 100644
 -import './contrib/inlayHints/browser/inlayHintsAccessibilty.js';
 -
  // Themes
-@@ -385,32 +317,2 @@ import './contrib/update/browser/update.contribution.js';
+@@ -382,60 +275,2 @@ import './contrib/themes/browser/themes.contribution.js';
  
+-// Update
+-import './contrib/update/browser/update.contribution.js';
+-
 -// Surveys
 -import './contrib/surveys/browser/nps.contribution.js';
 -import './contrib/surveys/browser/languageSurveys.contribution.js';
@@ -132,9 +182,15 @@ index 07ae813e..116ac906 100644
 -// Language Status
 -import './contrib/languageStatus/browser/languageStatus.contribution.js';
 -
- // Authentication
-@@ -424,18 +326,2 @@ import './contrib/userDataProfile/browser/userDataProfile.contribution.js';
- 
+-// Authentication
+-import './contrib/authentication/browser/authentication.contribution.js';
+-
+-// User Data Sync
+-import './contrib/userDataSync/browser/userDataSync.contribution.js';
+-
+-// User Data Profiles
+-import './contrib/userDataProfile/browser/userDataProfile.contribution.js';
+-
 -// Continue Edit Session
 -import './contrib/editSessions/browser/editSessions.contribution.js';
 -
@@ -152,13 +208,13 @@ index 07ae813e..116ac906 100644
 -import './contrib/localHistory/browser/localHistory.contribution.js';
 -
  // Workspace
-@@ -452,5 +338,2 @@ import './contrib/accessibilitySignals/browser/accessibilitySignal.contribution.
+@@ -452,5 +287,2 @@ import './contrib/accessibilitySignals/browser/accessibilitySignal.contribution.
  
 -// Bracket Pair Colorizer 2 Telemetry
 -import './contrib/bracketPairColorizer2Telemetry/browser/bracketPairColorizer2Telemetry.contribution.js';
 -
  // Accessibility
-@@ -458,20 +341,2 @@ import './contrib/accessibility/browser/accessibility.contribution.js';
+@@ -458,20 +290,2 @@ import './contrib/accessibility/browser/accessibility.contribution.js';
  
 -// Metered Connection
 -import './contrib/meteredConnection/browser/meteredConnection.contribution.js';
