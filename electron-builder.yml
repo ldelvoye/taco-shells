@@ -1,0 +1,28 @@
+appId: com.ldelvoye.taqueria
+productName: Taqueria
+
+directories:
+  buildResources: build
+  output: dist
+
+files:
+  - '!src'
+  - '!docs'
+  - '!branding'
+  - '!electron.vite.config.ts'
+  - '!vitest.config.ts'
+  - '!tsconfig*.json'
+  - '!electron-builder.yml'
+
+# node-pty ships a native binding and a spawn-helper executable, neither of
+# which macOS can load from inside an asar archive.
+asarUnpack:
+  - '**/node_modules/node-pty/**'
+
+mac:
+  category: public.app-category.developer-tools
+  icon: build/icon.icns
+  darkModeSupport: true
+  target:
+    - target: dmg
+      arch: arm64
