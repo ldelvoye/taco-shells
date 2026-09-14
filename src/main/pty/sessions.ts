@@ -96,13 +96,6 @@ export class PtySessions {
     session.pty.kill()
   }
 
-  killAll(): void {
-    const ids = [...this.sessions.keys()]
-    for (const id of ids) {
-      this.kill(id)
-    }
-  }
-
   onData(listener: DataListener): void {
     this.dataListeners.add(listener)
   }

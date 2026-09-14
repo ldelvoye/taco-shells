@@ -34,8 +34,9 @@ app.whenReady().then(() => {
   })
 })
 
+// The shells need no teardown: each one exits when its pty master closes with
+// the process.
 app.on('before-quit', () => {
-  sessions.killAll()
   if (store) {
     store.stop()
   }
