@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from 'node:fs'
+
 import { appIsRunning, builtDmg } from './bundle.mjs'
 import identity from './identity.cjs'
 import { changeList, commandSucceeds, fail, git, lastTag, run, runWith, tryGit } from './repo.mjs'
@@ -15,7 +17,22 @@ to open it until the quarantine flag is cleared:
 The app is ad-hoc signed and not notarised, so a downloaded copy is reported as
 damaged rather than merely unverified until that attribute is gone.`
 
-const publishing = process.argv.includes('--publish')
+const args = process.argv.slice(2)
+const publishing = args.includes('--publish')
+
+function optionValue(name) {
+  const prefix = `--${name}=`
+  const given = args.find((argument) => argument.startsWith(prefix))
+  if (!given) {
+    return null
+  }
+  return given.slice(prefix.length)
+}
+
+// Promotion rewrites the release body, since the notes it carried as a
+// prerelease say it has no download. A file replaces that generated body
+// outright, for a release where the list of commits is not the story.
+const notesFile = optionValue('notes-file')
 
 // Promotion marks a version that already exists rather than minting one, so it
 // runs where that version is: on the tag CI created for it.
@@ -29,6 +46,11 @@ if (!tag) {
 const version = versionOfTag(tag)
 if (!isVersion(version)) {
   fail(`${tag} is not a version tag.`)
+}
+
+// Checked here rather than where it is read, which is after the build.
+if (notesFile && !existsSync(notesFile)) {
+  fail(`no notes file at ${notesFile}.`)
 }
 
 const uncommitted = git('status', '--porcelain')
@@ -67,21 +89,31 @@ if (!dmg) {
 run('node', 'scripts/install-app.mjs')
 
 if (!publishing) {
+  let notesSource
+  if (notesFile) {
+    notesSource = notesFile
+  } else {
+    notesSource = 'the commits since the last release'
+  }
+
   console.log(`
 Dry run: ${tag} was not promoted on GitHub.
 
 ${STABLE_APP} is now ${version}, built and installed locally.
 
-Adding --publish would attach ${dmg} to the ${tag} release and clear its
-prerelease flag, making it the version GitHub lists as Latest.
+Adding --publish would attach ${dmg} to the ${tag} release, clear its prerelease
+flag so GitHub lists it as Latest, and write its notes from ${notesSource}.
 `)
   process.exit(0)
 }
 
-// The notes were written when this was unstable and say it carries no download.
-// Rewrite them now that it does.
-const previous = lastTag(`${tag}^`)
-const notes = `${changeList(previous)}\n\n${INSTALL_NOTES}`
+let notes
+if (notesFile) {
+  notes = readFileSync(notesFile, 'utf8')
+} else {
+  const previous = lastTag(`${tag}^`)
+  notes = `${changeList(previous)}\n\n${INSTALL_NOTES}`
+}
 
 run('gh', 'release', 'upload', tag, dmg, '--clobber')
 run('gh', 'release', 'edit', tag, '--prerelease=false', '--latest', '--notes', notes)

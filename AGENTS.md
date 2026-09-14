@@ -104,6 +104,13 @@ version tag with a clean tree, then rebuilds under the stable identity, installs
 it, attaches the dmg to the release that already exists and clears its prerelease
 flag. `--publish` is what makes it touch GitHub; without it nothing is published.
 
+**Promotion rewrites the release notes**, because the ones a prerelease carries
+say it has no download. They are generated from the commits since the last
+release, and `--notes-file=some.md` replaces that body outright for a release
+where the list of commits is not the story. Note the consequence: setting a
+release's notes by hand *before* promoting it achieves nothing, since promotion
+overwrites them. Pass the file, or edit afterwards.
+
 **"Which release is stable" is a GitHub flag, not a file.** A prerelease is
 excluded from Latest and from `/releases/latest`, so that endpoint is the stable
 download link and needs nothing maintaining it.
