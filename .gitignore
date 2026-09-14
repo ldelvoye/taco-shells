@@ -1,5 +1,8 @@
-# Throwaway build tree: VSCodium clone, vscode checkout, build output.
-# Rebuildable from upstream.json at any time.
+node_modules/
+dist/
+build/
+
+# Leftover VSCodium build tree from the abandoned fork.
 .build/
 
 .DS_Store
