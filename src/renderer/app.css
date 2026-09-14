@@ -1,0 +1,62 @@
+:root {
+  --chrome-background: #252526;
+  --chrome-border: #2d2d30;
+  --terminal-background: #1e1e1e;
+  --sidebar-width: 220px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  background: var(--terminal-background);
+  color: #cccccc;
+  font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+  font-size: 13px;
+}
+
+.app {
+  display: flex;
+  height: 100%;
+}
+
+.sidebar {
+  flex: 0 0 var(--sidebar-width);
+  display: flex;
+  flex-direction: column;
+  background: var(--chrome-background);
+  border-right: 1px solid var(--chrome-border);
+}
+
+/* The traffic lights float over this strip, which is also the only place the
+   frameless window can be dragged by. */
+.sidebar-titlebar {
+  flex: 0 0 var(--titlebar-height);
+  -webkit-app-region: drag;
+}
+
+.pane-area {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.terminal-view {
+  position: absolute;
+  inset: 0;
+  padding: 6px 0 6px 8px;
+}
+
+.terminal-host {
+  width: 100%;
+  height: 100%;
+}
+
+.xterm .xterm-viewport {
+  scrollbar-width: thin;
+}

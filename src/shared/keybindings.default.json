@@ -1,0 +1,5 @@
+{
+  "cmd+c": "terminal.copy",
+  "cmd+v": "terminal.paste",
+  "cmd+k": "terminal.clear"
+}

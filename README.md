@@ -6,7 +6,22 @@ I like VS Code's terminal manager: a sidebar list where splits show up as couple
 
 So I'm building just that part as its own app.
 
-Early. Nothing to run yet.
+Early. Right now it opens one terminal in a frameless window; the sidebar is still an empty column.
+
+## Running it
+
+```sh
+npm install
+npm run dev
+```
+
+## Building the app
+
+```sh
+npm run dist
+```
+
+Writes `Taqueria.app` and a dmg into `dist/`. The app is ad-hoc signed, not notarised, so it runs on the machine that built it.
 
 ## License
 
