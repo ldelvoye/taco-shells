@@ -1,5 +1,8 @@
 {
+  "cmd+t": "terminal.new",
+  "cmd+w": "terminal.close",
   "cmd+c": "terminal.copy",
   "cmd+v": "terminal.paste",
-  "cmd+k": "terminal.clear"
+  "cmd+k": "terminal.clear",
+  "cmd+b": "sidebar.toggle"
 }

@@ -2,6 +2,9 @@
   --chrome-background: #252526;
   --chrome-border: #2d2d30;
   --terminal-background: #1e1e1e;
+  --row-hover: #2a2d2e;
+  --row-active: #37373d;
+  --row-marker: #0078d4;
   --sidebar-width: 220px;
 }
 
@@ -35,21 +38,70 @@ body {
 
 /* The traffic lights float over this strip, which is also the only place the
    frameless window can be dragged by. */
-.sidebar-titlebar {
+.sidebar-titlebar,
+.pane-titlebar {
   flex: 0 0 var(--titlebar-height);
   -webkit-app-region: drag;
+}
+
+.sidebar-rows {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 0;
+}
+
+.terminal-row {
+  padding: 4px 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: default;
+  user-select: none;
+}
+
+.terminal-row:hover {
+  background: var(--row-hover);
+}
+
+.terminal-row.is-active {
+  background: var(--row-active);
+  color: #ffffff;
+}
+
+/* An inset line rather than a border, so a row does not change height while a
+   drag hovers over it. */
+.terminal-row.drop-above {
+  box-shadow: inset 0 2px 0 var(--row-marker);
+}
+
+.terminal-row.drop-below {
+  box-shadow: inset 0 -2px 0 var(--row-marker);
+}
+
+.pane-column {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .pane-area {
   position: relative;
   flex: 1 1 auto;
-  min-width: 0;
+  min-height: 0;
 }
 
 .terminal-view {
   position: absolute;
   inset: 0;
   padding: 6px 0 6px 8px;
+}
+
+/* visibility, not display: a hidden terminal keeps its layout box, so it stays
+   measurable and reflows with the window while it is off screen. */
+.terminal-view.is-inactive {
+  visibility: hidden;
 }
 
 .terminal-host {

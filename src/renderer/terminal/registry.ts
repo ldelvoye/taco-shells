@@ -31,6 +31,10 @@ const handles = new Map<SessionId, TerminalHandle>()
 // that output it is simply dropped, and what goes missing is the first prompt.
 const pendingOutput = new Map<SessionId, string[]>()
 
+type TitleListener = (id: SessionId, title: string) => void
+
+const titleListeners = new Set<TitleListener>()
+
 window.taqueria.pty.onData((event) => {
   const handle = handles.get(event.id)
   if (handle) {
@@ -68,6 +72,16 @@ export async function createSession(): Promise<SessionId> {
     window.taqueria.pty.write(id, data)
   })
 
+  // Both title sequences feed the sidebar, and the last one a program sets wins.
+  term.onTitleChange((title) => {
+    emitTitle(id, title)
+  })
+  term.parser.registerOscHandler(1, (title) => {
+    emitTitle(id, title)
+    // False, so xterm's own handler still gets to record the icon name.
+    return false
+  })
+
   handles.set(id, { id, term, fit, element, opened: false, observer: null })
   drainPendingOutput(id, term)
 
@@ -98,7 +112,8 @@ export function attachSession(id: SessionId, host: HTMLElement): void {
   handle.observer = observer
 
   fitToHost(handle)
-  handle.term.focus()
+  // No focus here: every session attaches on mount, active or not, so focusing
+  // on attach would let a background terminal steal the keyboard.
 }
 
 export function detachSession(id: SessionId): void {
@@ -128,12 +143,33 @@ export function disposeSession(id: SessionId): void {
   window.taqueria.pty.kill(id)
 }
 
+export function focusSession(id: SessionId): void {
+  const handle = handles.get(id)
+  if (!handle) {
+    return
+  }
+  handle.term.focus()
+}
+
 export function sessionTerminal(id: SessionId): Terminal | null {
   const handle = handles.get(id)
   if (!handle) {
     return null
   }
   return handle.term
+}
+
+export function onSessionTitle(listener: TitleListener): () => void {
+  titleListeners.add(listener)
+  return () => {
+    titleListeners.delete(listener)
+  }
+}
+
+function emitTitle(id: SessionId, title: string): void {
+  for (const listener of titleListeners) {
+    listener(id, title)
+  }
 }
 
 function drainPendingOutput(id: SessionId, term: Terminal): void {

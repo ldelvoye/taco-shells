@@ -6,7 +6,7 @@ I like VS Code's terminal manager: a sidebar list where splits show up as couple
 
 So I'm building just that part as its own app.
 
-Early. Right now it opens one terminal in a frameless window; the sidebar is still an empty column.
+Early. Right now it runs as many terminals as you like and lists them in the sidebar, each row named by whatever the program in it publishes as its title. You switch by clicking a row and reorder by dragging one. Splits, the part that makes a group of panes read as a group, are not built yet.
 
 ## Running it
 
