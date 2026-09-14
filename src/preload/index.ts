@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import type { Config, ConfigFile } from '@shared/config'
 import {
   CHANNEL,
   type PtyDataEvent,
@@ -30,6 +31,13 @@ const api: TaqueriaApi = {
   clipboard: {
     read: () => ipcRenderer.invoke(CHANNEL.clipboardRead),
     write: (text: string) => ipcRenderer.send(CHANNEL.clipboardWrite, text)
+  },
+  config: {
+    // Synchronous on purpose: the renderer sets the palette and builds its first
+    // terminal from this, and an await here would paint the wrong theme first.
+    initial: ipcRenderer.sendSync(CHANNEL.configGet) as Config,
+    onChange: (listener: (config: Config) => void) => subscribe(CHANNEL.configChanged, listener),
+    pathOf: (which: ConfigFile) => ipcRenderer.sendSync(CHANNEL.configPath, which) as string
   }
 }
 

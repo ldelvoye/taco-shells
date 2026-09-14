@@ -1,21 +1,44 @@
 import { app, Menu } from 'electron'
+import { paletteFor } from '@shared/theme'
+import { ConfigStore } from './config'
+import { configDirectory } from './config/files'
 import { registerIpc } from './ipc'
 import { PtySessions } from './pty/sessions'
 import { buildApplicationMenu } from './window/menu'
-import { createMainWindow } from './window/window'
+import { createMainWindow, isBackgroundWindow } from './window/window'
 
 app.setName('Taqueria')
 
 const sessions = new PtySessions()
+let store: ConfigStore | undefined
 
 app.whenReady().then(() => {
+  // Launching a GUI app activates it and takes the user's focus, so a suite run
+  // has to leave the dock alone.
+  if (isBackgroundWindow()) {
+    app.dock?.hide()
+  }
+
   Menu.setApplicationMenu(buildApplicationMenu())
-  const window = createMainWindow()
-  registerIpc(sessions, window)
+
+  const directory = configDirectory()
+  store = new ConfigStore(directory)
+  const initialConfig = store.current()
+  const palette = paletteFor(initialConfig.appearance)
+  const window = createMainWindow(palette)
+  registerIpc(sessions, window, store)
+
+  store.onChange((config) => {
+    const nextPalette = paletteFor(config.appearance)
+    window.setBackgroundColor(nextPalette.chrome.terminalBackground)
+  })
 })
 
 app.on('before-quit', () => {
   sessions.killAll()
+  if (store) {
+    store.stop()
+  }
 })
 
 // A terminal manager with no windows has nothing left to manage, so closing the

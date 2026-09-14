@@ -1,13 +1,9 @@
 import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
-import { Terminal } from '@xterm/xterm'
+import { Terminal, type ITerminalOptions } from '@xterm/xterm'
 import type { SessionId } from '@shared/ipc'
-import {
-  TERMINAL_FONT_FAMILY,
-  TERMINAL_FONT_SIZE,
-  TERMINAL_SCROLLBACK,
-  TERMINAL_THEME
-} from './theme'
+import { DEFAULT_SETTINGS, type Settings } from '@shared/settings'
+import { DARK_PALETTE, type TerminalColors } from '@shared/theme'
 
 const INITIAL_COLS = 80
 const INITIAL_ROWS = 24
@@ -25,6 +21,10 @@ interface TerminalHandle {
 // around a terminal; if a re-render ever owned the terminal itself, unmounting
 // would take the scrollback and the PTY connection with it.
 const handles = new Map<SessionId, TerminalHandle>()
+
+// Sessions created later must match the ones already open, so the current
+// options live here rather than being passed in at each call site.
+let terminalOptions: ITerminalOptions = optionsFrom(DEFAULT_SETTINGS, DARK_PALETTE.terminal)
 
 // The shell starts printing the moment main spawns it, which can land before
 // createSession has registered a handle to write into. Without somewhere to put
@@ -57,13 +57,7 @@ export async function createSession(cwdFrom?: SessionId): Promise<SessionId> {
   const size = { cols: INITIAL_COLS, rows: INITIAL_ROWS }
   const id = await window.taqueria.pty.create(size, cwdFrom)
 
-  const term = new Terminal({
-    fontFamily: TERMINAL_FONT_FAMILY,
-    fontSize: TERMINAL_FONT_SIZE,
-    scrollback: TERMINAL_SCROLLBACK,
-    theme: TERMINAL_THEME,
-    cursorBlink: true
-  })
+  const term = new Terminal(terminalOptions)
 
   const fit = new FitAddon()
   term.loadAddon(fit)
@@ -95,6 +89,15 @@ export async function createSession(cwdFrom?: SessionId): Promise<SessionId> {
   drainPendingOutput(id, term)
 
   return id
+}
+
+export function applyTerminalConfig(settings: Settings, colors: TerminalColors): void {
+  terminalOptions = optionsFrom(settings, colors)
+
+  for (const handle of handles.values()) {
+    Object.assign(handle.term.options, terminalOptions)
+    fitToHost(handle)
+  }
 }
 
 export function attachSession(id: SessionId, host: HTMLElement): void {
@@ -157,6 +160,7 @@ export function focusSession(id: SessionId): void {
   if (!handle) {
     return
   }
+
   handle.term.focus()
 }
 
@@ -203,6 +207,18 @@ function drainPendingOutput(id: SessionId, term: Terminal): void {
   pendingOutput.delete(id)
   for (const chunk of buffered) {
     term.write(chunk)
+  }
+}
+
+function optionsFrom(settings: Settings, colors: TerminalColors): ITerminalOptions {
+  return {
+    fontFamily: settings.fontFamily,
+    fontSize: settings.fontSize,
+    scrollback: settings.scrollback,
+    scrollSensitivity: settings.scrollSensitivity,
+    cursorBlink: settings.cursorBlink,
+    cursorStyle: settings.cursorStyle,
+    theme: colors
   }
 }
 

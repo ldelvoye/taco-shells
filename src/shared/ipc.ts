@@ -1,3 +1,5 @@
+import type { Config, ConfigFile } from './config'
+
 export type SessionId = string
 
 export interface PtySize {
@@ -23,7 +25,10 @@ export const CHANNEL = {
   ptyData: 'pty:data',
   ptyExit: 'pty:exit',
   clipboardRead: 'clipboard:read',
-  clipboardWrite: 'clipboard:write'
+  clipboardWrite: 'clipboard:write',
+  configGet: 'config:get',
+  configChanged: 'config:changed',
+  configPath: 'config:path'
 } as const
 
 /** Everything the renderer may ask the main process to do, exposed on `window.taqueria`. */
@@ -39,5 +44,10 @@ export interface TaqueriaApi {
   clipboard: {
     read(): Promise<string>
     write(text: string): void
+  }
+  config: {
+    initial: Config
+    onChange(listener: (config: Config) => void): () => void
+    pathOf(which: ConfigFile): string
   }
 }

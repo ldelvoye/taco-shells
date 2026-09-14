@@ -1,9 +1,11 @@
 appId: com.ldelvoye.taqueria
 productName: Taqueria
 
+# Spotlight skips a directory named .noindex, so the build output does not show
+# up as a second, staler Taqueria beside the installed one.
 directories:
   buildResources: build
-  output: dist
+  output: dist.noindex
 
 files:
   - '!src'

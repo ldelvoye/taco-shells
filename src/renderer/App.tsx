@@ -1,5 +1,6 @@
 import { type JSX, useCallback, useEffect, useMemo, useState } from 'react'
 import type { SessionId } from '@shared/ipc'
+import { paletteFor } from '@shared/theme'
 import {
   activatePane,
   activePane,
@@ -21,11 +22,14 @@ import {
 import { createCommandRegistry } from './commands/registry'
 import { registerTerminalCommands } from './commands/terminal'
 import { registerWorkspaceCommands } from './commands/workspace'
-import { keyBindings } from './keys/bindings'
+import { ConfigBanner } from './config/ConfigBanner'
+import { applyChromePalette } from './config/palette'
+import { useConfig } from './config/useConfig'
 import { useCommandKeys } from './keys/useCommandKeys'
 import { PaneArea } from './layout/PaneArea'
 import { Sidebar } from './sidebar/Sidebar'
 import {
+  applyTerminalConfig,
   createSession,
   disposeSession,
   focusSession,
@@ -39,6 +43,12 @@ function groupForSession(sessionId: SessionId): Group {
   const id = `group-${nextGroupNumber}`
   nextGroupNumber += 1
   return { id, panes: [{ id: sessionId, title: '', width: 1 }], activePane: 0 }
+}
+
+// The shell resolves EDITOR, not us: on a GUI launch the app's own environment
+// does not have it, because it is set in the files an interactive shell reads.
+function editorCommand(path: string): string {
+  return `\${EDITOR:-vi} '${path}'\n`
 }
 
 function activeSessionOf(workspace: Workspace | null): SessionId | null {
@@ -61,6 +71,8 @@ export function App(): JSX.Element {
   const [sidebarVisible, setSidebarVisible] = useState(true)
   const commands = useMemo(() => createCommandRegistry(), [])
   const activeSessionId = activeSessionOf(workspace)
+  const config = useConfig()
+  const bindings = useMemo(() => new Map(config.bindings), [config.bindings])
 
   // Changes before the first terminal exists are dropped: there is nothing yet
   // for them to describe.
@@ -73,7 +85,7 @@ export function App(): JSX.Element {
     })
   }, [])
 
-  const openTerminal = useCallback(() => {
+  const openTerminalRunning = useCallback((command: string | null) => {
     void createSession().then((sessionId) => {
       const group = groupForSession(sessionId)
       setWorkspace((current) => {
@@ -83,8 +95,27 @@ export function App(): JSX.Element {
         }
         return addGroup(base, group)
       })
+      if (command !== null) {
+        window.taqueria.pty.write(sessionId, command)
+      }
     })
   }, [])
+
+  const openTerminal = useCallback(() => {
+    openTerminalRunning(null)
+  }, [openTerminalRunning])
+
+  const openSettings = useCallback(() => {
+    const path = window.taqueria.config.pathOf('settings')
+    const command = editorCommand(path)
+    openTerminalRunning(command)
+  }, [openTerminalRunning])
+
+  const openKeybindings = useCallback(() => {
+    const path = window.taqueria.config.pathOf('keybindings')
+    const command = editorCommand(path)
+    openTerminalRunning(command)
+  }, [openTerminalRunning])
 
   // The new shell starts in the split terminal's directory, which the main
   // process resolves from the pty it names here.
@@ -217,7 +248,9 @@ export function App(): JSX.Element {
       focusPreviousPane: focusPrevious,
       focusNextGroup: focusNextTerminal,
       focusPreviousGroup: focusPreviousTerminal,
-      toggleSidebar
+      toggleSidebar,
+      openSettings,
+      openKeybindings
     })
   }, [
     commands,
@@ -228,7 +261,9 @@ export function App(): JSX.Element {
     focusPrevious,
     focusNextTerminal,
     focusPreviousTerminal,
-    toggleSidebar
+    toggleSidebar,
+    openSettings,
+    openKeybindings
   ])
 
   useEffect(() => {
@@ -238,7 +273,17 @@ export function App(): JSX.Element {
     registerTerminalCommands(commands, activeSessionId)
   }, [commands, activeSessionId])
 
-  useCommandKeys(commands, keyBindings)
+  useEffect(() => {
+    const palette = paletteFor(config.appearance)
+    applyChromePalette(palette)
+  }, [config.appearance])
+
+  useEffect(() => {
+    const palette = paletteFor(config.appearance)
+    applyTerminalConfig(config.settings, palette.terminal)
+  }, [config])
+
+  useCommandKeys(commands, bindings)
 
   let groups: Group[] = []
   let activeGroupIndex = 0
@@ -271,6 +316,7 @@ export function App(): JSX.Element {
       {sidebar}
       <div className="pane-column">
         {paneTitlebar}
+        <ConfigBanner problems={config.problems} />
         <PaneArea groups={groups} activeGroup={activeGroupIndex} onResize={resizeGroup} />
       </div>
     </div>

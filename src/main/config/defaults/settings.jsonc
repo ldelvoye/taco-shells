@@ -1,0 +1,19 @@
+{
+  // "system" follows macOS. "light" and "dark" pin it.
+  "theme": "system",
+
+  "fontFamily": "Menlo, Monaco, 'Courier New', monospace",
+  "fontSize": 12,
+
+  // Lines of history kept per terminal.
+  "scrollback": 100000,
+
+  // Lines per notch of the scroll wheel. VS Code calls this
+  // mouseWheelScrollSensitivity.
+  "scrollSensitivity": 1,
+
+  "cursorBlink": true,
+
+  // "block", "underline" or "bar".
+  "cursorStyle": "block"
+}

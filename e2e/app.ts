@@ -1,5 +1,7 @@
 import { execFileSync, spawn } from 'node:child_process'
-import { resolve } from 'node:path'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 
 const REPO_ROOT = resolve(import.meta.dirname, '..')
 const ELECTRON_BINARY = resolve(
@@ -32,13 +34,20 @@ export const KEY = {
   bracketLeft: { code: 'BracketLeft', text: '[', virtualKeyCode: 219 },
   bracketRight: { code: 'BracketRight', text: ']', virtualKeyCode: 221 },
   left: { code: 'ArrowLeft', text: '', virtualKeyCode: 37 },
-  right: { code: 'ArrowRight', text: '', virtualKeyCode: 39 }
+  right: { code: 'ArrowRight', text: '', virtualKeyCode: 39 },
+  comma: { code: 'Comma', text: ',', virtualKeyCode: 188 }
 } satisfies Record<string, Key>
 
 export interface Modifiers {
   cmd?: boolean
   alt?: boolean
   shift?: boolean
+}
+
+/** What a launch may override: the config directory, and anything the shells inherit. */
+export interface LaunchOptions {
+  configDir?: string
+  env?: Record<string, string>
 }
 
 /** A sidebar row: every pane of every group has one, in sidebar order. */
@@ -72,6 +81,8 @@ export interface App {
   pause(milliseconds: number): Promise<void>
   shellCount(): number
   rendererConsole(): string[]
+  chromeBackground(): Promise<string>
+  configProblems(): Promise<string[]>
   close(): Promise<void>
 }
 
@@ -98,24 +109,48 @@ function modifierMask(modifiers: Modifiers): number {
   return mask
 }
 
-async function findDebuggerUrl(): Promise<string> {
-  const deadline = Date.now() + LAUNCH_TIMEOUT_MS
+/**
+ * Retries `attempt` until it answers with something other than null, or the
+ * timeout runs out. Polling rather than sleeping a guessed interval is what keeps
+ * these tests from being a pile of timeouts.
+ */
+export async function pollFor<T>(
+  description: string,
+  attempt: () => Promise<T | null>,
+  timeoutMs: number
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs
 
   while (Date.now() < deadline) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)
-      const targets = (await response.json()) as DebugTarget[]
-      const page = targets.find((target) => target.type === 'page')
-      if (page) {
-        return page.webSocketDebuggerUrl
-      }
-    } catch {
-      // The devtools endpoint is not listening yet.
+    const found = await attempt()
+    if (found !== null) {
+      return found
     }
     await sleep(POLL_INTERVAL_MS)
   }
 
-  throw new Error('the app never exposed a debuggable page')
+  throw new Error(`timed out waiting for ${description}`)
+}
+
+async function findDebuggerUrl(): Promise<string> {
+  return pollFor(
+    'the app to expose a debuggable page',
+    async () => {
+      try {
+        const response = await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)
+        const targets = (await response.json()) as DebugTarget[]
+        const page = targets.find((target) => target.type === 'page')
+        if (!page) {
+          return null
+        }
+        return page.webSocketDebuggerUrl
+      } catch {
+        // The devtools endpoint is not listening yet.
+        return null
+      }
+    },
+    LAUNCH_TIMEOUT_MS
+  )
 }
 
 // The sidebar's rows and the on-screen group's panes are two separate lists:
@@ -142,10 +177,30 @@ const SCREEN_SCRIPT = `JSON.stringify({
   sidebarVisible: document.querySelector('.sidebar') !== null
 })`
 
-export async function launchApp(): Promise<App> {
-  const electron = spawn(ELECTRON_BINARY, ['.', `--remote-debugging-port=${DEBUG_PORT}`], {
+export async function launchApp(options: LaunchOptions = {}): Promise<App> {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    ELECTRON_ENABLE_LOGGING: '1',
+    TAQUERIA_BACKGROUND_WINDOW: '1'
+  }
+  // A launch with no directory of its own still gets one, so that no test can
+  // read the config belonging to whoever is running it.
+  let ownedConfigDir: string | null = null
+  if (options.configDir) {
+    env.TAQUERIA_CONFIG_DIR = options.configDir
+  } else {
+    ownedConfigDir = mkdtempSync(join(tmpdir(), 'taqueria-e2e-config-'))
+    env.TAQUERIA_CONFIG_DIR = ownedConfigDir
+  }
+  if (options.env) {
+    Object.assign(env, options.env)
+  }
+
+  const launchArguments = ['.', `--remote-debugging-port=${DEBUG_PORT}`]
+
+  const electron = spawn(ELECTRON_BINARY, launchArguments, {
     cwd: REPO_ROOT,
-    env: { ...process.env, ELECTRON_ENABLE_LOGGING: '1' },
+    env,
     stdio: ['ignore', 'pipe', 'pipe']
   })
 
@@ -307,6 +362,26 @@ export async function launchApp(): Promise<App> {
     return lines.filter((line) => line.includes(':INFO:CONSOLE'))
   }
 
+  async function chromeBackground(): Promise<string> {
+    return evaluate(
+      "getComputedStyle(document.documentElement).getPropertyValue('--chrome-background').trim()"
+    )
+  }
+
+  async function configProblems(): Promise<string[]> {
+    const raw = await evaluate(
+      "JSON.stringify([...document.querySelectorAll('.config-problem')].map((el) => el.textContent))"
+    )
+    return JSON.parse(raw) as string[]
+  }
+
+  function discardOwnedConfigDir(): void {
+    if (ownedConfigDir === null) {
+      return
+    }
+    rmSync(ownedConfigDir, { recursive: true, force: true })
+  }
+
   async function close(): Promise<void> {
     socket.close()
 
@@ -318,12 +393,14 @@ export async function launchApp(): Promise<App> {
     while (Date.now() < deadline) {
       const stopped = electron.exitCode !== null || electron.signalCode !== null
       if (stopped) {
+        discardOwnedConfigDir()
         return
       }
       await sleep(POLL_INTERVAL_MS)
     }
 
     electron.kill('SIGKILL')
+    discardOwnedConfigDir()
   }
 
   await send('Runtime.enable', {})
@@ -338,6 +415,8 @@ export async function launchApp(): Promise<App> {
     pause,
     shellCount,
     rendererConsole,
+    chromeBackground,
+    configProblems,
     close
   }
   await until('the first terminal exists', (state) => state.rows.length === 1)

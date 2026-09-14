@@ -9,7 +9,9 @@ export const COMMAND_IDS = [
   'terminal.copy',
   'terminal.paste',
   'terminal.clear',
-  'sidebar.toggle'
+  'sidebar.toggle',
+  'config.openSettings',
+  'config.openKeybindings'
 ] as const
 
 export type CommandId = (typeof COMMAND_IDS)[number]

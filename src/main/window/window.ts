@@ -1,17 +1,20 @@
 import { join } from 'node:path'
 import { BrowserWindow } from 'electron'
 import { TRAFFIC_LIGHT_POSITION } from '@shared/chrome'
+import type { Palette } from '@shared/theme'
 
-const WINDOW_BACKGROUND = '#1e1e1e'
+export function isBackgroundWindow(): boolean {
+  return process.env.TAQUERIA_BACKGROUND_WINDOW === '1'
+}
 
-export function createMainWindow(): BrowserWindow {
+export function createMainWindow(palette: Palette): BrowserWindow {
   const window = new BrowserWindow({
     width: 1100,
     height: 720,
     minWidth: 520,
     minHeight: 320,
     show: false,
-    backgroundColor: WINDOW_BACKGROUND,
+    backgroundColor: palette.chrome.terminalBackground,
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: TRAFFIC_LIGHT_POSITION,
     webPreferences: {
@@ -22,7 +25,14 @@ export function createMainWindow(): BrowserWindow {
     }
   })
 
+  // The e2e suite runs a window per test and must never interrupt whoever is
+  // typing, so its window is not shown at all.
+  const background = isBackgroundWindow()
+
   window.once('ready-to-show', () => {
+    if (background) {
+      return
+    }
     window.show()
   })
 

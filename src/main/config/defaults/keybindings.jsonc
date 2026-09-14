@@ -1,4 +1,6 @@
 {
+  // A chord maps to a command id. Set one to null to unbind it: deleting the
+  // line only lets the default through again.
   "cmd+t": "terminal.new",
   "cmd+w": "terminal.close",
   "cmd+\\": "terminal.split",
@@ -9,5 +11,7 @@
   "cmd+c": "terminal.copy",
   "cmd+v": "terminal.paste",
   "cmd+k": "terminal.clear",
-  "cmd+b": "sidebar.toggle"
+  "cmd+b": "sidebar.toggle",
+  "cmd+,": "config.openSettings",
+  "cmd+shift+,": "config.openKeybindings"
 }

@@ -9,6 +9,8 @@ export interface WorkspaceActions {
   focusNextGroup: () => void
   focusPreviousGroup: () => void
   toggleSidebar: () => void
+  openSettings: () => void
+  openKeybindings: () => void
 }
 
 export function registerWorkspaceCommands(
@@ -23,4 +25,6 @@ export function registerWorkspaceCommands(
   registry.register('terminal.focusNextGroup', actions.focusNextGroup)
   registry.register('terminal.focusPreviousGroup', actions.focusPreviousGroup)
   registry.register('sidebar.toggle', actions.toggleSidebar)
+  registry.register('config.openSettings', actions.openSettings)
+  registry.register('config.openKeybindings', actions.openKeybindings)
 }
