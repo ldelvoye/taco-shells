@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, watch, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { ConfigFile } from '@shared/config'
+import { configDirectoryName } from '../channel'
 
 const SETTINGS_FILE = 'settings.json'
 const KEYBINDINGS_FILE = 'keybindings.json'
@@ -30,14 +31,14 @@ function isFileExistsError(error: unknown): boolean {
 
 // TACO_SHELLS_CONFIG_DIR is what keeps the e2e suite out of the real config
 // directory, which it would otherwise seed and read.
-export function configDirectory(): string {
+export function configDirectory(channel: string): string {
   const override = process.env.TACO_SHELLS_CONFIG_DIR
   let directory: string
   if (override) {
     directory = override
   } else {
     const home = homedir()
-    directory = join(home, '.taco-shells')
+    directory = join(home, configDirectoryName(channel))
   }
   return directory
 }

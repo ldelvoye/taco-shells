@@ -1,0 +1,48 @@
+# Verifies every push to main, then releases it as a prerelease carrying no
+# download. Promoting one to stable is `npm run promote`, which runs on a machine
+# rather than here. AGENTS.md, "Versions and releasing", has the whole picture.
+name: main
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# A second push while the first is still running would race on the tag.
+concurrency:
+  group: main
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    # macOS because the app is macOS-only: the e2e suite launches a real
+    # Electron binary and the ptys it opens run login shells.
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The prerelease number counts commits since the last stable tag, and
+          # the notes read the log, so a shallow clone would get both wrong.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm test
+
+      # Builds and drives the real app. Nothing here packages a bundle, so this
+      # needs neither electron-builder nor librsvg for the icon.
+      - run: npm run e2e
+
+      - run: node scripts/dev-release.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_SHA: ${{ github.sha }}

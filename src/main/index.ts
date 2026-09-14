@@ -1,5 +1,6 @@
 import { app, Menu } from 'electron'
 import { paletteFor } from '@shared/theme'
+import { applicationName } from './channel'
 import { ConfigStore } from './config'
 import { configDirectory } from './config/files'
 import { registerIpc } from './ipc'
@@ -7,7 +8,8 @@ import { PtySessions } from './pty/sessions'
 import { buildApplicationMenu } from './window/menu'
 import { createMainWindow, isBackgroundWindow } from './window/window'
 
-app.setName('Taco Shells')
+const channel = __CHANNEL__
+app.setName(applicationName(channel))
 
 const sessions = new PtySessions()
 let store: ConfigStore | undefined
@@ -21,7 +23,7 @@ app.whenReady().then(() => {
 
   Menu.setApplicationMenu(buildApplicationMenu())
 
-  const directory = configDirectory()
+  const directory = configDirectory(channel)
   store = new ConfigStore(directory)
   const initialConfig = store.current()
   const palette = paletteFor(initialConfig.appearance)

@@ -8,9 +8,17 @@ So I'm building just that part as its own app.
 
 Early. Right now it runs as many terminals as you like and lists them in the sidebar, each row named by whatever the program in it publishes as its title. You switch by clicking a row and reorder by dragging one. Splitting a terminal puts its panes side by side, with a divider you can drag, and brackets their rows together in the sidebar so a group reads as a group. A split starts in the directory the terminal you split was sitting in.
 
-It reads `~/.taco-shells/settings.json` and `~/.taco-shells/keybindings.json`, both written on first launch holding the defaults, so the file you open is the list of everything you can change. Edits apply when you save, without a restart. Comments and trailing commas are fine. Theme follows macOS unless you pin it to `light` or `dark`.
+## Installing
 
-Your file is layered over the defaults rather than replacing them, so deleting a line brings the default back. To turn a key off, bind it to `null`.
+Download the dmg from [the latest release](https://github.com/ldelvoye/taco-shells/releases/latest) and drag Taco Shells into Applications.
+
+It won't open yet. The app is signed only ad-hoc and isn't notarised, so macOS reports a downloaded copy as damaged rather than merely unverified, and offers no way past it. One command fixes that:
+
+```sh
+xattr -dr com.apple.quarantine "/Applications/Taco Shells.app"
+```
+
+Releases marked as pre-releases are points in the project's history rather than builds to install; they carry no download.
 
 ## Keys
 
@@ -26,31 +34,22 @@ Your file is layered over the defaults rather than replacing them, so deleting a
 | `cmd+k`                       | clear                                                        |
 | `cmd+,` / `cmd+shift+,`       | open settings and keybindings in a terminal, using `$EDITOR` |
 
-## Running it
+## Settings
+
+It reads `~/.taco-shells/settings.json` and `~/.taco-shells/keybindings.json`, both written on first launch holding the defaults, so the file you open is the list of everything you can change. Edits apply when you save, without a restart. Comments and trailing commas are fine. Theme follows macOS unless you pin it to `light` or `dark`.
+
+Your file is layered over the defaults rather than replacing them, so deleting a line brings the default back. To turn a key off, bind it to `null`.
+
+## Building it yourself
 
 ```sh
 npm install
 npm run dev
 ```
 
-## Tests
+A build from the working tree installs as **Taco Shells Dev**, a separate app that sits beside the released one and reads its own config, so developing it never disturbs the copy you use.
 
-```sh
-npm test          # the pure units, ~100ms
-npm run test:e2e  # builds, drives the real app, then installs it
-```
-
-The e2e run drives a real app but never puts a window on screen, so it can run while you work. When it passes it reinstalls `/Applications/Taco Shells.app`, so the Taco Shells that Spotlight opens is always the last build that passed its tests. `npm run install-app` does that step on its own.
-
-The e2e tests launch Taco Shells, press real keys at it through Chromium's input pipeline, and read the result back out of the DOM. They cover the wiring the unit tests can't reach: that a key actually reaches a command, and that the command reaches the screen.
-
-## Building the app
-
-```sh
-npm run dist
-```
-
-Writes `Taco Shells.app` and a dmg into `dist.noindex/`. The app is ad-hoc signed, not notarised, so it runs on the machine that built it. The directory is named that way so Spotlight skips it: otherwise the build output is indexed next to the installed app and searching for Taco Shells offers you two, one of which is stale.
+[AGENTS.md](AGENTS.md) covers the rest — testing, the two-app split, and how versions and releases work. It's written for coding agents, but you're welcome to read it.
 
 ## License
 
