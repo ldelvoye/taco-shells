@@ -1,9 +1,21 @@
+import { existsSync, mkdtempSync, readFileSync, realpathSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { type App, KEY, launchApp } from './app'
 
 // Covers what the unit tests cannot: a chord reaching its command, and the
 // command reaching the screen. Model decisions live in shared/model.test.ts.
+
+function reportedDirectory(file: string): string | null {
+  if (!existsSync(file)) {
+    return null
+  }
+
+  const reported = readFileSync(file, 'utf8')
+  return reported.trim()
+}
 
 let app: App
 
@@ -149,23 +161,26 @@ describe('a split', () => {
   })
 
   it('starts its shell in the directory the split terminal is in', async () => {
-    // zsh publishes its directory as the window title, which the sidebar row
-    // shows, so the row reports where the shell actually is.
-    await app.runInPane('pty-1', 'cd /usr/local')
-    await app.until('the first row follows the shell', (state) =>
-      state.rows[0].label.endsWith('/usr/local')
-    )
+    // Each shell is asked to write where it is, rather than the sidebar row
+    // being read for it: a row only carries a directory if the machine's shell
+    // configuration publishes one as the window title, and most do not. The real
+    // path, because the app resolves a pty's directory through lsof, which
+    // reports the physical one.
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), 'taco-shells-cwd-')))
+    const donorReport = join(directory, 'donor')
+    const splitReport = join(directory, 'split')
+
+    await app.runInPane('pty-1', `cd ${directory} && pwd > ${donorReport}`)
+    await app.until('the first shell has moved', () => reportedDirectory(donorReport) === directory)
 
     await app.press(KEY.backslash, { cmd: true })
-    const screen = await app.until('the new pane has published a title', (state) => {
-      const bothRows = state.rows.length === 2
-      if (!bothRows) {
-        return false
-      }
-      return state.rows[1].label !== 'Terminal'
-    })
+    await app.until('the group holds two panes', (state) => state.rows.length === 2)
 
-    expect(screen.rows[1].label).toMatch(/\/usr\/local$/)
+    await app.runInPane('pty-2', `pwd > ${splitReport}`)
+    await app.until(
+      'the new shell has reported its directory',
+      () => reportedDirectory(splitReport) === directory
+    )
   })
 
   it('resizes when the divider between two panes is dragged', async () => {

@@ -146,6 +146,16 @@ complains and that is expected; do not go chasing it. It matters only for a
 *downloaded* copy, which macOS reports as damaged until the quarantine flag is
 cleared — the README says how.
 
+**An e2e test must not assume the machine's shell.** The app opens whatever
+`shellPath()` resolves — the user's login shell — and CI runs on a machine whose
+login shell differs from yours and which has no shell dotfiles at all. Two tests
+assumed otherwise and passed locally for weeks before the first CI run failed
+them: one counted processes matching a hardcoded `zsh -l`, and one read a pane's
+directory out of the sidebar row, which only carries one because a *user's*
+prompt configuration publishes it as the window title. Stock macOS `/etc/zshrc`
+does not. Ask the shell to report what you need instead of reading it off the
+chrome.
+
 **There is no screen-capture permission on this machine**, so an agent cannot see
 the window. Anything about how it *looks* has to go to a person. Everything else
 is a test: `e2e/` drives the real app, and that is where verification belongs.

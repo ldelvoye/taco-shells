@@ -1,7 +1,14 @@
 import { execFileSync, spawn } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
+
+import { shellPath } from '../src/main/pty/shell'
+
+// Asked of the app rather than assumed, because the shell it opens is whichever
+// one the machine gives its user. A hardcoded `zsh -l` counts nothing on a
+// machine whose login shell is something else.
+const LOGIN_SHELL = `${basename(shellPath())} -l`
 
 const REPO_ROOT = resolve(import.meta.dirname, '..')
 const ELECTRON_BINARY = resolve(
@@ -347,7 +354,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     const lines = listing.split('\n')
 
     const ours = lines.filter((line) => {
-      if (!line.includes('zsh -l')) {
+      if (!line.includes(LOGIN_SHELL)) {
         return false
       }
       const columns = line.trim().split(/\s+/)
