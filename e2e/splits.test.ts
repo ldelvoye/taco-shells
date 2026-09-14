@@ -60,7 +60,10 @@ describe('the default keymap', () => {
     await app.until('the first terminal is split', (state) => state.rows.length === 2)
 
     await app.press(KEY.t, { cmd: true })
-    await app.until('a second terminal exists', (state) => state.rows.length === 3)
+    await app.until(
+      'a second terminal exists and has the keyboard',
+      (state) => state.rows.length === 3 && state.rows[2].active
+    )
 
     // Three rows, two terminals: the split's two panes are one stop, so this
     // wraps from the second terminal straight back to the first.

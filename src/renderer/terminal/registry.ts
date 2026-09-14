@@ -22,6 +22,10 @@ interface TerminalHandle {
 // would take the scrollback and the PTY connection with it.
 const handles = new Map<SessionId, TerminalHandle>()
 
+// The session focusSession has just moved focus to. It is set there and consumed
+// by the focusin listener below, which is the only pair that reads it.
+let expectedFocus: SessionId | null = null
+
 // Sessions created later must match the ones already open, so the current
 // options live here rather than being passed in at each call site.
 let terminalOptions: ITerminalOptions = optionsFrom(DEFAULT_SETTINGS, DARK_PALETTE.terminal)
@@ -66,8 +70,15 @@ export async function createSession(cwdFrom?: SessionId): Promise<SessionId> {
   element.className = 'terminal-host'
 
   // Clicking into a pane is how focus moves between the panes of a split, so the
-  // workspace has to hear about it and not only about the moves it made itself.
+  // workspace has to hear about it. What arrives here is either that click or the
+  // echo of a focus the app itself asked for, and only the click is news: by the
+  // time an echo lands the workspace may have moved on, and reporting it would
+  // drag the active pane back.
   element.addEventListener('focusin', () => {
+    if (expectedFocus === id) {
+      expectedFocus = null
+      return
+    }
     emitFocus(id)
   })
 
@@ -161,6 +172,10 @@ export function focusSession(id: SessionId): void {
     return
   }
 
+  const alreadyFocused = handle.element.contains(document.activeElement)
+  if (!alreadyFocused) {
+    expectedFocus = id
+  }
   handle.term.focus()
 }
 
