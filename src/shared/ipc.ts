@@ -31,8 +31,8 @@ export const CHANNEL = {
   configPath: 'config:path'
 } as const
 
-/** Everything the renderer may ask the main process to do, exposed on `window.taqueria`. */
-export interface TaqueriaApi {
+/** Everything the renderer may ask the main process to do, exposed on `window.tacoShells`. */
+export interface TacoShellsApi {
   pty: {
     create(size: PtySize, cwdFrom?: SessionId): Promise<SessionId>
     write(id: SessionId, data: string): void

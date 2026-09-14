@@ -6,7 +6,7 @@ import {
   type PtyExitEvent,
   type PtySize,
   type SessionId,
-  type TaqueriaApi
+  type TacoShellsApi
 } from '@shared/ipc'
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
@@ -19,7 +19,7 @@ function subscribe<T>(channel: string, listener: (payload: T) => void): () => vo
   }
 }
 
-const api: TaqueriaApi = {
+const api: TacoShellsApi = {
   pty: {
     create: (size: PtySize, cwdFrom?: SessionId) => ipcRenderer.invoke(CHANNEL.ptyCreate, size, cwdFrom),
     write: (id: SessionId, data: string) => ipcRenderer.send(CHANNEL.ptyWrite, id, data),
@@ -41,4 +41,4 @@ const api: TaqueriaApi = {
   }
 }
 
-contextBridge.exposeInMainWorld('taqueria', api)
+contextBridge.exposeInMainWorld('tacoShells', api)

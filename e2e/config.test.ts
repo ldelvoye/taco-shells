@@ -13,7 +13,7 @@ const LIGHT_CHROME_BACKGROUND = '#f3f3f3'
 const DARK_CHROME_BACKGROUND = '#252526'
 
 function scratchConfigDirectory(): string {
-  return mkdtempSync(join(tmpdir(), 'taqueria-config-e2e-'))
+  return mkdtempSync(join(tmpdir(), 'taco-shells-config-e2e-'))
 }
 
 async function pressUntilSplit(app: App): Promise<Screen> {

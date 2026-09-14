@@ -41,7 +41,7 @@ type FocusListener = (id: SessionId) => void
 const titleListeners = new Set<TitleListener>()
 const focusListeners = new Set<FocusListener>()
 
-window.taqueria.pty.onData((event) => {
+window.tacoShells.pty.onData((event) => {
   const handle = handles.get(event.id)
   if (handle) {
     handle.term.write(event.data)
@@ -59,7 +59,7 @@ window.taqueria.pty.onData((event) => {
 
 export async function createSession(cwdFrom?: SessionId): Promise<SessionId> {
   const size = { cols: INITIAL_COLS, rows: INITIAL_ROWS }
-  const id = await window.taqueria.pty.create(size, cwdFrom)
+  const id = await window.tacoShells.pty.create(size, cwdFrom)
 
   const term = new Terminal(terminalOptions)
 
@@ -83,7 +83,7 @@ export async function createSession(cwdFrom?: SessionId): Promise<SessionId> {
   })
 
   term.onData((data) => {
-    window.taqueria.pty.write(id, data)
+    window.tacoShells.pty.write(id, data)
   })
 
   // Both title sequences feed the sidebar, and the last one a program sets wins.
@@ -163,7 +163,7 @@ export function disposeSession(id: SessionId): void {
   handle.term.dispose()
   handles.delete(id)
   pendingOutput.delete(id)
-  window.taqueria.pty.kill(id)
+  window.tacoShells.pty.kill(id)
 }
 
 export function focusSession(id: SessionId): void {
@@ -250,7 +250,7 @@ function fitToHost(handle: TerminalHandle): void {
   }
 
   handle.fit.fit()
-  window.taqueria.pty.resize(handle.id, { cols: handle.term.cols, rows: handle.term.rows })
+  window.tacoShells.pty.resize(handle.id, { cols: handle.term.cols, rows: handle.term.rows })
 }
 
 function loadWebglRenderer(term: Terminal): void {

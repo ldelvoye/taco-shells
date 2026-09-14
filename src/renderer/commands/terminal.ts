@@ -14,7 +14,7 @@ export function registerTerminalCommands(registry: CommandRegistry, sessionId: S
       return
     }
 
-    window.taqueria.clipboard.write(selection)
+    window.tacoShells.clipboard.write(selection)
   })
 
   // Pasting through xterm rather than straight down the pty: it is what wraps the
@@ -26,7 +26,7 @@ export function registerTerminalCommands(registry: CommandRegistry, sessionId: S
       return
     }
 
-    const text = await window.taqueria.clipboard.read()
+    const text = await window.tacoShells.clipboard.read()
     if (!text) {
       return
     }

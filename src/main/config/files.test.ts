@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { readConfigTexts, seedConfigFiles } from './files'
 
 function temporaryDirectory(): string {
-  return mkdtempSync(join(tmpdir(), 'taqueria-config-'))
+  return mkdtempSync(join(tmpdir(), 'taco-shells-config-'))
 }
 
 describe('seedConfigFiles', () => {
@@ -38,10 +38,10 @@ describe('seedConfigFiles', () => {
   it('reports a directory it cannot create instead of throwing', () => {
     const blocker = join(temporaryDirectory(), 'not-a-directory')
     writeFileSync(blocker, '')
-    const problems = seedConfigFiles(join(blocker, 'taqueria'), '{}', '{}')
+    const problems = seedConfigFiles(join(blocker, 'taco-shells'), '{}', '{}')
 
     expect(problems).toHaveLength(1)
-    expect(problems[0]).toContain('taqueria')
+    expect(problems[0]).toContain('taco-shells')
   })
 })
 

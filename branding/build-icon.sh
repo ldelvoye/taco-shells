@@ -4,14 +4,14 @@
 set -eu
 
 ROOT="$( cd "$( dirname "${BASH_SOURCE[0]:-$0}" )/.." && pwd )"
-SVG="${ROOT}/branding/icons/taqueria.svg"
+SVG="${ROOT}/branding/icons/taco-shells.svg"
 OUT="${1:-${ROOT}/build/icon.icns}"
 
 command -v rsvg-convert > /dev/null || { echo "no rsvg-convert: brew install librsvg" >&2; exit 1; }
 
 tmp="$( mktemp -d )"
 trap 'rm -rf "${tmp}"' EXIT
-iconset="${tmp}/taqueria.iconset"
+iconset="${tmp}/taco-shells.iconset"
 mkdir -p "${iconset}" "$( dirname "${OUT}" )"
 
 render() {

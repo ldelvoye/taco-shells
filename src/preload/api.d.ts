@@ -1,7 +1,7 @@
-import type { TaqueriaApi } from '@shared/ipc'
+import type { TacoShellsApi } from '@shared/ipc'
 
 declare global {
   interface Window {
-    taqueria: TaqueriaApi
+    tacoShells: TacoShellsApi
   }
 }

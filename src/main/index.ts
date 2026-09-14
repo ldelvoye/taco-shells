@@ -7,7 +7,7 @@ import { PtySessions } from './pty/sessions'
 import { buildApplicationMenu } from './window/menu'
 import { createMainWindow, isBackgroundWindow } from './window/window'
 
-app.setName('Taqueria')
+app.setName('Taco Shells')
 
 const sessions = new PtySessions()
 let store: ConfigStore | undefined

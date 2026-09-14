@@ -1,10 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Taqueria app icon. Full-bleed 1024 artwork including its own rounded shape,
-  because the prompt is knocked through the tortilla to the ground behind it:
-  composited onto VSCodium's template_macos.png the knockout would fall on
-  Apple's squircle instead and the prompt would disappear. Render with
-  build_darwin_main's "no-template" path.
+  Taco Shells app icon. Full-bleed 1024 artwork carrying its own rounded shape,
+  because the prompt is knocked through the tortilla to the ground behind it.
+  Composited onto a template mask instead, the knockout would fall on the mask's
+  squircle and the prompt would disappear.
 
   The corner is a cubic approximation of macOS's continuous-curvature squircle:
   an 824 icon area inset by 100, a 190 corner extent, and handles at 0.42 of it

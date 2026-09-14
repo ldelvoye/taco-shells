@@ -181,16 +181,16 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     ELECTRON_ENABLE_LOGGING: '1',
-    TAQUERIA_BACKGROUND_WINDOW: '1'
+    TACO_SHELLS_BACKGROUND_WINDOW: '1'
   }
   // A launch with no directory of its own still gets one, so that no test can
   // read the config belonging to whoever is running it.
   let ownedConfigDir: string | null = null
   if (options.configDir) {
-    env.TAQUERIA_CONFIG_DIR = options.configDir
+    env.TACO_SHELLS_CONFIG_DIR = options.configDir
   } else {
-    ownedConfigDir = mkdtempSync(join(tmpdir(), 'taqueria-e2e-config-'))
-    env.TAQUERIA_CONFIG_DIR = ownedConfigDir
+    ownedConfigDir = mkdtempSync(join(tmpdir(), 'taco-shells-e2e-config-'))
+    env.TACO_SHELLS_CONFIG_DIR = ownedConfigDir
   }
   if (options.env) {
     Object.assign(env, options.env)
@@ -330,7 +330,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
   async function runInPane(sessionId: string, command: string): Promise<void> {
     const keystrokes = JSON.stringify(`${command}\r`)
     const target = JSON.stringify(sessionId)
-    await evaluate(`window.taqueria.pty.write(${target}, ${keystrokes})`)
+    await evaluate(`window.tacoShells.pty.write(${target}, ${keystrokes})`)
   }
 
   // Chromium tags renderer console output INFO:CONSOLE whatever severity it was

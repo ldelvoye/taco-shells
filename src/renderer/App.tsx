@@ -96,7 +96,7 @@ export function App(): JSX.Element {
         return addGroup(base, group)
       })
       if (command !== null) {
-        window.taqueria.pty.write(sessionId, command)
+        window.tacoShells.pty.write(sessionId, command)
       }
     })
   }, [])
@@ -106,13 +106,13 @@ export function App(): JSX.Element {
   }, [openTerminalRunning])
 
   const openSettings = useCallback(() => {
-    const path = window.taqueria.config.pathOf('settings')
+    const path = window.tacoShells.config.pathOf('settings')
     const command = editorCommand(path)
     openTerminalRunning(command)
   }, [openTerminalRunning])
 
   const openKeybindings = useCallback(() => {
-    const path = window.taqueria.config.pathOf('keybindings')
+    const path = window.tacoShells.config.pathOf('keybindings')
     const command = editorCommand(path)
     openTerminalRunning(command)
   }, [openTerminalRunning])
@@ -160,7 +160,7 @@ export function App(): JSX.Element {
   // A pane leaves the workspace when its pty exits and at no other time, so
   // typing `exit` and closing the terminal from the app take one path.
   useEffect(() => {
-    return window.taqueria.pty.onExit((event) => {
+    return window.tacoShells.pty.onExit((event) => {
       disposeSession(event.id)
       updateWorkspace((current) => closePane(current, event.id))
     })

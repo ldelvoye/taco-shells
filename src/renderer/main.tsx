@@ -15,7 +15,7 @@ if (!container) {
 // process, so it is set from there rather than written into the stylesheet too.
 document.documentElement.style.setProperty('--titlebar-height', `${TITLEBAR_HEIGHT}px`)
 
-const initialConfig = window.taqueria.config.initial
+const initialConfig = window.tacoShells.config.initial
 const initialPalette = paletteFor(initialConfig.appearance)
 applyChromePalette(initialPalette)
 

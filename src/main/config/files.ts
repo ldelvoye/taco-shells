@@ -28,16 +28,16 @@ function isFileExistsError(error: unknown): boolean {
   }
 }
 
-// TAQUERIA_CONFIG_DIR is what keeps the e2e suite out of the real config
+// TACO_SHELLS_CONFIG_DIR is what keeps the e2e suite out of the real config
 // directory, which it would otherwise seed and read.
 export function configDirectory(): string {
-  const override = process.env.TAQUERIA_CONFIG_DIR
+  const override = process.env.TACO_SHELLS_CONFIG_DIR
   let directory: string
   if (override) {
     directory = override
   } else {
     const home = homedir()
-    directory = join(home, '.taqueria')
+    directory = join(home, '.taco-shells')
   }
   return directory
 }

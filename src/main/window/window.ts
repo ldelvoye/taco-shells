@@ -4,7 +4,7 @@ import { TRAFFIC_LIGHT_POSITION } from '@shared/chrome'
 import type { Palette } from '@shared/theme'
 
 export function isBackgroundWindow(): boolean {
-  return process.env.TAQUERIA_BACKGROUND_WINDOW === '1'
+  return process.env.TACO_SHELLS_BACKGROUND_WINDOW === '1'
 }
 
 export function createMainWindow(palette: Palette): BrowserWindow {
