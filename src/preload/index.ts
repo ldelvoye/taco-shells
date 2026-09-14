@@ -20,7 +20,7 @@ function subscribe<T>(channel: string, listener: (payload: T) => void): () => vo
 
 const api: TaqueriaApi = {
   pty: {
-    create: (size: PtySize) => ipcRenderer.invoke(CHANNEL.ptyCreate, size),
+    create: (size: PtySize, cwdFrom?: SessionId) => ipcRenderer.invoke(CHANNEL.ptyCreate, size, cwdFrom),
     write: (id: SessionId, data: string) => ipcRenderer.send(CHANNEL.ptyWrite, id, data),
     resize: (id: SessionId, size: PtySize) => ipcRenderer.send(CHANNEL.ptyResize, id, size),
     kill: (id: SessionId) => ipcRenderer.send(CHANNEL.ptyKill, id),

@@ -1,6 +1,11 @@
 export const COMMAND_IDS = [
   'terminal.new',
   'terminal.close',
+  'terminal.split',
+  'terminal.focusNextPane',
+  'terminal.focusPreviousPane',
+  'terminal.focusNextGroup',
+  'terminal.focusPreviousGroup',
   'terminal.copy',
   'terminal.paste',
   'terminal.clear',

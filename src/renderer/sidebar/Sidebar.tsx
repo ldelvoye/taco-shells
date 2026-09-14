@@ -4,11 +4,37 @@ import { type Group, paneOf } from '@shared/model'
 
 const UNTITLED_ROW = 'Terminal'
 
+const CONNECTOR_FIRST = 'is-first'
+const CONNECTOR_MIDDLE = 'is-middle'
+const CONNECTOR_LAST = 'is-last'
+
 interface SidebarProps {
   groups: Group[]
   activeGroup: number
-  onSelect: (index: number, sessionId: SessionId) => void
+  onSelect: (sessionId: SessionId) => void
   onReorder: (from: number, to: number) => void
+}
+
+function labelFor(title: string): string {
+  if (title) {
+    return title
+  }
+  return UNTITLED_ROW
+}
+
+// CSS, not box-drawing glyphs: their em box is shorter than a row, so the
+// strokes of adjacent rows would not quite meet.
+function connectorFor(paneIndex: number, paneCount: number): string | null {
+  if (paneCount < 2) {
+    return null
+  }
+  if (paneIndex === 0) {
+    return CONNECTOR_FIRST
+  }
+  if (paneIndex === paneCount - 1) {
+    return CONNECTOR_LAST
+  }
+  return CONNECTOR_MIDDLE
 }
 
 export function Sidebar({ groups, activeGroup, onSelect, onReorder }: SidebarProps): JSX.Element {
@@ -18,8 +44,8 @@ export function Sidebar({ groups, activeGroup, onSelect, onReorder }: SidebarPro
   function onDragStart(event: DragEvent<HTMLDivElement>, index: number, label: string): void {
     dragged.current = index
     event.dataTransfer.effectAllowed = 'move'
-    // The reorder reads the index above, not this. The row carries its name so a
-    // drag that lands outside the sidebar drops something meaningful.
+    // The reorder reads the index above, not this. The group carries its name so
+    // a drag that lands outside the sidebar drops something meaningful.
     event.dataTransfer.setData('text/plain', label)
   }
 
@@ -51,8 +77,8 @@ export function Sidebar({ groups, activeGroup, onSelect, onReorder }: SidebarPro
       return
     }
 
-    // The drop point is a gap between rows, so it counts the dragged row itself
-    // whenever that row sits above the gap.
+    // The drop point is a gap between groups, so it counts the dragged group
+    // itself whenever that group sits above the gap.
     let to = target
     if (from < target) {
       to = target - 1
@@ -66,44 +92,66 @@ export function Sidebar({ groups, activeGroup, onSelect, onReorder }: SidebarPro
   }
 
   const lastIndex = groups.length - 1
-  const rows = groups.map((group, index) => {
-    const pane = paneOf(group)
+  const rendered = groups.map((group, groupIndex) => {
+    const paneCount = group.panes.length
+    const rows = group.panes.map((pane, paneIndex) => {
+      const label = labelFor(pane.title)
 
-    let label = pane.title
-    if (!label) {
-      label = UNTITLED_ROW
-    }
+      let connector = null
+      const connectorPiece = connectorFor(paneIndex, paneCount)
+      if (connectorPiece) {
+        connector = <span className={`row-connector ${connectorPiece}`} />
+      }
 
-    let className = 'terminal-row'
-    if (index === activeGroup) {
-      className += ' is-active'
-    }
-    if (insertAt === index) {
+      let className = 'terminal-row'
+      const isActivePane = groupIndex === activeGroup && paneIndex === group.activePane
+      if (isActivePane) {
+        className += ' is-active'
+      }
+
+      return (
+        <div
+          key={pane.id}
+          className={className}
+          title={label}
+          onClick={() => {
+            onSelect(pane.id)
+          }}
+        >
+          {connector}
+          <span className="row-label">{label}</span>
+        </div>
+      )
+    })
+
+    // Dragging is a group-level gesture, so the group is what carries the drag
+    // handlers and the drop marker: its panes travel with it as one unit.
+    let className = 'terminal-group'
+    if (insertAt === groupIndex) {
       className += ' drop-above'
     }
-    if (index === lastIndex && insertAt === groups.length) {
+    if (groupIndex === lastIndex && insertAt === groups.length) {
       className += ' drop-below'
     }
+
+    const shownWhileDragged = paneOf(group)
+    const dragLabel = labelFor(shownWhileDragged.title)
 
     return (
       <div
         key={group.id}
         className={className}
         draggable
-        title={label}
-        onClick={() => {
-          onSelect(index, pane.id)
-        }}
         onDragStart={(event) => {
-          onDragStart(event, index, label)
+          onDragStart(event, groupIndex, dragLabel)
         }}
         onDragOver={(event) => {
-          onDragOver(event, index)
+          onDragOver(event, groupIndex)
         }}
         onDrop={onDrop}
         onDragEnd={endDrag}
       >
-        {label}
+        {rows}
       </div>
     )
   })
@@ -111,7 +159,7 @@ export function Sidebar({ groups, activeGroup, onSelect, onReorder }: SidebarPro
   return (
     <aside className="sidebar">
       <div className="sidebar-titlebar" />
-      <div className="sidebar-rows">{rows}</div>
+      <div className="sidebar-rows">{rendered}</div>
     </aside>
   )
 }

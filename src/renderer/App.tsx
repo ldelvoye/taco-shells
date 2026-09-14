@@ -1,14 +1,21 @@
 import { type JSX, useCallback, useEffect, useMemo, useState } from 'react'
 import type { SessionId } from '@shared/ipc'
 import {
+  activatePane,
   activePane,
-  activateGroup,
   addGroup,
+  canSplitActivePane,
   closePane,
   emptyWorkspace,
+  focusNextGroup,
+  focusNextPane,
+  focusPreviousGroup,
+  focusPreviousPane,
   type Group,
+  moveDivider,
   moveGroup,
   renamePane,
+  splitActivePane,
   type Workspace
 } from '@shared/model'
 import { createCommandRegistry } from './commands/registry'
@@ -16,16 +23,22 @@ import { registerTerminalCommands } from './commands/terminal'
 import { registerWorkspaceCommands } from './commands/workspace'
 import { keyBindings } from './keys/bindings'
 import { useCommandKeys } from './keys/useCommandKeys'
+import { PaneArea } from './layout/PaneArea'
 import { Sidebar } from './sidebar/Sidebar'
-import { createSession, disposeSession, focusSession, onSessionTitle } from './terminal/registry'
-import { TerminalView } from './terminal/TerminalView'
+import {
+  createSession,
+  disposeSession,
+  focusSession,
+  onSessionFocus,
+  onSessionTitle
+} from './terminal/registry'
 
 let nextGroupNumber = 1
 
 function groupForSession(sessionId: SessionId): Group {
   const id = `group-${nextGroupNumber}`
   nextGroupNumber += 1
-  return { id, panes: [{ id: sessionId, title: '' }], activePane: 0 }
+  return { id, panes: [{ id: sessionId, title: '', width: 1 }], activePane: 0 }
 }
 
 function activeSessionOf(workspace: Workspace | null): SessionId | null {
@@ -73,6 +86,26 @@ export function App(): JSX.Element {
     })
   }, [])
 
+  // The new shell starts in the split terminal's directory, which the main
+  // process resolves from the pty it names here.
+  const splitTerminal = useCallback(() => {
+    if (!activeSessionId) {
+      return
+    }
+    if (!workspace) {
+      return
+    }
+    // Asked before the pty is spawned: a split the model would refuse must not
+    // leave a shell running with no pane to show it in.
+    if (!canSplitActivePane(workspace)) {
+      return
+    }
+
+    void createSession(activeSessionId).then((sessionId) => {
+      updateWorkspace((current) => splitActivePane(current, sessionId))
+    })
+  }, [activeSessionId, workspace, updateWorkspace])
+
   useEffect(() => {
     openTerminal()
   }, [openTerminal])
@@ -80,6 +113,16 @@ export function App(): JSX.Element {
   useEffect(() => {
     return onSessionTitle((sessionId, title) => {
       updateWorkspace((current) => renamePane(current, sessionId, title))
+    })
+  }, [updateWorkspace])
+
+  // Clicking straight into a pane has to move the workspace's idea of the active
+  // pane with it, or cmd+w would close a terminal the user is not typing in. The
+  // effect below refocuses on that change, but activatePane returns the
+  // workspace untouched once the pane is already active, so this cannot loop.
+  useEffect(() => {
+    return onSessionFocus((sessionId) => {
+      updateWorkspace((current) => activatePane(current, sessionId))
     })
   }, [updateWorkspace])
 
@@ -118,6 +161,22 @@ export function App(): JSX.Element {
     disposeSession(activeSessionId)
   }, [activeSessionId])
 
+  const focusNext = useCallback(() => {
+    updateWorkspace((current) => focusNextPane(current))
+  }, [updateWorkspace])
+
+  const focusPrevious = useCallback(() => {
+    updateWorkspace((current) => focusPreviousPane(current))
+  }, [updateWorkspace])
+
+  const focusNextTerminal = useCallback(() => {
+    updateWorkspace((current) => focusNextGroup(current))
+  }, [updateWorkspace])
+
+  const focusPreviousTerminal = useCallback(() => {
+    updateWorkspace((current) => focusPreviousGroup(current))
+  }, [updateWorkspace])
+
   const toggleSidebar = useCallback(() => {
     setSidebarVisible((visible) => {
       return !visible
@@ -125,11 +184,11 @@ export function App(): JSX.Element {
   }, [])
 
   // Focused here rather than left to the effect above, because clicking the row
-  // that is already active changes no state and so would fire no effect, while
-  // the click itself has already taken focus off the terminal.
-  const selectGroup = useCallback(
-    (index: number, sessionId: SessionId) => {
-      updateWorkspace((current) => activateGroup(current, index))
+  // of the pane that is already active changes no state and so would fire no
+  // effect, while the click itself has already taken focus off the terminal.
+  const selectPane = useCallback(
+    (sessionId: SessionId) => {
+      updateWorkspace((current) => activatePane(current, sessionId))
       focusSession(sessionId)
     },
     [updateWorkspace]
@@ -142,9 +201,35 @@ export function App(): JSX.Element {
     [updateWorkspace]
   )
 
+  const resizeGroup = useCallback(
+    (groupIndex: number, dividerIndex: number, leftWidth: number) => {
+      updateWorkspace((current) => moveDivider(current, groupIndex, dividerIndex, leftWidth))
+    },
+    [updateWorkspace]
+  )
+
   useEffect(() => {
-    registerWorkspaceCommands(commands, { openTerminal, closeActiveTerminal, toggleSidebar })
-  }, [commands, openTerminal, closeActiveTerminal, toggleSidebar])
+    registerWorkspaceCommands(commands, {
+      openTerminal,
+      splitTerminal,
+      closeActiveTerminal,
+      focusNextPane: focusNext,
+      focusPreviousPane: focusPrevious,
+      focusNextGroup: focusNextTerminal,
+      focusPreviousGroup: focusPreviousTerminal,
+      toggleSidebar
+    })
+  }, [
+    commands,
+    openTerminal,
+    splitTerminal,
+    closeActiveTerminal,
+    focusNext,
+    focusPrevious,
+    focusNextTerminal,
+    focusPreviousTerminal,
+    toggleSidebar
+  ])
 
   useEffect(() => {
     if (!activeSessionId) {
@@ -162,18 +247,13 @@ export function App(): JSX.Element {
     activeGroupIndex = workspace.activeGroup
   }
 
-  const panes = groups.flatMap((group) => group.panes)
-  const terminals = panes.map((pane) => {
-    return <TerminalView key={pane.id} sessionId={pane.id} active={pane.id === activeSessionId} />
-  })
-
   let sidebar = null
   if (sidebarVisible) {
     sidebar = (
       <Sidebar
         groups={groups}
         activeGroup={activeGroupIndex}
-        onSelect={selectGroup}
+        onSelect={selectPane}
         onReorder={reorderGroups}
       />
     )
@@ -191,7 +271,7 @@ export function App(): JSX.Element {
       {sidebar}
       <div className="pane-column">
         {paneTitlebar}
-        <main className="pane-area">{terminals}</main>
+        <PaneArea groups={groups} activeGroup={activeGroupIndex} onResize={resizeGroup} />
       </div>
     </div>
   )

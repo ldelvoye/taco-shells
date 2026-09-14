@@ -4,12 +4,12 @@ import { attachSession, detachSession } from './registry'
 
 interface TerminalViewProps {
   sessionId: SessionId
-  active: boolean
+  width: number
 }
 
-// Inactive sessions stay mounted rather than unmounting, so an xterm element is
-// never reparented from one host to another.
-export function TerminalView({ sessionId, active }: TerminalViewProps): JSX.Element {
+// Sessions in a hidden group stay mounted rather than unmounting, so an xterm
+// element is never reparented from one host to another.
+export function TerminalView({ sessionId, width }: TerminalViewProps): JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -24,10 +24,5 @@ export function TerminalView({ sessionId, active }: TerminalViewProps): JSX.Elem
     }
   }, [sessionId])
 
-  let className = 'terminal-view'
-  if (!active) {
-    className = 'terminal-view is-inactive'
-  }
-
-  return <div className={className} ref={hostRef} />
+  return <div className="terminal-view" ref={hostRef} style={{ flexGrow: width }} />
 }

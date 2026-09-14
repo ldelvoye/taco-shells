@@ -3,7 +3,9 @@ import { CHANNEL, type PtySize, type SessionId } from '@shared/ipc'
 import type { PtySessions } from '../pty/sessions'
 
 export function registerIpc(sessions: PtySessions, window: BrowserWindow): void {
-  ipcMain.handle(CHANNEL.ptyCreate, (_event, size: PtySize) => sessions.create(size))
+  ipcMain.handle(CHANNEL.ptyCreate, (_event, size: PtySize, cwdFrom?: SessionId) =>
+    sessions.create(size, cwdFrom)
+  )
   ipcMain.on(CHANNEL.ptyWrite, (_event, id: SessionId, data: string) => sessions.write(id, data))
   ipcMain.on(CHANNEL.ptyResize, (_event, id: SessionId, size: PtySize) => sessions.resize(id, size))
   ipcMain.on(CHANNEL.ptyKill, (_event, id: SessionId) => sessions.kill(id))

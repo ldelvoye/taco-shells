@@ -29,7 +29,7 @@ export const CHANNEL = {
 /** Everything the renderer may ask the main process to do, exposed on `window.taqueria`. */
 export interface TaqueriaApi {
   pty: {
-    create(size: PtySize): Promise<SessionId>
+    create(size: PtySize, cwdFrom?: SessionId): Promise<SessionId>
     write(id: SessionId, data: string): void
     resize(id: SessionId, size: PtySize): void
     kill(id: SessionId): void

@@ -1,6 +1,11 @@
 {
   "cmd+t": "terminal.new",
   "cmd+w": "terminal.close",
+  "cmd+\\": "terminal.split",
+  "cmd+opt+right": "terminal.focusNextPane",
+  "cmd+opt+left": "terminal.focusPreviousPane",
+  "cmd+shift+]": "terminal.focusNextGroup",
+  "cmd+shift+[": "terminal.focusPreviousGroup",
   "cmd+c": "terminal.copy",
   "cmd+v": "terminal.paste",
   "cmd+k": "terminal.clear",

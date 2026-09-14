@@ -9,6 +9,13 @@ export function useCommandKeys(
 ): void {
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent): void {
+      // Every command here is a discrete action, so a held key must fire once
+      // rather than at the keyboard's repeat rate: holding cmd+t alone would
+      // spawn shells for as long as it stayed down.
+      if (event.repeat) {
+        return
+      }
+
       const commandId = commandForKeyStroke(bindings, event)
       if (!commandId) {
         return

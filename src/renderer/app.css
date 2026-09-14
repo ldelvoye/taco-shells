@@ -5,7 +5,9 @@
   --row-hover: #2a2d2e;
   --row-active: #37373d;
   --row-marker: #0078d4;
+  --row-connector: #6e7681;
   --sidebar-width: 220px;
+  --row-height: 22px;
 }
 
 html,
@@ -51,11 +53,24 @@ body {
   padding: 2px 0;
 }
 
+/* An inset line rather than a border, so a group does not change height while a
+   drag hovers over it. */
+.terminal-group.drop-above {
+  box-shadow: inset 0 2px 0 var(--row-marker);
+}
+
+.terminal-group.drop-below {
+  box-shadow: inset 0 -2px 0 var(--row-marker);
+}
+
+/* A fixed height rather than vertical padding, so a connector can stretch the
+   full row and meet the one in the row below it. */
 .terminal-row {
-  padding: 4px 10px;
-  white-space: nowrap;
+  display: flex;
+  align-items: stretch;
+  height: var(--row-height);
+  padding: 0 10px;
   overflow: hidden;
-  text-overflow: ellipsis;
   cursor: default;
   user-select: none;
 }
@@ -69,14 +84,51 @@ body {
   color: #ffffff;
 }
 
-/* An inset line rather than a border, so a row does not change height while a
-   drag hovers over it. */
-.terminal-row.drop-above {
-  box-shadow: inset 0 2px 0 var(--row-marker);
+.row-label {
+  align-self: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.terminal-row.drop-below {
-  box-shadow: inset 0 -2px 0 var(--row-marker);
+/* Half a bracket down the left of every row in a split group: a stem running to
+   the row's middle, and a stub reaching from it towards the label. */
+.row-connector {
+  position: relative;
+  flex: 0 0 11px;
+}
+
+.row-connector::before {
+  content: '';
+  position: absolute;
+  left: 3px;
+  width: 1px;
+  background: var(--row-connector);
+}
+
+.row-connector::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 5px;
+  height: 1px;
+  background: var(--row-connector);
+}
+
+.row-connector.is-first::before {
+  top: 50%;
+  bottom: 0;
+}
+
+.row-connector.is-middle::before {
+  top: 0;
+  bottom: 0;
+}
+
+.row-connector.is-last::before {
+  top: 0;
+  bottom: 50%;
 }
 
 .pane-column {
@@ -92,16 +144,49 @@ body {
   min-height: 0;
 }
 
-.terminal-view {
+/* The gutter sits on the group, not on each pane, so a pane's flex share covers
+   only its terminal and two equal shares come out equally wide. */
+.pane-group {
   position: absolute;
   inset: 0;
-  padding: 6px 0 6px 8px;
+  display: flex;
+  padding: 6px 8px;
 }
 
-/* visibility, not display: a hidden terminal keeps its layout box, so it stays
-   measurable and reflows with the window while it is off screen. */
-.terminal-view.is-inactive {
+/* visibility, not display: a hidden group keeps its layout box, so its terminals
+   stay measurable and reflow with the window while they are off screen. */
+.pane-group.is-inactive {
   visibility: hidden;
+}
+
+/* flex-grow carries the pane's share of the group and is set from the model. */
+.terminal-view {
+  flex-basis: 0;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+/* Wide enough to leave each terminal the same breathing room the group's own
+   gutter gives the outer two. */
+.pane-divider {
+  position: relative;
+  flex: 0 0 16px;
+  cursor: col-resize;
+  user-select: none;
+}
+
+.pane-divider::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: var(--chrome-border);
+}
+
+.pane-divider:hover::after {
+  background: var(--row-marker);
 }
 
 .terminal-host {

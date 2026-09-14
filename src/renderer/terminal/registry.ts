@@ -32,8 +32,10 @@ const handles = new Map<SessionId, TerminalHandle>()
 const pendingOutput = new Map<SessionId, string[]>()
 
 type TitleListener = (id: SessionId, title: string) => void
+type FocusListener = (id: SessionId) => void
 
 const titleListeners = new Set<TitleListener>()
+const focusListeners = new Set<FocusListener>()
 
 window.taqueria.pty.onData((event) => {
   const handle = handles.get(event.id)
@@ -51,8 +53,9 @@ window.taqueria.pty.onData((event) => {
   pendingOutput.set(event.id, [event.data])
 })
 
-export async function createSession(): Promise<SessionId> {
-  const id = await window.taqueria.pty.create({ cols: INITIAL_COLS, rows: INITIAL_ROWS })
+export async function createSession(cwdFrom?: SessionId): Promise<SessionId> {
+  const size = { cols: INITIAL_COLS, rows: INITIAL_ROWS }
+  const id = await window.taqueria.pty.create(size, cwdFrom)
 
   const term = new Terminal({
     fontFamily: TERMINAL_FONT_FAMILY,
@@ -67,6 +70,12 @@ export async function createSession(): Promise<SessionId> {
 
   const element = document.createElement('div')
   element.className = 'terminal-host'
+
+  // Clicking into a pane is how focus moves between the panes of a split, so the
+  // workspace has to hear about it and not only about the moves it made itself.
+  element.addEventListener('focusin', () => {
+    emitFocus(id)
+  })
 
   term.onData((data) => {
     window.taqueria.pty.write(id, data)
@@ -94,8 +103,8 @@ export function attachSession(id: SessionId, host: HTMLElement): void {
     return
   }
 
-  // Attaching is also how a terminal moves from one host to another, so undo the
-  // previous placement before making the new one.
+  // Attaching twice would strand the first ResizeObserver, still connected and
+  // still fitting the terminal to a host it has left.
   detachSession(id)
   host.appendChild(handle.element)
 
@@ -166,9 +175,22 @@ export function onSessionTitle(listener: TitleListener): () => void {
   }
 }
 
+export function onSessionFocus(listener: FocusListener): () => void {
+  focusListeners.add(listener)
+  return () => {
+    focusListeners.delete(listener)
+  }
+}
+
 function emitTitle(id: SessionId, title: string): void {
   for (const listener of titleListeners) {
     listener(id, title)
+  }
+}
+
+function emitFocus(id: SessionId): void {
+  for (const listener of focusListeners) {
+    listener(id)
   }
 }
 

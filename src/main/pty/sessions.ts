@@ -1,6 +1,8 @@
+import { statSync, type Stats } from 'node:fs'
 import { homedir } from 'node:os'
 import { spawn, type IPty } from 'node-pty'
 import type { PtyDataEvent, PtyExitEvent, PtySize, SessionId } from '@shared/ipc'
+import { processCwd } from './cwd'
 import { shellArguments, shellEnvironment, shellPath } from './shell'
 
 type DataListener = (event: PtyDataEvent) => void
@@ -27,15 +29,17 @@ export class PtySessions {
   private readonly exitListeners = new Set<ExitListener>()
   private nextId = 1
 
-  create(size: PtySize): SessionId {
+  async create(size: PtySize, cwdFrom?: SessionId): Promise<SessionId> {
     const id = `pty-${this.nextId}`
     this.nextId += 1
+
+    const cwd = await this.resolveStartingDirectory(cwdFrom)
 
     const pty = spawn(shellPath(), shellArguments(), {
       name: 'xterm-256color',
       cols: size.cols,
       rows: size.rows,
-      cwd: homedir(),
+      cwd,
       env: shellEnvironment()
     })
 
@@ -105,6 +109,35 @@ export class PtySessions {
 
   onExit(listener: ExitListener): void {
     this.exitListeners.add(listener)
+  }
+
+  private async resolveStartingDirectory(cwdFrom?: SessionId): Promise<string> {
+    if (cwdFrom === undefined) {
+      return homedir()
+    }
+
+    const sourceSession = this.sessions.get(cwdFrom)
+    if (sourceSession === undefined) {
+      return homedir()
+    }
+
+    const discoveredCwd = await processCwd(sourceSession.pty.pid)
+    if (discoveredCwd === null) {
+      return homedir()
+    }
+
+    let stats: Stats
+    try {
+      stats = statSync(discoveredCwd)
+    } catch {
+      return homedir()
+    }
+
+    if (!stats.isDirectory()) {
+      return homedir()
+    }
+
+    return discoveredCwd
   }
 
   private flush(id: SessionId): void {
