@@ -77,6 +77,9 @@ export interface Screen {
   groups: number
   dividers: number
   sidebarVisible: boolean
+  sidebarWidth: number
+  windowWidth: number
+  labelsTruncated: boolean
 }
 
 export interface App {
@@ -84,6 +87,8 @@ export interface App {
   press(key: Key, modifiers?: Modifiers): Promise<void>
   pressAutoRepeat(key: Key, modifiers?: Modifiers): Promise<void>
   dragDivider(dividerIndex: number, byPixels: number): Promise<void>
+  dragSidebarDivider(byPixels: number): Promise<void>
+  doubleClickSidebarDivider(): Promise<void>
   runInPane(sessionId: string, command: string): Promise<void>
   until(description: string, holds: (screen: Screen) => boolean): Promise<Screen>
   pause(milliseconds: number): Promise<void>
@@ -182,7 +187,28 @@ const SCREEN_SCRIPT = `JSON.stringify({
   })),
   groups: document.querySelectorAll('.pane-group').length,
   dividers: document.querySelectorAll('.pane-group:not(.is-inactive) .pane-divider').length,
-  sidebarVisible: document.querySelector('.sidebar') !== null
+  sidebarVisible: document.querySelector('.sidebar') !== null,
+  sidebarWidth: (() => {
+    const sidebar = document.querySelector('.sidebar')
+    if (!sidebar) {
+      return 0
+    }
+    return Math.round(sidebar.getBoundingClientRect().width)
+  })(),
+  windowWidth: window.innerWidth,
+  // A range rather than the usual scrollWidth against clientWidth: both of those
+  // are rounded, so they read equal while the label is a fraction over and still
+  // showing an ellipsis.
+  labelsTruncated: (() => {
+    const labels = [...document.querySelectorAll('.row-label')]
+    return labels.some((label) => {
+      const range = document.createRange()
+      range.selectNodeContents(label)
+      const textWidth = range.getBoundingClientRect().width
+      const availableWidth = label.getBoundingClientRect().width
+      return textWidth > availableWidth
+    })
+  })()
 })`
 
 export async function launchApp(options: LaunchOptions = {}): Promise<App> {
@@ -303,14 +329,18 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     await dispatchKey(key, modifiers, true)
   }
 
-  async function dragDivider(dividerIndex: number, byPixels: number): Promise<void> {
+  async function centreOf(selector: string, index: number): Promise<{ x: number; y: number }> {
     const centreScript = `JSON.stringify((() => {
-      const dividers = document.querySelectorAll('.pane-group:not(.is-inactive) .pane-divider')
-      const box = dividers[${dividerIndex}].getBoundingClientRect()
+      const handles = document.querySelectorAll('${selector}')
+      const box = handles[${index}].getBoundingClientRect()
       return { x: Math.round(box.left + box.width / 2), y: Math.round(box.top + box.height / 2) }
     })())`
     const measured = await evaluate(centreScript)
-    const centre = JSON.parse(measured) as { x: number; y: number }
+    return JSON.parse(measured) as { x: number; y: number }
+  }
+
+  async function dragAcross(selector: string, index: number, byPixels: number): Promise<void> {
+    const centre = await centreOf(selector, index)
 
     const held = { button: 'left', buttons: 1, clickCount: 1 }
     const destinationX = centre.x + byPixels
@@ -332,6 +362,32 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
       x: destinationX,
       y: centre.y,
       ...held
+    })
+  }
+
+  async function dragDivider(dividerIndex: number, byPixels: number): Promise<void> {
+    await dragAcross('.pane-group:not(.is-inactive) .pane-divider', dividerIndex, byPixels)
+  }
+
+  async function dragSidebarDivider(byPixels: number): Promise<void> {
+    await dragAcross('.sidebar-divider', 0, byPixels)
+  }
+
+  async function doubleClickSidebarDivider(): Promise<void> {
+    const centre = await centreOf('.sidebar-divider', 0)
+    const clicked = { button: 'left', buttons: 1, clickCount: 2 }
+
+    await send('Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      x: centre.x,
+      y: centre.y,
+      ...clicked
+    })
+    await send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x: centre.x,
+      y: centre.y,
+      ...clicked
     })
   }
 
@@ -418,6 +474,8 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     press,
     pressAutoRepeat,
     dragDivider,
+    dragSidebarDivider,
+    doubleClickSidebarDivider,
     runInPane,
     until,
     pause,
