@@ -23,8 +23,11 @@ body {
   height: 100%;
 }
 
+/* Without min-width, a flex item's automatic minimum is its content width, so a
+   long row label would widen the sidebar past the width set here. */
 .sidebar {
   flex: 0 0 var(--sidebar-width);
+  min-width: 0;
   display: flex;
   flex-direction: column;
   background: var(--chrome-background);
