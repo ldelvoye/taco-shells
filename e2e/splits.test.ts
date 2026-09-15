@@ -116,10 +116,11 @@ describe('the default keymap', () => {
     const received = join(directory, 'received')
     const surplus = join(directory, 'surplus')
 
-    // The shell is the only witness to what left the terminal, so it reports the
-    // bytes of the line it is given and then reads once more, which is what makes
-    // a second line arriving visible.
-    const report = `printf '%s' "$line" | od -An -tx1 > ${received}`
+    // The shell is the only witness to what left the terminal: it reports the
+    // bytes of its line, then reads once more so a second line would show up too.
+    // The report is renamed into place, so the file waited on is never half-written.
+    const write = `printf '%s' "$line" | od -An -tx1 > ${received}.part`
+    const report = `${write}; mv ${received}.part ${received}`
     const script = `printf ready > ${ready}; read -r line; ${report}; read -r; printf seen > ${surplus}`
     await app.runInPane('pty-1', script)
     await app.until('the shell is reading', () => existsSync(ready))
