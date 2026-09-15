@@ -42,7 +42,8 @@ export const KEY = {
   bracketRight: { code: 'BracketRight', text: ']', virtualKeyCode: 221 },
   left: { code: 'ArrowLeft', text: '', virtualKeyCode: 37 },
   right: { code: 'ArrowRight', text: '', virtualKeyCode: 39 },
-  comma: { code: 'Comma', text: ',', virtualKeyCode: 188 }
+  comma: { code: 'Comma', text: ',', virtualKeyCode: 188 },
+  enter: { code: 'Enter', text: 'Enter', virtualKeyCode: 13 }
 } satisfies Record<string, Key>
 
 export interface Modifiers {

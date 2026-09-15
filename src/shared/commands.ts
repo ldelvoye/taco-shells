@@ -10,6 +10,7 @@ export const COMMAND_IDS = [
   'terminal.paste',
   'terminal.clear',
   'terminal.killLine',
+  'terminal.insertNewline',
   'sidebar.toggle',
   'config.openSettings',
   'config.openKeybindings'

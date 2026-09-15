@@ -109,6 +109,32 @@ describe('the default keymap', () => {
     expect(screen.rows[0].connector).toBe('')
     expect(screen.panes.map((pane) => pane.width)).toEqual([1])
   })
+
+  it('sends esc+return on shift+enter, and only that', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'taco-shells-newline-'))
+    const ready = join(directory, 'ready')
+    const received = join(directory, 'received')
+    const surplus = join(directory, 'surplus')
+
+    // The shell is the only witness to what left the terminal, so it reports the
+    // bytes of the line it is given and then reads once more, which is what makes
+    // a second line arriving visible.
+    const report = `printf '%s' "$line" | od -An -tx1 > ${received}`
+    const script = `printf ready > ${ready}; read -r line; ${report}; read -r; printf seen > ${surplus}`
+    await app.runInPane('pty-1', script)
+    await app.until('the shell is reading', () => existsSync(ready))
+
+    await app.press(KEY.enter, { shift: true })
+    await app.until('the line arrives', () => existsSync(received))
+
+    // ESC alone: the return that followed it ended the line rather than joining
+    // it. A bare CR, which is all xterm sends for shift+enter, reads as an empty
+    // line here and submits whatever was typed in real use.
+    expect(readFileSync(received, 'utf8').trim()).toBe('1b')
+
+    await app.pause(1000)
+    expect(existsSync(surplus)).toBe(false)
+  })
 })
 
 describe('a split', () => {

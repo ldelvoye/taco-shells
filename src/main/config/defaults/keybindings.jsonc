@@ -12,6 +12,7 @@
   "cmd+v": "terminal.paste",
   "cmd+k": "terminal.clear",
   "cmd+backspace": "terminal.killLine",
+  "shift+enter": "terminal.insertNewline",
   "cmd+b": "sidebar.toggle",
   "cmd+,": "config.openSettings",
   "cmd+shift+,": "config.openKeybindings"

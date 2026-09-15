@@ -2,9 +2,11 @@ import type { SessionId } from '@shared/ipc'
 import { sessionTerminal } from '../terminal/registry'
 import type { CommandRegistry } from './registry'
 
-// What ctrl+U deletes is the reading program's call rather than ours: back to the
-// line start under readline, the whole line under zsh, half a page under vim.
+// A terminal's usual key for delete line.
 const CTRL_U = '\x15'
+
+// A terminal's usual key for a newline that does not submit the line: option+enter.
+const ESC_CR = '\x1b\r'
 
 export function registerTerminalCommands(registry: CommandRegistry, sessionId: SessionId): void {
   registry.register('terminal.copy', () => {
@@ -54,5 +56,14 @@ export function registerTerminalCommands(registry: CommandRegistry, sessionId: S
     }
 
     term.input(CTRL_U)
+  })
+
+  registry.register('terminal.insertNewline', () => {
+    const term = sessionTerminal(sessionId)
+    if (!term) {
+      return
+    }
+
+    term.input(ESC_CR)
   })
 }
