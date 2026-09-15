@@ -1,5 +1,4 @@
 :root {
-  --sidebar-width: 220px;
   --row-height: 22px;
 }
 
@@ -26,6 +25,7 @@ body {
 /* Without min-width, a flex item's automatic minimum is its content width, so a
    long row label would widen the sidebar past the width set here. */
 .sidebar {
+  position: relative;
   flex: 0 0 var(--sidebar-width);
   min-width: 0;
   display: flex;
@@ -125,6 +125,29 @@ body {
 .row-connector.is-last::before {
   top: 0;
   bottom: 50%;
+}
+
+/* The strip overlaps the titlebar above it, so without no-drag a grab near the
+   top moves the window instead of resizing the sidebar. */
+.sidebar-divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -3px;
+  width: 6px;
+  cursor: col-resize;
+  user-select: none;
+  -webkit-app-region: no-drag;
+}
+
+.sidebar-divider:hover::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: var(--row-marker);
 }
 
 .pane-column {

@@ -1,6 +1,7 @@
-import { type DragEvent, type JSX, useRef, useState } from 'react'
+import { type CSSProperties, type DragEvent, type JSX, useRef, useState } from 'react'
 import type { SessionId } from '@shared/ipc'
 import { type Group, paneOf } from '@shared/model'
+import { SidebarDivider } from './SidebarDivider'
 
 const UNTITLED_ROW = 'Terminal'
 
@@ -11,8 +12,10 @@ const CONNECTOR_LAST = 'is-last'
 interface SidebarProps {
   groups: Group[]
   activeGroup: number
+  width: number
   onSelect: (sessionId: SessionId) => void
   onReorder: (from: number, to: number) => void
+  onResize: (width: number) => void
 }
 
 function labelFor(title: string): string {
@@ -37,7 +40,14 @@ function connectorFor(paneIndex: number, paneCount: number): string | null {
   return CONNECTOR_MIDDLE
 }
 
-export function Sidebar({ groups, activeGroup, onSelect, onReorder }: SidebarProps): JSX.Element {
+export function Sidebar({
+  groups,
+  activeGroup,
+  width,
+  onSelect,
+  onReorder,
+  onResize
+}: SidebarProps): JSX.Element {
   const dragged = useRef<number | null>(null)
   const [insertAt, setInsertAt] = useState<number | null>(null)
 
@@ -156,10 +166,13 @@ export function Sidebar({ groups, activeGroup, onSelect, onReorder }: SidebarPro
     )
   })
 
+  const style = { '--sidebar-width': `${width}px` } as CSSProperties
+
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" style={style}>
       <div className="sidebar-titlebar" />
       <div className="sidebar-rows">{rendered}</div>
+      <SidebarDivider width={width} onResize={onResize} />
     </aside>
   )
 }

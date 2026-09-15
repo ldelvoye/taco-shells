@@ -28,6 +28,7 @@ import { useConfig } from './config/useConfig'
 import { useCommandKeys } from './keys/useCommandKeys'
 import { PaneArea } from './layout/PaneArea'
 import { Sidebar } from './sidebar/Sidebar'
+import { useSidebarWidth } from './sidebar/useSidebarWidth'
 import {
   applyTerminalConfig,
   createSession,
@@ -73,6 +74,7 @@ export function App(): JSX.Element {
   const activeSessionId = activeSessionOf(workspace)
   const config = useConfig()
   const bindings = useMemo(() => new Map(config.bindings), [config.bindings])
+  const sidebarWidth = useSidebarWidth()
 
   // Changes before the first terminal exists are dropped: there is nothing yet
   // for them to describe.
@@ -298,8 +300,10 @@ export function App(): JSX.Element {
       <Sidebar
         groups={groups}
         activeGroup={activeGroupIndex}
+        width={sidebarWidth.width}
         onSelect={selectPane}
         onReorder={reorderGroups}
+        onResize={sidebarWidth.resize}
       />
     )
   }
