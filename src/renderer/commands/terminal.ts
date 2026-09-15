@@ -2,6 +2,10 @@ import type { SessionId } from '@shared/ipc'
 import { sessionTerminal } from '../terminal/registry'
 import type { CommandRegistry } from './registry'
 
+// What ctrl+U deletes is the reading program's call rather than ours: back to the
+// line start under readline, the whole line under zsh, half a page under vim.
+const CTRL_U = '\x15'
+
 export function registerTerminalCommands(registry: CommandRegistry, sessionId: SessionId): void {
   registry.register('terminal.copy', () => {
     const term = sessionTerminal(sessionId)
@@ -41,5 +45,14 @@ export function registerTerminalCommands(registry: CommandRegistry, sessionId: S
     }
 
     term.clear()
+  })
+
+  registry.register('terminal.killLine', () => {
+    const term = sessionTerminal(sessionId)
+    if (!term) {
+      return
+    }
+
+    term.input(CTRL_U)
   })
 }

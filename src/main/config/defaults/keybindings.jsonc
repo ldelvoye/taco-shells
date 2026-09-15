@@ -11,6 +11,7 @@
   "cmd+c": "terminal.copy",
   "cmd+v": "terminal.paste",
   "cmd+k": "terminal.clear",
+  "cmd+backspace": "terminal.killLine",
   "cmd+b": "sidebar.toggle",
   "cmd+,": "config.openSettings",
   "cmd+shift+,": "config.openKeybindings"

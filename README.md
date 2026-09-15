@@ -32,6 +32,7 @@ Releases marked as pre-releases are points in the project's history rather than 
 | `cmd+b`                       | show or hide the sidebar                                     |
 | `cmd+c` / `cmd+v`             | copy and paste                                               |
 | `cmd+k`                       | clear                                                        |
+| `cmd+backspace`               | delete the line, by sending ctrl+U                           |
 | `cmd+,` / `cmd+shift+,`       | open settings and keybindings in a terminal, using `$EDITOR` |
 
 ## Settings
