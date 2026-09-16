@@ -20,21 +20,24 @@ xattr -dr com.apple.quarantine "/Applications/Taco Shells.app"
 
 Releases marked as pre-releases are points in the project's history rather than builds to install; they carry no download.
 
-## Keys
+## Jumping to the terminal that wants you
 
-|                               |                                                              |
-| ----------------------------- | ------------------------------------------------------------ |
-| `cmd+t`                       | new terminal                                                 |
-| `cmd+\`                       | split the current one                                        |
-| `cmd+w`                       | close the current pane                                       |
-| `cmd+opt+←` / `cmd+opt+→`     | move between the panes of a split                            |
-| `cmd+shift+[` / `cmd+shift+]` | move between terminals                                       |
-| `cmd+b`                       | show or hide the sidebar                                     |
-| `cmd+c` / `cmd+v`             | copy and paste                                               |
-| `cmd+k`                       | clear                                                        |
-| `cmd+backspace`               | delete the line, by sending ctrl+U                           |
-| `shift+enter`                 | newline without submitting, by sending esc+return            |
-| `cmd+,` / `cmd+shift+,`       | open settings and keybindings in a terminal, using `$EDITOR` |
+[Clawd on Desk](https://github.com/rullerzhou-afk/clawd-on-desk) shows a bubble when a Claude Code session needs you, with a "go to terminal" button. Clicking it raises Taco Shells and switches to the terminal that asked, rather than leaving you on whichever one you had open.
+
+It needs the hook below, which is what tells Taco Shells a session is waiting. Without it nothing is ever flagged and the button only raises the app. Add it to `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "Notification": [
+      { "hooks": [{ "type": "command", "command": "/path/to/taco-shells/hooks/taco-shells-attention.sh" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "/path/to/taco-shells/hooks/taco-shells-attention.sh" }] }
+    ]
+  }
+}
+```
 
 ## Settings
 
