@@ -38,6 +38,12 @@ const api: TacoShellsApi = {
     initial: ipcRenderer.sendSync(CHANNEL.configGet) as Config,
     onChange: (listener: (config: Config) => void) => subscribe(CHANNEL.configChanged, listener),
     pathOf: (which: ConfigFile) => ipcRenderer.sendSync(CHANNEL.configPath, which) as string
+  },
+  focus: {
+    onFocusSession: (listener: (id: SessionId) => void) => subscribe(CHANNEL.focusSession, listener),
+    onAttention: (listener: (id: SessionId) => void) => subscribe(CHANNEL.attentionSession, listener),
+    onActivated: (listener: () => void) => subscribe(CHANNEL.appActivated, () => listener()),
+    onUnavailable: (listener: () => void) => subscribe(CHANNEL.focusUnavailable, () => listener())
   }
 }
 

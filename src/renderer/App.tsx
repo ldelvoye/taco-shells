@@ -1,6 +1,7 @@
 import { type JSX, useCallback, useEffect, useMemo, useState } from 'react'
 import type { SessionId } from '@shared/ipc'
 import { paletteFor } from '@shared/theme'
+import { waitingAfterAttention, waitingAfterExit, waitingAfterFocus } from '@shared/attention'
 import {
   activatePane,
   activePane,
@@ -38,6 +39,9 @@ import {
   onSessionTitle
 } from './terminal/registry'
 
+const FOCUS_PORTS_TAKEN =
+  'Ports 23456-23460 are all in use, so jumping to the terminal that wants you is off.'
+
 let nextGroupNumber = 1
 
 function groupForSession(sessionId: SessionId): Group {
@@ -70,6 +74,8 @@ export function App(): JSX.Element {
   // state as a workspace whose last terminal has just closed.
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
   const [sidebarVisible, setSidebarVisible] = useState(true)
+  const [waiting, setWaiting] = useState<SessionId | null>(null)
+  const [focusProblem, setFocusProblem] = useState<string | null>(null)
   const commands = useMemo(() => createCommandRegistry(), [])
   const activeSessionId = activeSessionOf(workspace)
   const config = useConfig()
@@ -159,12 +165,46 @@ export function App(): JSX.Element {
     })
   }, [updateWorkspace])
 
+  useEffect(() => {
+    return window.tacoShells.focus.onAttention((id) => {
+      setWaiting((current) => waitingAfterAttention(current, id, activeSessionId))
+    })
+  }, [activeSessionId])
+
+  useEffect(() => {
+    return window.tacoShells.focus.onActivated(() => {
+      if (waiting === null) {
+        return
+      }
+      updateWorkspace((current) => activatePane(current, waiting))
+      focusSession(waiting)
+    })
+  }, [waiting, updateWorkspace])
+
+  useEffect(() => {
+    return window.tacoShells.focus.onFocusSession((id) => {
+      updateWorkspace((current) => activatePane(current, id))
+      focusSession(id)
+    })
+  }, [updateWorkspace])
+
+  useEffect(() => {
+    setWaiting((current) => waitingAfterFocus(current, activeSessionId))
+  }, [activeSessionId])
+
+  useEffect(() => {
+    return window.tacoShells.focus.onUnavailable(() => {
+      setFocusProblem(FOCUS_PORTS_TAKEN)
+    })
+  }, [])
+
   // A pane leaves the workspace when its pty exits and at no other time, so
   // typing `exit` and closing the terminal from the app take one path.
   useEffect(() => {
     return window.tacoShells.pty.onExit((event) => {
       disposeSession(event.id)
       updateWorkspace((current) => closePane(current, event.id))
+      setWaiting((current) => waitingAfterExit(current, event.id))
     })
   }, [updateWorkspace])
 
@@ -294,6 +334,11 @@ export function App(): JSX.Element {
     activeGroupIndex = workspace.activeGroup
   }
 
+  let problems = config.problems
+  if (focusProblem) {
+    problems = [...config.problems, focusProblem]
+  }
+
   let sidebar = null
   if (sidebarVisible) {
     sidebar = (
@@ -320,7 +365,7 @@ export function App(): JSX.Element {
       {sidebar}
       <div className="pane-column">
         {paneTitlebar}
-        <ConfigBanner problems={config.problems} />
+        <ConfigBanner problems={problems} />
         <PaneArea groups={groups} activeGroup={activeGroupIndex} onResize={resizeGroup} />
       </div>
     </div>

@@ -6,6 +6,7 @@ import { configDirectoryName } from '../channel'
 
 const SETTINGS_FILE = 'settings.json'
 const KEYBINDINGS_FILE = 'keybindings.json'
+const FOCUS_PORT_FILE = 'focus-port'
 const WATCH_DEBOUNCE_MS = 100
 
 export interface ConfigTexts {
@@ -51,6 +52,10 @@ export function configFilePath(directory: string, which: ConfigFile): string {
     fileName = KEYBINDINGS_FILE
   }
   return join(directory, fileName)
+}
+
+export function focusPortPath(directory: string): string {
+  return join(directory, FOCUS_PORT_FILE)
 }
 
 function readConfigFile(path: string): string | null {

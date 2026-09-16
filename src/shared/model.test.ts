@@ -174,6 +174,21 @@ describe('moveDivider', () => {
   })
 })
 
+describe('activatePane', () => {
+  it('reaches a pane in another group, and a pane beside it in the same one', () => {
+    const groups = [makeGroup('a', 'pane-a'), makeGroupWithWidths('b', [0.5, 0.5], 0)]
+    const workspace = makeWorkspace(groups, 0)
+
+    const acrossGroups = activatePane(workspace, 'b-1')
+    expect(acrossGroups.activeGroup).toBe(1)
+    expect(acrossGroups.groups[1].activePane).toBe(1)
+
+    const withinGroup = activatePane(acrossGroups, 'b-0')
+    expect(withinGroup.activeGroup).toBe(1)
+    expect(withinGroup.groups[1].activePane).toBe(0)
+  })
+})
+
 describe('unchanged operations', () => {
   it('returns the same workspace reference when nothing changes', () => {
     const workspace = makeWorkspace([makeGroup('a', 'pane-a'), makeGroup('b', 'pane-b')], 0)

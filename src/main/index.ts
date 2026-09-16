@@ -3,6 +3,7 @@ import { paletteFor } from '@shared/theme'
 import { applicationName } from './channel'
 import { ConfigStore } from './config'
 import { configDirectory } from './config/files'
+import { registerFocus } from './focus'
 import { registerIpc } from './ipc'
 import { PtySessions } from './pty/sessions'
 import { buildApplicationMenu } from './window/menu'
@@ -13,6 +14,7 @@ app.setName(applicationName(channel))
 
 const sessions = new PtySessions()
 let store: ConfigStore | undefined
+let stopFocus: (() => void) | undefined
 
 app.whenReady().then(() => {
   // Launching a GUI app activates it and takes the user's focus, so a suite run
@@ -29,6 +31,7 @@ app.whenReady().then(() => {
   const palette = paletteFor(initialConfig.appearance)
   const window = createMainWindow(palette)
   registerIpc(sessions, window, store)
+  stopFocus = registerFocus(sessions, window, directory)
 
   store.onChange((config) => {
     const nextPalette = paletteFor(config.appearance)
@@ -41,6 +44,9 @@ app.whenReady().then(() => {
 app.on('before-quit', () => {
   if (store) {
     store.stop()
+  }
+  if (stopFocus) {
+    stopFocus()
   }
 })
 

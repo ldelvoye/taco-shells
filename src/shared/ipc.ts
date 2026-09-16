@@ -28,7 +28,11 @@ export const CHANNEL = {
   clipboardWrite: 'clipboard:write',
   configGet: 'config:get',
   configChanged: 'config:changed',
-  configPath: 'config:path'
+  configPath: 'config:path',
+  focusSession: 'focus:session',
+  attentionSession: 'attention:session',
+  appActivated: 'app:activated',
+  focusUnavailable: 'focus:unavailable'
 } as const
 
 /** Everything the renderer may ask the main process to do, exposed on `window.tacoShells`. */
@@ -49,5 +53,11 @@ export interface TacoShellsApi {
     initial: Config
     onChange(listener: (config: Config) => void): () => void
     pathOf(which: ConfigFile): string
+  }
+  focus: {
+    onFocusSession(listener: (id: SessionId) => void): () => void
+    onAttention(listener: (id: SessionId) => void): () => void
+    onActivated(listener: () => void): () => void
+    onUnavailable(listener: () => void): () => void
   }
 }

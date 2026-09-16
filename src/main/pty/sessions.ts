@@ -104,6 +104,16 @@ export class PtySessions {
     this.exitListeners.add(listener)
   }
 
+  sessionForPids(pids: number[]): SessionId | null {
+    for (const [id, session] of this.sessions) {
+      const pid = session.pty.pid
+      if (pids.includes(pid)) {
+        return id
+      }
+    }
+    return null
+  }
+
   private async resolveStartingDirectory(cwdFrom?: SessionId): Promise<string> {
     if (cwdFrom === undefined) {
       return homedir()
