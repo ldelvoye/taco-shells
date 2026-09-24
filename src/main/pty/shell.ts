@@ -38,6 +38,8 @@ export function shellEnvironment(): Record<string, string> {
 
   environment.TERM = 'xterm-256color'
   environment.COLORTERM = 'truecolor'
+  // Most CLIs only emit OSC 8 hyperlinks for terminals they recognise by name.
+  environment.FORCE_HYPERLINK = '1'
   if (!environment.LANG) {
     environment.LANG = 'en_US.UTF-8'
   }

@@ -32,6 +32,9 @@ const api: TacoShellsApi = {
     read: () => ipcRenderer.invoke(CHANNEL.clipboardRead),
     write: (text: string) => ipcRenderer.send(CHANNEL.clipboardWrite, text)
   },
+  link: {
+    open: (url: string) => ipcRenderer.send(CHANNEL.linkOpen, url)
+  },
   config: {
     // Synchronous on purpose: the renderer sets the palette and builds its first
     // terminal from this, and an await here would paint the wrong theme first.

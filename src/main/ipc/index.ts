@@ -1,8 +1,9 @@
-import { type BrowserWindow, clipboard, ipcMain } from 'electron'
+import { type BrowserWindow, clipboard, ipcMain, shell } from 'electron'
 import type { ConfigFile } from '@shared/config'
 import { CHANNEL, type PtySize, type SessionId } from '@shared/ipc'
 import type { ConfigStore } from '../config'
 import { configFilePath } from '../config/files'
+import { isOpenableLink } from '../links'
 import type { PtySessions } from '../pty/sessions'
 
 export function registerIpc(sessions: PtySessions, window: BrowserWindow, store: ConfigStore): void {
@@ -15,6 +16,13 @@ export function registerIpc(sessions: PtySessions, window: BrowserWindow, store:
 
   ipcMain.handle(CHANNEL.clipboardRead, () => clipboard.readText())
   ipcMain.on(CHANNEL.clipboardWrite, (_event, text: string) => clipboard.writeText(text))
+
+  ipcMain.on(CHANNEL.linkOpen, (_event, url: string) => {
+    if (!isOpenableLink(url)) {
+      return
+    }
+    void shell.openExternal(url)
+  })
 
   // sendSync is answered by assigning returnValue, not by returning: a handler
   // that returns instead leaves the renderer waiting at startup.

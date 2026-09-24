@@ -26,6 +26,7 @@ export const CHANNEL = {
   ptyExit: 'pty:exit',
   clipboardRead: 'clipboard:read',
   clipboardWrite: 'clipboard:write',
+  linkOpen: 'link:open',
   configGet: 'config:get',
   configChanged: 'config:changed',
   configPath: 'config:path',
@@ -48,6 +49,9 @@ export interface TacoShellsApi {
   clipboard: {
     read(): Promise<string>
     write(text: string): void
+  }
+  link: {
+    open(url: string): void
   }
   config: {
     initial: Config

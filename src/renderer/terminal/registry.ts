@@ -1,12 +1,22 @@
 import { FitAddon } from '@xterm/addon-fit'
+import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
-import { Terminal, type ITerminalOptions } from '@xterm/xterm'
+import { Terminal, type ILinkHandler, type ITerminalOptions } from '@xterm/xterm'
 import type { SessionId } from '@shared/ipc'
 import { DEFAULT_SETTINGS, type Settings } from '@shared/settings'
 import { DARK_PALETTE, type TerminalColors } from '@shared/theme'
 
 const INITIAL_COLS = 80
 const INITIAL_ROWS = 24
+
+// OSC 8 hyperlinks, where the text shown can differ from the URL behind it.
+// Main decides which schemes may open, so xterm is told to pass them all.
+const HYPERLINK_HANDLER: ILinkHandler = {
+  activate: (event, url) => {
+    openLinkOnCmdClick(event, url)
+  },
+  allowNonHttpProtocols: true
+}
 
 interface TerminalHandle {
   id: SessionId
@@ -65,6 +75,9 @@ export async function createSession(cwdFrom?: SessionId): Promise<SessionId> {
 
   const fit = new FitAddon()
   term.loadAddon(fit)
+
+  const webLinks = new WebLinksAddon(openLinkOnCmdClick)
+  term.loadAddon(webLinks)
 
   const element = document.createElement('div')
   element.className = 'terminal-host'
@@ -233,8 +246,18 @@ function optionsFrom(settings: Settings, colors: TerminalColors): ITerminalOptio
     scrollSensitivity: settings.scrollSensitivity,
     cursorBlink: settings.cursorBlink,
     cursorStyle: settings.cursorStyle,
-    theme: colors
+    theme: colors,
+    linkHandler: HYPERLINK_HANDLER
   }
+}
+
+// A plain click has to stay free for selecting text, so a link only opens with
+// Cmd held.
+function openLinkOnCmdClick(event: MouseEvent, url: string): void {
+  if (!event.metaKey) {
+    return
+  }
+  window.tacoShells.link.open(url)
 }
 
 function fitToHost(handle: TerminalHandle): void {
