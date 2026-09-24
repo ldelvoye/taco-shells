@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readdirSync, rmSync } from 'node:fs'
 import { basename, join } from 'node:path'
 
 const OUTPUT_DIRECTORY = 'dist.noindex'
@@ -30,6 +30,19 @@ export function builtBundle() {
 /** The dmg the build last wrote. */
 export function builtDmg() {
   return onlyFileEndingIn(OUTPUT_DIRECTORY, '.dmg')
+}
+
+/** Removes the dmgs, and their blockmaps, that earlier builds left behind. */
+export function clearBuiltDmgs() {
+  if (!existsSync(OUTPUT_DIRECTORY)) {
+    return
+  }
+
+  const entries = readdirSync(OUTPUT_DIRECTORY)
+  const stale = entries.filter((entry) => entry.endsWith('.dmg') || entry.endsWith('.dmg.blockmap'))
+  for (const entry of stale) {
+    rmSync(join(OUTPUT_DIRECTORY, entry))
+  }
 }
 
 /** Where a built bundle installs to, under the name it was built with. */

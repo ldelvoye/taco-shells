@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 
-import { appIsRunning, builtDmg } from './bundle.mjs'
+import { appIsRunning, builtDmg, clearBuiltDmgs } from './bundle.mjs'
 import identity from './identity.cjs'
 import { changeList, commandSucceeds, fail, git, lastTag, run, runWith, tryGit } from './repo.mjs'
 import { isVersion, versionOfTag } from './version.mjs'
@@ -78,6 +78,9 @@ run('npm', 'run', 'e2e')
 // The only build that brands itself stable. Everything else, a plain
 // `npm run install-app` included, produces the dev app instead.
 const stableChannel = { [identity.CHANNEL_VARIABLE]: identity.STABLE_CHANNEL }
+// builtDmg refuses to choose between two, so the last promotion's dmg would
+// fail this one.
+clearBuiltDmgs()
 runWith(stableChannel, 'npm', 'run', 'dist')
 
 const dmg = builtDmg()
