@@ -29,6 +29,7 @@ import { useConfig } from './config/useConfig'
 import { useCommandKeys } from './keys/useCommandKeys'
 import { PaneArea } from './layout/PaneArea'
 import { Sidebar } from './sidebar/Sidebar'
+import { useFullScreen } from './sidebar/useFullScreen'
 import { useSidebarWidth } from './sidebar/useSidebarWidth'
 import {
   applyTerminalConfig,
@@ -81,6 +82,7 @@ export function App(): JSX.Element {
   const config = useConfig()
   const bindings = useMemo(() => new Map(config.bindings), [config.bindings])
   const sidebarWidth = useSidebarWidth()
+  const fullScreen = useFullScreen()
 
   // Changes before the first terminal exists are dropped: there is nothing yet
   // for them to describe.
@@ -346,6 +348,7 @@ export function App(): JSX.Element {
         groups={groups}
         activeGroup={activeGroupIndex}
         width={sidebarWidth.width}
+        fullScreen={fullScreen}
         onSelect={selectPane}
         onReorder={reorderGroups}
         onResize={sidebarWidth.resize}

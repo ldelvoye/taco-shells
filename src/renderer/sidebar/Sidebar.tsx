@@ -2,6 +2,7 @@ import { type CSSProperties, type DragEvent, type JSX, useRef, useState } from '
 import type { SessionId } from '@shared/ipc'
 import { type Group, paneOf } from '@shared/model'
 import { SidebarDivider } from './SidebarDivider'
+import { SidebarTitlebar } from './SidebarTitlebar'
 
 const UNTITLED_ROW = 'Terminal'
 
@@ -13,6 +14,7 @@ interface SidebarProps {
   groups: Group[]
   activeGroup: number
   width: number
+  fullScreen: boolean
   onSelect: (sessionId: SessionId) => void
   onReorder: (from: number, to: number) => void
   onResize: (width: number) => void
@@ -44,6 +46,7 @@ export function Sidebar({
   groups,
   activeGroup,
   width,
+  fullScreen,
   onSelect,
   onReorder,
   onResize
@@ -170,7 +173,7 @@ export function Sidebar({
 
   return (
     <aside className="sidebar" style={style}>
-      <div className="sidebar-titlebar" />
+      <SidebarTitlebar fullScreen={fullScreen} />
       <div className="sidebar-rows">{rendered}</div>
       <SidebarDivider width={width} onResize={onResize} />
     </aside>

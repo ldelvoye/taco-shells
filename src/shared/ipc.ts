@@ -33,7 +33,9 @@ export const CHANNEL = {
   focusSession: 'focus:session',
   attentionSession: 'attention:session',
   appActivated: 'app:activated',
-  focusUnavailable: 'focus:unavailable'
+  focusUnavailable: 'focus:unavailable',
+  fullScreenGet: 'full-screen:get',
+  fullScreenChanged: 'full-screen:changed'
 } as const
 
 /** Everything the renderer may ask the main process to do, exposed on `window.tacoShells`. */
@@ -63,5 +65,9 @@ export interface TacoShellsApi {
     onAttention(listener: (id: SessionId) => void): () => void
     onActivated(listener: () => void): () => void
     onUnavailable(listener: () => void): () => void
+  }
+  fullScreen: {
+    initial: boolean
+    onChange(listener: (fullScreen: boolean) => void): () => void
   }
 }

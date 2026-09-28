@@ -5,8 +5,9 @@ import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 const sharedDir = resolve(__dirname, 'src/shared')
 const rendererDir = resolve(__dirname, 'src/renderer')
 
-// Baked in so the running app knows which config directory is its own, matching
-// the identity electron-builder brands the bundle with.
+// Baked in so the running app knows which config directory is its own, and which
+// sidebar mark to draw, matching the identity electron-builder brands the bundle
+// with.
 let channel: string
 if (process.env.TACO_SHELLS_CHANNEL === 'stable') {
   channel = 'stable'
@@ -30,6 +31,7 @@ export default defineConfig({
     root: rendererDir,
     plugins: [react()],
     resolve: { alias: { '@shared': sharedDir, '@renderer': rendererDir } },
+    define: { __CHANNEL__: JSON.stringify(channel) },
     build: { rollupOptions: { input: resolve(rendererDir, 'index.html') } }
   }
 })

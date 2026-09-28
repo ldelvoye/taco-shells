@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The taco from taco-shells.svg without its ground, for drawing on the app's own
+  chrome. Shapes and colours are copied from the icon; keep the two in step.
+
+  The prompt is masked out rather than painted in the icon's ground colour, so
+  whatever sits behind the mark shows through it.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="112 262 800 478" width="800" height="478">
+  <defs>
+    <mask id="prompt" maskUnits="userSpaceOnUse" x="112" y="262" width="800" height="478">
+      <rect x="112" y="262" width="800" height="478" fill="#FFFFFF"/>
+      <path d="M352 508 L456 596 L352 684" fill="none" stroke="#000000" stroke-width="56" stroke-linecap="round" stroke-linejoin="round"/>
+      <rect x="516" y="644" width="148" height="42" rx="21" fill="#000000"/>
+    </mask>
+  </defs>
+
+  <g mask="url(#prompt)">
+    <circle cx="196" cy="560" r="76" fill="#5E8C28"/>
+    <circle cx="286" cy="466" r="82" fill="#7FB239"/>
+    <circle cx="398" cy="404" r="80" fill="#5E8C28"/>
+    <circle cx="512" cy="382" r="84" fill="#7FB239"/>
+    <circle cx="626" cy="402" r="80" fill="#5E8C28"/>
+    <circle cx="738" cy="466" r="82" fill="#7FB239"/>
+    <circle cx="828" cy="560" r="76" fill="#5E8C28"/>
+
+    <circle cx="232" cy="452" r="38" fill="#C81E5B"/>
+    <circle cx="352" cy="356" r="36" fill="#C81E5B"/>
+    <circle cx="512" cy="308" r="38" fill="#C81E5B"/>
+    <circle cx="672" cy="354" r="36" fill="#C81E5B"/>
+    <circle cx="792" cy="452" r="38" fill="#C81E5B"/>
+
+    <path d="M152 690 A360 300 0 0 1 872 690 L872 706 A26 26 0 0 1 846 732 L178 732 A26 26 0 0 1 152 706 Z" fill="#F0902F"/>
+
+    <circle cx="704" cy="556" r="20" fill="#FFC24A"/>
+    <circle cx="772" cy="612" r="15" fill="#FFC24A"/>
+    <circle cx="722" cy="664" r="13" fill="#FFC24A"/>
+  </g>
+</svg>

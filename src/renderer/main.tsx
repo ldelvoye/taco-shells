@@ -1,5 +1,5 @@
 import { createRoot } from 'react-dom/client'
-import { TITLEBAR_HEIGHT } from '@shared/chrome'
+import { TITLEBAR_HEIGHT, TRAFFIC_LIGHT_INSET, TRAFFIC_LIGHTS_WIDTH } from '@shared/chrome'
 import { paletteFor } from '@shared/theme'
 import '@xterm/xterm/css/xterm.css'
 import './app.css'
@@ -11,9 +11,12 @@ if (!container) {
   throw new Error('renderer has no #root element to mount into')
 }
 
-// The same number positions the traffic lights over this strip in the main
-// process, so it is set from there rather than written into the stylesheet too.
+// The main process places the traffic lights over this strip from the same
+// shared numbers, so they are set from there rather than written into the
+// stylesheet too.
 document.documentElement.style.setProperty('--titlebar-height', `${TITLEBAR_HEIGHT}px`)
+document.documentElement.style.setProperty('--traffic-light-inset', `${TRAFFIC_LIGHT_INSET}px`)
+document.documentElement.style.setProperty('--traffic-lights-width', `${TRAFFIC_LIGHTS_WIDTH}px`)
 
 const initialConfig = window.tacoShells.config.initial
 const initialPalette = paletteFor(initialConfig.appearance)

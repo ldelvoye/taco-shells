@@ -33,6 +33,22 @@ export function registerIpc(sessions: PtySessions, window: BrowserWindow, store:
     const directory = store.configDirectory()
     event.returnValue = configFilePath(directory, which)
   })
+  ipcMain.on(CHANNEL.fullScreenGet, (event) => {
+    event.returnValue = window.isFullScreen()
+  })
+
+  const sendFullScreen = (fullScreen: boolean): void => {
+    if (window.isDestroyed()) {
+      return
+    }
+    window.webContents.send(CHANNEL.fullScreenChanged, fullScreen)
+  }
+  window.on('enter-full-screen', () => {
+    sendFullScreen(true)
+  })
+  window.on('leave-full-screen', () => {
+    sendFullScreen(false)
+  })
 
   sessions.onData((event) => {
     if (window.isDestroyed()) {

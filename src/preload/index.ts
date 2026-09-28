@@ -47,6 +47,10 @@ const api: TacoShellsApi = {
     onAttention: (listener: (id: SessionId) => void) => subscribe(CHANNEL.attentionSession, listener),
     onActivated: (listener: () => void) => subscribe(CHANNEL.appActivated, () => listener()),
     onUnavailable: (listener: () => void) => subscribe(CHANNEL.focusUnavailable, () => listener())
+  },
+  fullScreen: {
+    initial: ipcRenderer.sendSync(CHANNEL.fullScreenGet) as boolean,
+    onChange: (listener: (fullScreen: boolean) => void) => subscribe(CHANNEL.fullScreenChanged, listener)
   }
 }
 
