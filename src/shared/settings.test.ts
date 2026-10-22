@@ -29,12 +29,14 @@ describe('applySettingsLayer', () => {
       fontFamily: '',
       theme: 'solarized',
       cursorStyle: 'beam',
-      cursorBlink: 'yes'
+      cursorBlink: 'yes',
+      restoreOnLaunch: 'yes'
     }
     const result = applySettingsLayer(DEFAULT_SETTINGS, layer, 'settings.json')
 
     expect(result.settings).toEqual(DEFAULT_SETTINGS)
-    expect(result.problems).toHaveLength(7)
+    expect(result.settings.restoreOnLaunch).toBe(true)
+    expect(result.problems).toHaveLength(8)
   })
 
   it('reports a key it does not know and ignores it', () => {

@@ -284,6 +284,21 @@ body {
   cursor: default;
 }
 
+.update-banner {
+  align-items: center;
+}
+
+.update-apply {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border: 1px solid var(--warning-border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--warning-text);
+  font: inherit;
+  cursor: pointer;
+}
+
 .terminal-host {
   width: 100%;
   height: 100%;

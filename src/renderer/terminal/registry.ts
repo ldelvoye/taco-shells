@@ -2,7 +2,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { Terminal, type ILinkHandler, type ITerminalOptions } from '@xterm/xterm'
-import type { SessionId } from '@shared/ipc'
+import type { PtyCreateOptions, SessionId } from '@shared/ipc'
 import { DEFAULT_SETTINGS, type Settings } from '@shared/settings'
 import { DARK_PALETTE, type TerminalColors } from '@shared/theme'
 
@@ -67,9 +67,9 @@ window.tacoShells.pty.onData((event) => {
   pendingOutput.set(event.id, [event.data])
 })
 
-export async function createSession(cwdFrom?: SessionId): Promise<SessionId> {
+export async function createSession(options?: PtyCreateOptions): Promise<SessionId> {
   const size = { cols: INITIAL_COLS, rows: INITIAL_ROWS }
-  const id = await window.tacoShells.pty.create(size, cwdFrom)
+  const id = await window.tacoShells.pty.create(size, options)
 
   const term = new Terminal(terminalOptions)
 

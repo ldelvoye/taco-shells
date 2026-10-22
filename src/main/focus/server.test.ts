@@ -5,12 +5,15 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import type { SessionId } from '@shared/ipc'
+import type { ClaudeSession } from '@shared/snapshot'
 import { type FocusServerHandlers, startFocusServer } from './server'
 
 interface FakeHandlers extends FocusServerHandlers {
   sessionPids: Map<SessionId, number>
   focused: SessionId[]
   attended: SessionId[]
+  started: Array<[SessionId, ClaudeSession]>
+  ended: Array<[SessionId, string]>
   unavailable: boolean[]
 }
 
@@ -18,13 +21,23 @@ function createFakeHandlers(): FakeHandlers {
   const sessionPids = new Map<SessionId, number>()
   const focused: SessionId[] = []
   const attended: SessionId[] = []
+  const started: Array<[SessionId, ClaudeSession]> = []
+  const ended: Array<[SessionId, string]> = []
   const unavailable: boolean[] = []
 
   return {
     sessionPids,
     focused,
     attended,
+    started,
+    ended,
     unavailable,
+    onClaudeStart: (id: SessionId, session: ClaudeSession) => {
+      started.push([id, session])
+    },
+    onClaudeEnd: (id: SessionId, sessionId: string) => {
+      ended.push([id, sessionId])
+    },
     onUnavailable: () => {
       unavailable.push(true)
     },
@@ -119,6 +132,54 @@ describe('startFocusServer', () => {
     expect(handlers.focused).toEqual(['pty-2'])
     expect(handlers.attended).toEqual(['pty-2'])
   })
+})
+
+describe('startFocusServer Claude session routes', () => {
+  const SESSION_ID = '123e4567-e89b-12d3-a456-426614174000'
+  let handlers: FakeHandlers
+  let stop: () => void
+  let port: number
+
+  beforeEach(async () => {
+    handlers = createFakeHandlers()
+    handlers.sessionPids.set('pty-2', 222)
+    const portFilePath = freshPortFilePath()
+    stop = startFocusServer(handlers, portFilePath)
+    port = await waitForPortFile(portFilePath)
+  })
+
+  afterEach(() => {
+    stop()
+  })
+
+  it('records a valid start once', async () => {
+    const body = { pids: [999, 222], sessionId: SESSION_ID, cwd: '/tmp/work' }
+
+    const response = await post(port, '/claude-session/start', body)
+
+    expect(response.status).toBe(200)
+    expect(handlers.started).toEqual([['pty-2', { sessionId: SESSION_ID, cwd: '/tmp/work' }]])
+  })
+
+  it('answers 400 and records nothing for a malformed session', async () => {
+    const badId = await post(port, '/claude-session/start', { pids: [222], sessionId: 'abc', cwd: '/tmp/work' })
+    const noCwd = await post(port, '/claude-session/start', { pids: [222], sessionId: SESSION_ID })
+    const badEndId = await post(port, '/claude-session/end', { pids: [222], sessionId: 'abc' })
+
+    expect([badId.status, noCwd.status, badEndId.status]).toEqual([400, 400, 400])
+    expect(handlers.started).toEqual([])
+    expect(handlers.ended).toEqual([])
+  })
+
+  it('records a valid end', async () => {
+    const body = { pids: [222], sessionId: SESSION_ID }
+
+    const response = await post(port, '/claude-session/end', body)
+
+    expect(response.status).toBe(200)
+    expect(handlers.ended).toEqual([['pty-2', SESSION_ID]])
+  })
+
 })
 
 function bindBlocker(port: number): Promise<Server> {

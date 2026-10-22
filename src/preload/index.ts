@@ -2,12 +2,15 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type { Config, ConfigFile } from '@shared/config'
 import {
   CHANNEL,
+  type PtyCreateOptions,
   type PtyDataEvent,
   type PtyExitEvent,
   type PtySize,
   type SessionId,
   type TacoShellsApi
 } from '@shared/ipc'
+import type { Workspace } from '@shared/model'
+import type { Snapshot } from '@shared/snapshot'
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
   const forward = (_event: IpcRendererEvent, payload: T): void => {
@@ -21,7 +24,7 @@ function subscribe<T>(channel: string, listener: (payload: T) => void): () => vo
 
 const api: TacoShellsApi = {
   pty: {
-    create: (size: PtySize, cwdFrom?: SessionId) => ipcRenderer.invoke(CHANNEL.ptyCreate, size, cwdFrom),
+    create: (size: PtySize, options?: PtyCreateOptions) => ipcRenderer.invoke(CHANNEL.ptyCreate, size, options),
     write: (id: SessionId, data: string) => ipcRenderer.send(CHANNEL.ptyWrite, id, data),
     resize: (id: SessionId, size: PtySize) => ipcRenderer.send(CHANNEL.ptyResize, id, size),
     kill: (id: SessionId) => ipcRenderer.send(CHANNEL.ptyKill, id),
@@ -51,6 +54,16 @@ const api: TacoShellsApi = {
   fullScreen: {
     initial: ipcRenderer.sendSync(CHANNEL.fullScreenGet) as boolean,
     onChange: (listener: (fullScreen: boolean) => void) => subscribe(CHANNEL.fullScreenChanged, listener)
+  },
+  snapshot: {
+    initial: ipcRenderer.sendSync(CHANNEL.snapshotGet) as Snapshot | null,
+    workspaceChanged: (workspace: Workspace) => ipcRenderer.send(CHANNEL.snapshotWorkspace, workspace)
+  },
+  update: {
+    initial: ipcRenderer.sendSync(CHANNEL.updateGet) as string | null,
+    onReady: (listener: (version: string) => void) => subscribe(CHANNEL.updateReady, listener),
+    onProblem: (listener: (message: string) => void) => subscribe(CHANNEL.updateProblem, listener),
+    apply: () => ipcRenderer.send(CHANNEL.updateApply)
   }
 }
 

@@ -56,6 +56,7 @@ export interface Modifiers {
 export interface LaunchOptions {
   configDir?: string
   env?: Record<string, string>
+  expectedRows?: number
 }
 
 /** A sidebar row: every pane of every group has one, in sidebar order. */
@@ -97,6 +98,8 @@ export interface App {
   chromeBackground(): Promise<string>
   configProblems(): Promise<string[]>
   close(): Promise<void>
+  quitGracefully(): Promise<void>
+  waitForExit(): Promise<void>
 }
 
 interface DebugTarget {
@@ -446,17 +449,12 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     rmSync(ownedConfigDir, { recursive: true, force: true })
   }
 
-  async function close(): Promise<void> {
-    socket.close()
-
-    // The signal has to reach Electron itself. Launching it through a wrapper
-    // like npx and killing that leaves Electron running, still holding the ptys.
-    electron.kill('SIGTERM')
-
+  async function waitForExit(): Promise<void> {
     const deadline = Date.now() + SHUTDOWN_TIMEOUT_MS
     while (Date.now() < deadline) {
       const stopped = electron.exitCode !== null || electron.signalCode !== null
       if (stopped) {
+        socket.close()
         discardOwnedConfigDir()
         return
       }
@@ -464,7 +462,27 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     }
 
     electron.kill('SIGKILL')
+    socket.close()
     discardOwnedConfigDir()
+  }
+
+  async function close(): Promise<void> {
+    // The signal has to reach Electron itself. Launching it through a wrapper
+    // like npx and killing that leaves Electron running, still holding the ptys.
+    electron.kill('SIGTERM')
+    await waitForExit()
+  }
+
+  async function quitGracefully(): Promise<void> {
+    const socketClosed = new Promise<void>((closed) => {
+      socket.addEventListener('close', () => closed())
+    })
+    try {
+      await Promise.race([evaluate('window.close()'), socketClosed])
+    } catch {
+      return waitForExit()
+    }
+    await waitForExit()
   }
 
   await send('Runtime.enable', {})
@@ -483,9 +501,16 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     rendererConsole,
     chromeBackground,
     configProblems,
-    close
+    close,
+    quitGracefully,
+    waitForExit
   }
-  await until('the first terminal exists', (state) => state.rows.length === 1)
+  let expectedRows = 1
+  if (options.expectedRows !== undefined) {
+    expectedRows = options.expectedRows
+  }
+  const waitDescription = `the app shows ${expectedRows} terminal rows`
+  await until(waitDescription, (state) => state.rows.length === expectedRows)
 
   return app
 }

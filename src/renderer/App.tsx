@@ -1,5 +1,6 @@
 import { type JSX, useCallback, useEffect, useMemo, useState } from 'react'
-import type { SessionId } from '@shared/ipc'
+import type { PtyCreateOptions, SessionId } from '@shared/ipc'
+import { type Snapshot, type SnapshotPane, workspaceFromSnapshot } from '@shared/snapshot'
 import { paletteFor } from '@shared/theme'
 import { waitingAfterAttention, waitingAfterExit, waitingAfterFocus } from '@shared/attention'
 import {
@@ -26,6 +27,8 @@ import { registerWorkspaceCommands } from './commands/workspace'
 import { ConfigBanner } from './config/ConfigBanner'
 import { applyChromePalette } from './config/palette'
 import { useConfig } from './config/useConfig'
+import { UpdateBanner } from './update/UpdateBanner'
+import { useUpdate } from './update/useUpdate'
 import { useCommandKeys } from './keys/useCommandKeys'
 import { PaneArea } from './layout/PaneArea'
 import { Sidebar } from './sidebar/Sidebar'
@@ -45,10 +48,25 @@ const FOCUS_PORTS_TAKEN =
 
 let nextGroupNumber = 1
 
-function groupForSession(sessionId: SessionId): Group {
+function nextGroupId(): string {
   const id = `group-${nextGroupNumber}`
   nextGroupNumber += 1
+  return id
+}
+
+function groupForSession(sessionId: SessionId): Group {
+  const id = nextGroupId()
   return { id, panes: [{ id: sessionId, title: '', width: 1 }], activePane: 0 }
+}
+
+function startOptionsOf(pane: SnapshotPane): PtyCreateOptions {
+  if (pane.claude !== null) {
+    return { resume: pane.claude }
+  } else if (typeof pane.cwd === 'string') {
+    return { cwd: pane.cwd }
+  } else {
+    return {}
+  }
 }
 
 // The shell resolves EDITOR, not us: on a GUI launch the app's own environment
@@ -83,6 +101,11 @@ export function App(): JSX.Element {
   const bindings = useMemo(() => new Map(config.bindings), [config.bindings])
   const sidebarWidth = useSidebarWidth()
   const fullScreen = useFullScreen()
+  const update = useUpdate()
+
+  const applyUpdate = useCallback(() => {
+    window.tacoShells.update.apply()
+  }, [])
 
   // Changes before the first terminal exists are dropped: there is nothing yet
   // for them to describe.
@@ -142,14 +165,58 @@ export function App(): JSX.Element {
       return
     }
 
-    void createSession(activeSessionId).then((sessionId) => {
+    void createSession({ cwdFrom: activeSessionId }).then((sessionId) => {
       updateWorkspace((current) => splitActivePane(current, sessionId))
     })
   }, [activeSessionId, workspace, updateWorkspace])
 
+  // Panes are created in group order and workspaceFromSnapshot hands the ids
+  // back out in that same order, so the two loops have to walk the same list.
+  const restoreWorkspace = useCallback(
+    async (snapshot: Snapshot) => {
+      const sessionIds: SessionId[] = []
+      let restored: Workspace = emptyWorkspace()
+      try {
+        for (const group of snapshot.groups) {
+          for (const pane of group.panes) {
+            const startOptions = startOptionsOf(pane)
+            const sessionId = await createSession(startOptions)
+            sessionIds.push(sessionId)
+          }
+        }
+        const groupIds = snapshot.groups.map(() => nextGroupId())
+        restored = workspaceFromSnapshot(snapshot, sessionIds, groupIds)
+      } catch {
+        restored = emptyWorkspace()
+      }
+
+      if (restored.groups.length === 0) {
+        for (const sessionId of sessionIds) {
+          disposeSession(sessionId)
+        }
+        openTerminal()
+        return
+      }
+      setWorkspace(restored)
+    },
+    [openTerminal]
+  )
+
   useEffect(() => {
-    openTerminal()
-  }, [openTerminal])
+    const initial = window.tacoShells.snapshot.initial
+    if (initial === null || initial.groups.length === 0) {
+      openTerminal()
+      return
+    }
+    void restoreWorkspace(initial)
+  }, [openTerminal, restoreWorkspace])
+
+  useEffect(() => {
+    if (!workspace) {
+      return
+    }
+    window.tacoShells.snapshot.workspaceChanged(workspace)
+  }, [workspace])
 
   useEffect(() => {
     return onSessionTitle((sessionId, title) => {
@@ -369,6 +436,7 @@ export function App(): JSX.Element {
       <div className="pane-column">
         {paneTitlebar}
         <ConfigBanner problems={problems} />
+        <UpdateBanner version={update.ready} problem={update.problem} onApply={applyUpdate} />
         <PaneArea groups={groups} activeGroup={activeGroupIndex} onResize={resizeGroup} />
       </div>
     </div>

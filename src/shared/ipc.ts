@@ -1,6 +1,14 @@
 import type { Config, ConfigFile } from './config'
+import type { Workspace } from './model'
+import type { ClaudeSession, Snapshot } from './snapshot'
 
 export type SessionId = string
+
+export interface PtyCreateOptions {
+  cwdFrom?: SessionId
+  cwd?: string
+  resume?: ClaudeSession
+}
 
 export interface PtySize {
   cols: number
@@ -35,13 +43,19 @@ export const CHANNEL = {
   appActivated: 'app:activated',
   focusUnavailable: 'focus:unavailable',
   fullScreenGet: 'full-screen:get',
-  fullScreenChanged: 'full-screen:changed'
+  fullScreenChanged: 'full-screen:changed',
+  snapshotGet: 'snapshot:get',
+  snapshotWorkspace: 'snapshot:workspace',
+  updateGet: 'update:get',
+  updateReady: 'update:ready',
+  updateProblem: 'update:problem',
+  updateApply: 'update:apply'
 } as const
 
 /** Everything the renderer may ask the main process to do, exposed on `window.tacoShells`. */
 export interface TacoShellsApi {
   pty: {
-    create(size: PtySize, cwdFrom?: SessionId): Promise<SessionId>
+    create(size: PtySize, options?: PtyCreateOptions): Promise<SessionId>
     write(id: SessionId, data: string): void
     resize(id: SessionId, size: PtySize): void
     kill(id: SessionId): void
@@ -69,5 +83,15 @@ export interface TacoShellsApi {
   fullScreen: {
     initial: boolean
     onChange(listener: (fullScreen: boolean) => void): () => void
+  }
+  snapshot: {
+    initial: Snapshot | null
+    workspaceChanged(workspace: Workspace): void
+  }
+  update: {
+    initial: string | null
+    onReady(listener: (version: string) => void): () => void
+    onProblem(listener: (message: string) => void): () => void
+    apply(): void
   }
 }

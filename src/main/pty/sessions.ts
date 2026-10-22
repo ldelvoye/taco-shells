@@ -1,8 +1,9 @@
 import { statSync, type Stats } from 'node:fs'
 import { homedir } from 'node:os'
 import { spawn, type IPty } from 'node-pty'
-import type { PtyDataEvent, PtyExitEvent, PtySize, SessionId } from '@shared/ipc'
+import type { PtyCreateOptions, PtyDataEvent, PtyExitEvent, PtySize, SessionId } from '@shared/ipc'
 import { processCwd } from './cwd'
+import { resumeCommand } from './resume'
 import { shellArguments, shellEnvironment, shellPath } from './shell'
 
 type DataListener = (event: PtyDataEvent) => void
@@ -12,6 +13,7 @@ interface Session {
   pty: IPty
   pending: string[]
   flushTimer: ReturnType<typeof setTimeout> | null
+  cwd: string
 }
 
 // A pty in line-buffered mode emits roughly one chunk per line: `seq 1 200000`
@@ -29,11 +31,11 @@ export class PtySessions {
   private readonly exitListeners = new Set<ExitListener>()
   private nextId = 1
 
-  async create(size: PtySize, cwdFrom?: SessionId): Promise<SessionId> {
+  async create(size: PtySize, options: PtyCreateOptions = {}): Promise<SessionId> {
     const id = `pty-${this.nextId}`
     this.nextId += 1
 
-    const cwd = await this.resolveStartingDirectory(cwdFrom)
+    const cwd = await this.resolveStartingDirectory(options)
 
     const pty = spawn(shellPath(), shellArguments(), {
       name: 'xterm-256color',
@@ -43,8 +45,15 @@ export class PtySessions {
       env: shellEnvironment()
     })
 
-    const session: Session = { pty, pending: [], flushTimer: null }
+    const session: Session = { pty, pending: [], flushTimer: null, cwd }
     this.sessions.set(id, session)
+
+    if (options.resume !== undefined) {
+      const command = resumeCommand(options.resume)
+      if (command !== null) {
+        pty.write(command)
+      }
+    }
 
     pty.onData((data) => {
       session.pending.push(data)
@@ -104,6 +113,24 @@ export class PtySessions {
     this.exitListeners.add(listener)
   }
 
+  /** The directory a session's shell was started in, or null once it is gone. */
+  startingDirectory(id: SessionId): string | null {
+    const session = this.sessions.get(id)
+    if (session === undefined) {
+      return null
+    }
+    return session.cwd
+  }
+
+  /** The process id of a session's shell, or null once it is gone. */
+  pidOf(id: SessionId): number | null {
+    const session = this.sessions.get(id)
+    if (session === undefined) {
+      return null
+    }
+    return session.pty.pid
+  }
+
   sessionForPids(pids: number[]): SessionId | null {
     for (const [id, session] of this.sessions) {
       const pid = session.pty.pid
@@ -114,24 +141,34 @@ export class PtySessions {
     return null
   }
 
-  private async resolveStartingDirectory(cwdFrom?: SessionId): Promise<string> {
-    if (cwdFrom === undefined) {
-      return homedir()
+  private async resolveStartingDirectory(options: PtyCreateOptions): Promise<string> {
+    let candidate: string | null = null
+    if (options.resume !== undefined) {
+      candidate = options.resume.cwd
+    } else if (options.cwd !== undefined) {
+      candidate = options.cwd
+    } else if (options.cwdFrom !== undefined) {
+      candidate = await this.directoryOf(options.cwdFrom)
     }
+    return this.usableDirectory(candidate)
+  }
 
-    const sourceSession = this.sessions.get(cwdFrom)
+  private async directoryOf(id: SessionId): Promise<string | null> {
+    const sourceSession = this.sessions.get(id)
     if (sourceSession === undefined) {
-      return homedir()
+      return null
     }
+    return processCwd(sourceSession.pty.pid)
+  }
 
-    const discoveredCwd = await processCwd(sourceSession.pty.pid)
-    if (discoveredCwd === null) {
+  private usableDirectory(candidate: string | null): string {
+    if (candidate === null) {
       return homedir()
     }
 
     let stats: Stats
     try {
-      stats = statSync(discoveredCwd)
+      stats = statSync(candidate)
     } catch {
       return homedir()
     }
@@ -140,7 +177,7 @@ export class PtySessions {
       return homedir()
     }
 
-    return discoveredCwd
+    return candidate
   }
 
   private flush(id: SessionId): void {

@@ -6,6 +6,8 @@ import { configDirectory } from './config/files'
 import { registerFocus } from './focus'
 import { registerIpc } from './ipc'
 import { PtySessions } from './pty/sessions'
+import { SnapshotStore } from './snapshot/store'
+import { registerUpdates } from './update'
 import { buildApplicationMenu } from './window/menu'
 import { createMainWindow, isBackgroundWindow } from './window/window'
 
@@ -14,7 +16,10 @@ app.setName(applicationName(channel))
 
 const sessions = new PtySessions()
 let store: ConfigStore | undefined
+let snapshotStore: SnapshotStore | undefined
 let stopFocus: (() => void) | undefined
+let stopUpdates: (() => void) | undefined
+let flushed = false
 
 app.whenReady().then(() => {
   // Launching a GUI app activates it and takes the user's focus, so a suite run
@@ -30,8 +35,20 @@ app.whenReady().then(() => {
   const initialConfig = store.current()
   const palette = paletteFor(initialConfig.appearance)
   const window = createMainWindow(palette)
-  registerIpc(sessions, window, store)
-  stopFocus = registerFocus(sessions, window, directory)
+  const snapshots = new SnapshotStore(directory, sessions)
+  snapshotStore = snapshots
+  registerIpc(sessions, window, store, snapshots)
+  stopFocus = registerFocus(sessions, window, directory, snapshots)
+  const registeredUpdates = registerUpdates(window, directory, channel)
+  if (registeredUpdates !== null) {
+    stopUpdates = registeredUpdates
+  }
+
+  // Closing the window is the start of a quit, and the snapshot has to stop
+  // changing from that moment, before the ptys go down with the process.
+  window.on('close', () => {
+    snapshots.freeze()
+  })
 
   store.onChange((config) => {
     const nextPalette = paletteFor(config.appearance)
@@ -41,13 +58,40 @@ app.whenReady().then(() => {
 
 // The shells need no teardown: each one exits when its pty master closes with
 // the process.
-app.on('before-quit', () => {
+function stopEverything(): void {
   if (store) {
     store.stop()
   }
   if (stopFocus) {
     stopFocus()
   }
+  if (stopUpdates) {
+    stopUpdates()
+  }
+  if (snapshotStore) {
+    snapshotStore.stop()
+  }
+}
+
+// The first before-quit is held back while the snapshot's final write runs; the
+// app.quit() at the end of that write fires it a second time, which goes through.
+app.on('before-quit', (event) => {
+  if (flushed) {
+    return
+  }
+  flushed = true
+
+  if (snapshotStore === undefined) {
+    stopEverything()
+    return
+  }
+
+  event.preventDefault()
+  snapshotStore.freeze()
+  void snapshotStore.flushAtQuit().finally(() => {
+    stopEverything()
+    app.quit()
+  })
 })
 
 // A terminal manager with no windows has nothing left to manage, so closing the
