@@ -18,6 +18,8 @@ It won't open yet. The app is signed only ad-hoc and isn't notarised, so macOS r
 xattr -dr com.apple.quarantine "/Applications/Taco Shells.app"
 ```
 
+Once it's installed, the app checks for a new stable release, downloads it in the background, and offers a restart that swaps in the new version and brings your terminals back. Only the first install is the dmg.
+
 Releases marked as pre-releases are points in the project's history rather than builds to install; they carry no download.
 
 ## Jumping to the terminal that wants you
@@ -34,10 +36,20 @@ It needs the hook below, which is what tells Taco Shells a session is waiting. W
     ],
     "Stop": [
       { "hooks": [{ "type": "command", "command": "/path/to/taco-shells/hooks/taco-shells-attention.sh" }] }
+    ],
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "/path/to/taco-shells/hooks/taco-shells-claude-session.sh" }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "/path/to/taco-shells/hooks/taco-shells-claude-session.sh" }] }
     ]
   }
 }
 ```
+
+## Picking up where you left off
+
+Quit and relaunch, and the terminals you had come back, each in the directory it was in. A terminal that was running Claude Code picks its conversation back up by resuming it. That part needs the `SessionStart` and `SessionEnd` entries in the hook snippet above, which is how Taco Shells learns which terminal is running which conversation. Set `"restoreOnLaunch": false` in settings to turn the whole thing off.
 
 ## Settings
 
