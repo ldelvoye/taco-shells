@@ -54,6 +54,10 @@ Each config directory holds `settings.json`, `keybindings.json` and `focus-port`
 
 `scripts/identity.cjs` is CommonJS because `electron-builder.js` loads as CommonJS and both it and the ESM scripts must read one set of identities. `src/main/channel.ts` states the names a second time for the running app, since a source compiled into the bundle cannot import the build's config. Those two are the only copies.
 
+## Landing
+
+Work lands through a pull request against `main`, rebase-merged so each commit keeps its own message; nothing is pushed to `main` directly. The push to `main` is what CI versions and releases as a prerelease (next section). Making a version stable is a separate, deliberate step: `npm run promote -- --publish` on the tag, which also replaces the installed Taco Shells, so the app has to be quit first. The check for that is `pgrep -f` on the bundle path: run `promote` from a command line that does not itself mention `/Applications/Taco Shells.app`, or it matches its own shell.
+
 ## Versions and releasing
 
 `main` is not assumed releasable. Features land in small batches and their fixes arrive in later rounds, so **every push to main is versioned and released, and some of those versions are promoted to stable.**
