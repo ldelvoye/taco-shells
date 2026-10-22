@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 
-import { appIsRunning, builtDmg, clearBuiltDmgs } from './bundle.mjs'
+import { appIsRunning, builtDmg, builtZip, clearBuiltArtifacts } from './bundle.mjs'
 import identity from './identity.cjs'
 import { changeList, commandSucceeds, fail, git, lastTag, run, runWith, tryGit } from './repo.mjs'
 import { isVersion, versionOfTag } from './version.mjs'
@@ -78,14 +78,19 @@ run('npm', 'run', 'e2e')
 // The only build that brands itself stable. Everything else, a plain
 // `npm run install-app` included, produces the dev app instead.
 const stableChannel = { [identity.CHANNEL_VARIABLE]: identity.STABLE_CHANNEL }
-// builtDmg refuses to choose between two, so the last promotion's dmg would
-// fail this one.
-clearBuiltDmgs()
+// builtDmg and builtZip refuse to choose between two, so the last promotion's
+// files would fail this one.
+clearBuiltArtifacts()
 runWith(stableChannel, 'npm', 'run', 'dist')
 
 const dmg = builtDmg()
 if (!dmg) {
   fail('the build did not produce a dmg.')
+}
+
+const zip = builtZip()
+if (!zip) {
+  fail('the build did not produce a zip.')
 }
 
 // No channel needed: install-app finds whichever bundle was just built.
@@ -104,7 +109,7 @@ Dry run: ${tag} was not promoted on GitHub.
 
 ${STABLE_APP} is now ${version}, built and installed locally.
 
-Adding --publish would attach ${dmg} to the ${tag} release, clear its prerelease
+Adding --publish would attach ${dmg} and ${zip} to the ${tag} release, clear its prerelease
 flag so GitHub lists it as Latest, and write its notes from ${notesSource}.
 `)
   process.exit(0)
@@ -118,11 +123,11 @@ if (notesFile) {
   notes = `${changeList(previous)}\n\n${INSTALL_NOTES}`
 }
 
-run('gh', 'release', 'upload', tag, dmg, '--clobber')
+run('gh', 'release', 'upload', tag, dmg, zip, '--clobber')
 run('gh', 'release', 'edit', tag, '--prerelease=false', '--latest', '--notes', notes)
 
 console.log(`
 Promoted ${version}.
-  release   ${tag} is now Latest, carrying ${dmg}
+  release   ${tag} is now Latest, carrying ${dmg} and ${zip}
   installed ${STABLE_APP}
 `)

@@ -4,6 +4,7 @@ import { basename, join } from 'node:path'
 
 const OUTPUT_DIRECTORY = 'dist.noindex'
 const APP_DIRECTORY = join(OUTPUT_DIRECTORY, 'mac-arm64')
+const ARTIFACT_SUFFIXES = ['.dmg', '.dmg.blockmap', '.zip', '.zip.blockmap']
 
 // More than one match means something is stale; guessing would be worse than
 // stopping. Finding the file rather than naming it also keeps this clear of
@@ -32,14 +33,19 @@ export function builtDmg() {
   return onlyFileEndingIn(OUTPUT_DIRECTORY, '.dmg')
 }
 
-/** Removes the dmgs, and their blockmaps, that earlier builds left behind. */
-export function clearBuiltDmgs() {
+/** The zip the build last wrote. */
+export function builtZip() {
+  return onlyFileEndingIn(OUTPUT_DIRECTORY, '.zip')
+}
+
+/** Removes the dmgs and zips, and their blockmaps, that earlier builds left behind. */
+export function clearBuiltArtifacts() {
   if (!existsSync(OUTPUT_DIRECTORY)) {
     return
   }
 
   const entries = readdirSync(OUTPUT_DIRECTORY)
-  const stale = entries.filter((entry) => entry.endsWith('.dmg') || entry.endsWith('.dmg.blockmap'))
+  const stale = entries.filter((entry) => ARTIFACT_SUFFIXES.some((suffix) => entry.endsWith(suffix)))
   for (const entry of stale) {
     rmSync(join(OUTPUT_DIRECTORY, entry))
   }
