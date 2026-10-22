@@ -1,11 +1,14 @@
 import { unlinkSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { SessionId } from '@shared/ipc'
+import { type ClaudeSession, claudeSessionFrom, isSessionUuid } from '@shared/snapshot'
 
 export interface FocusServerHandlers {
   sessionForPids(pids: number[]): SessionId | null
   onFocus(id: SessionId): void
   onAttention(id: SessionId): void
+  onClaudeStart(id: SessionId, session: ClaudeSession): void
+  onClaudeEnd(id: SessionId, sessionId: string): void
   onUnavailable(): void
 }
 
@@ -15,6 +18,8 @@ const LAST_PORT = 23460
 // /focus-tab switches to it at once. Merged, every ping would steal focus.
 const FOCUS_TAB_PATH = '/focus-tab'
 const ATTENTION_PATH = '/attention'
+const CLAUDE_START_PATH = '/claude-session/start'
+const CLAUDE_END_PATH = '/claude-session/end'
 // A pid chain is a handful of numbers, so anything larger is not one of ours.
 const MAX_BODY_BYTES = 64 * 1024
 
@@ -81,6 +86,19 @@ function pidsFrom(body: unknown): number[] | null {
   return finite
 }
 
+function sessionIdFrom(body: unknown): string | null {
+  if (typeof body !== 'object' || body === null) {
+    return null
+  }
+
+  const record = body as Record<string, unknown>
+  const candidate = record.sessionId
+  if (!isSessionUuid(candidate)) {
+    return null
+  }
+  return candidate
+}
+
 function readBody(request: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
@@ -113,7 +131,9 @@ async function handleRequest(
 ): Promise<void> {
   const isFocusTab = request.url === FOCUS_TAB_PATH
   const isAttention = request.url === ATTENTION_PATH
-  const isKnownRoute = isFocusTab || isAttention
+  const isClaudeStart = request.url === CLAUDE_START_PATH
+  const isClaudeEnd = request.url === CLAUDE_END_PATH
+  const isKnownRoute = isFocusTab || isAttention || isClaudeStart || isClaudeEnd
   if (request.method !== 'POST' || !isKnownRoute) {
     respond(response, 404, '')
     return
@@ -141,6 +161,24 @@ async function handleRequest(
     return
   }
 
+  let startedSession: ClaudeSession | null = null
+  if (isClaudeStart) {
+    startedSession = claudeSessionFrom(payload)
+    if (startedSession === null) {
+      respond(response, 400, 'bad session')
+      return
+    }
+  }
+
+  let endedSessionId: string | null = null
+  if (isClaudeEnd) {
+    endedSessionId = sessionIdFrom(payload)
+    if (endedSessionId === null) {
+      respond(response, 400, 'bad session')
+      return
+    }
+  }
+
   const sessionId = handlers.sessionForPids(pids)
   if (sessionId === null) {
     respond(response, 404, 'not found')
@@ -149,8 +187,12 @@ async function handleRequest(
 
   if (isFocusTab) {
     handlers.onFocus(sessionId)
-  } else {
+  } else if (isAttention) {
     handlers.onAttention(sessionId)
+  } else if (startedSession !== null) {
+    handlers.onClaudeStart(sessionId, startedSession)
+  } else if (endedSessionId !== null) {
+    handlers.onClaudeEnd(sessionId, endedSessionId)
   }
   respond(response, 200, 'ok')
 }

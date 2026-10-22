@@ -53,6 +53,10 @@ module.exports = {
   // git reports, since package.json's own version is not authoritative.
   artifactName: 'taco-shells-' + version + '-${arch}.${ext}',
 
+  extraMetadata: { version },
+
+  extraResources: [{ from: 'resources/update-helper.sh', to: 'update-helper.sh' }],
+
   // Spotlight skips a directory named .noindex, so the build output does not show
   // up as a second, staler Taco Shells beside the installed one.
   directories: {
@@ -86,6 +90,10 @@ module.exports = {
     target: [
       {
         target: 'dmg',
+        arch: 'arm64'
+      },
+      {
+        target: 'zip',
         arch: 'arm64'
       }
     ]

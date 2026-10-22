@@ -15,5 +15,8 @@
   "cursorBlink": true,
 
   // "block", "underline" or "bar".
-  "cursorStyle": "block"
+  "cursorStyle": "block",
+
+  // Reopen the terminals you had, each in its directory, when the app starts.
+  "restoreOnLaunch": true
 }

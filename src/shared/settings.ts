@@ -9,6 +9,7 @@ export interface Settings {
   scrollSensitivity: number
   cursorBlink: boolean
   cursorStyle: CursorStyle
+  restoreOnLaunch: boolean
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -18,7 +19,8 @@ export const DEFAULT_SETTINGS: Settings = {
   scrollback: 100000,
   scrollSensitivity: 1,
   cursorBlink: true,
-  cursorStyle: 'block'
+  cursorStyle: 'block',
+  restoreOnLaunch: true
 }
 
 export interface SettingsLayerResult {
@@ -77,7 +79,8 @@ const VALIDATORS: SettingRules = {
   scrollback: { check: isScrollback, requirement: 'must be a whole number of lines, 0 or more' },
   scrollSensitivity: { check: isPositiveNumber, requirement: 'must be a number greater than 0' },
   cursorBlink: { check: isBoolean, requirement: 'must be true or false' },
-  cursorStyle: { check: isCursorStyle, requirement: 'must be "block", "underline" or "bar"' }
+  cursorStyle: { check: isCursorStyle, requirement: 'must be "block", "underline" or "bar"' },
+  restoreOnLaunch: { check: isBoolean, requirement: 'must be true or false' }
 }
 
 function isValidatedKey(key: string): key is keyof Settings {

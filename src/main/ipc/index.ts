@@ -1,15 +1,30 @@
 import { type BrowserWindow, clipboard, ipcMain, shell } from 'electron'
 import type { ConfigFile } from '@shared/config'
-import { CHANNEL, type PtySize, type SessionId } from '@shared/ipc'
+import { CHANNEL, type PtyCreateOptions, type PtySize, type SessionId } from '@shared/ipc'
+import type { Workspace } from '@shared/model'
 import type { ConfigStore } from '../config'
 import { configFilePath } from '../config/files'
 import { isOpenableLink } from '../links'
 import type { PtySessions } from '../pty/sessions'
+import type { SnapshotStore } from '../snapshot/store'
 
-export function registerIpc(sessions: PtySessions, window: BrowserWindow, store: ConfigStore): void {
-  ipcMain.handle(CHANNEL.ptyCreate, (_event, size: PtySize, cwdFrom?: SessionId) =>
-    sessions.create(size, cwdFrom)
-  )
+export function registerIpc(
+  sessions: PtySessions,
+  window: BrowserWindow,
+  store: ConfigStore,
+  snapshotStore: SnapshotStore
+): void {
+  ipcMain.handle(CHANNEL.ptyCreate, async (_event, size: PtySize, options?: PtyCreateOptions) => {
+    const id = await sessions.create(size, options)
+    const startingDirectory = sessions.startingDirectory(id)
+    if (startingDirectory !== null) {
+      snapshotStore.seedDirectory(id, startingDirectory)
+    }
+    if (options?.resume !== undefined) {
+      snapshotStore.seedClaude(id, options.resume)
+    }
+    return id
+  })
   ipcMain.on(CHANNEL.ptyWrite, (_event, id: SessionId, data: string) => sessions.write(id, data))
   ipcMain.on(CHANNEL.ptyResize, (_event, id: SessionId, size: PtySize) => sessions.resize(id, size))
   ipcMain.on(CHANNEL.ptyKill, (_event, id: SessionId) => sessions.kill(id))
@@ -35,6 +50,16 @@ export function registerIpc(sessions: PtySessions, window: BrowserWindow, store:
   })
   ipcMain.on(CHANNEL.fullScreenGet, (event) => {
     event.returnValue = window.isFullScreen()
+  })
+  ipcMain.on(CHANNEL.snapshotGet, (event) => {
+    if (store.current().settings.restoreOnLaunch) {
+      event.returnValue = snapshotStore.initial()
+    } else {
+      event.returnValue = null
+    }
+  })
+  ipcMain.on(CHANNEL.snapshotWorkspace, (_event, workspace: Workspace) => {
+    snapshotStore.workspaceChanged(workspace)
   })
 
   const sendFullScreen = (fullScreen: boolean): void => {
