@@ -12,6 +12,8 @@
   "cmd+v": "terminal.paste",
   "cmd+k": "terminal.clear",
   "cmd+backspace": "terminal.killLine",
+  "cmd+left": "terminal.lineStart",
+  "cmd+right": "terminal.lineEnd",
   "shift+enter": "terminal.insertNewline",
   "cmd+b": "sidebar.toggle",
   "cmd+,": "config.openSettings",
