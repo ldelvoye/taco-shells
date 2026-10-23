@@ -5,6 +5,10 @@ import type { CommandRegistry } from './registry'
 // A terminal's usual key for delete line.
 const CTRL_U = '\x15'
 
+// A terminal's usual keys for start and end of line.
+const CTRL_A = '\x01'
+const CTRL_E = '\x05'
+
 // A terminal's usual key for a newline that does not submit the line: option+enter.
 const ESC_CR = '\x1b\r'
 
@@ -56,6 +60,24 @@ export function registerTerminalCommands(registry: CommandRegistry, sessionId: S
     }
 
     term.input(CTRL_U)
+  })
+
+  registry.register('terminal.lineStart', () => {
+    const term = sessionTerminal(sessionId)
+    if (!term) {
+      return
+    }
+
+    term.input(CTRL_A)
+  })
+
+  registry.register('terminal.lineEnd', () => {
+    const term = sessionTerminal(sessionId)
+    if (!term) {
+      return
+    }
+
+    term.input(CTRL_E)
   })
 
   registry.register('terminal.insertNewline', () => {
