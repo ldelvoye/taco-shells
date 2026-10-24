@@ -48,7 +48,7 @@ Each config directory holds `settings.json`, `keybindings.json` and `focus-port`
 
 **The version says nothing about which is which.** `0.2.2` is the same number whether or not it has been promoted, so the channel comes from `TACO_SHELLS_CHANNEL`, read in `scripts/identity.cjs`. **Development is the default** and stable has to be asked for: `install-app`, `npm run dev` and a bare `electron-builder` all produce the dev app, and only `npm run promote` sets the variable. The safety is in the direction of the default — anything that forgets gives you a dev build, never a replacement for the app in daily use.
 
-**It is baked at build time, not read at startup.** `electron.vite.config.ts` defines `__CHANNEL__`, so `channel` in `src/main/index.ts` is a string literal in the bundle and nothing at runtime can change which app a build is. The renderer bundle contains only its own channel's code; the main bundle still carries both channels' names and directories and picks one at startup.
+**It is baked at build time, not read at startup.** `electron.vite.config.ts` defines `__CHANNEL__`, and `src/main/channel.ts` compares it once at module scope, so the bundler folds the comparison and drops the losing channel. A dev bundle contains `.taco-shells-dev` and no `.taco-shells`; the stable bundle is the exact inverse.
 
 **The bundle ids differ, and that matters more than the names.** Two bundles claiming one id leaves LaunchServices picking between them.
 
