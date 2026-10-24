@@ -22,6 +22,10 @@ const SETTLE_TIMEOUT_MS = 15000
 const SHUTDOWN_TIMEOUT_MS = 3000
 const POLL_INTERVAL_MS = 100
 
+// xterm warns when a render task overruns its idle deadline, which a slow CI
+// runner does on its own; it says nothing about the app.
+const XTERM_DEADLINE_WARNING = 'task queue exceeded allotted deadline'
+
 // Chromium's modifier bitmask for Input.dispatchKeyEvent.
 const MODIFIER_ALT = 1
 const MODIFIER_META = 4
@@ -426,7 +430,8 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
 
   function rendererConsole(): string[] {
     const lines = output.join('').split('\n')
-    return lines.filter((line) => line.includes(':INFO:CONSOLE'))
+    const consoleLines = lines.filter((line) => line.includes(':INFO:CONSOLE'))
+    return consoleLines.filter((line) => !line.includes(XTERM_DEADLINE_WARNING))
   }
 
   async function chromeBackground(): Promise<string> {
