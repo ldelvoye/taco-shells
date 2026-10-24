@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { app, type BrowserWindow, ipcMain, net } from 'electron'
 import { CHANNEL } from '@shared/ipc'
 import { isVersion } from '@shared/version'
-import { STABLE } from '../channel'
+import { isStable } from '../channel'
 import { helperArguments, installedBundlePath } from './apply'
 import { UpdateChecker, type UpdateEvents } from './checker'
 import { updatesDirectory } from './download'
@@ -17,8 +17,8 @@ const UNVERSIONED = '0.0.0'
 // The stable build always follows GitHub. The feed override is a test seam for
 // the dev channel, which otherwise never checks, and it treats the dev build's
 // unversioned number as older than any release.
-function feedUrlFor(channel: string): string | null {
-  if (channel === STABLE) {
+function feedUrlForBuild(): string | null {
+  if (isStable) {
     return DEFAULT_FEED_URL
   }
   const override = process.env[FEED_VARIABLE]
@@ -28,12 +28,12 @@ function feedUrlFor(channel: string): string | null {
   return override
 }
 
-function currentVersionFor(channel: string): string | null {
+function currentVersionForBuild(): string | null {
   const version = app.getVersion()
   if (isVersion(version)) {
     return version
   }
-  if (channel === STABLE) {
+  if (isStable) {
     return null
   }
   return UNVERSIONED
@@ -49,8 +49,7 @@ function sendToWindow(window: BrowserWindow, channel: string, payload: string): 
 /** The update checks and the apply handler, or null when this build does not update. */
 export function registerUpdates(
   window: BrowserWindow,
-  configDirectory: string,
-  channel: string
+  configDirectory: string
 ): (() => void) | null {
   let checker: UpdateChecker | null = null
 
@@ -69,8 +68,8 @@ export function registerUpdates(
     }
   })
 
-  const feedUrl = feedUrlFor(channel)
-  const currentVersion = currentVersionFor(channel)
+  const feedUrl = feedUrlForBuild()
+  const currentVersion = currentVersionForBuild()
   if (feedUrl === null || currentVersion === null) {
     return null
   }

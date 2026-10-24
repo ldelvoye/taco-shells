@@ -11,8 +11,7 @@ import { registerUpdates } from './update'
 import { buildApplicationMenu } from './window/menu'
 import { createMainWindow, isBackgroundWindow } from './window/window'
 
-const channel = __CHANNEL__
-app.setName(applicationName(channel))
+app.setName(applicationName)
 
 const sessions = new PtySessions()
 let store: ConfigStore | undefined
@@ -30,7 +29,7 @@ app.whenReady().then(() => {
 
   Menu.setApplicationMenu(buildApplicationMenu())
 
-  const directory = configDirectory(channel)
+  const directory = configDirectory()
   store = new ConfigStore(directory)
   const initialConfig = store.current()
   const palette = paletteFor(initialConfig.appearance)
@@ -39,7 +38,7 @@ app.whenReady().then(() => {
   snapshotStore = snapshots
   registerIpc(sessions, window, store, snapshots)
   stopFocus = registerFocus(sessions, window, directory, snapshots)
-  const registeredUpdates = registerUpdates(window, directory, channel)
+  const registeredUpdates = registerUpdates(window, directory)
   if (registeredUpdates !== null) {
     stopUpdates = registeredUpdates
   }

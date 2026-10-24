@@ -1,24 +1,41 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { STABLE, applicationName, configDirectoryName } from './channel'
+// The module reads the baked-in channel when it loads, so each case has to set
+// the global and import a fresh copy.
+async function buildFor(channel: string) {
+  vi.stubGlobal('__CHANNEL__', channel)
+  vi.resetModules()
+  const build = await import('./channel')
+  return build
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 describe('the two builds stay apart', () => {
-  it('gives each channel its own name and config directory', () => {
-    expect(applicationName(STABLE)).toBe('Taco Shells')
-    expect(configDirectoryName(STABLE)).toBe('.taco-shells')
+  it('gives each channel its own name and config directory', async () => {
+    const stable = await buildFor('stable')
+    expect(stable.isStable).toBe(true)
+    expect(stable.applicationName).toBe('Taco Shells')
+    expect(stable.configDirectoryName).toBe('.taco-shells')
 
-    expect(applicationName('development')).toBe('Taco Shells Dev')
-    expect(configDirectoryName('development')).toBe('.taco-shells-dev')
+    const development = await buildFor('development')
+    expect(development.isStable).toBe(false)
+    expect(development.applicationName).toBe('Taco Shells Dev')
+    expect(development.configDirectoryName).toBe('.taco-shells-dev')
   })
 
   // A build that lost its channel must not read the config the app in daily use
   // depends on, so anything unrecognised has to fall to development.
-  it('treats anything but stable as development', () => {
+  it('treats anything but stable as development', async () => {
     const unrecognised = ['', 'Stable', 'production', 'undefined']
 
     for (const channel of unrecognised) {
-      expect(configDirectoryName(channel)).toBe('.taco-shells-dev')
-      expect(applicationName(channel)).toBe('Taco Shells Dev')
+      const build = await buildFor(channel)
+      expect(build.isStable).toBe(false)
+      expect(build.configDirectoryName).toBe('.taco-shells-dev')
+      expect(build.applicationName).toBe('Taco Shells Dev')
     }
   })
 })
