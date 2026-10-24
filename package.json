@@ -12,7 +12,7 @@
     "package": "npm run build && npm run icon && electron-builder --mac dir",
     "dist": "npm run build && npm run icon && electron-builder --mac",
     "test": "vitest run",
-    "e2e": "npm run build && vitest run --config vitest.e2e.config.ts",
+    "e2e": "npm run build && vitest run --config vitest.e2e.config.mts",
     "test:e2e": "npm run e2e && npm run install-app",
     "install-app": "npm run package && node scripts/install-app.mjs",
     "promote": "node scripts/promote.mjs",

@@ -14,7 +14,7 @@
     "src/shared/**/*.json",
     "e2e/**/*.ts",
     "electron.vite.config.ts",
-    "vitest.config.ts",
-    "vitest.e2e.config.ts"
+    "vitest.config.mts",
+    "vitest.e2e.config.mts"
   ]
 }
