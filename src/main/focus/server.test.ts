@@ -234,7 +234,9 @@ describe('startFocusServer port selection', () => {
       const stop = startFocusServer(createFakeHandlers(), portFilePath)
       try {
         const port = await waitForPortFile(portFilePath)
-        expect(port).toBe(firstAvailablePort + 1)
+        // Another running Taco Shells may hold the ports in between, so only
+        // the direction is certain.
+        expect(port).toBeGreaterThan(firstAvailablePort)
       } finally {
         stop()
       }
