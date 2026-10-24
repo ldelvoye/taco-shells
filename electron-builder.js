@@ -71,8 +71,8 @@ module.exports = {
     '!scripts',
     '!e2e',
     '!electron.vite.config.ts',
-    '!vitest.config.ts',
-    '!vitest.e2e.config.ts',
+    '!vitest.config.mts',
+    '!vitest.e2e.config.mts',
     '!tsconfig*.json',
     '!electron-builder.js'
   ],
