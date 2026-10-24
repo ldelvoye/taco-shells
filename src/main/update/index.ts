@@ -17,7 +17,7 @@ const UNVERSIONED = '0.0.0'
 // The stable build always follows GitHub. The feed override is a test seam for
 // the dev channel, which otherwise never checks, and it treats the dev build's
 // unversioned number as older than any release.
-function feedUrlForBuild(): string | null {
+function resolveFeedUrl(): string | null {
   if (isStable) {
     return DEFAULT_FEED_URL
   }
@@ -28,7 +28,7 @@ function feedUrlForBuild(): string | null {
   return override
 }
 
-function currentVersionForBuild(): string | null {
+function resolveCurrentVersion(): string | null {
   const version = app.getVersion()
   if (isVersion(version)) {
     return version
@@ -68,8 +68,8 @@ export function registerUpdates(
     }
   })
 
-  const feedUrl = feedUrlForBuild()
-  const currentVersion = currentVersionForBuild()
+  const feedUrl = resolveFeedUrl()
+  const currentVersion = resolveCurrentVersion()
   if (feedUrl === null || currentVersion === null) {
     return null
   }
