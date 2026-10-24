@@ -48,7 +48,7 @@ Each config directory holds `settings.json`, `keybindings.json` and `focus-port`
 
 **The version says nothing about which is which.** `0.2.2` is the same number whether or not it has been promoted, so the channel comes from `TACO_SHELLS_CHANNEL`, read in `scripts/identity.cjs`. **Development is the default** and stable has to be asked for: `install-app`, `npm run dev` and a bare `electron-builder` all produce the dev app, and only `npm run promote` sets the variable. The safety is in the direction of the default — anything that forgets gives you a dev build, never a replacement for the app in daily use.
 
-**It is baked at build time, not read at startup.** `electron.vite.config.ts` defines `__CHANNEL__`, so the comparison in `src/main/channel.ts` is constant-folded and the losing branch is eliminated. A dev bundle contains `.taco-shells-dev` and no `.taco-shells`; the stable bundle is the exact inverse.
+**It is baked at build time, not read at startup.** `electron.vite.config.ts` defines `__CHANNEL__`, so `channel` in `src/main/index.ts` is a string literal in the bundle and nothing at runtime can change which app a build is. The renderer's `__CHANNEL__` check is folded away entirely; the main bundle keeps both channels' names and directories and picks at startup, because Rolldown does not trace a constant through a function argument the way Rollup did.
 
 **The bundle ids differ, and that matters more than the names.** Two bundles claiming one id leaves LaunchServices picking between them.
 
