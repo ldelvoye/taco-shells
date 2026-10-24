@@ -31,7 +31,7 @@ npm run promote      # mark a version stable (see below)
 
 **`npm run e2e` builds first, on purpose.** Driving a stale `out/` passes while the change under test is not in it.
 
-**`npm test` never launches anything.** The e2e suite covers only what the unit tests structurally cannot: that a chord reaches a registered command, and that the command reaches the screen. Do not restate the model there — it is slow and buys nothing.
+**`npm test` never launches anything.** The e2e suite covers only what the unit tests structurally cannot: that a chord reaches a registered command, that the command reaches the screen, and what the built bundle contains. Do not restate the model there — it is slow and buys nothing.
 
 ## Two apps, and which one a build becomes
 
@@ -48,7 +48,7 @@ Each config directory holds `settings.json`, `keybindings.json` and `focus-port`
 
 **The version says nothing about which is which.** `0.2.2` is the same number whether or not it has been promoted, so the channel comes from `TACO_SHELLS_CHANNEL`, read in `scripts/identity.cjs`. **Development is the default** and stable has to be asked for: `install-app`, `npm run dev` and a bare `electron-builder` all produce the dev app, and only `npm run promote` sets the variable. The safety is in the direction of the default — anything that forgets gives you a dev build, never a replacement for the app in daily use.
 
-**It is baked at build time, not read at startup.** `electron.vite.config.ts` defines `__CHANNEL__`, and `src/main/channel.ts` compares it once at module scope, so the bundler folds the comparison and drops the losing channel. A dev bundle contains `.taco-shells-dev` and no `.taco-shells`; the stable bundle is the exact inverse.
+**It is baked at build time, not read at startup.** `electron.vite.config.ts` defines `__CHANNEL__`, and `src/main/channel.ts` compares it once at module scope, so the bundler folds the comparison and drops the losing channel. The dev bundle holds only the dev name and directory, the stable bundle only the stable pair, and `e2e/bundle.test.ts` checks the dev half of that on every e2e run.
 
 **The bundle ids differ, and that matters more than the names.** Two bundles claiming one id leaves LaunchServices picking between them.
 

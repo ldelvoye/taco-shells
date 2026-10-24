@@ -2,8 +2,7 @@ import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
   resolve: { tsconfigPaths: true },
-  // The main process reads its channel when a module loads, so tests run as the
-  // dev build unless they stub the global themselves.
+  // main/channel.ts reads __CHANNEL__ at load, so tests run as the dev build unless they stub it.
   define: { __CHANNEL__: JSON.stringify('development') },
   test: {
     environment: 'node',

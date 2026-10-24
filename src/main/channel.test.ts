@@ -5,8 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 async function buildFor(channel: string) {
   vi.stubGlobal('__CHANNEL__', channel)
   vi.resetModules()
-  const build = await import('./channel')
-  return build
+  return import('./channel')
 }
 
 afterEach(() => {
