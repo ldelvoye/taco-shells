@@ -5,8 +5,7 @@
     "types": ["vite/client"],
     "jsx": "react-jsx",
     "paths": {
-      "@shared/*": ["./src/shared/*"],
-      "@renderer/*": ["./src/renderer/*"]
+      "@shared/*": ["./src/shared/*"]
     }
   },
   "include": [

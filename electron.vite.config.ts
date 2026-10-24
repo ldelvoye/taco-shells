@@ -1,9 +1,8 @@
 import { resolve } from 'node:path'
 import react from '@vitejs/plugin-react'
-import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
+import { defineConfig } from 'electron-vite'
 
 const sharedDir = resolve(__dirname, 'src/shared')
-const rendererDir = resolve(__dirname, 'src/renderer')
 
 // Baked in so the running app knows which config directory is its own, and which
 // sidebar mark to draw, matching the identity electron-builder brands the bundle
@@ -17,21 +16,15 @@ if (process.env.TACO_SHELLS_CHANNEL === 'stable') {
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
     resolve: { alias: { '@shared': sharedDir } },
-    define: { __CHANNEL__: JSON.stringify(channel) },
-    build: { rollupOptions: { input: resolve(__dirname, 'src/main/index.ts') } }
+    define: { __CHANNEL__: JSON.stringify(channel) }
   },
   preload: {
-    plugins: [externalizeDepsPlugin()],
-    resolve: { alias: { '@shared': sharedDir } },
-    build: { rollupOptions: { input: resolve(__dirname, 'src/preload/index.ts') } }
+    resolve: { alias: { '@shared': sharedDir } }
   },
   renderer: {
-    root: rendererDir,
     plugins: [react()],
-    resolve: { alias: { '@shared': sharedDir, '@renderer': rendererDir } },
-    define: { __CHANNEL__: JSON.stringify(channel) },
-    build: { rollupOptions: { input: resolve(rendererDir, 'index.html') } }
+    resolve: { alias: { '@shared': sharedDir } },
+    define: { __CHANNEL__: JSON.stringify(channel) }
   }
 })
