@@ -11,7 +11,8 @@ if (process.env.TACO_SHELLS_CHANNEL === 'stable') {
   channel = 'development'
 }
 
-// The `@shared` alias comes from the tsconfig `paths`, so it is declared once.
+// `@shared` resolves through the tsconfig whose `include` covers each file:
+// tsconfig.node.json for main and preload, tsconfig.web.json for the renderer.
 export default defineConfig({
   main: {
     resolve: { tsconfigPaths: true },
