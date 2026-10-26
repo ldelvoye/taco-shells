@@ -1,0 +1,18 @@
+✳ taco-shells
+0.8	\033[38;5;208m✳\033[0m \033[1mClaude Code\033[0m  \033[2m~/code/taco-shells\033[0m
+0.1
+0.6	\033[2m>\033[0m fit the sidebar to the widest row label when its divider is double-clicked
+0.1
+1.2	\033[38;5;208m●\033[0m I'll start from the divider component.
+0.1
+0.7	\033[38;5;208m●\033[0m \033[1mRead\033[0m(src/renderer/sidebar/SidebarDivider.tsx)
+0.3	  \033[2m⎿  Read 84 lines\033[0m
+0.1
+1.0	\033[38;5;208m●\033[0m \033[1mUpdate\033[0m(src/renderer/sidebar/SidebarDivider.tsx)
+0.4	  \033[2m⎿  Added 21 lines, removed 3 lines\033[0m
+0.1
+5.0	\033[38;5;208m●\033[0m \033[1mBash\033[0m(npm test)
+1.6	  \033[2m⎿  Test Files  14 passed (14)\033[0m
+0.2	  \033[2m        Tests  131 passed (131)\033[0m
+0.1
+0.8	\033[38;5;208m●\033[0m Double-clicking the divider now fits the sidebar to its widest label.

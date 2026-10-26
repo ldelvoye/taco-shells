@@ -27,6 +27,7 @@ npm run test:e2e     # the same, then installs it
 npm run install-app  # build and install Taco Shells Dev
 npm run dist         # app and dmg into dist.noindex/
 npm run promote      # mark a version stable (see below)
+npm run record:clip  # builds, then films a portfolio clip into dist.noindex/ (-- taco for the other scene)
 ```
 
 **`npm run e2e` builds first, on purpose.** Driving a stale `out/` passes while the change under test is not in it.

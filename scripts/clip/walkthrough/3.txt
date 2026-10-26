@@ -1,0 +1,11 @@
+git · smorg
+0.3	\033[2m~/code/smorg\033[0m \033[36m❯\033[0m git status --short
+0.4	\033[32m M\033[0m smorg/widgets/gutter.py
+0.05	\033[32m M\033[0m tests/test_gutter.py
+0.1
+0.6	\033[2m~/code/smorg\033[0m \033[36m❯\033[0m git log --oneline -3
+0.4	\033[33m9f3c2ab\033[0m feat(gutter): mark rows changed since refresh
+0.05	\033[33m51d0e77\033[0m fix(linear): keep the cursor after a reload
+0.05	\033[33mb8a1f04\033[0m docs: describe the binding table
+0.1
+0.5	\033[2m~/code/smorg\033[0m \033[36m❯\033[0m
