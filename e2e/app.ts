@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 
-import { shellPath } from '../src/main/pty/shell'
+import { shellPath } from '../src/main/pty/shell.ts'
 
 // Asked of the app rather than assumed, because the shell it opens is whichever
 // one the machine gives its user. A hardcoded `zsh -l` counts nothing on a
@@ -17,6 +17,7 @@ const ELECTRON_BINARY = resolve(
 )
 
 const DEBUG_PORT = 9422
+const INSPECT_PORT = 9423
 const LAUNCH_TIMEOUT_MS = 20000
 const SETTLE_TIMEOUT_MS = 15000
 const SHUTDOWN_TIMEOUT_MS = 3000
@@ -56,11 +57,18 @@ export interface Modifiers {
   shift?: boolean
 }
 
-/** What a launch may override: the config directory, and anything the shells inherit. */
+/** A content size for a window shown on screen, without focus, on the display with the highest scale factor. */
+export interface WindowPlacement {
+  width: number
+  height: number
+}
+
+/** What a launch may override: the config directory, anything the shells inherit, and whether the window is shown. */
 export interface LaunchOptions {
   configDir?: string
   env?: Record<string, string>
   expectedRows?: number
+  window?: WindowPlacement
 }
 
 /** A sidebar row: every pane of every group has one, in sidebar order. */
@@ -87,7 +95,11 @@ export interface Screen {
   labelsTruncated: boolean
 }
 
+export type ProtocolParams = Record<string, unknown>
+
 export interface App {
+  cdp(method: string, params?: ProtocolParams): Promise<ProtocolParams>
+  onCdpEvent(method: string, listener: (params: ProtocolParams) => void): void
   screen(): Promise<Screen>
   press(key: Key, modifiers?: Modifiers): Promise<void>
   pressAutoRepeat(key: Key, modifiers?: Modifiers): Promise<void>
@@ -109,6 +121,13 @@ export interface App {
 interface DebugTarget {
   type: string
   webSocketDebuggerUrl: string
+}
+
+interface Protocol {
+  send(method: string, params: ProtocolParams): Promise<ProtocolParams>
+  onEvent(method: string, listener: (params: ProtocolParams) => void): void
+  close(): void
+  onClose(listener: () => void): void
 }
 
 function sleep(milliseconds: number): Promise<void> {
@@ -152,18 +171,18 @@ export async function pollFor<T>(
   throw new Error(`timed out waiting for ${description}`)
 }
 
-async function findDebuggerUrl(): Promise<string> {
+async function findDebuggerUrl(port: number, targetType: string): Promise<string> {
   return pollFor(
-    'the app to expose a debuggable page',
+    `the app to expose a debuggable ${targetType}`,
     async () => {
       try {
-        const response = await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)
+        const response = await fetch(`http://127.0.0.1:${port}/json/list`)
         const targets = (await response.json()) as DebugTarget[]
-        const page = targets.find((target) => target.type === 'page')
-        if (!page) {
+        const target = targets.find((candidate) => candidate.type === targetType)
+        if (!target) {
           return null
         }
-        return page.webSocketDebuggerUrl
+        return target.webSocketDebuggerUrl
       } catch {
         // The devtools endpoint is not listening yet.
         return null
@@ -171,6 +190,92 @@ async function findDebuggerUrl(): Promise<string> {
     },
     LAUNCH_TIMEOUT_MS
   )
+}
+
+async function openProtocol(url: string): Promise<Protocol> {
+  const socket = new WebSocket(url)
+  await new Promise((opened) => socket.addEventListener('open', opened))
+
+  let nextMessageId = 1
+  const awaitingReply = new Map<number, (result: ProtocolParams) => void>()
+  const eventListeners = new Map<string, ((params: ProtocolParams) => void)[]>()
+
+  socket.addEventListener('message', (event) => {
+    const message = JSON.parse(String(event.data))
+    if (message.id === undefined) {
+      const listeners = eventListeners.get(message.method)
+      if (!listeners) {
+        return
+      }
+      for (const listener of listeners) {
+        listener(message.params)
+      }
+      return
+    }
+    const reply = awaitingReply.get(message.id)
+    if (!reply) {
+      return
+    }
+    awaitingReply.delete(message.id)
+    reply(message.result)
+  })
+
+  function send(method: string, params: ProtocolParams): Promise<ProtocolParams> {
+    const id = nextMessageId
+    nextMessageId += 1
+    socket.send(JSON.stringify({ id, method, params }))
+    return new Promise((resolved) => awaitingReply.set(id, resolved))
+  }
+
+  function onEvent(method: string, listener: (params: ProtocolParams) => void): void {
+    const listeners = eventListeners.get(method)
+    if (listeners) {
+      listeners.push(listener)
+      return
+    }
+    eventListeners.set(method, [listener])
+  }
+
+  function close(): void {
+    socket.close()
+  }
+
+  function onClose(listener: () => void): void {
+    socket.addEventListener('close', listener)
+  }
+
+  return { send, onEvent, close, onClose }
+}
+
+// Runs in the main process, which is the only side that can size and show the
+// window. The sharpest display wins so a capture of the window is at full
+// device resolution. The inspector's global scope has no require of its own.
+function placementScript(placement: WindowPlacement): string {
+  return `(() => {
+    const { BrowserWindow, screen } = process.mainModule.require('electron')
+    const window = BrowserWindow.getAllWindows()[0]
+    let display = screen.getPrimaryDisplay()
+    for (const candidate of screen.getAllDisplays()) {
+      if (candidate.scaleFactor > display.scaleFactor) {
+        display = candidate
+      }
+    }
+    const area = display.workArea
+    const x = Math.round(area.x + (area.width - ${placement.width}) / 2)
+    const y = Math.round(area.y + (area.height - ${placement.height}) / 2)
+    window.setPosition(x, y)
+    window.setContentSize(${placement.width}, ${placement.height})
+    window.showInactive()
+  })()`
+}
+
+async function placeWindow(placement: WindowPlacement): Promise<void> {
+  const main = await openProtocol(await findDebuggerUrl(INSPECT_PORT, 'node'))
+  const outcome = await main.send('Runtime.evaluate', { expression: placementScript(placement) })
+  main.close()
+  if (outcome.exceptionDetails) {
+    throw new Error(`placing the window failed: ${JSON.stringify(outcome.exceptionDetails)}`)
+  }
 }
 
 // The sidebar's rows and the on-screen group's panes are two separate lists:
@@ -238,6 +343,15 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
   }
 
   const launchArguments = ['.', `--remote-debugging-port=${DEBUG_PORT}`]
+  if (options.window) {
+    // The window is shown behind whatever the user is doing, and Chromium
+    // stops painting an occluded window unless told not to.
+    launchArguments.push(
+      `--inspect=${INSPECT_PORT}`,
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding'
+    )
+  }
 
   const electron = spawn(ELECTRON_BINARY, launchArguments, {
     cwd: REPO_ROOT,
@@ -253,28 +367,11 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     electron.stderr.on('data', (chunk) => output.push(String(chunk)))
   }
 
-  const debuggerUrl = await findDebuggerUrl()
-  const socket = new WebSocket(debuggerUrl)
-  await new Promise((opened) => socket.addEventListener('open', opened))
+  const page = await openProtocol(await findDebuggerUrl(DEBUG_PORT, 'page'))
+  const send = page.send
 
-  let nextMessageId = 1
-  const awaitingReply = new Map<number, (result: Record<string, unknown>) => void>()
-
-  socket.addEventListener('message', (event) => {
-    const message = JSON.parse(String(event.data))
-    const reply = awaitingReply.get(message.id)
-    if (!reply) {
-      return
-    }
-    awaitingReply.delete(message.id)
-    reply(message.result)
-  })
-
-  function send(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const id = nextMessageId
-    nextMessageId += 1
-    socket.send(JSON.stringify({ id, method, params }))
-    return new Promise((resolved) => awaitingReply.set(id, resolved))
+  async function cdp(method: string, params: ProtocolParams = {}): Promise<ProtocolParams> {
+    return send(method, params)
   }
 
   async function evaluate(expression: string): Promise<string> {
@@ -459,7 +556,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     while (Date.now() < deadline) {
       const stopped = electron.exitCode !== null || electron.signalCode !== null
       if (stopped) {
-        socket.close()
+        page.close()
         discardOwnedConfigDir()
         return
       }
@@ -467,7 +564,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     }
 
     electron.kill('SIGKILL')
-    socket.close()
+    page.close()
     discardOwnedConfigDir()
   }
 
@@ -480,7 +577,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
 
   async function quitGracefully(): Promise<void> {
     const socketClosed = new Promise<void>((closed) => {
-      socket.addEventListener('close', () => closed())
+      page.onClose(() => closed())
     })
     try {
       await Promise.race([evaluate('window.close()'), socketClosed])
@@ -491,8 +588,18 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
   }
 
   await send('Runtime.enable', {})
+  if (options.window) {
+    try {
+      await placeWindow(options.window)
+    } catch (failure) {
+      electron.kill('SIGTERM')
+      throw failure
+    }
+  }
 
   const app: App = {
+    cdp,
+    onCdpEvent: page.onEvent,
     screen,
     press,
     pressAutoRepeat,
