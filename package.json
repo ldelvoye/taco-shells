@@ -14,6 +14,7 @@
     "test": "vitest run",
     "e2e": "npm run build && vitest run --config vitest.e2e.config.mts",
     "test:e2e": "npm run e2e && npm run install-app",
+    "record:clip": "npm run build && node scripts/record-clip.mts",
     "install-app": "npm run package && node scripts/install-app.mjs",
     "promote": "node scripts/promote.mjs",
     "typecheck": "npm run typecheck:shared && npm run typecheck:node && npm run typecheck:web",
