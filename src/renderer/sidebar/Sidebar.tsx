@@ -121,7 +121,7 @@ export function Sidebar({
 
       let markerState: string | undefined
       const claudeRow = rowStates.get(pane.id)
-      if (claudeRow !== undefined && claudeRow.state !== 'idle') {
+      if (claudeRow !== undefined) {
         markerState = claudeRow.state
       }
 

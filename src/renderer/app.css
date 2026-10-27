@@ -179,6 +179,13 @@ body {
   animation: row-state-spin 0.9s linear infinite;
 }
 
+.row-state[data-state='idle']::before {
+  width: 6px;
+  height: 6px;
+  border: 1.5px solid var(--row-connector);
+  border-radius: 50%;
+}
+
 .row-state[data-state='needs']::before {
   left: 0.5px;
   top: 0.5px;
