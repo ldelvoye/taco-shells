@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import type { SessionId } from '@shared/ipc'
+import type { ClaudeSignal } from '@shared/rowState'
 import type { ClaudeSession } from '@shared/snapshot'
 import { type FocusServerHandlers, startFocusServer } from './server'
 
@@ -14,6 +15,7 @@ interface FakeHandlers extends FocusServerHandlers {
   attended: SessionId[]
   started: Array<[SessionId, ClaudeSession]>
   ended: Array<[SessionId, string]>
+  signals: Array<[SessionId, string, ClaudeSignal]>
   unavailable: boolean[]
 }
 
@@ -23,6 +25,7 @@ function createFakeHandlers(): FakeHandlers {
   const attended: SessionId[] = []
   const started: Array<[SessionId, ClaudeSession]> = []
   const ended: Array<[SessionId, string]> = []
+  const signals: Array<[SessionId, string, ClaudeSignal]> = []
   const unavailable: boolean[] = []
 
   return {
@@ -31,7 +34,11 @@ function createFakeHandlers(): FakeHandlers {
     attended,
     started,
     ended,
+    signals,
     unavailable,
+    onClaudeSignal: (id: SessionId, claudeSessionId: string, signal: ClaudeSignal) => {
+      signals.push([id, claudeSessionId, signal])
+    },
     onClaudeStart: (id: SessionId, session: ClaudeSession) => {
       started.push([id, session])
     },
@@ -180,6 +187,32 @@ describe('startFocusServer Claude session routes', () => {
     expect(handlers.ended).toEqual([['pty-2', SESSION_ID]])
   })
 
+  it('forwards a hook event as its signal', async () => {
+    const body = { pids: [222], sessionId: SESSION_ID, event: 'Notification', detail: 'permission_prompt' }
+
+    const response = await post(port, '/claude-session/state', body)
+
+    expect(response.status).toBe(200)
+    expect(handlers.signals).toEqual([['pty-2', SESSION_ID, 'needs']])
+  })
+
+  it('drops hook events that carry no signal', async () => {
+    const body = { pids: [222], sessionId: SESSION_ID, event: 'Notification', detail: 'idle_prompt' }
+
+    const response = await post(port, '/claude-session/state', body)
+
+    expect(response.status).toBe(200)
+    expect(handlers.signals).toEqual([])
+  })
+
+  it('rejects a state post without a valid session id', async () => {
+    const body = { pids: [222], sessionId: 'nope', event: 'Stop' }
+
+    const response = await post(port, '/claude-session/state', body)
+
+    expect(response.status).toBe(400)
+    expect(handlers.signals).toEqual([])
+  })
 })
 
 function bindBlocker(port: number): Promise<Server> {

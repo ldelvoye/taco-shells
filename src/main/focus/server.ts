@@ -1,6 +1,7 @@
 import { unlinkSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { SessionId } from '@shared/ipc'
+import { type ClaudeSignal, signalForHook } from '@shared/rowState'
 import { type ClaudeSession, claudeSessionFrom, isSessionUuid } from '@shared/snapshot'
 
 export interface FocusServerHandlers {
@@ -9,6 +10,7 @@ export interface FocusServerHandlers {
   onAttention(id: SessionId): void
   onClaudeStart(id: SessionId, session: ClaudeSession): void
   onClaudeEnd(id: SessionId, sessionId: string): void
+  onClaudeSignal(id: SessionId, claudeSessionId: string, signal: ClaudeSignal): void
   onUnavailable(): void
 }
 
@@ -20,6 +22,7 @@ const FOCUS_TAB_PATH = '/focus-tab'
 const ATTENTION_PATH = '/attention'
 const CLAUDE_START_PATH = '/claude-session/start'
 const CLAUDE_END_PATH = '/claude-session/end'
+const CLAUDE_STATE_PATH = '/claude-session/state'
 // A pid chain is a handful of numbers, so anything larger is not one of ours.
 const MAX_BODY_BYTES = 64 * 1024
 
@@ -99,6 +102,32 @@ function sessionIdFrom(body: unknown): string | null {
   return candidate
 }
 
+function eventFrom(body: unknown): string | null {
+  if (typeof body !== 'object' || body === null) {
+    return null
+  }
+
+  const record = body as Record<string, unknown>
+  const candidate = record.event
+  if (typeof candidate !== 'string') {
+    return null
+  }
+  return candidate
+}
+
+function detailFrom(body: unknown): string | null {
+  if (typeof body !== 'object' || body === null) {
+    return null
+  }
+
+  const record = body as Record<string, unknown>
+  const candidate = record.detail
+  if (typeof candidate !== 'string' || candidate === '') {
+    return null
+  }
+  return candidate
+}
+
 function readBody(request: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
@@ -133,7 +162,8 @@ async function handleRequest(
   const isAttention = request.url === ATTENTION_PATH
   const isClaudeStart = request.url === CLAUDE_START_PATH
   const isClaudeEnd = request.url === CLAUDE_END_PATH
-  const isKnownRoute = isFocusTab || isAttention || isClaudeStart || isClaudeEnd
+  const isClaudeState = request.url === CLAUDE_STATE_PATH
+  const isKnownRoute = isFocusTab || isAttention || isClaudeStart || isClaudeEnd || isClaudeState
   if (request.method !== 'POST' || !isKnownRoute) {
     respond(response, 404, '')
     return
@@ -179,6 +209,23 @@ async function handleRequest(
     }
   }
 
+  let claudeSessionId: string | null = null
+  let stateSignal: ClaudeSignal | null = null
+  if (isClaudeState) {
+    claudeSessionId = sessionIdFrom(payload)
+    if (claudeSessionId === null) {
+      respond(response, 400, 'bad session')
+      return
+    }
+    const event = eventFrom(payload)
+    if (event === null) {
+      respond(response, 400, 'bad event')
+      return
+    }
+    const detail = detailFrom(payload)
+    stateSignal = signalForHook(event, detail)
+  }
+
   const sessionId = handlers.sessionForPids(pids)
   if (sessionId === null) {
     respond(response, 404, 'not found')
@@ -193,6 +240,8 @@ async function handleRequest(
     handlers.onClaudeStart(sessionId, startedSession)
   } else if (endedSessionId !== null) {
     handlers.onClaudeEnd(sessionId, endedSessionId)
+  } else if (claudeSessionId !== null && stateSignal !== null) {
+    handlers.onClaudeSignal(sessionId, claudeSessionId, stateSignal)
   }
   respond(response, 200, 'ok')
 }

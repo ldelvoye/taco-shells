@@ -1,6 +1,7 @@
 import { type CSSProperties, type DragEvent, type JSX, useRef, useState } from 'react'
 import type { SessionId } from '@shared/ipc'
 import { type Group, paneOf } from '@shared/model'
+import type { ClaudeRows } from '@shared/rowState'
 import { SidebarDivider } from './SidebarDivider'
 import { SidebarTitlebar } from './SidebarTitlebar'
 
@@ -15,6 +16,7 @@ interface SidebarProps {
   activeGroup: number
   width: number
   fullScreen: boolean
+  rowStates: ClaudeRows
   onSelect: (sessionId: SessionId) => void
   onReorder: (from: number, to: number) => void
   onResize: (width: number) => void
@@ -47,6 +49,7 @@ export function Sidebar({
   activeGroup,
   width,
   fullScreen,
+  rowStates,
   onSelect,
   onReorder,
   onResize
@@ -116,6 +119,12 @@ export function Sidebar({
         connector = <span className={`row-connector ${connectorPiece}`} />
       }
 
+      let markerState: string | undefined
+      const claudeRow = rowStates.get(pane.id)
+      if (claudeRow !== undefined && claudeRow.state !== 'idle') {
+        markerState = claudeRow.state
+      }
+
       let className = 'terminal-row'
       const isActivePane = groupIndex === activeGroup && paneIndex === group.activePane
       if (isActivePane) {
@@ -132,6 +141,7 @@ export function Sidebar({
           }}
         >
           {connector}
+          <span className="row-state" data-state={markerState} />
           <span className="row-label">{label}</span>
         </div>
       )

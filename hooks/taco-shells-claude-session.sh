@@ -8,6 +8,8 @@ event=$(printf '%s' "$payload" | sed -n 's/.*"hook_event_name" *: *"\([^"]*\)".*
 session_id=$(printf '%s' "$payload" | sed -n 's/.*"session_id" *: *"\([^"]*\)".*/\1/p')
 # The match stops at the first quote, so only backslashes can reach the JSON body unescaped.
 cwd=$(printf '%s' "$payload" | sed -n 's/.*"cwd" *: *"\([^"]*\)".*/\1/p' | sed 's/\\/\\\\/g')
+tool_name=$(printf '%s' "$payload" | sed -n 's/.*"tool_name" *: *"\([^"]*\)".*/\1/p')
+notification_type=$(printf '%s' "$payload" | sed -n 's/.*"notification_type" *: *"\([^"]*\)".*/\1/p')
 
 if [ -z "$session_id" ]; then
   exit 0
@@ -34,6 +36,20 @@ if [ "$event" = "SessionStart" ]; then
 elif [ "$event" = "SessionEnd" ]; then
   route="/claude-session/end"
   body="{\"pids\":[$pids],\"sessionId\":\"$session_id\"}"
+elif [ "$event" = "UserPromptSubmit" ] || [ "$event" = "PreToolUse" ] || [ "$event" = "PostToolUse" ] \
+  || [ "$event" = "Notification" ] || [ "$event" = "Stop" ] || [ "$event" = "StopFailure" ]; then
+  detail=""
+  if [ "$event" = "PreToolUse" ] || [ "$event" = "PostToolUse" ]; then
+    detail="$tool_name"
+  elif [ "$event" = "Notification" ]; then
+    detail="$notification_type"
+  fi
+  route="/claude-session/state"
+  if [ -n "$detail" ]; then
+    body="{\"pids\":[$pids],\"sessionId\":\"$session_id\",\"event\":\"$event\",\"detail\":\"$detail\"}"
+  else
+    body="{\"pids\":[$pids],\"sessionId\":\"$session_id\",\"event\":\"$event\"}"
+  fi
 else
   exit 0
 fi

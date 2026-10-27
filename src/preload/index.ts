@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type { Config, ConfigFile } from '@shared/config'
 import {
   CHANNEL,
+  type ClaudeSignalEvent,
   type PtyCreateOptions,
   type PtyDataEvent,
   type PtyExitEvent,
@@ -48,6 +49,7 @@ const api: TacoShellsApi = {
   focus: {
     onFocusSession: (listener: (id: SessionId) => void) => subscribe(CHANNEL.focusSession, listener),
     onAttention: (listener: (id: SessionId) => void) => subscribe(CHANNEL.attentionSession, listener),
+    onClaudeSignal: (listener: (event: ClaudeSignalEvent) => void) => subscribe(CHANNEL.claudeSignal, listener),
     onActivated: (listener: () => void) => subscribe(CHANNEL.appActivated, () => listener()),
     onUnavailable: (listener: () => void) => subscribe(CHANNEL.focusUnavailable, () => listener())
   },
