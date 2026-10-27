@@ -51,6 +51,37 @@ It needs the hook below, which is what tells Taco Shells a session is waiting. W
 
 Quit and relaunch, and the terminals you had come back, each in the directory it was in. A terminal that was running Claude Code picks its conversation back up by resuming it. That part needs the `SessionStart` and `SessionEnd` entries in the hook snippet above, which is how Taco Shells learns which terminal is running which conversation. Set `"restoreOnLaunch": false` in settings to turn the whole thing off.
 
+## Seeing which session needs you
+
+A terminal running Claude Code gets a marker in front of its name in the sidebar: a spinner while Claude works, an amber dot when it is waiting on you, and a green check when it finished while you were looking at another terminal. The check clears once you switch to it. With the sidebar hidden, a "2 waiting" pill in the titlebar counts the amber ones.
+
+The markers come from Claude Code's hooks, so they need these entries next to the ones above. `async` keeps Claude from waiting on them:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "/path/to/taco-shells/hooks/taco-shells-claude-session.sh", "async": true }] }
+    ],
+    "PreToolUse": [
+      { "hooks": [{ "type": "command", "command": "/path/to/taco-shells/hooks/taco-shells-claude-session.sh", "async": true }] }
+    ],
+    "PostToolUse": [
+      { "hooks": [{ "type": "command", "command": "/path/to/taco-shells/hooks/taco-shells-claude-session.sh", "async": true }] }
+    ],
+    "Notification": [
+      { "hooks": [{ "type": "command", "command": "/path/to/taco-shells/hooks/taco-shells-claude-session.sh", "async": true }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "/path/to/taco-shells/hooks/taco-shells-claude-session.sh", "async": true }] }
+    ],
+    "StopFailure": [
+      { "hooks": [{ "type": "command", "command": "/path/to/taco-shells/hooks/taco-shells-claude-session.sh", "async": true }] }
+    ]
+  }
+}
+```
+
 ## Settings
 
 It reads `~/.taco-shells/settings.json` and `~/.taco-shells/keybindings.json`, both written on first launch holding the defaults, so the file you open is the list of everything you can change. Edits apply when you save, without a restart. Comments and trailing commas are fine. Theme follows macOS unless you pin it to `light` or `dark`.

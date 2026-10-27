@@ -34,6 +34,9 @@ export interface ChromeColors {
   rowActive: string
   rowMarker: string
   rowConnector: string
+  stateWorking: string
+  stateNeeds: string
+  stateDone: string
   warningBackground: string
   warningBorder: string
   warningText: string
@@ -78,6 +81,9 @@ export const DARK_PALETTE: Palette = {
     rowActive: '#37373d',
     rowMarker: '#0078d4',
     rowConnector: '#6e7681',
+    stateWorking: '#3794ff',
+    stateNeeds: '#cca700',
+    stateDone: '#89d185',
     warningBackground: '#352a05',
     warningBorder: '#b89500',
     warningText: '#cca700'
@@ -118,6 +124,9 @@ export const LIGHT_PALETTE: Palette = {
     rowActive: '#e4e6f1',
     rowMarker: '#005fb8',
     rowConnector: '#a0a0a0',
+    stateWorking: '#005fb8',
+    stateNeeds: '#bf8803',
+    stateDone: '#388a34',
     warningBackground: '#f6f5d2',
     warningBorder: '#b89500',
     warningText: '#7a5b00'

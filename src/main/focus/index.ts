@@ -1,5 +1,6 @@
 import { app, type BrowserWindow } from 'electron'
-import { CHANNEL, type SessionId } from '@shared/ipc'
+import { CHANNEL, type ClaudeSignalEvent, type SessionId } from '@shared/ipc'
+import type { ClaudeSignal } from '@shared/rowState'
 import { focusPortPath } from '../config/files'
 import type { ClaudeSession } from '@shared/snapshot'
 import type { PtySessions } from '../pty/sessions'
@@ -11,6 +12,13 @@ function sendToWindow(window: BrowserWindow, channel: string, id: SessionId): vo
     return
   }
   window.webContents.send(channel, id)
+}
+
+function sendSignal(window: BrowserWindow, event: ClaudeSignalEvent): void {
+  if (window.isDestroyed()) {
+    return
+  }
+  window.webContents.send(CHANNEL.claudeSignal, event)
 }
 
 function sendBare(window: BrowserWindow, channel: string): void {
@@ -39,9 +47,14 @@ export function registerFocus(
       },
       onClaudeStart: (id: SessionId, session: ClaudeSession) => {
         snapshotStore.recordClaudeStart(id, session)
+        sendSignal(window, { id, claudeSessionId: session.sessionId, signal: 'start' })
       },
       onClaudeEnd: (id: SessionId, sessionId: string) => {
         snapshotStore.recordClaudeEnd(id, sessionId)
+        sendSignal(window, { id, claudeSessionId: sessionId, signal: 'end' })
+      },
+      onClaudeSignal: (id: SessionId, claudeSessionId: string, signal: ClaudeSignal) => {
+        sendSignal(window, { id, claudeSessionId, signal })
       },
       onUnavailable: () => {
         sendBare(window, CHANNEL.focusUnavailable)

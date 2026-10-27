@@ -10,6 +10,9 @@ const CHROME_VARIABLES: Record<keyof ChromeColors, string> = {
   rowActive: '--row-active',
   rowMarker: '--row-marker',
   rowConnector: '--row-connector',
+  stateWorking: '--state-working',
+  stateNeeds: '--state-needs',
+  stateDone: '--state-done',
   warningBackground: '--warning-background',
   warningBorder: '--warning-border',
   warningText: '--warning-text'

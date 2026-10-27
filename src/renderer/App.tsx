@@ -1,4 +1,4 @@
-import { type JSX, useCallback, useEffect, useMemo, useState } from 'react'
+import { type JSX, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { PtyCreateOptions, SessionId } from '@shared/ipc'
 import { type Snapshot, type SnapshotPane, workspaceFromSnapshot } from '@shared/snapshot'
 import { paletteFor } from '@shared/theme'
@@ -21,6 +21,15 @@ import {
   splitActivePane,
   type Workspace
 } from '@shared/model'
+import { claudeTitleOf } from '@shared/claudeTitle'
+import {
+  type ClaudeRows,
+  rowsAfterExit,
+  rowsAfterIdleTitle,
+  rowsAfterScreen,
+  rowsAfterSignal,
+  waitingCount
+} from '@shared/rowState'
 import { createCommandRegistry } from './commands/registry'
 import { registerTerminalCommands } from './commands/terminal'
 import { registerWorkspaceCommands } from './commands/workspace'
@@ -88,6 +97,17 @@ function activeSessionOf(workspace: Workspace | null): SessionId | null {
   return pane.id
 }
 
+function onScreenPanesOf(workspace: Workspace | null): SessionId[] {
+  if (!workspace) {
+    return []
+  }
+  const group = workspace.groups[workspace.activeGroup]
+  if (!group) {
+    return []
+  }
+  return group.panes.map((pane) => pane.id)
+}
+
 export function App(): JSX.Element {
   // Null is the app before its first terminal exists, which is not the same
   // state as a workspace whose last terminal has just closed.
@@ -95,6 +115,10 @@ export function App(): JSX.Element {
   const [sidebarVisible, setSidebarVisible] = useState(true)
   const [waiting, setWaiting] = useState<SessionId | null>(null)
   const [focusProblem, setFocusProblem] = useState<string | null>(null)
+  const [claudeRows, setClaudeRows] = useState<ClaudeRows>(() => new Map())
+  const claudeRowsRef = useRef<ClaudeRows>(claudeRows)
+  const onScreenRef = useRef<SessionId[]>([])
+  const rawTitlesRef = useRef(new Map<SessionId, string>())
   const commands = useMemo(() => createCommandRegistry(), [])
   const activeSessionId = activeSessionOf(workspace)
   const config = useConfig()
@@ -218,11 +242,55 @@ export function App(): JSX.Element {
     window.tacoShells.snapshot.workspaceChanged(workspace)
   }, [workspace])
 
+  const changeClaudeRows = useCallback((change: (rows: ClaudeRows) => ClaudeRows) => {
+    const next = change(claudeRowsRef.current)
+    claudeRowsRef.current = next
+    setClaudeRows(next)
+  }, [])
+
+  const handleTitle = useCallback(
+    (sessionId: SessionId, title: string) => {
+      rawTitlesRef.current.set(sessionId, title)
+      const hasRow = claudeRowsRef.current.has(sessionId)
+      if (!hasRow) {
+        updateWorkspace((current) => renamePane(current, sessionId, title))
+        return
+      }
+      const parsed = claudeTitleOf(title)
+      updateWorkspace((current) => renamePane(current, sessionId, parsed.name))
+      if (parsed.idle) {
+        changeClaudeRows((rows) => rowsAfterIdleTitle(rows, sessionId))
+      }
+    },
+    [updateWorkspace, changeClaudeRows]
+  )
+
   useEffect(() => {
-    return onSessionTitle((sessionId, title) => {
-      updateWorkspace((current) => renamePane(current, sessionId, title))
+    return onSessionTitle(handleTitle)
+  }, [handleTitle])
+
+  useEffect(() => {
+    return window.tacoShells.focus.onClaudeSignal((event) => {
+      const onScreen = onScreenRef.current.includes(event.id)
+      changeClaudeRows((rows) => {
+        return rowsAfterSignal(rows, event.id, event.claudeSessionId, event.signal, onScreen)
+      })
+      if (event.signal !== 'start') {
+        return
+      }
+      // A title can arrive before SessionStart has created the row, so replay the last one through the stripping path.
+      const rawTitle = rawTitlesRef.current.get(event.id)
+      if (rawTitle !== undefined) {
+        handleTitle(event.id, rawTitle)
+      }
     })
-  }, [updateWorkspace])
+  }, [changeClaudeRows, handleTitle])
+
+  useEffect(() => {
+    const onScreen = onScreenPanesOf(workspace)
+    onScreenRef.current = onScreen
+    changeClaudeRows((rows) => rowsAfterScreen(rows, onScreen))
+  }, [workspace, changeClaudeRows])
 
   // Clicking straight into a pane has to move the workspace's idea of the active
   // pane with it, or cmd+w would close a terminal the user is not typing in. The
@@ -272,10 +340,12 @@ export function App(): JSX.Element {
   useEffect(() => {
     return window.tacoShells.pty.onExit((event) => {
       disposeSession(event.id)
+      rawTitlesRef.current.delete(event.id)
       updateWorkspace((current) => closePane(current, event.id))
+      changeClaudeRows((rows) => rowsAfterExit(rows, event.id))
       setWaiting((current) => waitingAfterExit(current, event.id))
     })
-  }, [updateWorkspace])
+  }, [updateWorkspace, changeClaudeRows])
 
   // The terminals are the window's only contents, so losing the last of them is
   // the same gesture as closing the window.
@@ -416,6 +486,7 @@ export function App(): JSX.Element {
         activeGroup={activeGroupIndex}
         width={sidebarWidth.width}
         fullScreen={fullScreen}
+        rowStates={claudeRows}
         onSelect={selectPane}
         onReorder={reorderGroups}
         onResize={sidebarWidth.resize}
@@ -427,7 +498,17 @@ export function App(): JSX.Element {
   // grows its own. It is the only place a frameless window can be dragged by.
   let paneTitlebar = null
   if (!sidebarVisible) {
-    paneTitlebar = <div className="pane-titlebar" />
+    const count = waitingCount(claudeRows)
+    let pill = null
+    if (count > 0) {
+      pill = (
+        <div className="waiting-pill">
+          <span className="waiting-pill-dot" />
+          {`${count} waiting`}
+        </div>
+      )
+    }
+    paneTitlebar = <div className="pane-titlebar">{pill}</div>
   }
 
   return (

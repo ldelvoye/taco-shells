@@ -1,5 +1,6 @@
 import type { Config, ConfigFile } from './config'
 import type { Workspace } from './model'
+import type { ClaudeSignal } from './rowState'
 import type { ClaudeSession, Snapshot } from './snapshot'
 
 export type SessionId = string
@@ -25,6 +26,12 @@ export interface PtyExitEvent {
   exitCode: number
 }
 
+export interface ClaudeSignalEvent {
+  id: SessionId
+  claudeSessionId: string
+  signal: ClaudeSignal
+}
+
 export const CHANNEL = {
   ptyCreate: 'pty:create',
   ptyWrite: 'pty:write',
@@ -40,6 +47,7 @@ export const CHANNEL = {
   configPath: 'config:path',
   focusSession: 'focus:session',
   attentionSession: 'attention:session',
+  claudeSignal: 'claude:signal',
   appActivated: 'app:activated',
   focusUnavailable: 'focus:unavailable',
   fullScreenGet: 'full-screen:get',
@@ -77,6 +85,7 @@ export interface TacoShellsApi {
   focus: {
     onFocusSession(listener: (id: SessionId) => void): () => void
     onAttention(listener: (id: SessionId) => void): () => void
+    onClaudeSignal(listener: (event: ClaudeSignalEvent) => void): () => void
     onActivated(listener: () => void): () => void
     onUnavailable(listener: () => void): () => void
   }
