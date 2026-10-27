@@ -53,7 +53,7 @@ Quit and relaunch, and the terminals you had come back, each in the directory it
 
 ## Seeing which session needs you
 
-A terminal running Claude Code gets a marker in front of its name in the sidebar: a spinner while Claude works, an amber dot when it is waiting on you, and a green check when it finished while you were looking at another terminal. The check clears once you switch to it. With the sidebar hidden, a "2 waiting" pill in the titlebar counts the amber ones.
+A terminal running Claude Code gets a marker in front of its name in the sidebar: a grey ring while it sits idle, a spinner while Claude works, an amber dot when it is waiting on you, and a green check when it finished while you were looking at another terminal. The check clears once you switch to it. With the sidebar hidden, a "2 waiting" pill in the titlebar counts the amber ones.
 
 The markers come from Claude Code's hooks, so they need these entries next to the ones above. `async` keeps Claude from waiting on them:
 
