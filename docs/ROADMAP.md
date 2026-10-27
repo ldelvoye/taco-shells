@@ -1,11 +1,6 @@
 # Features
 
-- Upstream a PR to Clawd on Desk dropping the `editor` allowlist in
-  `scheduleTerminalTabFocus`, so it posts `/focus-tab` to any terminal that
-  serves it. The endpoint already exists here, so the attention hook stops being
-  needed the day it merges.
-
 
 # Bugfixes
 
-- Currently, the latest hook addition breaks a bit because clicking the go to terminal link sometimes redirects you to the wrong terminal (it'll switch terminals to a wrong one). Not sure how to fix tbh, but even when not going through claude, on selection (enter press to send the response on a question) it'll switch
+- The terminal sometimes goes blank: text disappears and only background fills stay (diff highlight bands, the grey block behind a Claude tool call), and the only known fix is restarting the app. It happens rarely, with no known way to trigger it. Unconfirmed guess: xterm's WebGL glyph texture atlas going stale. Backgrounds and glyphs are drawn separately, so losing only the glyphs fits. `loadWebglRenderer` in `src/renderer/terminal/registry.ts` handles context loss, but nothing ever calls `term.clearTextureAtlas()`. VS Code calls it to recover from the same symptom. Before relying on that guess, check whether forcing a full redraw (resizing the window, toggling the sidebar) brings the text back.
