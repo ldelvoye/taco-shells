@@ -131,6 +131,7 @@ body {
 /* A fixed height rather than vertical padding, so a connector can stretch the
    full row and meet the one in the row below it. */
 .terminal-row {
+  position: relative;
   display: flex;
   align-items: stretch;
   height: var(--row-height);
@@ -154,6 +155,59 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.row-color {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+}
+
+.row-color-picker {
+  position: fixed;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  background: var(--chrome-background);
+  border: 1px solid var(--row-connector);
+  border-radius: 7px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.row-color-dot {
+  position: relative;
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+}
+
+.row-color-dot.is-current {
+  box-shadow:
+    0 0 0 2px var(--chrome-background),
+    0 0 0 3.5px var(--text);
+}
+
+.row-color-dot.is-none {
+  background: transparent;
+  border: 1.5px solid var(--row-connector);
+}
+
+.row-color-dot.is-none::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: -1px;
+  bottom: -1px;
+  width: 1.5px;
+  background: var(--row-connector);
+  transform: rotate(45deg);
 }
 
 .row-state {

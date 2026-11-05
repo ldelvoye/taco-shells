@@ -14,15 +14,19 @@ import {
   moveDivider,
   moveGroup,
   renamePane,
-  splitActivePane
+  setPaneColor,
+  splitActivePane,
+  toggleActivePaneColor
 } from './model'
 
 function makeGroup(id: string, paneId: string): Group {
-  return { id, panes: [{ id: paneId, title: paneId, width: 1 }], activePane: 0 }
+  return { id, panes: [{ id: paneId, title: paneId, width: 1, color: null }], activePane: 0 }
 }
 
 function makeGroupWithWidths(id: string, widths: number[], activePane: number): Group {
-  const panes = widths.map((width, index) => ({ id: `${id}-${index}`, title: '', width }))
+  const panes = widths.map((width, index) => {
+    return { id: `${id}-${index}`, title: '', width, color: null }
+  })
   return { id, panes, activePane }
 }
 
@@ -189,6 +193,24 @@ describe('activatePane', () => {
   })
 })
 
+describe('toggleActivePaneColor', () => {
+  it('colors only the active pane, swaps a different color, and clears the same one', () => {
+    const start = makeWorkspace([makeGroupWithWidths('a', [0.5, 0.5], 1)], 0)
+    const colorsOf = (workspace: Workspace): Array<string | null> => {
+      return workspace.groups[0].panes.map((pane) => pane.color)
+    }
+
+    const blue = toggleActivePaneColor(start, 'blue')
+    expect(colorsOf(blue)).toEqual([null, 'blue'])
+
+    const red = toggleActivePaneColor(blue, 'red')
+    expect(colorsOf(red)).toEqual([null, 'red'])
+
+    const cleared = toggleActivePaneColor(red, 'red')
+    expect(colorsOf(cleared)).toEqual([null, null])
+  })
+})
+
 describe('unchanged operations', () => {
   it('returns the same workspace reference when nothing changes', () => {
     const workspace = makeWorkspace([makeGroup('a', 'pane-a'), makeGroup('b', 'pane-b')], 0)
@@ -196,6 +218,7 @@ describe('unchanged operations', () => {
     expect(closePane(workspace, 'missing-session')).toBe(workspace)
     expect(renamePane(workspace, 'missing-session', 'new title')).toBe(workspace)
     expect(renamePane(workspace, 'pane-a', 'pane-a')).toBe(workspace)
+    expect(setPaneColor(workspace, 'pane-a', null)).toBe(workspace)
     expect(moveGroup(workspace, 0, 0)).toBe(workspace)
 
     const empty = emptyWorkspace()

@@ -1,6 +1,6 @@
 import type { SessionId } from './ipc'
-import type { GroupId, Group, Pane, Workspace } from './model'
-import { emptyWorkspace, MIN_PANE_WIDTH } from './model'
+import type { GroupId, Group, Pane, RowColor, Workspace } from './model'
+import { emptyWorkspace, MIN_PANE_WIDTH, ROW_COLORS } from './model'
 
 export const SNAPSHOT_VERSION = 1
 
@@ -17,6 +17,7 @@ export interface SnapshotPane {
   width: number
   cwd: string | null
   claude: ClaudeSession | null
+  color: RowColor | null
 }
 
 export interface SnapshotGroup {
@@ -68,6 +69,14 @@ export function claudeSessionFrom(value: unknown): ClaudeSession | null {
   return { sessionId, cwd }
 }
 
+function rowColorFrom(value: unknown): RowColor | null {
+  const knownColor = ROW_COLORS.find((color) => color === value)
+  if (knownColor === undefined) {
+    return null
+  }
+  return knownColor
+}
+
 function parseGroup(value: unknown): SnapshotGroup | null {
   if (!isRecord(value) || !Array.isArray(value.panes)) {
     return null
@@ -96,7 +105,8 @@ function parseGroup(value: unknown): SnapshotGroup | null {
     }
     const width = widths[index] / widthSum
     const claude = claudeSessionFrom(raw.claude)
-    return { width, cwd, claude }
+    const color = rowColorFrom(raw.color)
+    return { width, cwd, claude, color }
   })
 
   const activePane = clampIndex(value.activePane, panes.length)
@@ -135,7 +145,12 @@ export function snapshotFrom(
 ): Snapshot {
   const groups = workspace.groups.map((group): SnapshotGroup => {
     const panes = group.panes.map((pane): SnapshotPane => {
-      return { width: pane.width, cwd: cwdOf(pane.id), claude: claudeOf(pane.id) }
+      return {
+        width: pane.width,
+        cwd: cwdOf(pane.id),
+        claude: claudeOf(pane.id),
+        color: pane.color
+      }
     })
     return { panes, activePane: group.activePane }
   })
@@ -166,7 +181,7 @@ export function workspaceFromSnapshot(
     const panes = snapshotGroup.panes.map((snapshotPane): Pane => {
       const id = sessionIds[nextSession]
       nextSession += 1
-      return { id, title: '', width: snapshotPane.width }
+      return { id, title: '', width: snapshotPane.width, color: snapshotPane.color }
     })
     return { id: groupIds[groupIndex], panes, activePane: snapshotGroup.activePane }
   })

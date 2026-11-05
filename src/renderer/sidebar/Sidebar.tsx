@@ -1,7 +1,16 @@
-import { type CSSProperties, type DragEvent, type JSX, useRef, useState } from 'react'
+import {
+  type CSSProperties,
+  type DragEvent,
+  type JSX,
+  type MouseEvent,
+  useCallback,
+  useRef,
+  useState
+} from 'react'
 import type { SessionId } from '@shared/ipc'
-import { type Group, paneOf } from '@shared/model'
+import { type Group, type Pane, paneOf, type RowColor } from '@shared/model'
 import type { ClaudeRows } from '@shared/rowState'
+import { RowColorPicker, rowColorVariable } from './RowColorPicker'
 import { SidebarDivider } from './SidebarDivider'
 import { SidebarTitlebar } from './SidebarTitlebar'
 
@@ -11,6 +20,20 @@ const CONNECTOR_FIRST = 'is-first'
 const CONNECTOR_MIDDLE = 'is-middle'
 const CONNECTOR_LAST = 'is-last'
 
+const RIGHT_BUTTON = 2
+
+// Wrapped because previewing no color is different from not previewing at all.
+interface ColorPreview {
+  color: RowColor | null
+}
+
+interface OpenPicker {
+  paneId: SessionId
+  x: number
+  y: number
+  preview: ColorPreview | null
+}
+
 interface SidebarProps {
   groups: Group[]
   activeGroup: number
@@ -19,6 +42,7 @@ interface SidebarProps {
   rowStates: ClaudeRows
   onSelect: (sessionId: SessionId) => void
   onReorder: (from: number, to: number) => void
+  onColor: (sessionId: SessionId, color: RowColor | null) => void
   onResize: (width: number) => void
 }
 
@@ -52,10 +76,28 @@ export function Sidebar({
   rowStates,
   onSelect,
   onReorder,
+  onColor,
   onResize
 }: SidebarProps): JSX.Element {
   const dragged = useRef<number | null>(null)
   const [insertAt, setInsertAt] = useState<number | null>(null)
+  const [picker, setPicker] = useState<OpenPicker | null>(null)
+
+  const closePicker = useCallback(() => {
+    setPicker(null)
+  }, [])
+
+  function openPicker(event: MouseEvent<HTMLDivElement>, paneId: SessionId): void {
+    event.preventDefault()
+    setPicker({ paneId, x: event.clientX, y: event.clientY, preview: null })
+  }
+
+  function shownColor(pane: Pane): RowColor | null {
+    if (picker === null || picker.paneId !== pane.id || picker.preview === null) {
+      return pane.color
+    }
+    return picker.preview.color
+  }
 
   function onDragStart(event: DragEvent<HTMLDivElement>, index: number, label: string): void {
     dragged.current = index
@@ -131,6 +173,13 @@ export function Sidebar({
         className += ' is-active'
       }
 
+      let stripe = null
+      const color = shownColor(pane)
+      if (color !== null) {
+        const background = rowColorVariable(color)
+        stripe = <span className="row-color" data-color={color} style={{ background }} />
+      }
+
       return (
         <div
           key={pane.id}
@@ -139,7 +188,17 @@ export function Sidebar({
           onClick={() => {
             onSelect(pane.id)
           }}
+          onMouseDown={(event) => {
+            // Keeps keyboard focus in the terminal: right-clicking a row only opens the picker.
+            if (event.button === RIGHT_BUTTON) {
+              event.preventDefault()
+            }
+          }}
+          onContextMenu={(event) => {
+            openPicker(event, pane.id)
+          }}
         >
+          {stripe}
           {connector}
           <span className="row-state" data-state={markerState} />
           <span className="row-label">{label}</span>
@@ -181,11 +240,39 @@ export function Sidebar({
 
   const style = { '--sidebar-width': `${width}px` } as CSSProperties
 
+  // A pane can exit while its picker is open, which takes the picker with it.
+  let colorPicker = null
+  if (picker !== null) {
+    const panes = groups.flatMap((group) => group.panes)
+    const pickedPane = panes.find((pane) => pane.id === picker.paneId)
+    if (pickedPane !== undefined) {
+      colorPicker = (
+        <RowColorPicker
+          x={picker.x}
+          y={picker.y}
+          current={pickedPane.color}
+          onPreview={(color) => {
+            setPicker({ ...picker, preview: { color } })
+          }}
+          onPreviewEnd={() => {
+            setPicker({ ...picker, preview: null })
+          }}
+          onPick={(color) => {
+            onColor(pickedPane.id, color)
+            closePicker()
+          }}
+          onClose={closePicker}
+        />
+      )
+    }
+  }
+
   return (
     <aside className="sidebar" style={style}>
       <SidebarTitlebar fullScreen={fullScreen} />
       <div className="sidebar-rows">{rendered}</div>
       <SidebarDivider width={width} onResize={onResize} />
+      {colorPicker}
     </aside>
   )
 }

@@ -52,8 +52,8 @@ describe('parseSnapshot', () => {
         {
           activePane: -4,
           panes: [
-            { width: 1, cwd: '/a', claude: { sessionId: SESSION_ID, cwd: '/a' } },
-            { width: 1, cwd: 7, claude: { sessionId: 'nope', cwd: '/b' } },
+            { width: 1, cwd: '/a', claude: { sessionId: SESSION_ID, cwd: '/a' }, color: 'blue' },
+            { width: 1, cwd: 7, claude: { sessionId: 'nope', cwd: '/b' }, color: 'mauve' },
             'garbage',
             { width: -2, cwd: '/c', claude: { sessionId: SESSION_ID, cwd: '' } }
           ]
@@ -77,6 +77,7 @@ describe('parseSnapshot', () => {
     expect(first.panes[1].cwd).toBeNull()
     expect(first.panes[1].claude).toBeNull()
     expect(first.panes[2].claude).toBeNull()
+    expect(first.panes.map((pane) => pane.color)).toEqual(['blue', null, null])
     expect(widthSum(snapshot, 0)).toBeCloseTo(1)
     expect(first.panes[2].width).toBeGreaterThan(0)
 
@@ -109,13 +110,13 @@ describe('snapshot and workspace round trip', () => {
   const workspace: Workspace = {
     activeGroup: 1,
     groups: [
-      { id: 'g1', activePane: 0, panes: [{ id: 'pty-1', title: 'one', width: 1 }] },
+      { id: 'g1', activePane: 0, panes: [{ id: 'pty-1', title: 'one', width: 1, color: null }] },
       {
         id: 'g2',
         activePane: 1,
         panes: [
-          { id: 'pty-2', title: 'two', width: 0.25 },
-          { id: 'pty-3', title: 'three', width: 0.75 }
+          { id: 'pty-2', title: 'two', width: 0.25, color: 'purple' },
+          { id: 'pty-3', title: 'three', width: 0.75, color: null }
         ]
       }
     ]
@@ -145,8 +146,8 @@ describe('snapshot and workspace round trip', () => {
     expect(restored.groups.map((group) => group.id)).toEqual(['x', 'y'])
     expect(restored.groups[1].activePane).toBe(1)
     expect(restored.groups[1].panes).toEqual([
-      { id: 'b', title: '', width: 0.25 },
-      { id: 'c', title: '', width: 0.75 }
+      { id: 'b', title: '', width: 0.25, color: 'purple' },
+      { id: 'c', title: '', width: 0.75, color: null }
     ])
     expect(snapshot.groups[1].panes[1].claude).toEqual(claude)
     expect(snapshot.groups[1].panes[0].cwd).toBeNull()

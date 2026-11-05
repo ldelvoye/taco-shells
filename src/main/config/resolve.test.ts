@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { isCommandId } from '@shared/commands'
+import { isCommandId, ROW_COLOR_COMMANDS } from '@shared/commands'
+import { ROW_COLORS } from '@shared/model'
 import { DEFAULT_SETTINGS } from '@shared/settings'
 import { parseJsonc } from './jsonc'
 import { resolveConfig } from './resolve'
@@ -42,6 +43,24 @@ describe('the shipped defaults', () => {
     const commands = Object.values(bindings)
     const unknown = commands.filter((command) => !isCommandId(String(command)))
     expect(unknown).toEqual([])
+  })
+
+  it('binds the color chords in the order the picker shows its dots', () => {
+    const parsed = parseJsonc(defaultKeybindingsText, 'keybindings.json')
+    const bindings = parsed.value as Record<string, unknown>
+
+    const chordCommands = ROW_COLORS.map((_, index) => bindings[`cmd+opt+${index + 1}`])
+    const colorCommands = ROW_COLORS.map((color) => ROW_COLOR_COMMANDS[color])
+
+    expect(colorCommands).toEqual([
+      'terminal.colorRed',
+      'terminal.colorOrange',
+      'terminal.colorYellow',
+      'terminal.colorGreen',
+      'terminal.colorBlue',
+      'terminal.colorPurple'
+    ])
+    expect(chordCommands).toEqual(colorCommands)
   })
 })
 

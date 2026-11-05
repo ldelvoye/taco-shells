@@ -48,7 +48,9 @@ export const KEY = {
   left: { code: 'ArrowLeft', text: '', virtualKeyCode: 37 },
   right: { code: 'ArrowRight', text: '', virtualKeyCode: 39 },
   comma: { code: 'Comma', text: ',', virtualKeyCode: 188 },
-  enter: { code: 'Enter', text: 'Enter', virtualKeyCode: 13 }
+  enter: { code: 'Enter', text: 'Enter', virtualKeyCode: 13 },
+  escape: { code: 'Escape', text: '', virtualKeyCode: 27 },
+  digit5: { code: 'Digit5', text: '5', virtualKeyCode: 53 }
 } satisfies Record<string, Key>
 
 export interface Modifiers {
@@ -76,6 +78,12 @@ export interface Row {
   label: string
   connector: string
   active: boolean
+  color: string | null
+}
+
+interface Point {
+  x: number
+  y: number
 }
 
 /** A pane of the group currently on screen, left to right. */
@@ -93,6 +101,8 @@ export interface Screen {
   sidebarWidth: number
   windowWidth: number
   labelsTruncated: boolean
+  colorPickerOpen: boolean
+  terminalFocused: boolean
 }
 
 export type ProtocolParams = Record<string, unknown>
@@ -106,6 +116,11 @@ export interface App {
   dragDivider(dividerIndex: number, byPixels: number): Promise<void>
   dragSidebarDivider(byPixels: number): Promise<void>
   doubleClickSidebarDivider(): Promise<void>
+  clickVisiblePane(): Promise<void>
+  rightClickRow(rowIndex: number): Promise<void>
+  hoverRow(rowIndex: number): Promise<void>
+  hoverColorDot(color: string): Promise<void>
+  clickColorDot(color: string): Promise<void>
   runInPane(sessionId: string, command: string): Promise<void>
   until(description: string, holds: (screen: Screen) => boolean): Promise<Screen>
   pause(milliseconds: number): Promise<void>
@@ -287,10 +302,16 @@ const SCREEN_SCRIPT = `JSON.stringify({
     if (connector) {
       piece = connector.className.replace('row-connector ', '')
     }
+    const stripe = row.querySelector('.row-color')
+    let color = null
+    if (stripe) {
+      color = stripe.dataset.color
+    }
     return {
       label: row.querySelector('.row-label').textContent,
       connector: piece,
-      active: row.classList.contains('is-active')
+      active: row.classList.contains('is-active'),
+      color
     }
   }),
   panes: [...document.querySelectorAll('.pane-group:not(.is-inactive) .terminal-view')].map((view) => ({
@@ -320,7 +341,9 @@ const SCREEN_SCRIPT = `JSON.stringify({
       const availableWidth = label.getBoundingClientRect().width
       return textWidth > availableWidth
     })
-  })()
+  })(),
+  colorPickerOpen: document.querySelector('.row-color-picker') !== null,
+  terminalFocused: document.querySelector('.xterm-helper-textarea:focus') !== null
 })`
 
 export async function launchApp(options: LaunchOptions = {}): Promise<App> {
@@ -495,6 +518,46 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     })
   }
 
+  async function clickAt(centre: Point, button: 'left' | 'right'): Promise<void> {
+    let buttons = 1
+    if (button === 'right') {
+      buttons = 2
+    }
+    const clicked = { x: centre.x, y: centre.y, button, buttons, clickCount: 1 }
+
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...clicked })
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...clicked })
+  }
+
+  async function clickVisiblePane(): Promise<void> {
+    const centre = await centreOf('.pane-group:not(.is-inactive) .terminal-view', 0)
+    await clickAt(centre, 'left')
+  }
+
+  async function rightClickRow(rowIndex: number): Promise<void> {
+    const centre = await centreOf('.terminal-row', rowIndex)
+    await clickAt(centre, 'right')
+  }
+
+  async function hover(selector: string, index: number): Promise<Point> {
+    const centre = await centreOf(selector, index)
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: centre.x, y: centre.y })
+    return centre
+  }
+
+  async function hoverRow(rowIndex: number): Promise<void> {
+    await hover('.terminal-row', rowIndex)
+  }
+
+  async function hoverColorDot(color: string): Promise<void> {
+    await hover(`.row-color-dot[data-color=${color}]`, 0)
+  }
+
+  async function clickColorDot(color: string): Promise<void> {
+    const centre = await hover(`.row-color-dot[data-color=${color}]`, 0)
+    await clickAt(centre, 'left')
+  }
+
   async function runInPane(sessionId: string, command: string): Promise<void> {
     const keystrokes = JSON.stringify(`${command}\r`)
     const target = JSON.stringify(sessionId)
@@ -606,6 +669,11 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     dragDivider,
     dragSidebarDivider,
     doubleClickSidebarDivider,
+    clickVisiblePane,
+    rightClickRow,
+    hoverRow,
+    hoverColorDot,
+    clickColorDot,
     runInPane,
     until,
     pause,
