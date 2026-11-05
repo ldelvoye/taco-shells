@@ -2,13 +2,18 @@ import type { SessionId } from './ipc'
 
 export const MIN_PANE_WIDTH = 0.1
 
+export const ROW_COLORS = ['red', 'orange', 'yellow', 'green', 'blue', 'purple'] as const
+
 export type GroupId = string
+
+export type RowColor = (typeof ROW_COLORS)[number]
 
 export interface Pane {
   id: SessionId
   title: string
   /** Share of the group's width. A group's widths sum to 1. */
   width: number
+  color: RowColor | null
 }
 
 export interface Group {
@@ -108,7 +113,12 @@ export function moveGroup(workspace: Workspace, from: number, to: number): Works
   return { groups, activeGroup }
 }
 
-export function renamePane(workspace: Workspace, id: SessionId, title: string): Workspace {
+// A change that hands the pane back untouched leaves the workspace untouched too.
+function withPaneChanged(
+  workspace: Workspace,
+  id: SessionId,
+  change: (pane: Pane) => Pane
+): Workspace {
   const groupIndex = workspace.groups.findIndex((group) =>
     group.panes.some((pane) => pane.id === id)
   )
@@ -119,21 +129,55 @@ export function renamePane(workspace: Workspace, id: SessionId, title: string): 
   const group = workspace.groups[groupIndex]
   const paneIndex = group.panes.findIndex((pane) => pane.id === id)
   const pane = group.panes[paneIndex]
-
-  // A shell republishes its title on every prompt, so re-titling to the same
-  // string would re-render the sidebar for nothing.
-  if (pane.title === title) {
+  const changed = change(pane)
+  if (changed === pane) {
     return workspace
   }
 
   const panes = [...group.panes]
-  panes[paneIndex] = { ...pane, title }
+  panes[paneIndex] = changed
 
   const updatedGroup: Group = { ...group, panes }
   const groups = [...workspace.groups]
   groups[groupIndex] = updatedGroup
 
   return { groups, activeGroup: workspace.activeGroup }
+}
+
+export function renamePane(workspace: Workspace, id: SessionId, title: string): Workspace {
+  return withPaneChanged(workspace, id, (pane) => {
+    // A shell republishes its title on every prompt, so re-titling to the same
+    // string would re-render the sidebar for nothing.
+    if (pane.title === title) {
+      return pane
+    }
+    return { ...pane, title }
+  })
+}
+
+export function setPaneColor(
+  workspace: Workspace,
+  id: SessionId,
+  color: RowColor | null
+): Workspace {
+  return withPaneChanged(workspace, id, (pane) => {
+    if (pane.color === color) {
+      return pane
+    }
+    return { ...pane, color }
+  })
+}
+
+/** The workspace with the active pane in a color, or without it if the pane already had it. */
+export function toggleActivePaneColor(workspace: Workspace, color: RowColor): Workspace {
+  const pane = activePane(workspace)
+  if (!pane) {
+    return workspace
+  }
+  if (pane.color === color) {
+    return setPaneColor(workspace, pane.id, null)
+  }
+  return setPaneColor(workspace, pane.id, color)
 }
 
 // Every operation keeps each pane at or above MIN_PANE_WIDTH, so a group holds
@@ -157,7 +201,7 @@ export function splitActivePane(workspace: Workspace, id: SessionId): Workspace 
 
   const group = workspace.groups[workspace.activeGroup]
   const donorIndex = group.activePane
-  const newPane: Pane = { id, title: '', width: 0 }
+  const newPane: Pane = { id, title: '', width: 0, color: null }
 
   const panesBefore = group.panes.slice(0, donorIndex + 1)
   const panesAfter = group.panes.slice(donorIndex + 1)

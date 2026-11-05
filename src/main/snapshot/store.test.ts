@@ -13,7 +13,7 @@ const SESSION_A: ClaudeSession = { sessionId: '11111111-1111-4111-8111-111111111
 const SESSION_B: ClaudeSession = { sessionId: '22222222-2222-4222-8222-222222222222', cwd: '/tmp/b' }
 const SESSION_C: ClaudeSession = { sessionId: '33333333-3333-4333-8333-333333333333', cwd: '/tmp/c' }
 const WORKSPACE: Workspace = {
-  groups: [{ id: 'group-1', panes: [{ id: PANE_ID, title: '', width: 1 }], activePane: 0 }],
+  groups: [{ id: 'group-1', panes: [{ id: PANE_ID, title: '', width: 1, color: null }], activePane: 0 }],
   activeGroup: 0
 }
 

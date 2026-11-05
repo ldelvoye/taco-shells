@@ -1,3 +1,5 @@
+import { ROW_COLOR_COMMANDS } from '@shared/commands'
+import { ROW_COLORS, type RowColor } from '@shared/model'
 import type { CommandRegistry } from './registry'
 
 export interface WorkspaceActions {
@@ -8,6 +10,7 @@ export interface WorkspaceActions {
   focusPreviousPane: () => void
   focusNextGroup: () => void
   focusPreviousGroup: () => void
+  toggleActiveColor: (color: RowColor) => void
   toggleSidebar: () => void
   openSettings: () => void
   openKeybindings: () => void
@@ -27,4 +30,10 @@ export function registerWorkspaceCommands(
   registry.register('sidebar.toggle', actions.toggleSidebar)
   registry.register('config.openSettings', actions.openSettings)
   registry.register('config.openKeybindings', actions.openKeybindings)
+
+  for (const color of ROW_COLORS) {
+    registry.register(ROW_COLOR_COMMANDS[color], () => {
+      actions.toggleActiveColor(color)
+    })
+  }
 }

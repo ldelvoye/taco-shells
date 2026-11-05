@@ -8,7 +8,7 @@ import { KEY, launchApp } from './app'
 const SAVED_WORKSPACE = {
   version: 1,
   groups: [
-    { panes: [{ width: 1, cwd: '/usr/local', claude: null }], activePane: 0 },
+    { panes: [{ width: 1, cwd: '/usr/local', claude: null, color: 'purple' }], activePane: 0 },
     {
       panes: [
         { width: 0.3, cwd: '/private/tmp', claude: null },
@@ -24,7 +24,9 @@ function scratchConfigDirectory(): string {
   return mkdtempSync(join(tmpdir(), 'taco-shells-restore-e2e-'))
 }
 
-function savedSnapshot(configDir: string): { groups: Array<{ panes: Array<{ cwd: string }> }> } {
+function savedSnapshot(configDir: string): {
+  groups: Array<{ panes: Array<{ cwd: string; color: string | null }> }>
+} {
   const text = readFileSync(join(configDir, 'workspace.json'), 'utf8')
   return JSON.parse(text)
 }
@@ -43,10 +45,12 @@ describe('restoring a saved workspace', () => {
       expect(screen.panes[1].width).toBeCloseTo(0.7, 2)
       expect(screen.dividers).toBe(1)
       expect(screen.rows[2].active).toBe(true)
+      expect(screen.rows.map((row) => row.color)).toEqual(['purple', null, null])
 
       await app.quitGracefully()
 
       const snapshot = savedSnapshot(configDir)
+      expect(snapshot.groups[0].panes[0].color).toBe('purple')
       expect(snapshot.groups[0].panes[0].cwd).toBe('/usr/local')
       expect(snapshot.groups[1].panes[0].cwd).toBe('/private/tmp')
       expect(snapshot.groups[1].panes[1].cwd).toBe(homedir())

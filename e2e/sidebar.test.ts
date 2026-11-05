@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { type App, launchApp } from './app'
+import { type App, KEY, launchApp } from './app'
 
 let app: App
 
@@ -59,5 +59,85 @@ describe('the sidebar divider', () => {
 
     await app.doubleClickSidebarDivider()
     await app.until('the label is no longer truncated', (state) => !state.labelsTruncated)
+  })
+})
+
+describe('row colors', () => {
+  it('colors the active row from the keyboard, and the same chord clears it', async () => {
+    const chord = { cmd: true, alt: true }
+
+    await app.press(KEY.digit5, chord)
+    await app.until('the row is blue', (state) => state.rows[0].color === 'blue')
+
+    await app.press(KEY.digit5, chord)
+    await app.until('the row has no color', (state) => state.rows[0].color === null)
+  })
+
+  it('previews a hovered dot on the row and keeps a color only when clicked', async () => {
+    await app.rightClickRow(0)
+    await app.until('the picker is open', (state) => state.colorPickerOpen)
+
+    await app.hoverColorDot('green')
+    await app.until('the row previews green', (state) => state.rows[0].color === 'green')
+
+    await app.press(KEY.escape)
+    const dismissed = await app.until('the picker closes', (state) => !state.colorPickerOpen)
+    expect(dismissed.rows[0].color).toBeNull()
+    expect(dismissed.terminalFocused).toBe(true)
+
+    await app.rightClickRow(0)
+    await app.until('the picker is open again', (state) => state.colorPickerOpen)
+    await app.clickColorDot('red')
+    const picked = await app.until('the picker closes', (state) => !state.colorPickerOpen)
+    expect(picked.rows[0].color).toBe('red')
+    expect(picked.terminalFocused).toBe(true)
+
+    await app.rightClickRow(0)
+    await app.until('the picker is open again', (state) => state.colorPickerOpen)
+    await app.hoverColorDot('none')
+    await app.until('the row previews no color', (state) => state.rows[0].color === null)
+    await app.hoverRow(0)
+    await app.until('the saved color is back', (state) => state.rows[0].color === 'red')
+    await app.clickColorDot('none')
+    const removed = await app.until('the picker closes', (state) => !state.colorPickerOpen)
+    expect(removed.rows[0].color).toBeNull()
+  })
+
+  it('previews on the right-clicked row alone, and a click elsewhere drops it', async () => {
+    await app.press(KEY.t, { cmd: true })
+    await app.until('a second row appears', (state) => state.rows.length === 2)
+
+    await app.rightClickRow(0)
+    await app.until('the picker is open', (state) => state.colorPickerOpen)
+    await app.hoverColorDot('green')
+    const previewing = await app.until(
+      'the first row previews green',
+      (state) => state.rows[0].color === 'green'
+    )
+    expect(previewing.rows[1].color).toBeNull()
+    expect(previewing.rows[1].active).toBe(true)
+
+    await app.clickVisiblePane()
+    const dismissed = await app.until('the picker closes', (state) => !state.colorPickerOpen)
+    expect(dismissed.rows[0].color).toBeNull()
+  })
+
+  it('keeps the Esc that closes the picker away from the terminal', async () => {
+    const script =
+      "printf '\\033]0;ready\\007'; stty raw -echo; dd bs=1 count=1 >/dev/null 2>&1; " +
+      "printf '\\033]0;got-a-key\\007'; sleep 60"
+    await app.runInPane('pty-1', script)
+    await app.until('the terminal is reading a key', (state) => state.rows[0].label === 'ready')
+
+    await app.rightClickRow(0)
+    await app.until('the picker is open', (state) => state.colorPickerOpen)
+    await app.press(KEY.escape)
+    await app.until('the picker closes', (state) => !state.colorPickerOpen)
+    await app.pause(300)
+    const afterPicker = await app.screen()
+    expect(afterPicker.rows[0].label).toBe('ready')
+
+    await app.press(KEY.escape)
+    await app.until('the next Esc reaches it', (state) => state.rows[0].label === 'got-a-key')
   })
 })

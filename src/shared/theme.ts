@@ -37,6 +37,12 @@ export interface ChromeColors {
   stateWorking: string
   stateNeeds: string
   stateDone: string
+  rowColorRed: string
+  rowColorOrange: string
+  rowColorYellow: string
+  rowColorGreen: string
+  rowColorBlue: string
+  rowColorPurple: string
   warningBackground: string
   warningBorder: string
   warningText: string
@@ -84,6 +90,12 @@ export const DARK_PALETTE: Palette = {
     stateWorking: '#3794ff',
     stateNeeds: '#cca700',
     stateDone: '#89d185',
+    rowColorRed: '#f14c4c',
+    rowColorOrange: '#f0883e',
+    rowColorYellow: '#e2c044',
+    rowColorGreen: '#4ec9a0',
+    rowColorBlue: '#3b8eea',
+    rowColorPurple: '#b180d7',
     warningBackground: '#352a05',
     warningBorder: '#b89500',
     warningText: '#cca700'
@@ -127,6 +139,12 @@ export const LIGHT_PALETTE: Palette = {
     stateWorking: '#005fb8',
     stateNeeds: '#bf8803',
     stateDone: '#388a34',
+    rowColorRed: '#d13438',
+    rowColorOrange: '#d2640f',
+    rowColorYellow: '#b58900',
+    rowColorGreen: '#2e8b57',
+    rowColorBlue: '#0a6fd8',
+    rowColorPurple: '#8a4fc0',
     warningBackground: '#f6f5d2',
     warningBorder: '#b89500',
     warningText: '#7a5b00'

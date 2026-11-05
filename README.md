@@ -51,6 +51,10 @@ It needs the hook below, which is what tells Taco Shells a session is waiting. W
 
 Quit and relaunch, and the terminals you had come back, each in the directory it was in. A terminal that was running Claude Code picks its conversation back up by resuming it. That part needs the `SessionStart` and `SessionEnd` entries in the hook snippet above, which is how Taco Shells learns which terminal is running which conversation. Set `"restoreOnLaunch": false` in settings to turn the whole thing off.
 
+## Coloring terminals
+
+Any row in the sidebar can carry a color, shown as a stripe down its left edge. The colors mean whatever you want: what's on your plate, what's waiting on someone else, work and personal. Right-click a row and hover the dots to preview one on the row; only a click keeps it. The crossed-out dot removes the color. `cmd+opt+1` to `cmd+opt+6` color the terminal you're in, and pressing the same one again removes it. Colors come back when you relaunch.
+
 ## Seeing which session needs you
 
 A terminal running Claude Code gets a marker in front of its name in the sidebar: a grey ring while it sits idle, a spinner while Claude works, an amber dot when it is waiting on you, and a green check when it finished while you were looking at another terminal. The check clears once you switch to it. With the sidebar hidden, a "2 waiting" pill in the titlebar counts the amber ones.

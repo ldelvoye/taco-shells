@@ -18,7 +18,10 @@ import {
   moveDivider,
   moveGroup,
   renamePane,
+  type RowColor,
+  setPaneColor,
   splitActivePane,
+  toggleActivePaneColor,
   type Workspace
 } from '@shared/model'
 import { claudeTitleOf } from '@shared/claudeTitle'
@@ -65,7 +68,7 @@ function nextGroupId(): string {
 
 function groupForSession(sessionId: SessionId): Group {
   const id = nextGroupId()
-  return { id, panes: [{ id: sessionId, title: '', width: 1 }], activePane: 0 }
+  return { id, panes: [{ id: sessionId, title: '', width: 1, color: null }], activePane: 0 }
 }
 
 function startOptionsOf(pane: SnapshotPane): PtyCreateOptions {
@@ -389,6 +392,20 @@ export function App(): JSX.Element {
     updateWorkspace((current) => focusPreviousGroup(current))
   }, [updateWorkspace])
 
+  const colorPane = useCallback(
+    (sessionId: SessionId, color: RowColor | null) => {
+      updateWorkspace((current) => setPaneColor(current, sessionId, color))
+    },
+    [updateWorkspace]
+  )
+
+  const toggleActiveColor = useCallback(
+    (color: RowColor) => {
+      updateWorkspace((current) => toggleActivePaneColor(current, color))
+    },
+    [updateWorkspace]
+  )
+
   const toggleSidebar = useCallback(() => {
     setSidebarVisible((visible) => {
       return !visible
@@ -429,6 +446,7 @@ export function App(): JSX.Element {
       focusPreviousPane: focusPrevious,
       focusNextGroup: focusNextTerminal,
       focusPreviousGroup: focusPreviousTerminal,
+      toggleActiveColor,
       toggleSidebar,
       openSettings,
       openKeybindings
@@ -442,6 +460,7 @@ export function App(): JSX.Element {
     focusPrevious,
     focusNextTerminal,
     focusPreviousTerminal,
+    toggleActiveColor,
     toggleSidebar,
     openSettings,
     openKeybindings
@@ -489,6 +508,7 @@ export function App(): JSX.Element {
         rowStates={claudeRows}
         onSelect={selectPane}
         onReorder={reorderGroups}
+        onColor={colorPane}
         onResize={sidebarWidth.resize}
       />
     )

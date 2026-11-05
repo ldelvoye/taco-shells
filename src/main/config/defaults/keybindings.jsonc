@@ -15,6 +15,12 @@
   "cmd+left": "terminal.lineStart",
   "cmd+right": "terminal.lineEnd",
   "shift+enter": "terminal.insertNewline",
+  "cmd+opt+1": "terminal.colorRed",
+  "cmd+opt+2": "terminal.colorOrange",
+  "cmd+opt+3": "terminal.colorYellow",
+  "cmd+opt+4": "terminal.colorGreen",
+  "cmd+opt+5": "terminal.colorBlue",
+  "cmd+opt+6": "terminal.colorPurple",
   "cmd+b": "sidebar.toggle",
   "cmd+,": "config.openSettings",
   "cmd+shift+,": "config.openKeybindings"

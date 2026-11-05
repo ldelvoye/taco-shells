@@ -13,6 +13,12 @@ const CHROME_VARIABLES: Record<keyof ChromeColors, string> = {
   stateWorking: '--state-working',
   stateNeeds: '--state-needs',
   stateDone: '--state-done',
+  rowColorRed: '--row-color-red',
+  rowColorOrange: '--row-color-orange',
+  rowColorYellow: '--row-color-yellow',
+  rowColorGreen: '--row-color-green',
+  rowColorBlue: '--row-color-blue',
+  rowColorPurple: '--row-color-purple',
   warningBackground: '--warning-background',
   warningBorder: '--warning-border',
   warningText: '--warning-text'
