@@ -32,7 +32,8 @@ export function registerFocus(
   sessions: PtySessions,
   window: BrowserWindow,
   directory: string,
-  snapshotStore: SnapshotStore
+  snapshotStore: SnapshotStore,
+  onUpdateCheck: () => void
 ): () => void {
   const portFilePath = focusPortPath(directory)
 
@@ -56,6 +57,7 @@ export function registerFocus(
       onClaudeSignal: (id: SessionId, claudeSessionId: string, signal: ClaudeSignal) => {
         sendSignal(window, { id, claudeSessionId, signal })
       },
+      onUpdateCheck,
       onUnavailable: () => {
         sendBare(window, CHANNEL.focusUnavailable)
       }

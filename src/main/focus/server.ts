@@ -11,6 +11,7 @@ export interface FocusServerHandlers {
   onClaudeStart(id: SessionId, session: ClaudeSession): void
   onClaudeEnd(id: SessionId, sessionId: string): void
   onClaudeSignal(id: SessionId, claudeSessionId: string, signal: ClaudeSignal): void
+  onUpdateCheck(): void
   onUnavailable(): void
 }
 
@@ -23,6 +24,8 @@ const ATTENTION_PATH = '/attention'
 const CLAUDE_START_PATH = '/claude-session/start'
 const CLAUDE_END_PATH = '/claude-session/end'
 const CLAUDE_STATE_PATH = '/claude-session/state'
+// Must match scripts/bundle.mjs, or promote cannot reach the running app.
+const UPDATE_CHECK_PATH = '/update/check'
 // A pid chain is a handful of numbers, so anything larger is not one of ours.
 const MAX_BODY_BYTES = 64 * 1024
 
@@ -158,6 +161,14 @@ async function handleRequest(
   request: IncomingMessage,
   response: ServerResponse
 ): Promise<void> {
+  // Not tied to a pane, so it carries no pids: any local caller can send it, and
+  // all it can do is start a look for a new release.
+  if (request.method === 'POST' && request.url === UPDATE_CHECK_PATH) {
+    handlers.onUpdateCheck()
+    respond(response, 200, 'ok')
+    return
+  }
+
   const isFocusTab = request.url === FOCUS_TAB_PATH
   const isAttention = request.url === ATTENTION_PATH
   const isClaudeStart = request.url === CLAUDE_START_PATH

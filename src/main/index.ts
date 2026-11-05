@@ -37,11 +37,13 @@ app.whenReady().then(() => {
   const snapshots = new SnapshotStore(directory, sessions)
   snapshotStore = snapshots
   registerIpc(sessions, window, store, snapshots)
-  stopFocus = registerFocus(sessions, window, directory, snapshots)
   const registeredUpdates = registerUpdates(window, directory)
+  let checkForUpdate = (): void => undefined
   if (registeredUpdates !== null) {
-    stopUpdates = registeredUpdates
+    stopUpdates = registeredUpdates.stop
+    checkForUpdate = registeredUpdates.checkNow
   }
+  stopFocus = registerFocus(sessions, window, directory, snapshots, checkForUpdate)
 
   // Closing the window is the start of a quit, and the snapshot has to stop
   // changing from that moment, before the ptys go down with the process.

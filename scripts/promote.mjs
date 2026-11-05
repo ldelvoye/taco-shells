@@ -1,6 +1,12 @@
 import { existsSync, readFileSync } from 'node:fs'
 
-import { appIsRunning, builtDmg, builtZip, clearBuiltArtifacts } from './bundle.mjs'
+import {
+  appIsRunning,
+  builtDmg,
+  builtZip,
+  clearBuiltArtifacts,
+  requestUpdateCheck
+} from './bundle.mjs'
 import identity from './identity.cjs'
 import { changeList, commandSucceeds, fail, git, lastTag, run, runWith, tryGit } from './repo.mjs'
 import { isVersion, versionOfTag } from './version.mjs'
@@ -58,8 +64,11 @@ if (uncommitted) {
   fail(`the working tree has uncommitted changes, so a build would not be ${tag}:\n${uncommitted}`)
 }
 
-if (appIsRunning(STABLE_APP)) {
-  fail(`${STABLE_APP} is running. Quit it so the promoted build can replace it.`)
+// A dry run publishes nothing, so a running app has no release to update to.
+if (!publishing && appIsRunning(STABLE_APP)) {
+  fail(
+    `${STABLE_APP} is running. Quit it so this build can replace it, or pass --publish to update the running app.`
+  )
 }
 
 if (publishing) {
@@ -93,8 +102,13 @@ if (!zip) {
   fail('the build did not produce a zip.')
 }
 
-// No channel needed: install-app finds whichever bundle was just built.
-run('node', 'scripts/install-app.mjs')
+// The app may have quit during the tests. A running one cannot be overwritten,
+// so its updater installs the release instead.
+const handingOffToRunningApp = publishing && appIsRunning(STABLE_APP)
+if (!handingOffToRunningApp) {
+  // No channel needed: install-app finds whichever bundle was just built.
+  run('node', 'scripts/install-app.mjs')
+}
 
 if (!publishing) {
   let notesSource
@@ -126,8 +140,18 @@ if (notesFile) {
 run('gh', 'release', 'upload', tag, dmg, zip, '--clobber')
 run('gh', 'release', 'edit', tag, '--prerelease=false', '--latest', '--notes', notes)
 
+let installLine = `installed ${STABLE_APP}`
+if (handingOffToRunningApp) {
+  const accepted = await requestUpdateCheck(identity.STABLE.configDirectory)
+  if (accepted) {
+    installLine = 'running   the app is checking for it; an Update menu appears once it has downloaded'
+  } else {
+    installLine = 'running   the app did not answer; relaunch it in a minute and it will offer the update'
+  }
+}
+
 console.log(`
 Promoted ${version}.
   release   ${tag} is now Latest, carrying ${dmg} and ${zip}
-  installed ${STABLE_APP}
+  ${installLine}
 `)

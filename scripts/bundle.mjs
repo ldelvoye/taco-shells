@@ -1,10 +1,16 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 
 const OUTPUT_DIRECTORY = 'dist.noindex'
 const APP_DIRECTORY = join(OUTPUT_DIRECTORY, 'mac-arm64')
 const ARTIFACT_SUFFIXES = ['.dmg', '.dmg.blockmap', '.zip', '.zip.blockmap']
+// Must match src/main/config/files.ts and src/main/focus/server.ts, or promote
+// cannot reach the running app.
+const PORT_FILE = 'focus-port'
+const UPDATE_CHECK_PATH = '/update/check'
+const REQUEST_TIMEOUT_MS = 5000
 
 // More than one match means something is stale; guessing would be worse than
 // stopping. Finding the file rather than naming it also keeps this clear of
@@ -64,6 +70,21 @@ export function appIsRunning(installedPath) {
   try {
     execFileSync('pgrep', ['-f', installedPath], { stdio: 'ignore' })
     return true
+  } catch {
+    return false
+  }
+}
+
+/** Whether a running app accepted a request to look for a new release now. */
+export async function requestUpdateCheck(configDirectory) {
+  try {
+    const portFilePath = join(homedir(), configDirectory, PORT_FILE)
+    const port = readFileSync(portFilePath, 'utf8').trim()
+    const response = await fetch(`http://127.0.0.1:${port}${UPDATE_CHECK_PATH}`, {
+      method: 'POST',
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+    })
+    return response.ok
   } catch {
     return false
   }
