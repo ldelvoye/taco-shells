@@ -16,6 +16,7 @@ interface FakeHandlers extends FocusServerHandlers {
   started: Array<[SessionId, ClaudeSession]>
   ended: Array<[SessionId, string]>
   signals: Array<[SessionId, string, ClaudeSignal]>
+  updateChecks: boolean[]
   unavailable: boolean[]
 }
 
@@ -26,6 +27,7 @@ function createFakeHandlers(): FakeHandlers {
   const started: Array<[SessionId, ClaudeSession]> = []
   const ended: Array<[SessionId, string]> = []
   const signals: Array<[SessionId, string, ClaudeSignal]> = []
+  const updateChecks: boolean[] = []
   const unavailable: boolean[] = []
 
   return {
@@ -35,7 +37,11 @@ function createFakeHandlers(): FakeHandlers {
     started,
     ended,
     signals,
+    updateChecks,
     unavailable,
+    onUpdateCheck: () => {
+      updateChecks.push(true)
+    },
     onClaudeSignal: (id: SessionId, claudeSessionId: string, signal: ClaudeSignal) => {
       signals.push([id, claudeSessionId, signal])
     },
@@ -116,6 +122,18 @@ describe('startFocusServer', () => {
 
     expect(response.status).toBe(200)
     expect(handlers.focused).toEqual(['pty-2'])
+  })
+
+  it('takes an update check from promote, which has no pane and sends no pids', async () => {
+    const url = `http://127.0.0.1:${port}/update/check`
+
+    const refused = await fetch(url)
+    expect(refused.status).toBe(404)
+    expect(handlers.updateChecks).toEqual([])
+
+    const accepted = await fetch(url, { method: 'POST' })
+    expect(accepted.status).toBe(200)
+    expect(handlers.updateChecks).toEqual([true])
   })
 
   it('answers 404 and calls neither handler when no pid in the chain matches', async () => {

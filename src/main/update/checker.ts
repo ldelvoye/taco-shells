@@ -11,6 +11,8 @@ import { parseRelease } from './feed'
 
 export const FIRST_CHECK_DELAY_MS = 10_000
 export const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
+// Past the 60 seconds GitHub's shared cache can keep serving the previous release.
+const RECHECK_DELAY_MS = 75_000
 
 export interface UpdateEvents {
   onReady(version: string): void
@@ -37,6 +39,7 @@ export class UpdateChecker {
   private checking = false
   private firstTimer: ReturnType<typeof setTimeout> | null = null
   private intervalTimer: ReturnType<typeof setInterval> | null = null
+  private recheckTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(options: UpdateCheckerOptions) {
     this.options = options
@@ -45,8 +48,8 @@ export class UpdateChecker {
   /** The first prune and adoption of what is already on disk, then the scheduled checks. */
   start(): void {
     this.pruneAndAdopt()
-    this.firstTimer = setTimeout(() => this.runScheduledCheck(), FIRST_CHECK_DELAY_MS)
-    this.intervalTimer = setInterval(() => this.runScheduledCheck(), CHECK_INTERVAL_MS)
+    this.firstTimer = setTimeout(() => this.runCheck(), FIRST_CHECK_DELAY_MS)
+    this.intervalTimer = setInterval(() => this.runCheck(), CHECK_INTERVAL_MS)
   }
 
   stop(): void {
@@ -58,6 +61,19 @@ export class UpdateChecker {
       clearInterval(this.intervalTimer)
       this.intervalTimer = null
     }
+    if (this.recheckTimer !== null) {
+      clearTimeout(this.recheckTimer)
+      this.recheckTimer = null
+    }
+  }
+
+  /** A check right away, then one more once GitHub's cached feed has expired. */
+  checkNow(): void {
+    this.runCheck()
+    if (this.recheckTimer !== null) {
+      clearTimeout(this.recheckTimer)
+    }
+    this.recheckTimer = setTimeout(() => this.runCheck(), RECHECK_DELAY_MS)
   }
 
   /** The downloaded app waiting to be installed, or null. */
@@ -96,7 +112,7 @@ export class UpdateChecker {
     this.options.events.onReady(version)
   }
 
-  private runScheduledCheck(): void {
+  private runCheck(): void {
     this.check().catch(() => undefined)
   }
 

@@ -53,11 +53,11 @@ Each config directory holds `settings.json`, `keybindings.json` and `focus-port`
 
 **The bundle ids differ, and that matters more than the names.** Two bundles claiming one id leaves LaunchServices picking between them.
 
-`scripts/identity.cjs` is CommonJS because `electron-builder.js` loads as CommonJS and both it and the ESM scripts must read one set of identities. `src/main/channel.ts` states the names a second time for the running app, since a source compiled into the bundle cannot import the build's config. Those two are the only copies.
+`scripts/identity.cjs` is CommonJS because `electron-builder.js` loads as CommonJS and both it and the ESM scripts must read one set of identities. `src/main/channel.ts` states the names and config directories a second time for the running app, since a source compiled into the bundle cannot import the build's config. Those two are the only copies.
 
 ## Landing
 
-Work lands through a pull request against `main`, rebase-merged so each commit keeps its own message; nothing is pushed to `main` directly. The push to `main` is what CI versions and releases as a prerelease (next section). Making a version stable is a separate, deliberate step: `npm run promote -- --publish` on the tag, which also replaces the installed Taco Shells, so the app has to be quit first. The check for that is `pgrep -f` on the bundle path: run `promote` from a command line that does not itself mention `/Applications/Taco Shells.app`, or it matches its own shell.
+Work lands through a pull request against `main`, rebase-merged so each commit keeps its own message; nothing is pushed to `main` directly. The push to `main` is what CI versions and releases as a prerelease (next section). Making a version stable is a separate, deliberate step: `npm run promote -- --publish` on the tag. If Taco Shells is quit, this replaces the installed app. If it is running, promote publishes without installing and asks the app to fetch the release; an **Update** menu appears in the menu bar once it is ready, and **Restart to Update** swaps the bundle and reopens with the workspace restored. Nothing restarts until that click, because a restart ends whatever is running in the terminals. A dry run has no release to hand over, so it still needs the app quit. The running check is `pgrep -f` on the bundle path: run `promote` from a command line that does not itself mention `/Applications/Taco Shells.app`, or it matches its own shell.
 
 ## Versions and releasing
 
@@ -74,7 +74,7 @@ v0.2.2     cleanup, then promoted
 
 **Tags are the source of truth. `package.json`'s version is not** — it sits at `0.0.0` and is read only as a floor before the first tag exists. This was chosen over a `chore(release):` commit per merge so main's history stays the commits someone actually wrote. The cost is that `electron-builder.js` overrides `bundleShortVersion`, `bundleVersion` and `artifactName`, which would otherwise all come from package.json.
 
-**Promotion is a rebuild.** `npm run promote` refuses unless HEAD is exactly on a version tag with a clean tree, then rebuilds under the stable identity, installs it, attaches the dmg and the zip to the release that already exists and clears its prerelease flag. The dmg is for the first install; the zip is what the in-app updater downloads. `--publish` is what makes it touch GitHub; without it nothing is published.
+**Promotion is a rebuild.** `npm run promote` refuses unless HEAD is exactly on a version tag with a clean tree, then rebuilds under the stable identity, installs it unless the app is running (see Landing), attaches the dmg and the zip to the release that already exists and clears its prerelease flag. The dmg is for the first install; the zip is what the in-app updater downloads. `--publish` is what makes it touch GitHub; without it nothing is published.
 
 **Promotion rewrites the release notes**, because the ones a prerelease carries say it has no download. They are generated from the commits since the last release, and `--notes-file=some.md` replaces that body outright for a release where the list of commits is not the story. Note the consequence: setting a release's notes by hand *before* promoting it achieves nothing, since promotion overwrites them. Pass the file, or edit afterwards.
 

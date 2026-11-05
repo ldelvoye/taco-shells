@@ -1,9 +1,10 @@
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
-import { app, type BrowserWindow, ipcMain, net } from 'electron'
+import { app, type BrowserWindow, ipcMain, Menu, net } from 'electron'
 import { CHANNEL } from '@shared/ipc'
 import { isVersion } from '@shared/version'
 import { isStable } from '../channel'
+import { buildApplicationMenu } from '../window/menu'
 import { helperArguments, installedBundlePath } from './apply'
 import { UpdateChecker, type UpdateEvents } from './checker'
 import { updatesDirectory } from './download'
@@ -13,6 +14,11 @@ const FEED_VARIABLE = 'TACO_SHELLS_UPDATE_FEED'
 const HELPER_NAME = 'update-helper.sh'
 const NOT_IN_APPLICATIONS = 'Taco Shells can only update itself from /Applications.'
 const UNVERSIONED = '0.0.0'
+
+export interface RegisteredUpdates {
+  stop: () => void
+  checkNow: () => void
+}
 
 // The stable build always follows GitHub. The feed override is a test seam for
 // the dev channel, which otherwise never checks, and it treats the dev build's
@@ -50,7 +56,7 @@ function sendToWindow(window: BrowserWindow, channel: string, payload: string): 
 export function registerUpdates(
   window: BrowserWindow,
   configDirectory: string
-): (() => void) | null {
+): RegisteredUpdates | null {
   let checker: UpdateChecker | null = null
 
   // A sendSync left unanswered hangs the renderer at startup, so this answers
@@ -77,6 +83,8 @@ export function registerUpdates(
   const events: UpdateEvents = {
     onReady: (version: string) => {
       sendToWindow(window, CHANNEL.updateReady, version)
+      const menu = buildApplicationMenu({ version, onApply: applyReadyUpdate })
+      Menu.setApplicationMenu(menu)
     },
     onProblem: (message: string) => {
       sendToWindow(window, CHANNEL.updateProblem, message)
@@ -97,7 +105,7 @@ export function registerUpdates(
   })
   checker = started
 
-  ipcMain.on(CHANNEL.updateApply, () => {
+  function applyReadyUpdate(): void {
     const ready = started.readyApp()
     if (ready === null) {
       return
@@ -114,13 +122,20 @@ export function registerUpdates(
     const child = spawn('/bin/sh', [helperPath, ...helperArgs], { detached: true, stdio: 'ignore' })
     child.unref()
     app.quit()
-  })
+  }
+
+  ipcMain.on(CHANNEL.updateApply, applyReadyUpdate)
 
   started.start()
 
-  return () => {
-    started.stop()
-    ipcMain.removeAllListeners(CHANNEL.updateApply)
-    ipcMain.removeAllListeners(CHANNEL.updateGet)
+  return {
+    stop: () => {
+      started.stop()
+      ipcMain.removeAllListeners(CHANNEL.updateApply)
+      ipcMain.removeAllListeners(CHANNEL.updateGet)
+    },
+    checkNow: () => {
+      started.checkNow()
+    }
   }
 }

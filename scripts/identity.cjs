@@ -13,13 +13,15 @@ const STABLE_CHANNEL = 'stable'
 const STABLE = {
   productName: 'Taco Shells',
   appId: 'com.ldelvoye.tacoshells',
-  icon: 'build/icon.icns'
+  icon: 'build/icon.icns',
+  configDirectory: '.taco-shells'
 }
 
 const DEVELOPMENT = {
   productName: 'Taco Shells Dev',
   appId: 'com.ldelvoye.tacoshells.dev',
-  icon: 'build/icon-dev.icns'
+  icon: 'build/icon-dev.icns',
+  configDirectory: '.taco-shells-dev'
 }
 
 function identityFor(channel) {
