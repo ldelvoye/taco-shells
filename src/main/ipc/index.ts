@@ -6,6 +6,7 @@ import type { ConfigStore } from '../config'
 import { configFilePath } from '../config/files'
 import { isOpenableLink } from '../links'
 import type { PtySessions } from '../pty/sessions'
+import { shellStartFor } from '../pty/start'
 import type { SnapshotStore } from '../snapshot/store'
 
 export function registerIpc(
@@ -14,17 +15,23 @@ export function registerIpc(
   store: ConfigStore,
   snapshotStore: SnapshotStore
 ): void {
-  ipcMain.handle(CHANNEL.ptyCreate, async (_event, size: PtySize, options?: PtyCreateOptions) => {
-    const id = await sessions.create(size, options)
-    const startingDirectory = sessions.startingDirectory(id)
-    if (startingDirectory !== null) {
-      snapshotStore.seedDirectory(id, startingDirectory)
+  ipcMain.handle(
+    CHANNEL.ptyCreate,
+    async (_event, size: PtySize, options: PtyCreateOptions = {}) => {
+      const claudeSessionOf = (id: SessionId) => snapshotStore.claudeSessionOf(id)
+      const start = shellStartFor(options, claudeSessionOf)
+      const id = await sessions.create(size, start)
+      const startingDirectory = sessions.startingDirectory(id)
+      if (startingDirectory !== null) {
+        snapshotStore.seedDirectory(id, startingDirectory)
+      }
+      // A fork is not seeded: its session id is unknown until its SessionStart hook reports.
+      if (options.resume !== undefined) {
+        snapshotStore.seedClaude(id, options.resume)
+      }
+      return id
     }
-    if (options?.resume !== undefined) {
-      snapshotStore.seedClaude(id, options.resume)
-    }
-    return id
-  })
+  )
   ipcMain.on(CHANNEL.ptyWrite, (_event, id: SessionId, data: string) => sessions.write(id, data))
   ipcMain.on(CHANNEL.ptyResize, (_event, id: SessionId, size: PtySize) => sessions.resize(id, size))
   ipcMain.on(CHANNEL.ptyKill, (_event, id: SessionId) => sessions.kill(id))
