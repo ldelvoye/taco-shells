@@ -86,6 +86,10 @@ The markers come from Claude Code's hooks, so they need these entries next to th
 }
 ```
 
+## Forking a Claude conversation
+
+Right-click a row that is running Claude Code and pick **Fork with Claude**. A copy of the conversation opens in a split beside it, so you can try a second direction while the first carries on untouched, even mid-reply. The fork wears the same color as its original and its name starts with `⑂`, then `⑂2`, `⑂3` for the ones after it. It needs the same `SessionStart` hook entry that restoring does.
+
 ## Settings
 
 It reads `~/.taco-shells/settings.json` and `~/.taco-shells/keybindings.json`, both written on first launch holding the defaults, so the file you open is the list of everything you can change. Edits apply when you save, without a restart. Comments and trailing commas are fine. Theme follows macOS unless you pin it to `light` or `dark`.

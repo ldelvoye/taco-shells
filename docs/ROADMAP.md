@@ -2,7 +2,6 @@
 
 - Move terminals in and out of splits: drag a standalone terminal into an existing split to add it as a pane, and drag a pane out of its split to make it a standalone terminal again.
 - Chrome-style tab groups: gather terminals into a named, colored group in the sidebar that can be collapsed to a single row and moved as one.
-- Fork with Claude: a right-click menu item on a row running Claude that opens a new terminal continuing the same conversation as a fork (`claude --resume <id> --fork-session`), so the original session carries on untouched. The app already learns each row's Claude session id from the session hook.
 
 # Architecture
 
