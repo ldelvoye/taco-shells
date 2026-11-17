@@ -47,15 +47,20 @@ interface SidebarProps {
   onResize: (width: number) => void
 }
 
-// Offered only on a row with a Claude session, and disabled when its group has no room.
+// Offered only on a row with a Claude session, and disabled while that session
+// has no conversation to fork or its group has no room.
 function forkItemFor(pane: Pane, groups: Group[], rowStates: ClaudeRows): ForkItem {
-  if (!rowStates.has(pane.id)) {
+  const row = rowStates.get(pane.id)
+  if (row === undefined) {
     return 'hidden'
   }
 
   const group = groups.find((candidate) => candidate.panes.includes(pane))
   if (group === undefined) {
     return 'hidden'
+  }
+  if (!row.hasConversation) {
+    return 'disabled'
   }
   if (!groupHasRoom(group)) {
     return 'disabled'

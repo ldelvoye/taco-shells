@@ -8,7 +8,7 @@ export interface FocusServerHandlers {
   sessionForPids(pids: number[]): SessionId | null
   onFocus(id: SessionId): void
   onAttention(id: SessionId): void
-  onClaudeStart(id: SessionId, session: ClaudeSession): void
+  onClaudeStart(id: SessionId, session: ClaudeSession, hasConversation: boolean): void
   onClaudeEnd(id: SessionId, sessionId: string): void
   onClaudeSignal(id: SessionId, claudeSessionId: string, signal: ClaudeSignal): void
   onUpdateCheck(): void
@@ -103,6 +103,15 @@ function sessionIdFrom(body: unknown): string | null {
     return null
   }
   return candidate
+}
+
+function hasConversationFrom(body: unknown): boolean {
+  if (typeof body !== 'object' || body === null) {
+    return false
+  }
+
+  const record = body as Record<string, unknown>
+  return record.hasConversation === true
 }
 
 function eventFrom(body: unknown): string | null {
@@ -248,7 +257,8 @@ async function handleRequest(
   } else if (isAttention) {
     handlers.onAttention(sessionId)
   } else if (startedSession !== null) {
-    handlers.onClaudeStart(sessionId, startedSession)
+    const hasConversation = hasConversationFrom(payload)
+    handlers.onClaudeStart(sessionId, startedSession, hasConversation)
   } else if (endedSessionId !== null) {
     handlers.onClaudeEnd(sessionId, endedSessionId)
   } else if (claudeSessionId !== null && stateSignal !== null) {

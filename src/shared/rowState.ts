@@ -9,11 +9,13 @@ const NEEDS_NOTIFICATIONS: ReadonlySet<string> = new Set([
 ])
 
 export type RowState = 'working' | 'needs' | 'done' | 'idle'
-export type ClaudeSignal = 'start' | 'working' | 'needs' | 'stopped' | 'end'
+// 'resume' is a start whose session already holds a conversation.
+export type ClaudeSignal = 'start' | 'resume' | 'working' | 'needs' | 'stopped' | 'end'
 
 export interface ClaudeRow {
   claudeSessionId: string
   state: RowState
+  hasConversation: boolean
 }
 
 export type ClaudeRows = ReadonlyMap<SessionId, ClaudeRow>
@@ -73,11 +75,12 @@ export function rowsAfterSignal(
   onScreen: boolean
 ): ClaudeRows {
   const row = rows.get(pane)
-  if (signal === 'start') {
+  if (signal === 'start' || signal === 'resume') {
     if (row !== undefined && row.claudeSessionId === claudeSessionId) {
       return rows
     }
-    return withRow(rows, pane, { claudeSessionId, state: 'idle' })
+    const hasConversation = signal === 'resume'
+    return withRow(rows, pane, { claudeSessionId, state: 'idle', hasConversation })
   }
   if (row === undefined || row.claudeSessionId !== claudeSessionId) {
     return rows
@@ -85,11 +88,12 @@ export function rowsAfterSignal(
   if (signal === 'end') {
     return withoutRow(rows, pane)
   }
+  // Every signal left comes from a turn, and a turn begins with a prompt.
   const state = stateAfterSignal(signal, onScreen)
-  if (row.state === state) {
+  if (row.state === state && row.hasConversation) {
     return rows
   }
-  return withRow(rows, pane, { claudeSessionId, state })
+  return withRow(rows, pane, { claudeSessionId, state, hasConversation: true })
 }
 
 export function rowsAfterScreen(rows: ClaudeRows, onScreen: readonly SessionId[]): ClaudeRows {
@@ -97,7 +101,7 @@ export function rowsAfterScreen(rows: ClaudeRows, onScreen: readonly SessionId[]
   for (const pane of onScreen) {
     const row = rows.get(pane)
     if (row !== undefined && row.state === 'done') {
-      next = withRow(next, pane, { claudeSessionId: row.claudeSessionId, state: 'idle' })
+      next = withRow(next, pane, { ...row, state: 'idle' })
     }
   }
   return next
@@ -110,7 +114,7 @@ export function rowsAfterIdleTitle(rows: ClaudeRows, pane: SessionId): ClaudeRow
     return rows
   }
   if (row.state === 'working' || row.state === 'needs') {
-    return withRow(rows, pane, { claudeSessionId: row.claudeSessionId, state: 'idle' })
+    return withRow(rows, pane, { ...row, state: 'idle' })
   }
   return rows
 }

@@ -88,7 +88,7 @@ The markers come from Claude Code's hooks, so they need these entries next to th
 
 ## Forking a Claude conversation
 
-Right-click a row that is running Claude Code and pick **Fork with Claude**. A copy of the conversation opens in a split beside it, so you can try a second direction while the first carries on untouched, even mid-reply. The fork wears the same color as its original and its name starts with `⑂`, then `⑂2`, `⑂3` for the ones after it. It needs the same `SessionStart` hook entry that restoring does.
+Right-click a row that is running Claude Code and pick **Fork with Claude**. A copy of the conversation opens in a split beside it, so you can try a second direction while the first carries on untouched, even mid-reply. The fork wears the same color as its original and its name starts with `⑂`, then `⑂2`, `⑂3` for the ones after it. The item is greyed out until there is a conversation to copy: a brand-new session, or a fresh fork, needs its first message. It needs the `SessionStart` hook entry that restoring does and the `UserPromptSubmit` one from the markers below.
 
 ## Settings
 

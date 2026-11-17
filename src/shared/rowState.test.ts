@@ -47,6 +47,21 @@ describe('row state', () => {
     expect(rowsAfterSignal(working, 'p1', A, 'start', false)).toBe(working)
   })
 
+  it('knows a session has a conversation once it is resumed or takes a prompt', () => {
+    expect(started.get('p1')?.hasConversation).toBe(false)
+
+    const prompted = rowsAfterSignal(started, 'p1', A, 'working', false)
+    expect(prompted.get('p1')?.hasConversation).toBe(true)
+    // the row is rebuilt on these paths, and must not forget it
+    const stopped = rowsAfterSignal(prompted, 'p1', A, 'stopped', false)
+    expect(rowsAfterScreen(stopped, ['p1']).get('p1')?.hasConversation).toBe(true)
+    expect(rowsAfterIdleTitle(prompted, 'p1').get('p1')?.hasConversation).toBe(true)
+
+    const resumed = rowsAfterSignal(empty, 'p1', A, 'resume', false)
+    expect(resumed.get('p1')).toEqual({ claudeSessionId: A, state: 'idle', hasConversation: true })
+    expect(rowsAfterSignal(prompted, 'p1', A, 'resume', false)).toBe(prompted)
+  })
+
   it('clears done when the pane comes on screen', () => {
     const done = rowsAfterSignal(started, 'p1', A, 'stopped', false)
     expect(rowsAfterScreen(done, ['p1']).get('p1')?.state).toBe('idle')
