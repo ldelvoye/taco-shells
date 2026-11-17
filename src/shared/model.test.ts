@@ -10,6 +10,7 @@ import {
   focusNextPane,
   focusPreviousGroup,
   focusPreviousPane,
+  forkPane,
   MIN_PANE_WIDTH,
   moveDivider,
   moveGroup,
@@ -96,6 +97,42 @@ describe('splitActivePane', () => {
     const widths = resultGroup.panes.map((pane) => pane.width)
     expect(widths[0]).toBe(widths[1])
     expect(widths[1]).toBe(widths[2])
+  })
+})
+
+describe('forkPane', () => {
+  it('puts the fork right of its source in any group, with its color, and focuses it', () => {
+    const colored: Group = {
+      id: 'g0',
+      panes: [
+        { id: 'a', title: '', width: 0.5, color: 'blue' },
+        { id: 'b', title: '', width: 0.5, color: null }
+      ],
+      activePane: 1
+    }
+    const other = makeGroup('g1', 'c')
+    const workspace = makeWorkspace([colored, other], 1)
+
+    const forkOfColored = forkPane(workspace, 'a', 'f')
+
+    const forkedGroup = forkOfColored.groups[0]
+    expect(forkedGroup.panes.map((pane) => pane.id)).toEqual(['a', 'f', 'b'])
+    for (const pane of forkedGroup.panes) {
+      expect(pane.width).toBeCloseTo(1 / 3)
+    }
+    expect(forkedGroup.panes[1].color).toBe('blue')
+    expect(forkedGroup.activePane).toBe(1)
+    expect(forkOfColored.activeGroup).toBe(0)
+    expect(forkOfColored.groups[1]).toBe(other)
+
+    const forkOfPlain = forkPane(workspace, 'b', 'f')
+    expect(forkOfPlain.groups[0].panes[2].color).toBeNull()
+
+    expect(forkPane(workspace, 'missing', 'f')).toBe(workspace)
+
+    const fullGroup = makeGroupWithWidths('full', new Array(10).fill(0.1), 0)
+    const fullWorkspace = makeWorkspace([fullGroup], 0)
+    expect(forkPane(fullWorkspace, 'full-3', 'f')).toBe(fullWorkspace)
   })
 })
 
