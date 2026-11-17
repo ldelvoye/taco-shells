@@ -5,10 +5,16 @@ import type { ClaudeSession, Snapshot } from './snapshot'
 
 export type SessionId = string
 
+export interface ForkRequest {
+  from: SessionId
+  name: string
+}
+
 export interface PtyCreateOptions {
   cwdFrom?: SessionId
   cwd?: string
   resume?: ClaudeSession
+  fork?: ForkRequest
 }
 
 export interface PtySize {

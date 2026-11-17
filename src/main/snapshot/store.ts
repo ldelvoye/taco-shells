@@ -120,6 +120,20 @@ export class SnapshotStore {
     entries.push({ session, provisionalSince: this.now() })
   }
 
+  // A pane's newest session is the one it resumes or forks: an older entry whose
+  // Claude died without a SessionEnd would otherwise pin the pane to a dead id for good.
+  claudeSessionOf(id: SessionId): ClaudeSession | null {
+    const entries = this.claude.get(id)
+    if (entries === undefined) {
+      return null
+    }
+    if (entries.length === 0) {
+      return null
+    }
+    const newest = entries[entries.length - 1]
+    return newest.session
+  }
+
   /** The quitting flag; after it only flushAtQuit changes the file. */
   freeze(): void {
     this.frozen = true
@@ -180,7 +194,7 @@ export class SnapshotStore {
     const snapshot = snapshotFrom(
       this.latestWorkspace,
       (id) => this.cwdOf(id),
-      (id) => this.claudeOf(id)
+      (id) => this.claudeSessionOf(id)
     )
     writeSnapshot(this.directory, snapshot)
   }
@@ -200,20 +214,6 @@ export class SnapshotStore {
       this.claude.set(id, entries)
     }
     return entries
-  }
-
-  // A pane's newest session is the one it resumes: an older entry whose Claude
-  // died without a SessionEnd would otherwise pin the pane to a dead id for good.
-  private claudeOf(id: SessionId): ClaudeSession | null {
-    const entries = this.claude.get(id)
-    if (entries === undefined) {
-      return null
-    }
-    if (entries.length === 0) {
-      return null
-    }
-    const newest = entries[entries.length - 1]
-    return newest.session
   }
 
   private dropExpiredClaude(): void {

@@ -1,10 +1,10 @@
 import { statSync, type Stats } from 'node:fs'
 import { homedir } from 'node:os'
 import { spawn, type IPty } from 'node-pty'
-import type { PtyCreateOptions, PtyDataEvent, PtyExitEvent, PtySize, SessionId } from '@shared/ipc'
+import type { PtyDataEvent, PtyExitEvent, PtySize, SessionId } from '@shared/ipc'
 import { processCwd } from './cwd'
-import { resumeCommand } from './resume'
 import { shellArguments, shellEnvironment, shellPath } from './shell'
+import type { ShellStart } from './start'
 
 type DataListener = (event: PtyDataEvent) => void
 type ExitListener = (event: PtyExitEvent) => void
@@ -31,11 +31,11 @@ export class PtySessions {
   private readonly exitListeners = new Set<ExitListener>()
   private nextId = 1
 
-  async create(size: PtySize, options: PtyCreateOptions = {}): Promise<SessionId> {
+  async create(size: PtySize, start: ShellStart): Promise<SessionId> {
     const id = `pty-${this.nextId}`
     this.nextId += 1
 
-    const cwd = await this.resolveStartingDirectory(options)
+    const cwd = await this.resolveStartingDirectory(start)
 
     const pty = spawn(shellPath(), shellArguments(), {
       name: 'xterm-256color',
@@ -48,11 +48,8 @@ export class PtySessions {
     const session: Session = { pty, pending: [], flushTimer: null, cwd }
     this.sessions.set(id, session)
 
-    if (options.resume !== undefined) {
-      const command = resumeCommand(options.resume)
-      if (command !== null) {
-        pty.write(command)
-      }
+    if (start.command !== null) {
+      pty.write(start.command)
     }
 
     pty.onData((data) => {
@@ -141,14 +138,12 @@ export class PtySessions {
     return null
   }
 
-  private async resolveStartingDirectory(options: PtyCreateOptions): Promise<string> {
+  private async resolveStartingDirectory(start: ShellStart): Promise<string> {
     let candidate: string | null = null
-    if (options.resume !== undefined) {
-      candidate = options.resume.cwd
-    } else if (options.cwd !== undefined) {
-      candidate = options.cwd
-    } else if (options.cwdFrom !== undefined) {
-      candidate = await this.directoryOf(options.cwdFrom)
+    if (start.cwd !== null) {
+      candidate = start.cwd
+    } else if (start.cwdFrom !== null) {
+      candidate = await this.directoryOf(start.cwdFrom)
     }
     return this.usableDirectory(candidate)
   }
