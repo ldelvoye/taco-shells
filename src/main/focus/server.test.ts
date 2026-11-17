@@ -13,7 +13,7 @@ interface FakeHandlers extends FocusServerHandlers {
   sessionPids: Map<SessionId, number>
   focused: SessionId[]
   attended: SessionId[]
-  started: Array<[SessionId, ClaudeSession]>
+  started: Array<[SessionId, ClaudeSession, boolean]>
   ended: Array<[SessionId, string]>
   signals: Array<[SessionId, string, ClaudeSignal]>
   updateChecks: boolean[]
@@ -24,7 +24,7 @@ function createFakeHandlers(): FakeHandlers {
   const sessionPids = new Map<SessionId, number>()
   const focused: SessionId[] = []
   const attended: SessionId[] = []
-  const started: Array<[SessionId, ClaudeSession]> = []
+  const started: Array<[SessionId, ClaudeSession, boolean]> = []
   const ended: Array<[SessionId, string]> = []
   const signals: Array<[SessionId, string, ClaudeSignal]> = []
   const updateChecks: boolean[] = []
@@ -45,8 +45,8 @@ function createFakeHandlers(): FakeHandlers {
     onClaudeSignal: (id: SessionId, claudeSessionId: string, signal: ClaudeSignal) => {
       signals.push([id, claudeSessionId, signal])
     },
-    onClaudeStart: (id: SessionId, session: ClaudeSession) => {
-      started.push([id, session])
+    onClaudeStart: (id: SessionId, session: ClaudeSession, hasConversation: boolean) => {
+      started.push([id, session, hasConversation])
     },
     onClaudeEnd: (id: SessionId, sessionId: string) => {
       ended.push([id, sessionId])
@@ -177,13 +177,20 @@ describe('startFocusServer Claude session routes', () => {
     stop()
   })
 
-  it('records a valid start once', async () => {
+  it('records a valid start, and whether the session already holds a conversation', async () => {
     const body = { pids: [999, 222], sessionId: SESSION_ID, cwd: '/tmp/work' }
+    const session = { sessionId: SESSION_ID, cwd: '/tmp/work' }
 
     const response = await post(port, '/claude-session/start', body)
+    await post(port, '/claude-session/start', { ...body, hasConversation: true })
+    await post(port, '/claude-session/start', { ...body, hasConversation: 'yes' })
 
     expect(response.status).toBe(200)
-    expect(handlers.started).toEqual([['pty-2', { sessionId: SESSION_ID, cwd: '/tmp/work' }]])
+    expect(handlers.started).toEqual([
+      ['pty-2', session, false],
+      ['pty-2', session, true],
+      ['pty-2', session, false]
+    ])
   })
 
   it('answers 400 and records nothing for a malformed session', async () => {

@@ -10,6 +10,7 @@ session_id=$(printf '%s' "$payload" | sed -n 's/.*"session_id" *: *"\([^"]*\)".*
 cwd=$(printf '%s' "$payload" | sed -n 's/.*"cwd" *: *"\([^"]*\)".*/\1/p' | sed 's/\\/\\\\/g')
 tool_name=$(printf '%s' "$payload" | sed -n 's/.*"tool_name" *: *"\([^"]*\)".*/\1/p')
 notification_type=$(printf '%s' "$payload" | sed -n 's/.*"notification_type" *: *"\([^"]*\)".*/\1/p')
+start_source=$(printf '%s' "$payload" | sed -n 's/.*"source" *: *"\([^"]*\)".*/\1/p')
 
 if [ -z "$session_id" ]; then
   exit 0
@@ -31,8 +32,14 @@ if [ "$event" = "SessionStart" ]; then
   if [ -z "$cwd" ]; then
     exit 0
   fi
+  # A new, cleared or forked session has no conversation saved under its id
+  # until its first prompt, so there is nothing to fork from it yet.
+  has_conversation=false
+  if [ "$start_source" = "resume" ] || [ "$start_source" = "compact" ]; then
+    has_conversation=true
+  fi
   route="/claude-session/start"
-  body="{\"pids\":[$pids],\"sessionId\":\"$session_id\",\"cwd\":\"$cwd\"}"
+  body="{\"pids\":[$pids],\"sessionId\":\"$session_id\",\"cwd\":\"$cwd\",\"hasConversation\":$has_conversation}"
 elif [ "$event" = "SessionEnd" ]; then
   route="/claude-session/end"
   body="{\"pids\":[$pids],\"sessionId\":\"$session_id\"}"

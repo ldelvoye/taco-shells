@@ -46,9 +46,13 @@ export function registerFocus(
       onAttention: (id: SessionId) => {
         sendToWindow(window, CHANNEL.attentionSession, id)
       },
-      onClaudeStart: (id: SessionId, session: ClaudeSession) => {
+      onClaudeStart: (id: SessionId, session: ClaudeSession, hasConversation: boolean) => {
         snapshotStore.recordClaudeStart(id, session)
-        sendSignal(window, { id, claudeSessionId: session.sessionId, signal: 'start' })
+        let signal: ClaudeSignal = 'start'
+        if (hasConversation) {
+          signal = 'resume'
+        }
+        sendSignal(window, { id, claudeSessionId: session.sessionId, signal })
       },
       onClaudeEnd: (id: SessionId, sessionId: string) => {
         snapshotStore.recordClaudeEnd(id, sessionId)

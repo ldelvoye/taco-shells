@@ -315,7 +315,8 @@ export function App(): JSX.Element {
       changeClaudeRows((rows) => {
         return rowsAfterSignal(rows, event.id, event.claudeSessionId, event.signal, onScreen)
       })
-      if (event.signal !== 'start') {
+      const startsSession = event.signal === 'start' || event.signal === 'resume'
+      if (!startsSession) {
         return
       }
       // A title can arrive before SessionStart has created the row, so replay the last one through the stripping path.

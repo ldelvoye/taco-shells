@@ -15,8 +15,17 @@ import { KEY, launchApp } from './app'
 
 const CLAUDE_SESSION_ID = '123e4567-e89b-12d3-a456-426614174000'
 
+async function postToFocusServer(port: string, route: string, payload: object): Promise<void> {
+  const body = JSON.stringify(payload)
+  await fetch(`http://127.0.0.1:${port}${route}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body
+  })
+}
+
 describe('fork with Claude', () => {
-  it('forks a Claude row into a split, colored and named, until its group is full', async () => {
+  it('forks a prompted Claude row into a colored, named split, until its group is full', async () => {
     const configDir = mkdtempSync(join(tmpdir(), 'taco-shells-fork-config-'))
     const scratch = mkdtempSync(join(tmpdir(), 'taco-shells-fork-scratch-'))
     const workDirPath = mkdtempSync(join(tmpdir(), 'taco-shells-fork-work-'))
@@ -57,19 +66,17 @@ describe('fork with Claude', () => {
       const portText = readFileSync(join(configDir, 'focus-port'), 'utf8')
       const port = portText.trim()
 
-      const body = JSON.stringify({ pids: [pid], sessionId: CLAUDE_SESSION_ID, cwd: workDir })
-      await fetch(`http://127.0.0.1:${port}/claude-session/start`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body
-      })
+      const hook = { pids: [pid], sessionId: CLAUDE_SESSION_ID }
+      await postToFocusServer(port, '/claude-session/start', { ...hook, cwd: workDir })
       await app.until('the row is known to run Claude', (state) => state.rows[0].label === title)
 
       await app.rightClickRow(0)
-      await app.until('the picker is open', (state) => state.colorPickerOpen)
+      const unprompted = await app.until('the picker is open', (state) => state.colorPickerOpen)
+      expect(unprompted.forkItem).toBe('disabled')
       await app.clickColorDot('blue')
       await app.until('the picker closes', (state) => !state.colorPickerOpen)
 
+      await postToFocusServer(port, '/claude-session/state', { ...hook, event: 'UserPromptSubmit' })
       await app.rightClickRow(0)
       await app.until('the fork item is offered', (state) => state.forkItem === 'enabled')
       await app.clickForkItem()
