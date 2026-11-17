@@ -14,6 +14,8 @@ export const COMMAND_IDS = [
   'terminal.killLine',
   'terminal.lineStart',
   'terminal.lineEnd',
+  'terminal.wordLeft',
+  'terminal.wordRight',
   'terminal.insertNewline',
   'terminal.colorRed',
   'terminal.colorOrange',
@@ -36,6 +38,13 @@ export const ROW_COLOR_COMMANDS: Record<RowColor, CommandId> = {
   blue: 'terminal.colorBlue',
   purple: 'terminal.colorPurple'
 }
+
+// Commands a held key keeps firing. Every other command is a discrete action
+// and runs once per press.
+export const REPEATING_COMMANDS: ReadonlySet<CommandId> = new Set<CommandId>([
+  'terminal.wordLeft',
+  'terminal.wordRight'
+])
 
 export function isCommandId(value: string): value is CommandId {
   const knownIds: readonly string[] = COMMAND_IDS

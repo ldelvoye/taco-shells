@@ -14,6 +14,8 @@
   "cmd+backspace": "terminal.killLine",
   "cmd+left": "terminal.lineStart",
   "cmd+right": "terminal.lineEnd",
+  "opt+left": "terminal.wordLeft",
+  "opt+right": "terminal.wordRight",
   "shift+enter": "terminal.insertNewline",
   "cmd+opt+1": "terminal.colorRed",
   "cmd+opt+2": "terminal.colorOrange",

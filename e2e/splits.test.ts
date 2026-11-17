@@ -136,6 +136,30 @@ describe('the default keymap', () => {
     await app.pause(1000)
     expect(existsSync(surplus)).toBe(false)
   })
+
+  it('sends esc+b and esc+f on option+arrow, and keeps sending while the key is held', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'taco-shells-word-'))
+    const ready = join(directory, 'ready')
+    const received = join(directory, 'received')
+
+    const write = `printf '%s' "$line" | od -An -tx1 > ${received}.part`
+    const report = `${write}; mv ${received}.part ${received}`
+    const script = `printf ready > ${ready}; read -r line; ${report}`
+    await app.runInPane('pty-1', script)
+    await app.until('the shell is reading', () => existsSync(ready))
+
+    await app.press(KEY.left, { alt: true })
+    await app.pressAutoRepeat(KEY.left, { alt: true })
+    await app.press(KEY.right, { alt: true })
+    await app.runInPane('pty-1', '')
+    await app.until('the line arrives', () => existsSync(received))
+
+    // Not the CSI 1;3 sequences xterm sends for these keys: zsh binds neither by
+    // default, so its prompt prints their last letter instead of moving.
+    const dump = readFileSync(received, 'utf8')
+    const bytes = dump.trim().split(/\s+/)
+    expect(bytes).toEqual(['1b', '62', '1b', '62', '1b', '66'])
+  })
 })
 
 describe('a split', () => {

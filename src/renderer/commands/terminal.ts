@@ -9,6 +9,10 @@ const CTRL_U = '\x15'
 const CTRL_A = '\x01'
 const CTRL_E = '\x05'
 
+// A terminal's usual keys for back and forward a word: option+b and option+f.
+const ESC_B = '\x1bb'
+const ESC_F = '\x1bf'
+
 // A terminal's usual key for a newline that does not submit the line: option+enter.
 const ESC_CR = '\x1b\r'
 
@@ -78,6 +82,24 @@ export function registerTerminalCommands(registry: CommandRegistry, sessionId: S
     }
 
     term.input(CTRL_E)
+  })
+
+  registry.register('terminal.wordLeft', () => {
+    const term = sessionTerminal(sessionId)
+    if (!term) {
+      return
+    }
+
+    term.input(ESC_B)
+  })
+
+  registry.register('terminal.wordRight', () => {
+    const term = sessionTerminal(sessionId)
+    if (!term) {
+      return
+    }
+
+    term.input(ESC_F)
   })
 
   registry.register('terminal.insertNewline', () => {

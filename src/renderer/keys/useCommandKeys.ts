@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import type { CommandId } from '@shared/commands'
+import { REPEATING_COMMANDS, type CommandId } from '@shared/commands'
 import { commandForKeyStroke } from '@shared/keys'
 import type { CommandRegistry } from '../commands/registry'
 
@@ -9,15 +9,16 @@ export function useCommandKeys(
 ): void {
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent): void {
-      // Every command here is a discrete action, so a held key must fire once
-      // rather than at the keyboard's repeat rate: holding cmd+t alone would
-      // spawn shells for as long as it stayed down.
-      if (event.repeat) {
+      const commandId = commandForKeyStroke(bindings, event)
+      if (!commandId) {
         return
       }
 
-      const commandId = commandForKeyStroke(bindings, event)
-      if (!commandId) {
+      // Most commands are discrete actions, so a held key must fire them once
+      // rather than at the keyboard's repeat rate: holding cmd+t alone would
+      // spawn shells for as long as it stayed down.
+      const repeatsWhileHeld = REPEATING_COMMANDS.has(commandId)
+      if (event.repeat && !repeatsWhileHeld) {
         return
       }
       if (!registry.has(commandId)) {
