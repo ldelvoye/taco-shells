@@ -8,12 +8,14 @@ import {
   activePane,
   addGroup,
   canSplitActivePane,
+  canSplitPane,
   closePane,
   emptyWorkspace,
   focusNextGroup,
   focusNextPane,
   focusPreviousGroup,
   focusPreviousPane,
+  forkPane,
   type Group,
   moveDivider,
   moveGroup,
@@ -25,6 +27,7 @@ import {
   type Workspace
 } from '@shared/model'
 import { claudeTitleOf } from '@shared/claudeTitle'
+import { forkNameFor } from '@shared/forkName'
 import {
   type ClaudeRows,
   rowsAfterExit,
@@ -120,6 +123,7 @@ export function App(): JSX.Element {
   const [focusProblem, setFocusProblem] = useState<string | null>(null)
   const [claudeRows, setClaudeRows] = useState<ClaudeRows>(() => new Map())
   const claudeRowsRef = useRef<ClaudeRows>(claudeRows)
+  const workspaceRef = useRef<Workspace | null>(workspace)
   const onScreenRef = useRef<SessionId[]>([])
   const rawTitlesRef = useRef(new Map<SessionId, string>())
   const commands = useMemo(() => createCommandRegistry(), [])
@@ -196,6 +200,39 @@ export function App(): JSX.Element {
       updateWorkspace((current) => splitActivePane(current, sessionId))
     })
   }, [activeSessionId, workspace, updateWorkspace])
+
+  // The main process finds the Claude session to fork from the pane named here.
+  const forkTerminal = useCallback(
+    (source: SessionId) => {
+      if (!workspace) {
+        return
+      }
+      if (!canSplitPane(workspace, source)) {
+        return
+      }
+
+      const panes = workspace.groups.flatMap((group) => group.panes)
+      const sourcePane = panes.find((pane) => pane.id === source)
+      if (!sourcePane) {
+        return
+      }
+      const titles = panes.map((pane) => pane.title)
+      const name = forkNameFor(sourcePane.title, titles)
+
+      void createSession({ fork: { from: source, name } }).then((sessionId) => {
+        // The source can close, or its group fill, while the shell is spawning:
+        // a fork with no pane to show it would leave Claude running unseen.
+        const latest = workspaceRef.current
+        const stillForkable = latest !== null && canSplitPane(latest, source)
+        if (!stillForkable) {
+          disposeSession(sessionId)
+          return
+        }
+        updateWorkspace((current) => forkPane(current, source, sessionId))
+      })
+    },
+    [workspace, updateWorkspace]
+  )
 
   // Panes are created in group order and workspaceFromSnapshot hands the ids
   // back out in that same order, so the two loops have to walk the same list.
@@ -290,6 +327,7 @@ export function App(): JSX.Element {
   }, [changeClaudeRows, handleTitle])
 
   useEffect(() => {
+    workspaceRef.current = workspace
     const onScreen = onScreenPanesOf(workspace)
     onScreenRef.current = onScreen
     changeClaudeRows((rows) => rowsAfterScreen(rows, onScreen))
@@ -509,6 +547,7 @@ export function App(): JSX.Element {
         onSelect={selectPane}
         onReorder={reorderGroups}
         onColor={colorPane}
+        onFork={forkTerminal}
         onResize={sidebarWidth.resize}
       />
     )

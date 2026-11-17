@@ -3,13 +3,17 @@ import { ROW_COLORS, type RowColor } from '@shared/model'
 
 const WINDOW_EDGE_GAP = 6
 
+export type ForkItem = 'hidden' | 'enabled' | 'disabled'
+
 interface RowColorPickerProps {
   x: number
   y: number
   current: RowColor | null
+  fork: ForkItem
   onPreview: (color: RowColor | null) => void
   onPreviewEnd: () => void
   onPick: (color: RowColor | null) => void
+  onFork: () => void
   onClose: () => void
 }
 
@@ -21,9 +25,11 @@ export function RowColorPicker({
   x,
   y,
   current,
+  fork,
   onPreview,
   onPreviewEnd,
   onPick,
+  onFork,
   onClose
 }: RowColorPickerProps): JSX.Element {
   const picker = useRef<HTMLDivElement>(null)
@@ -99,30 +105,43 @@ export function RowColorPicker({
     )
   })
 
+  let forkItem = null
+  if (fork !== 'hidden') {
+    const disabled = fork === 'disabled'
+    forkItem = (
+      <button type="button" className="row-fork-item" disabled={disabled} onClick={onFork}>
+        Fork with Claude
+      </button>
+    )
+  }
+
   return (
     <div
       ref={picker}
       className="row-color-picker"
       style={position}
-      // Keeps keyboard focus in the terminal while the dots are clicked.
+      // Keeps keyboard focus in the terminal while the popup is clicked.
       onMouseDown={(event) => {
         event.preventDefault()
       }}
     >
-      {dots}
-      <button
-        type="button"
-        className="row-color-dot is-none"
-        data-color="none"
-        aria-label="no color"
-        onMouseEnter={() => {
-          onPreview(null)
-        }}
-        onMouseLeave={onPreviewEnd}
-        onClick={() => {
-          onPick(null)
-        }}
-      />
+      <div className="row-color-dots">
+        {dots}
+        <button
+          type="button"
+          className="row-color-dot is-none"
+          data-color="none"
+          aria-label="no color"
+          onMouseEnter={() => {
+            onPreview(null)
+          }}
+          onMouseLeave={onPreviewEnd}
+          onClick={() => {
+            onPick(null)
+          }}
+        />
+      </div>
+      {forkItem}
     </div>
   )
 }
