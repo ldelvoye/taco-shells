@@ -3,13 +3,11 @@ import { ROW_COLORS, type RowColor } from '@shared/model'
 
 const WINDOW_EDGE_GAP = 6
 
-export type ForkItem = 'hidden' | 'enabled' | 'disabled'
-
 interface RowColorPickerProps {
   x: number
   y: number
   current: RowColor | null
-  fork: ForkItem
+  canFork: boolean
   onPreview: (color: RowColor | null) => void
   onPreviewEnd: () => void
   onPick: (color: RowColor | null) => void
@@ -25,7 +23,7 @@ export function RowColorPicker({
   x,
   y,
   current,
-  fork,
+  canFork,
   onPreview,
   onPreviewEnd,
   onPick,
@@ -105,16 +103,6 @@ export function RowColorPicker({
     )
   })
 
-  let forkItem = null
-  if (fork !== 'hidden') {
-    const disabled = fork === 'disabled'
-    forkItem = (
-      <button type="button" className="row-fork-item" disabled={disabled} onClick={onFork}>
-        Fork with Claude
-      </button>
-    )
-  }
-
   return (
     <div
       ref={picker}
@@ -141,7 +129,9 @@ export function RowColorPicker({
           }}
         />
       </div>
-      {forkItem}
+      <button type="button" className="row-fork-item" disabled={!canFork} onClick={onFork}>
+        Fork with Claude
+      </button>
     </div>
   )
 }
