@@ -182,25 +182,39 @@ export function toggleActivePaneColor(workspace: Workspace, color: RowColor): Wo
 
 // Every operation keeps each pane at or above MIN_PANE_WIDTH, so a group holds
 // at most ten panes and a group's widths can never sum to zero.
-export function canSplitActivePane(workspace: Workspace): boolean {
-  if (workspace.groups.length === 0) {
-    return false
-  }
-
-  const group = workspace.groups[workspace.activeGroup]
+export function groupHasRoom(group: Group): boolean {
   const paneCount = group.panes.length + 1
   const shareEach = 1 / paneCount
 
   return shareEach >= MIN_PANE_WIDTH
 }
 
-export function splitActivePane(workspace: Workspace, id: SessionId): Workspace {
-  if (!canSplitActivePane(workspace)) {
+export function canSplitPane(workspace: Workspace, donor: SessionId): boolean {
+  const groupIndex = workspace.groups.findIndex((group) =>
+    group.panes.some((pane) => pane.id === donor)
+  )
+  if (groupIndex === -1) {
+    return false
+  }
+
+  const group = workspace.groups[groupIndex]
+  return groupHasRoom(group)
+}
+
+export function splitPane(workspace: Workspace, donor: SessionId, id: SessionId): Workspace {
+  const groupIndex = workspace.groups.findIndex((group) =>
+    group.panes.some((pane) => pane.id === donor)
+  )
+  if (groupIndex === -1) {
     return workspace
   }
 
-  const group = workspace.groups[workspace.activeGroup]
-  const donorIndex = group.activePane
+  const group = workspace.groups[groupIndex]
+  if (!groupHasRoom(group)) {
+    return workspace
+  }
+
+  const donorIndex = group.panes.findIndex((pane) => pane.id === donor)
   const newPane: Pane = { id, title: '', width: 0, color: null }
 
   const panesBefore = group.panes.slice(0, donorIndex + 1)
@@ -217,9 +231,42 @@ export function splitActivePane(workspace: Workspace, id: SessionId): Workspace 
 
   const updatedGroup: Group = { ...group, panes, activePane: donorIndex + 1 }
   const groups = [...workspace.groups]
-  groups[workspace.activeGroup] = updatedGroup
+  groups[groupIndex] = updatedGroup
 
-  return { groups, activeGroup: workspace.activeGroup }
+  return { groups, activeGroup: groupIndex }
+}
+
+export function forkPane(workspace: Workspace, source: SessionId, id: SessionId): Workspace {
+  const panes = workspace.groups.flatMap((group) => group.panes)
+  const sourcePane = panes.find((pane) => pane.id === source)
+  if (!sourcePane) {
+    return workspace
+  }
+
+  const split = splitPane(workspace, source, id)
+  if (split === workspace) {
+    return workspace
+  }
+
+  return setPaneColor(split, id, sourcePane.color)
+}
+
+export function canSplitActivePane(workspace: Workspace): boolean {
+  const pane = activePane(workspace)
+  if (!pane) {
+    return false
+  }
+
+  return canSplitPane(workspace, pane.id)
+}
+
+export function splitActivePane(workspace: Workspace, id: SessionId): Workspace {
+  const pane = activePane(workspace)
+  if (!pane) {
+    return workspace
+  }
+
+  return splitPane(workspace, pane.id, id)
 }
 
 export function activatePane(workspace: Workspace, id: SessionId): Workspace {
