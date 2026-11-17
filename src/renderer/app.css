@@ -169,13 +169,38 @@ body {
   position: fixed;
   z-index: 100;
   display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 8px 10px;
+  flex-direction: column;
   background: var(--chrome-background);
   border: 1px solid var(--row-connector);
   border-radius: 7px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.row-color-dots {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+}
+
+.row-fork-item {
+  padding: 6px 10px;
+  border: 0;
+  border-top: 1px solid var(--row-connector);
+  border-radius: 0 0 6px 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+
+.row-fork-item:hover:enabled {
+  background: var(--row-hover);
+}
+
+.row-fork-item:disabled {
+  opacity: 0.4;
 }
 
 .row-color-dot {

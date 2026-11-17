@@ -8,9 +8,9 @@ import {
   useState
 } from 'react'
 import type { SessionId } from '@shared/ipc'
-import { type Group, type Pane, paneOf, type RowColor } from '@shared/model'
+import { type Group, groupHasRoom, type Pane, paneOf, type RowColor } from '@shared/model'
 import type { ClaudeRows } from '@shared/rowState'
-import { RowColorPicker, rowColorVariable } from './RowColorPicker'
+import { type ForkItem, RowColorPicker, rowColorVariable } from './RowColorPicker'
 import { SidebarDivider } from './SidebarDivider'
 import { SidebarTitlebar } from './SidebarTitlebar'
 
@@ -43,7 +43,24 @@ interface SidebarProps {
   onSelect: (sessionId: SessionId) => void
   onReorder: (from: number, to: number) => void
   onColor: (sessionId: SessionId, color: RowColor | null) => void
+  onFork: (sessionId: SessionId) => void
   onResize: (width: number) => void
+}
+
+// Offered only on a row with a Claude session, and disabled when its group has no room.
+function forkItemFor(pane: Pane, groups: Group[], rowStates: ClaudeRows): ForkItem {
+  if (!rowStates.has(pane.id)) {
+    return 'hidden'
+  }
+
+  const group = groups.find((candidate) => candidate.panes.includes(pane))
+  if (group === undefined) {
+    return 'hidden'
+  }
+  if (!groupHasRoom(group)) {
+    return 'disabled'
+  }
+  return 'enabled'
 }
 
 function labelFor(title: string): string {
@@ -77,6 +94,7 @@ export function Sidebar({
   onSelect,
   onReorder,
   onColor,
+  onFork,
   onResize
 }: SidebarProps): JSX.Element {
   const dragged = useRef<number | null>(null)
@@ -246,11 +264,13 @@ export function Sidebar({
     const panes = groups.flatMap((group) => group.panes)
     const pickedPane = panes.find((pane) => pane.id === picker.paneId)
     if (pickedPane !== undefined) {
+      const fork = forkItemFor(pickedPane, groups, rowStates)
       colorPicker = (
         <RowColorPicker
           x={picker.x}
           y={picker.y}
           current={pickedPane.color}
+          fork={fork}
           onPreview={(color) => {
             setPicker({ ...picker, preview: { color } })
           }}
@@ -259,6 +279,10 @@ export function Sidebar({
           }}
           onPick={(color) => {
             onColor(pickedPane.id, color)
+            closePicker()
+          }}
+          onFork={() => {
+            onFork(pickedPane.id)
             closePicker()
           }}
           onClose={closePicker}

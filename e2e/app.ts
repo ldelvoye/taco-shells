@@ -102,6 +102,7 @@ export interface Screen {
   windowWidth: number
   labelsTruncated: boolean
   colorPickerOpen: boolean
+  forkItem: 'absent' | 'enabled' | 'disabled'
   terminalFocused: boolean
 }
 
@@ -121,6 +122,7 @@ export interface App {
   hoverRow(rowIndex: number): Promise<void>
   hoverColorDot(color: string): Promise<void>
   clickColorDot(color: string): Promise<void>
+  clickForkItem(): Promise<void>
   runInPane(sessionId: string, command: string): Promise<void>
   until(description: string, holds: (screen: Screen) => boolean): Promise<Screen>
   pause(milliseconds: number): Promise<void>
@@ -343,6 +345,16 @@ const SCREEN_SCRIPT = `JSON.stringify({
     })
   })(),
   colorPickerOpen: document.querySelector('.row-color-picker') !== null,
+  forkItem: (() => {
+    const item = document.querySelector('.row-fork-item')
+    if (!item) {
+      return 'absent'
+    }
+    if (item.disabled) {
+      return 'disabled'
+    }
+    return 'enabled'
+  })(),
   terminalFocused: document.querySelector('.xterm-helper-textarea:focus') !== null
 })`
 
@@ -558,6 +570,11 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     await clickAt(centre, 'left')
   }
 
+  async function clickForkItem(): Promise<void> {
+    const centre = await hover('.row-fork-item', 0)
+    await clickAt(centre, 'left')
+  }
+
   async function runInPane(sessionId: string, command: string): Promise<void> {
     const keystrokes = JSON.stringify(`${command}\r`)
     const target = JSON.stringify(sessionId)
@@ -674,6 +691,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     hoverRow,
     hoverColorDot,
     clickColorDot,
+    clickForkItem,
     runInPane,
     until,
     pause,
