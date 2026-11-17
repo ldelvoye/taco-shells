@@ -10,7 +10,7 @@ import {
 import type { SessionId } from '@shared/ipc'
 import { type Group, groupHasRoom, type Pane, paneOf, type RowColor } from '@shared/model'
 import type { ClaudeRows } from '@shared/rowState'
-import { type ForkItem, RowColorPicker, rowColorVariable } from './RowColorPicker'
+import { RowColorPicker, rowColorVariable } from './RowColorPicker'
 import { SidebarDivider } from './SidebarDivider'
 import { SidebarTitlebar } from './SidebarTitlebar'
 
@@ -47,25 +47,22 @@ interface SidebarProps {
   onResize: (width: number) => void
 }
 
-// Offered only on a row with a Claude session, and disabled while that session
-// has no conversation to fork or its group has no room.
-function forkItemFor(pane: Pane, groups: Group[], rowStates: ClaudeRows): ForkItem {
+// A row forks when it runs a Claude session with a conversation to copy and its
+// group has room for the fork.
+function canForkRow(pane: Pane, groups: Group[], rowStates: ClaudeRows): boolean {
   const row = rowStates.get(pane.id)
   if (row === undefined) {
-    return 'hidden'
+    return false
+  }
+  if (!row.hasConversation) {
+    return false
   }
 
   const group = groups.find((candidate) => candidate.panes.includes(pane))
   if (group === undefined) {
-    return 'hidden'
+    return false
   }
-  if (!row.hasConversation) {
-    return 'disabled'
-  }
-  if (!groupHasRoom(group)) {
-    return 'disabled'
-  }
-  return 'enabled'
+  return groupHasRoom(group)
 }
 
 function labelFor(title: string): string {
@@ -269,13 +266,13 @@ export function Sidebar({
     const panes = groups.flatMap((group) => group.panes)
     const pickedPane = panes.find((pane) => pane.id === picker.paneId)
     if (pickedPane !== undefined) {
-      const fork = forkItemFor(pickedPane, groups, rowStates)
+      const canFork = canForkRow(pickedPane, groups, rowStates)
       colorPicker = (
         <RowColorPicker
           x={picker.x}
           y={picker.y}
           current={pickedPane.color}
-          fork={fork}
+          canFork={canFork}
           onPreview={(color) => {
             setPicker({ ...picker, preview: { color } })
           }}

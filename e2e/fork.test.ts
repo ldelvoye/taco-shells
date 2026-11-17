@@ -53,7 +53,7 @@ describe('fork with Claude', () => {
       await app.rightClickRow(0)
       await app.until('the picker is open', (state) => state.colorPickerOpen)
       const beforeSession = await app.screen()
-      expect(beforeSession.forkItem).toBe('absent')
+      expect(beforeSession.forkItem).toBe('disabled')
       await app.press(KEY.escape)
       await app.until('the picker closes', (state) => !state.colorPickerOpen)
 
