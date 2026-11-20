@@ -1,7 +1,6 @@
-import { type JSX, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import type { JSX } from 'react'
 import { ROW_COLORS, type RowColor } from '@shared/model'
-
-const WINDOW_EDGE_GAP = 6
+import { usePopup } from './usePopup'
 
 interface RowColorPickerProps {
   x: number
@@ -12,6 +11,7 @@ interface RowColorPickerProps {
   onPreviewEnd: () => void
   onPick: (color: RowColor | null) => void
   onFork: () => void
+  onNewGroup: () => void
   onClose: () => void
 }
 
@@ -28,54 +28,10 @@ export function RowColorPicker({
   onPreviewEnd,
   onPick,
   onFork,
+  onNewGroup,
   onClose
 }: RowColorPickerProps): JSX.Element {
-  const picker = useRef<HTMLDivElement>(null)
-  const [position, setPosition] = useState({ left: x, top: y })
-
-  useLayoutEffect(() => {
-    const element = picker.current
-    if (!element) {
-      return
-    }
-
-    const bounds = element.getBoundingClientRect()
-    const furthestLeft = window.innerWidth - bounds.width - WINDOW_EDGE_GAP
-    const furthestTop = window.innerHeight - bounds.height - WINDOW_EDGE_GAP
-    const left = Math.min(x, furthestLeft)
-    const top = Math.min(y, furthestTop)
-    setPosition({ left, top })
-  }, [x, y])
-
-  useEffect(() => {
-    // Capture phase: Esc would otherwise reach the program in the terminal and interrupt Claude.
-    function onKeyDown(event: KeyboardEvent): void {
-      if (event.code !== 'Escape') {
-        return
-      }
-      event.preventDefault()
-      event.stopPropagation()
-      onClose()
-    }
-
-    function onMouseDown(event: MouseEvent): void {
-      const element = picker.current
-      if (element && element.contains(event.target as Node)) {
-        return
-      }
-      onClose()
-    }
-
-    window.addEventListener('keydown', onKeyDown, true)
-    window.addEventListener('mousedown', onMouseDown, true)
-    // A click in another app reaches this window only as a blur.
-    window.addEventListener('blur', onClose)
-    return () => {
-      window.removeEventListener('keydown', onKeyDown, true)
-      window.removeEventListener('mousedown', onMouseDown, true)
-      window.removeEventListener('blur', onClose)
-    }
-  }, [onClose])
+  const { popup, position } = usePopup(x, y, onClose)
 
   const dots = ROW_COLORS.map((color) => {
     let className = 'row-color-dot'
@@ -105,7 +61,7 @@ export function RowColorPicker({
 
   return (
     <div
-      ref={picker}
+      ref={popup}
       className="row-color-picker"
       style={position}
       // Keeps keyboard focus in the terminal while the popup is clicked.
@@ -131,6 +87,9 @@ export function RowColorPicker({
       </div>
       <button type="button" className="row-fork-item" disabled={!canFork} onClick={onFork}>
         Fork with Claude
+      </button>
+      <button type="button" className="row-fork-item row-new-group-item" onClick={onNewGroup}>
+        New group
       </button>
     </div>
   )
