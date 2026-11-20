@@ -208,6 +208,24 @@ export function Sidebar({
     setDrop(null)
   }
 
+  // The empty space under the last row is no drop target, so the line must not stay behind there.
+  function onDragOverRows(event: DragEvent<HTMLDivElement>): void {
+    if (event.target === event.currentTarget) {
+      setDrop(null)
+    }
+  }
+
+  // A dragleave also fires when the pointer moves between two rows, so only one that ends outside the rows counts.
+  function onDragLeaveRows(event: DragEvent<HTMLDivElement>): void {
+    const bounds = event.currentTarget.getBoundingClientRect()
+    const insideAcross = event.clientX >= bounds.left && event.clientX < bounds.right
+    const insideDown = event.clientY >= bounds.top && event.clientY < bounds.bottom
+    if (insideAcross && insideDown) {
+      return
+    }
+    setDrop(null)
+  }
+
   let gap: number | null = null
   if (drop !== null && drop.kind === 'between') {
     gap = drop.index
@@ -365,7 +383,9 @@ export function Sidebar({
   return (
     <aside className="sidebar" style={style}>
       <SidebarTitlebar fullScreen={fullScreen} />
-      <div className="sidebar-rows">{rendered}</div>
+      <div className="sidebar-rows" onDragOver={onDragOverRows} onDragLeave={onDragLeaveRows}>
+        {rendered}
+      </div>
       <SidebarDivider width={width} onResize={onResize} />
       {colorPicker}
     </aside>
