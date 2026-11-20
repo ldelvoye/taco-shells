@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import type { Group, Workspace } from './model'
+import type { Dragged, Drop, Group, Workspace } from './model'
 import {
   activatePane,
+  applyDrop,
   canSplitActivePane,
   closePane,
   emptyWorkspace,
@@ -78,6 +79,55 @@ describe('moveGroup', () => {
     const afterMovingOther = moveGroup(movingAnotherGroupPastTheActiveOne, 0, 2)
     expect(afterMovingOther.groups.map((group) => group.id)).toEqual(['b', 'c', 'a'])
     expect(afterMovingOther.activeGroup).toBe(0)
+  })
+})
+
+describe('applyDrop', () => {
+  it('moves a pane out of a split, into one, and within one', () => {
+    const split = makeGroupWithWidths('s', [0.5, 0.25, 0.25], 1)
+    const start = makeWorkspace([makeGroup('a', 'pane-a'), split], 0)
+
+    const left = applyDrop(start, { kind: 'pane', pane: 's-0' }, { kind: 'between', index: 2 }, 'new')
+    expect(left.groups.map((group) => group.id)).toEqual(['a', 's', 'new'])
+    expect(left.groups[1].panes.map((pane) => pane.width)).toEqual([0.5, 0.5])
+    expect(left.groups[1].activePane).toBe(0)
+    expect(left.groups[2].panes).toEqual([{ id: 's-0', title: '', width: 1, color: null }])
+    expect(left.groups[2].activePane).toBe(0)
+    expect(left.activeGroup).toBe(2)
+
+    const joined = applyDrop(start, { kind: 'pane', pane: 'pane-a' }, { kind: 'into', group: 's', slot: 1 }, 'new')
+    expect(joined.groups.map((group) => group.id)).toEqual(['s'])
+    expect(joined.groups[0].panes.map((pane) => pane.id)).toEqual(['s-0', 'pane-a', 's-1', 's-2'])
+    expect(joined.groups[0].panes.map((pane) => pane.width)).toEqual([0.25, 0.25, 0.25, 0.25])
+    expect(joined.groups[0].activePane).toBe(1)
+    expect(joined.activeGroup).toBe(0)
+
+    const reordered = applyDrop(start, { kind: 'pane', pane: 's-0' }, { kind: 'into', group: 's', slot: 3 }, 'new')
+    expect(reordered.groups[1].panes.map((pane) => pane.id)).toEqual(['s-1', 's-2', 's-0'])
+    expect(reordered.groups[1].panes.map((pane) => pane.width)).toEqual([0.25, 0.25, 0.5])
+    expect(reordered.groups[1].activePane).toBe(2)
+    expect(reordered.activeGroup).toBe(1)
+
+    const pair = makeWorkspace([makeGroupWithWidths('p', [0.7, 0.3], 0)], 0)
+    const parted = applyDrop(pair, { kind: 'pane', pane: 'p-1' }, { kind: 'between', index: 0 }, 'new')
+    expect(parted.groups.map((group) => group.id)).toEqual(['new', 'p'])
+    expect(parted.groups[1].panes.map((pane) => pane.width)).toEqual([1])
+    expect(parted.activeGroup).toBe(0)
+  })
+
+  it('moves a terminal or a whole split to a gap, keeping its group', () => {
+    const start = makeWorkspace(threeGroups(), 0)
+
+    const terminal = applyDrop(start, { kind: 'pane', pane: 'pane-c' }, { kind: 'between', index: 0 }, 'new')
+    expect(terminal.groups.map((group) => group.id)).toEqual(['c', 'a', 'b'])
+    expect(terminal.activeGroup).toBe(0)
+
+    const whole = applyDrop(start, { kind: 'group', group: 'c' }, { kind: 'between', index: 0 }, 'new')
+    expect(whole.groups.map((group) => group.id)).toEqual(['c', 'a', 'b'])
+    expect(whole.activeGroup).toBe(1)
+
+    const down = applyDrop(start, { kind: 'group', group: 'a' }, { kind: 'between', index: 2 }, 'new')
+    expect(down.groups.map((group) => group.id)).toEqual(['b', 'a', 'c'])
   })
 })
 
@@ -266,5 +316,32 @@ describe('unchanged operations', () => {
     const loneGroup = makeWorkspace([makeGroup('a', 'pane-a')], 0)
     expect(focusNextGroup(loneGroup)).toBe(loneGroup)
     expect(moveDivider(workspace, 0, 5, 0.5)).toBe(workspace)
+  })
+
+  it('returns the same workspace reference for a drop that does nothing', () => {
+    const tenWidths = Array.from({ length: 10 }, () => 0.1)
+    const full = makeGroupWithWidths('full', tenWidths, 0)
+    const pair = makeGroupWithWidths('s', [0.5, 0.5], 0)
+    const start = makeWorkspace([makeGroup('a', 'pane-a'), pair, full], 0)
+
+    const cases: [Dragged, Drop][] = [
+      [{ kind: 'pane', pane: 'pane-a' }, { kind: 'between', index: 0 }],
+      [{ kind: 'pane', pane: 'pane-a' }, { kind: 'between', index: 1 }],
+      [{ kind: 'pane', pane: 'pane-a' }, { kind: 'into', group: 'a', slot: 1 }],
+      [{ kind: 'pane', pane: 's-0' }, { kind: 'into', group: 's', slot: 0 }],
+      [{ kind: 'pane', pane: 's-0' }, { kind: 'into', group: 's', slot: 1 }],
+      [{ kind: 'pane', pane: 'pane-a' }, { kind: 'into', group: 'full', slot: 0 }],
+      [{ kind: 'pane', pane: 'pane-a' }, { kind: 'into', group: 'gone', slot: 0 }],
+      [{ kind: 'pane', pane: 'gone' }, { kind: 'between', index: 0 }],
+      [{ kind: 'group', group: 's' }, { kind: 'between', index: 1 }],
+      [{ kind: 'group', group: 's' }, { kind: 'between', index: 2 }],
+      [{ kind: 'group', group: 's' }, { kind: 'into', group: 'a', slot: 0 }],
+      [{ kind: 'group', group: 'gone' }, { kind: 'between', index: 0 }]
+    ]
+
+    for (const [dragged, drop] of cases) {
+      const after = applyDrop(start, dragged, drop, 'new')
+      expect(after).toBe(start)
+    }
   })
 })
