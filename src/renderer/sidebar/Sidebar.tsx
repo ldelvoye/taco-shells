@@ -8,7 +8,7 @@ import {
   useState
 } from 'react'
 import type { SessionId } from '@shared/ipc'
-import { dropFor, rowPointIn } from '@shared/drop'
+import { type DropPoint, dropFor, rowPointIn } from '@shared/drop'
 import {
   blockOf,
   type Dragged,
@@ -37,6 +37,8 @@ const CONNECTOR_LAST = 'is-last'
 
 const RIGHT_BUTTON = 2
 
+const END_POINT: DropPoint = { over: 'end' }
+
 // Wrapped because previewing no color is different from not previewing at all.
 interface ColorPreview {
   color: RowColor | null
@@ -53,6 +55,17 @@ interface OpenTabGroupPopup {
   tabGroup: TabGroupId
   x: number
   y: number
+}
+
+type MarkTarget =
+  | { on: 'entry'; index: number }
+  | { on: 'wrapper'; tabGroup: TabGroupId }
+  | { on: 'header'; tabGroup: TabGroupId }
+
+interface DropMark {
+  target: MarkTarget
+  edge: 'above' | 'below' | 'whole'
+  tabGroup: TabGroupId | null
 }
 
 interface SidebarProps {
@@ -104,6 +117,107 @@ function sameDrop(a: Drop | null, b: Drop | null): boolean {
     return a.group === b.group && a.slot === b.slot
   }
   return false
+}
+
+function markInNoGroup(workspace: Workspace, index: number): DropMark | null {
+  const groups = workspace.groups
+  if (index === groups.length) {
+    const lastIndex = groups.length - 1
+    const last = groups[lastIndex]
+    if (last === undefined) {
+      return null
+    }
+    if (last.tabGroup === null) {
+      return { target: { on: 'entry', index: lastIndex }, edge: 'below', tabGroup: null }
+    }
+    return { target: { on: 'wrapper', tabGroup: last.tabGroup }, edge: 'below', tabGroup: null }
+  }
+
+  const entry = groups[index]
+  if (entry.tabGroup !== null) {
+    const block = blockOf(workspace, entry.tabGroup)
+    if (block !== null && block.first === index) {
+      return { target: { on: 'wrapper', tabGroup: entry.tabGroup }, edge: 'above', tabGroup: null }
+    }
+  }
+  return { target: { on: 'entry', index }, edge: 'above', tabGroup: null }
+}
+
+function markInTabGroup(workspace: Workspace, id: TabGroupId, index: number): DropMark | null {
+  const record = workspace.tabGroups.find((candidate) => candidate.id === id)
+  const block = blockOf(workspace, id)
+  if (record === undefined || block === null) {
+    return null
+  }
+
+  if (record.collapsed) {
+    return { target: { on: 'header', tabGroup: id }, edge: 'whole', tabGroup: id }
+  }
+  if (index === block.first) {
+    return { target: { on: 'header', tabGroup: id }, edge: 'below', tabGroup: id }
+  }
+  if (index > block.last) {
+    return { target: { on: 'entry', index: block.last }, edge: 'below', tabGroup: id }
+  }
+  return { target: { on: 'entry', index }, edge: 'above', tabGroup: id }
+}
+
+function dropMarkFor(workspace: Workspace, drop: Drop | null): DropMark | null {
+  if (drop === null || drop.kind !== 'between') {
+    return null
+  }
+  if (drop.tabGroup === null) {
+    return markInNoGroup(workspace, drop.index)
+  }
+  return markInTabGroup(workspace, drop.tabGroup, drop.index)
+}
+
+function edgeClass(mark: DropMark): string {
+  if (mark.edge === 'whole') {
+    return ' is-drop-target'
+  }
+
+  let className = ' drop-above'
+  if (mark.edge === 'below') {
+    className = ' drop-below'
+  }
+  if (mark.tabGroup !== null) {
+    className += ' drop-in-group'
+  }
+  return className
+}
+
+function entryMarkClass(mark: DropMark | null, index: number): string {
+  if (mark === null) {
+    return ''
+  }
+  const target = mark.target
+  if (target.on !== 'entry' || target.index !== index) {
+    return ''
+  }
+  return edgeClass(mark)
+}
+
+function wrapperMarkClass(mark: DropMark | null, id: TabGroupId): string {
+  if (mark === null) {
+    return ''
+  }
+  const target = mark.target
+  if (target.on !== 'wrapper' || target.tabGroup !== id) {
+    return ''
+  }
+  return edgeClass(mark)
+}
+
+function headerMarkClass(mark: DropMark | null, id: TabGroupId): string {
+  if (mark === null) {
+    return ''
+  }
+  const target = mark.target
+  if (target.on !== 'header' || target.tabGroup !== id) {
+    return ''
+  }
+  return edgeClass(mark)
 }
 
 function labelFor(title: string): string {
@@ -194,33 +308,44 @@ export function Sidebar({
   }
 
   // The bracket is what was grabbed, but the picture that follows the pointer is the whole split.
-  function showWholeGroup(event: DragEvent<HTMLElement>): void {
-    const groupElement = event.currentTarget.closest('.terminal-group')
-    if (groupElement === null) {
+  function showWholeGroup(event: DragEvent<HTMLElement>, selector: string): void {
+    const shown = event.currentTarget.closest(selector)
+    if (shown === null) {
       return
     }
 
-    const bounds = groupElement.getBoundingClientRect()
+    const bounds = shown.getBoundingClientRect()
     const offsetX = event.clientX - bounds.left
     const offsetY = event.clientY - bounds.top
-    event.dataTransfer.setDragImage(groupElement, offsetX, offsetY)
+    event.dataTransfer.setDragImage(shown, offsetX, offsetY)
   }
 
-  function dropAt(event: DragEvent<HTMLDivElement>, groupIndex: number): Drop | null {
-    const dragging = dragged.current
-    if (dragging === null) {
-      return null
-    }
-
+  function rowPointOf(event: DragEvent<HTMLDivElement>, groupIndex: number): DropPoint {
     const paneCount = groups[groupIndex].panes.length
     const bounds = event.currentTarget.getBoundingClientRect()
     const offsetY = event.clientY - bounds.top
     const point = rowPointIn(groupIndex, paneCount, offsetY, bounds.height)
-    return dropFor(workspace, dragging, { over: 'row', ...point })
+    return { over: 'row', ...point }
   }
 
-  function onDragOver(event: DragEvent<HTMLDivElement>, groupIndex: number): void {
-    const next = dropAt(event, groupIndex)
+  function headerPointOf(event: DragEvent<HTMLDivElement>, tabGroup: TabGroupId): DropPoint {
+    const bounds = event.currentTarget.getBoundingClientRect()
+    const offsetY = event.clientY - bounds.top
+    const raised = Math.max(offsetY / bounds.height, 0)
+    const fraction = Math.min(raised, 1)
+    return { over: 'header', tabGroup, fraction }
+  }
+
+  function dropAt(point: DropPoint): Drop | null {
+    const dragging = dragged.current
+    if (dragging === null) {
+      return null
+    }
+    return dropFor(workspace, dragging, point)
+  }
+
+  function onDragOver(event: DragEvent<HTMLDivElement>, point: DropPoint): void {
+    const next = dropAt(point)
     if (next === null) {
       setDrop(null)
       return
@@ -233,10 +358,10 @@ export function Sidebar({
     }
   }
 
-  function onDropOnGroup(event: DragEvent<HTMLDivElement>, groupIndex: number): void {
+  function onDropAt(event: DragEvent<HTMLDivElement>, point: DropPoint): void {
     event.preventDefault()
 
-    const landed = dropAt(event, groupIndex)
+    const landed = dropAt(point)
     const draggedValue = dragged.current
     endDrag()
 
@@ -251,10 +376,16 @@ export function Sidebar({
     setDrop(null)
   }
 
-  // The empty space under the last row is no drop target, so the line must not stay behind there.
-  function onDragOverRows(event: DragEvent<HTMLDivElement>): void {
+  // The empty space under the last row drops at the bottom of the list, in no group.
+  function onDragOverEnd(event: DragEvent<HTMLDivElement>): void {
     if (event.target === event.currentTarget) {
-      setDrop(null)
+      onDragOver(event, END_POINT)
+    }
+  }
+
+  function onDropOnEnd(event: DragEvent<HTMLDivElement>): void {
+    if (event.target === event.currentTarget) {
+      onDropAt(event, END_POINT)
     }
   }
 
@@ -269,12 +400,8 @@ export function Sidebar({
     setDrop(null)
   }
 
-  let gap: number | null = null
-  if (drop !== null && drop.kind === 'between') {
-    gap = drop.index
-  }
+  const mark = dropMarkFor(workspace, drop)
 
-  const lastIndex = groups.length - 1
   const entries = groups.map((group, groupIndex) => {
     const paneCount = group.panes.length
     const activeInGroup = paneOf(group)
@@ -298,7 +425,7 @@ export function Sidebar({
             onDragStart={(event) => {
               event.stopPropagation()
               startDrag(event, { kind: 'group', group: group.id }, groupDragLabel)
-              showWholeGroup(event)
+              showWholeGroup(event, '.terminal-group')
             }}
           />
         )
@@ -360,12 +487,7 @@ export function Sidebar({
     })
 
     let className = 'terminal-group'
-    if (gap === groupIndex) {
-      className += ' drop-above'
-    }
-    if (groupIndex === lastIndex && gap === groups.length) {
-      className += ' drop-below'
-    }
+    className += entryMarkClass(mark, groupIndex)
     if (joinSlot !== null) {
       className += ' is-join-target'
     }
@@ -376,10 +498,12 @@ export function Sidebar({
         key={group.id}
         className={className}
         onDragOver={(event) => {
-          onDragOver(event, groupIndex)
+          const point = rowPointOf(event, groupIndex)
+          onDragOver(event, point)
         }}
         onDrop={(event) => {
-          onDropOnGroup(event, groupIndex)
+          const point = rowPointOf(event, groupIndex)
+          onDropAt(event, point)
         }}
         onDragEnd={endDrag}
       >
@@ -416,11 +540,29 @@ export function Sidebar({
       shownEntries = entries.slice(first, last + 1)
     }
 
+    className += wrapperMarkClass(mark, tabGroup.id)
+    headerClassName += headerMarkClass(mark, tabGroup.id)
+
     const tabStyle = { '--tab-color': rowColorVariable(tabGroup.color) } as CSSProperties
+    const dragLabel = tabGroupLabel(tabGroup.name)
     return (
       <div key={tabGroup.id} className={className} data-tab-group={tabGroup.id} style={tabStyle}>
         <div
           className={headerClassName}
+          draggable
+          onDragStart={(event) => {
+            startDrag(event, { kind: 'tabGroup', tabGroup: tabGroup.id }, dragLabel)
+            showWholeGroup(event, '.tab-group')
+          }}
+          onDragOver={(event) => {
+            const point = headerPointOf(event, tabGroup.id)
+            onDragOver(event, point)
+          }}
+          onDrop={(event) => {
+            const point = headerPointOf(event, tabGroup.id)
+            onDropAt(event, point)
+          }}
+          onDragEnd={endDrag}
           onClick={() => {
             onToggleTabGroup(tabGroup.id)
           }}
@@ -530,7 +672,12 @@ export function Sidebar({
   return (
     <aside className="sidebar" style={style}>
       <SidebarTitlebar fullScreen={fullScreen} />
-      <div className="sidebar-rows" onDragOver={onDragOverRows} onDragLeave={onDragLeaveRows}>
+      <div
+        className="sidebar-rows"
+        onDragOver={onDragOverEnd}
+        onDrop={onDropOnEnd}
+        onDragLeave={onDragLeaveRows}
+      >
         {rendered}
       </div>
       <SidebarDivider width={width} onResize={onResize} />

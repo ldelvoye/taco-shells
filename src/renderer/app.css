@@ -119,6 +119,7 @@ body {
   min-height: 0;
   overflow-y: auto;
   padding: 2px 0;
+  padding-bottom: var(--row-height);
 }
 
 /* An inset line rather than a border, so a group does not change height while a
@@ -244,7 +245,41 @@ body {
 }
 
 .tab-group {
+  position: relative;
   background: color-mix(in srgb, var(--tab-color) 13%, transparent);
+}
+
+.tab-group.drop-above::after,
+.tab-group.drop-below::after,
+.tab-group-header.drop-below::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--row-marker);
+  pointer-events: none;
+}
+
+.tab-group.drop-above::after {
+  top: 0;
+}
+
+.tab-group.drop-below::after,
+.tab-group-header.drop-below::after {
+  bottom: 0;
+}
+
+.tab-group-header.drop-in-group::after {
+  background: var(--tab-color);
+}
+
+.terminal-group.drop-in-group.drop-above {
+  box-shadow: inset 0 2px 0 var(--tab-color);
+}
+
+.terminal-group.drop-in-group.drop-below {
+  box-shadow: inset 0 -2px 0 var(--tab-color);
 }
 
 .tab-group-header {
@@ -261,6 +296,11 @@ body {
 
 .tab-group-header.is-active {
   background: color-mix(in srgb, var(--tab-color) 60%, transparent);
+}
+
+.tab-group-header.is-drop-target {
+  background: color-mix(in srgb, var(--tab-color) 55%, transparent);
+  box-shadow: inset 0 0 0 1.5px var(--tab-color);
 }
 
 .tab-group-caret {
