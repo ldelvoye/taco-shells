@@ -24,6 +24,7 @@ const SHUTDOWN_TIMEOUT_MS = 3000
 const POLL_INTERVAL_MS = 100
 const DRAG_START_TIMEOUT_MS = 3000
 const DRAG_STEPS = 8
+// Pixels in from a row's left edge: over its label, and on the bracket's stem (--bracket-stem in app.css).
 const ROW_HANDLE_OFFSET = 60
 const BRACKET_HANDLE_OFFSET = 13
 

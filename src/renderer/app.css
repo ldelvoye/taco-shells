@@ -1,5 +1,8 @@
 :root {
   --row-height: 22px;
+  --row-padding: 10px;
+  --bracket-stem: 13px;
+  --bracket-width: 21px;
 }
 
 html,
@@ -139,7 +142,7 @@ body {
 .terminal-group.is-join-target::before {
   content: '';
   position: absolute;
-  left: 13px;
+  left: var(--bracket-stem);
   top: 0;
   bottom: 0;
   width: 2px;
@@ -151,7 +154,7 @@ body {
 .terminal-row.drop-after::after {
   content: '';
   position: absolute;
-  left: 21px;
+  left: var(--bracket-width);
   right: 0;
   height: 2px;
   background: var(--row-marker);
@@ -172,7 +175,7 @@ body {
   display: flex;
   align-items: stretch;
   height: var(--row-height);
-  padding: 0 10px;
+  padding: 0 var(--row-padding);
   overflow: hidden;
   cursor: default;
   user-select: none;
@@ -334,11 +337,12 @@ body {
 }
 
 /* Half a bracket down the left of every row in a split group: a stem running to
-   the row's middle, and a stub reaching from it towards the label. */
+   the row's middle, and a stub reaching from it towards the label. Its box
+   reaches the row's left edge, and is the handle that drags the whole split. */
 .row-connector {
   position: relative;
-  flex: 0 0 21px;
-  margin-left: -10px;
+  flex: 0 0 var(--bracket-width);
+  margin-left: calc(-1 * var(--row-padding));
   cursor: grab;
 }
 
@@ -350,7 +354,7 @@ body {
 .row-connector::before {
   content: '';
   position: absolute;
-  left: 13px;
+  left: var(--bracket-stem);
   width: 1px;
   background: var(--row-connector);
 }
@@ -359,7 +363,7 @@ body {
   content: '';
   position: absolute;
   top: 50%;
-  left: 13px;
+  left: var(--bracket-stem);
   width: 5px;
   height: 1px;
   background: var(--row-connector);
