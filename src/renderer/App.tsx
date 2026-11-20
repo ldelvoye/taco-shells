@@ -480,8 +480,11 @@ export function App(): JSX.Element {
   const dropInSidebar = useCallback(
     (dragged: Dragged, drop: Drop) => {
       const newGroup = nextGroupId()
-      refocusAfterDrop.current = true
-      updateWorkspace((current) => applyDrop(current, dragged, drop, newGroup))
+      updateWorkspace((current) => {
+        const next = applyDrop(current, dragged, drop, newGroup)
+        refocusAfterDrop.current = next !== current
+        return next
+      })
     },
     [updateWorkspace]
   )
