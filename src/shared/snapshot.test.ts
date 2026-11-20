@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import type { Workspace } from './model'
+import type { Group, Workspace } from './model'
 import { emptyWorkspace } from './model'
 import {
   isSessionUuid,
@@ -9,7 +9,7 @@ import {
   snapshotFrom,
   workspaceFromSnapshot
 } from './snapshot'
-import type { ClaudeSession, Snapshot } from './snapshot'
+import type { ClaudeSession, Snapshot, SnapshotTabGroup } from './snapshot'
 
 const SESSION_ID = '123e4567-e89b-12d3-a456-426614174000'
 
@@ -40,7 +40,7 @@ describe('parseSnapshot', () => {
 
   it('keeps a valid file with no groups as an empty snapshot', () => {
     const text = JSON.stringify({ version: 1, groups: [], activeGroup: 3 })
-    expect(parseSnapshot(text)).toEqual({ version: 1, groups: [], activeGroup: 0 })
+    expect(parseSnapshot(text)).toEqual({ version: 1, groups: [], activeGroup: 0, tabGroups: [] })
   })
 
   it('normalises a hand-edited file into a sane one', () => {
@@ -103,17 +103,59 @@ describe('parseSnapshot', () => {
     expect(parsed?.groups[0].panes).toHaveLength(10)
     expect(parsed?.groups[0].activePane).toBe(9)
   })
+
+  it('loads a file saved before tab groups existed', () => {
+    const text =
+      '{"version":1,"groups":[{"panes":[{"width":1,"cwd":null,"claude":null,"color":null}],"activePane":0}],"activeGroup":0}'
+
+    const snapshot = parseSnapshot(text)
+
+    expect(snapshot?.groups).toHaveLength(1)
+    expect(snapshot?.groups[0].tabGroup).toBeNull()
+    expect(snapshot?.tabGroups).toEqual([])
+  })
+
+  it('repairs a hand-edited file', () => {
+    const pane = { width: 1, cwd: null, claude: null }
+    const record: SnapshotTabGroup = { name: 'a', color: 'blue', collapsed: false }
+    const cases: [string, unknown[], unknown[], Array<number | null>, SnapshotTabGroup[]][] = [
+      ['split across the list', [0, null, 0], [record], [0, null, null], [record]],
+      ['index out of range', [5], [record], [null], []],
+      ['unknown color', [0], [{ ...record, color: 'mauve' }], [0], [{ ...record, color: 'red' }]],
+      ['non-string name', [0], [{ ...record, name: 7 }], [0], [{ ...record, name: '' }]],
+      ['record nothing points at', [1], [record, { ...record, name: 'b' }], [0], [{ ...record, name: 'b' }]]
+    ]
+
+    for (const [label, indexes, records, expectedIndexes, expectedRecords] of cases) {
+      const groups = indexes.map((tabGroup) => {
+        return { panes: [pane], activePane: 0, tabGroup }
+      })
+      const text = JSON.stringify({ version: 1, activeGroup: 0, groups, tabGroups: records })
+
+      const snapshot = parseSnapshot(text)
+
+      expect(snapshot?.groups.map((group) => group.tabGroup), label).toEqual(expectedIndexes)
+      expect(snapshot?.tabGroups, label).toEqual(expectedRecords)
+    }
+  })
 })
 
 describe('snapshot and workspace round trip', () => {
   const claude: ClaudeSession = { sessionId: SESSION_ID, cwd: '/work' }
   const workspace: Workspace = {
     activeGroup: 1,
+    tabGroups: [],
     groups: [
-      { id: 'g1', activePane: 0, panes: [{ id: 'pty-1', title: 'one', width: 1, color: null }] },
+      {
+        id: 'g1',
+        activePane: 0,
+        tabGroup: null,
+        panes: [{ id: 'pty-1', title: 'one', width: 1, color: null }]
+      },
       {
         id: 'g2',
         activePane: 1,
+        tabGroup: null,
         panes: [
           { id: 'pty-2', title: 'two', width: 0.25, color: 'purple' },
           { id: 'pty-3', title: 'three', width: 0.75, color: null }
@@ -141,7 +183,7 @@ describe('snapshot and workspace round trip', () => {
     const reparsed = parseSnapshot(JSON.stringify(snapshot))
     expect(reparsed).toEqual(snapshot)
 
-    const restored = workspaceFromSnapshot(snapshot, ['a', 'b', 'c'], ['x', 'y'])
+    const restored = workspaceFromSnapshot(snapshot, ['a', 'b', 'c'], ['x', 'y'], [])
     expect(restored.activeGroup).toBe(1)
     expect(restored.groups.map((group) => group.id)).toEqual(['x', 'y'])
     expect(restored.groups[1].activePane).toBe(1)
@@ -156,7 +198,66 @@ describe('snapshot and workspace round trip', () => {
   it('falls back to an empty workspace when the id counts do not match', () => {
     const snapshot = snapshotFrom(workspace, cwdOf, claudeOf)
     expect(paneCount(snapshot)).toBe(3)
-    expect(workspaceFromSnapshot(snapshot, ['a', 'b'], ['x', 'y'])).toEqual(emptyWorkspace())
-    expect(workspaceFromSnapshot(snapshot, ['a', 'b', 'c'], ['x'])).toEqual(emptyWorkspace())
+    expect(workspaceFromSnapshot(snapshot, ['a', 'b'], ['x', 'y'], [])).toEqual(emptyWorkspace())
+    expect(workspaceFromSnapshot(snapshot, ['a', 'b', 'c'], ['x'], [])).toEqual(emptyWorkspace())
+  })
+})
+
+describe('tab groups through a save and a restore', () => {
+  function entry(id: string, tabGroup: string | null): Group {
+    return {
+      id,
+      panes: [{ id: `pane-${id}`, title: '', width: 1, color: null }],
+      activePane: 0,
+      tabGroup
+    }
+  }
+
+  it('keeps tab groups through a save and a restore', () => {
+    const workspace: Workspace = {
+      groups: [entry('a', 't1'), entry('b', 't1'), entry('c', null), entry('d', 't2')],
+      activeGroup: 2,
+      tabGroups: [
+        { id: 't1', name: 'pebbles', color: 'blue', collapsed: false },
+        { id: 't2', name: 'smorg', color: 'orange', collapsed: true }
+      ]
+    }
+    const noCwd = (): null => null
+    const noClaude = (): null => null
+
+    const snapshot = snapshotFrom(workspace, noCwd, noClaude)
+    const reparsed = parseSnapshot(JSON.stringify(snapshot))
+    if (reparsed === null) {
+      throw new Error('expected a snapshot')
+    }
+    const restored = workspaceFromSnapshot(reparsed, ['p1', 'p2', 'p3', 'p4'], ['g1', 'g2', 'g3', 'g4'], ['u1', 'u2'])
+
+    expect(restored.groups.map((group) => group.tabGroup)).toEqual(['u1', 'u1', null, 'u2'])
+    expect(restored.activeGroup).toBe(2)
+    expect(restored.tabGroups).toEqual([
+      { id: 'u1', name: 'pebbles', color: 'blue', collapsed: false },
+      { id: 'u2', name: 'smorg', color: 'orange', collapsed: true }
+    ])
+  })
+
+  it('opens the group of a restored active terminal', () => {
+    const pane = { width: 1, cwd: null, claude: null }
+    const text = JSON.stringify({
+      version: 1,
+      activeGroup: 0,
+      groups: [
+        { panes: [pane], activePane: 0, tabGroup: 0 },
+        { panes: [pane], activePane: 0, tabGroup: null }
+      ],
+      tabGroups: [{ name: 'a', color: 'blue', collapsed: true }]
+    })
+    const snapshot = parseSnapshot(text)
+    if (snapshot === null) {
+      throw new Error('expected a snapshot')
+    }
+
+    const restored = workspaceFromSnapshot(snapshot, ['p1', 'p2'], ['g1', 'g2'], ['u1'])
+
+    expect(restored.tabGroups[0].collapsed).toBe(false)
   })
 })

@@ -1,6 +1,6 @@
 import type { SessionId } from './ipc'
-import type { GroupId, Group, Pane, RowColor, Workspace } from './model'
-import { emptyWorkspace, MIN_PANE_WIDTH, ROW_COLORS } from './model'
+import type { GroupId, Group, Pane, RowColor, TabGroup, TabGroupId, Workspace } from './model'
+import { emptyWorkspace, MIN_PANE_WIDTH, openedAt, ROW_COLORS } from './model'
 
 export const SNAPSHOT_VERSION = 1
 
@@ -20,15 +20,23 @@ export interface SnapshotPane {
   color: RowColor | null
 }
 
+export interface SnapshotTabGroup {
+  name: string
+  color: RowColor
+  collapsed: boolean
+}
+
 export interface SnapshotGroup {
   panes: SnapshotPane[]
   activePane: number
+  tabGroup: number | null
 }
 
 export interface Snapshot {
   version: typeof SNAPSHOT_VERSION
   groups: SnapshotGroup[]
   activeGroup: number
+  tabGroups: SnapshotTabGroup[]
 }
 
 type Loose = Record<string, unknown>
@@ -110,7 +118,111 @@ function parseGroup(value: unknown): SnapshotGroup | null {
   })
 
   const activePane = clampIndex(value.activePane, panes.length)
-  return { panes, activePane }
+  const tabGroup = tabGroupIndexFrom(value.tabGroup)
+  return { panes, activePane, tabGroup }
+}
+
+function tabGroupIndexFrom(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    return null
+  }
+  return value
+}
+
+function parseTabGroup(value: unknown): SnapshotTabGroup {
+  let loose: Loose = {}
+  if (isRecord(value)) {
+    loose = value
+  }
+
+  let name = ''
+  if (typeof loose.name === 'string') {
+    name = loose.name
+  }
+
+  let color: RowColor = ROW_COLORS[0]
+  const knownColor = rowColorFrom(loose.color)
+  if (knownColor !== null) {
+    color = knownColor
+  }
+
+  let collapsed = false
+  if (typeof loose.collapsed === 'boolean') {
+    collapsed = loose.collapsed
+  }
+
+  return { name, color, collapsed }
+}
+
+function parseTabGroups(value: unknown): SnapshotTabGroup[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  const candidates: unknown[] = value
+  return candidates.map(parseTabGroup)
+}
+
+function withKnownTabGroups(groups: SnapshotGroup[], recordCount: number): SnapshotGroup[] {
+  return groups.map((group) => {
+    const index = group.tabGroup
+    if (index !== null && index >= recordCount) {
+      return { ...group, tabGroup: null }
+    }
+    return group
+  })
+}
+
+function withTabGroupsAdjacent(groups: SnapshotGroup[]): SnapshotGroup[] {
+  const seen = new Set<number>()
+  let previous: number | null = null
+
+  return groups.map((group) => {
+    let tabGroup = group.tabGroup
+    if (tabGroup !== null) {
+      const straggler = seen.has(tabGroup) && previous !== tabGroup
+      if (straggler) {
+        tabGroup = null
+      } else {
+        seen.add(tabGroup)
+      }
+    }
+
+    previous = tabGroup
+    if (tabGroup === group.tabGroup) {
+      return group
+    }
+    return { ...group, tabGroup }
+  })
+}
+
+function withoutUnusedTabGroups(
+  groups: SnapshotGroup[],
+  records: SnapshotTabGroup[]
+): { groups: SnapshotGroup[]; tabGroups: SnapshotTabGroup[] } {
+  const usedIndexes = new Set(groups.map((group) => group.tabGroup))
+  const tabGroups = records.filter((_record, index) => usedIndexes.has(index))
+
+  const renumbered = new Map<number, number>()
+  records.forEach((_record, index) => {
+    if (usedIndexes.has(index)) {
+      renumbered.set(index, renumbered.size)
+    }
+  })
+
+  const renumberedGroups = groups.map((group): SnapshotGroup => {
+    if (group.tabGroup === null) {
+      return group
+    }
+
+    const renumberedIndex = renumbered.get(group.tabGroup)
+    if (renumberedIndex === undefined) {
+      return { ...group, tabGroup: null }
+    }
+    return { ...group, tabGroup: renumberedIndex }
+  })
+
+  return { groups: renumberedGroups, tabGroups }
 }
 
 /** The snapshot a file's text describes, or null when it cannot be one. */
@@ -131,10 +243,38 @@ export function parseSnapshot(text: string): Snapshot | null {
 
   const candidates: unknown[] = parsed.groups
   const parsedGroups = candidates.map(parseGroup)
-  const groups = parsedGroups.filter((group): group is SnapshotGroup => group !== null)
-  const activeGroup = clampIndex(parsed.activeGroup, groups.length)
+  const parsedKept = parsedGroups.filter((group): group is SnapshotGroup => group !== null)
+  const activeGroup = clampIndex(parsed.activeGroup, parsedKept.length)
 
-  return { version: SNAPSHOT_VERSION, groups, activeGroup }
+  const records = parseTabGroups(parsed.tabGroups)
+  const known = withKnownTabGroups(parsedKept, records.length)
+  const adjacent = withTabGroupsAdjacent(known)
+  const { groups, tabGroups } = withoutUnusedTabGroups(adjacent, records)
+
+  return { version: SNAPSHOT_VERSION, groups, activeGroup, tabGroups }
+}
+
+function tabGroupsInOrder(workspace: Workspace): TabGroup[] {
+  const ordered: TabGroup[] = []
+  for (const group of workspace.groups) {
+    const id = group.tabGroup
+    if (id !== null) {
+      const alreadyListed = ordered.some((tabGroup) => tabGroup.id === id)
+      const record = workspace.tabGroups.find((tabGroup) => tabGroup.id === id)
+      if (!alreadyListed && record !== undefined) {
+        ordered.push(record)
+      }
+    }
+  }
+  return ordered
+}
+
+function snapshotIndexOf(ordered: TabGroup[], id: TabGroupId | null): number | null {
+  const index = ordered.findIndex((tabGroup) => tabGroup.id === id)
+  if (id === null || index === -1) {
+    return null
+  }
+  return index
 }
 
 /** The snapshot of a workspace, with each pane's directory and Claude session looked up by id. */
@@ -143,6 +283,7 @@ export function snapshotFrom(
   cwdOf: (id: SessionId) => string | null,
   claudeOf: (id: SessionId) => ClaudeSession | null
 ): Snapshot {
+  const ordered = tabGroupsInOrder(workspace)
   const groups = workspace.groups.map((group): SnapshotGroup => {
     const panes = group.panes.map((pane): SnapshotPane => {
       return {
@@ -152,10 +293,15 @@ export function snapshotFrom(
         color: pane.color
       }
     })
-    return { panes, activePane: group.activePane }
+    const tabGroup = snapshotIndexOf(ordered, group.tabGroup)
+    return { panes, activePane: group.activePane, tabGroup }
   })
 
-  return { version: SNAPSHOT_VERSION, groups, activeGroup: workspace.activeGroup }
+  const tabGroups = ordered.map((record): SnapshotTabGroup => {
+    return { name: record.name, color: record.color, collapsed: record.collapsed }
+  })
+
+  return { version: SNAPSHOT_VERSION, groups, activeGroup: workspace.activeGroup, tabGroups }
 }
 
 /** The total number of panes across all groups. */
@@ -167,12 +313,16 @@ export function paneCount(snapshot: Snapshot): number {
 export function workspaceFromSnapshot(
   snapshot: Snapshot,
   sessionIds: SessionId[],
-  groupIds: GroupId[]
+  groupIds: GroupId[],
+  tabGroupIds: TabGroupId[]
 ): Workspace {
   if (sessionIds.length !== paneCount(snapshot)) {
     return emptyWorkspace()
   }
   if (groupIds.length !== snapshot.groups.length) {
+    return emptyWorkspace()
+  }
+  if (tabGroupIds.length !== snapshot.tabGroups.length) {
     return emptyWorkspace()
   }
 
@@ -183,8 +333,18 @@ export function workspaceFromSnapshot(
       nextSession += 1
       return { id, title: '', width: snapshotPane.width, color: snapshotPane.color }
     })
-    return { id: groupIds[groupIndex], panes, activePane: snapshotGroup.activePane }
+
+    let tabGroup: TabGroupId | null = null
+    if (snapshotGroup.tabGroup !== null) {
+      tabGroup = tabGroupIds[snapshotGroup.tabGroup]
+    }
+    return { id: groupIds[groupIndex], panes, activePane: snapshotGroup.activePane, tabGroup }
   })
 
-  return { groups, activeGroup: snapshot.activeGroup }
+  const tabGroups = snapshot.tabGroups.map((record, index): TabGroup => {
+    return { id: tabGroupIds[index], name: record.name, color: record.color, collapsed: record.collapsed }
+  })
+
+  const restored: Workspace = { groups, activeGroup: snapshot.activeGroup, tabGroups }
+  return openedAt(restored, restored.activeGroup)
 }

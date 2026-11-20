@@ -172,8 +172,8 @@ export function Sidebar({
     const bounds = event.currentTarget.getBoundingClientRect()
     const offsetY = event.clientY - bounds.top
     const point = rowPointIn(groupIndex, paneCount, offsetY, bounds.height)
-    const workspace: Workspace = { groups, activeGroup }
-    return dropFor(workspace, dragging, point)
+    const workspace: Workspace = { groups, activeGroup, tabGroups: [] }
+    return dropFor(workspace, dragging, { over: 'row', ...point })
   }
 
   function onDragOver(event: DragEvent<HTMLDivElement>, groupIndex: number): void {

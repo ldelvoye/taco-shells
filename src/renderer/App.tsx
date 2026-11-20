@@ -71,9 +71,22 @@ function nextGroupId(): string {
   return id
 }
 
+let nextTabGroupNumber = 1
+
+function nextTabGroupId(): string {
+  const id = `tab-group-${nextTabGroupNumber}`
+  nextTabGroupNumber += 1
+  return id
+}
+
 function groupForSession(sessionId: SessionId): Group {
   const id = nextGroupId()
-  return { id, panes: [{ id: sessionId, title: '', width: 1, color: null }], activePane: 0 }
+  return {
+    id,
+    panes: [{ id: sessionId, title: '', width: 1, color: null }],
+    activePane: 0,
+    tabGroup: null
+  }
 }
 
 function startOptionsOf(pane: SnapshotPane): PtyCreateOptions {
@@ -252,7 +265,8 @@ export function App(): JSX.Element {
           }
         }
         const groupIds = snapshot.groups.map(() => nextGroupId())
-        restored = workspaceFromSnapshot(snapshot, sessionIds, groupIds)
+        const tabGroupIds = snapshot.tabGroups.map(() => nextTabGroupId())
+        restored = workspaceFromSnapshot(snapshot, sessionIds, groupIds, tabGroupIds)
       } catch {
         restored = emptyWorkspace()
       }

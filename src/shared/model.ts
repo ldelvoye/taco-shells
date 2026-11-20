@@ -6,6 +6,8 @@ export const ROW_COLORS = ['red', 'orange', 'yellow', 'green', 'blue', 'purple']
 
 export type GroupId = string
 
+export type TabGroupId = string
+
 export type RowColor = (typeof ROW_COLORS)[number]
 
 export interface Pane {
@@ -16,31 +18,156 @@ export interface Pane {
   color: RowColor | null
 }
 
+export interface TabGroup {
+  id: TabGroupId
+  name: string
+  color: RowColor
+  collapsed: boolean
+}
+
 export interface Group {
   id: GroupId
   panes: Pane[]
   activePane: number
+  tabGroup: TabGroupId | null
 }
 
 export interface Workspace {
   groups: Group[]
   activeGroup: number
+  tabGroups: TabGroup[]
 }
 
-export type Dragged = { kind: 'pane'; pane: SessionId } | { kind: 'group'; group: GroupId }
+export type Dragged =
+  | { kind: 'pane'; pane: SessionId }
+  | { kind: 'group'; group: GroupId }
+  | { kind: 'tabGroup'; tabGroup: TabGroupId }
 
 export type Drop =
-  | { kind: 'between'; index: number }
+  | { kind: 'between'; index: number; tabGroup: TabGroupId | null }
   | { kind: 'into'; group: GroupId; slot: number }
 
+type BetweenDrop = Extract<Drop, { kind: 'between' }>
+
 export function emptyWorkspace(): Workspace {
-  return { groups: [], activeGroup: 0 }
+  return { groups: [], activeGroup: 0, tabGroups: [] }
+}
+
+/** The first and last index of a tab group's entries, or null when it has none. */
+export function blockOf(
+  workspace: Workspace,
+  id: TabGroupId
+): { first: number; last: number } | null {
+  let first = -1
+  let last = -1
+  workspace.groups.forEach((group, index) => {
+    if (group.tabGroup === id) {
+      if (first === -1) {
+        first = index
+      }
+      last = index
+    }
+  })
+
+  if (first === -1) {
+    return null
+  }
+  return { first, last }
+}
+
+/** Whether the entry at this index sits in a collapsed tab group. */
+export function isHidden(workspace: Workspace, groupIndex: number): boolean {
+  const group = workspace.groups[groupIndex]
+  if (!group || group.tabGroup === null) {
+    return false
+  }
+
+  const tabGroupId = group.tabGroup
+  const record = workspace.tabGroups.find((tabGroup) => tabGroup.id === tabGroupId)
+  if (record === undefined) {
+    return false
+  }
+  return record.collapsed
+}
+
+function withoutEmptyTabGroups(workspace: Workspace): Workspace {
+  const usedIds = new Set(workspace.groups.map((group) => group.tabGroup))
+  const tabGroups = workspace.tabGroups.filter((tabGroup) => usedIds.has(tabGroup.id))
+  if (tabGroups.length === workspace.tabGroups.length) {
+    return workspace
+  }
+
+  return { ...workspace, tabGroups }
+}
+
+function nearestShowingEntry(workspace: Workspace): number | null {
+  const lastIndex = workspace.groups.length - 1
+  for (let index = workspace.activeGroup + 1; index <= lastIndex; index += 1) {
+    if (!isHidden(workspace, index)) {
+      return index
+    }
+  }
+  for (let index = workspace.activeGroup - 1; index >= 0; index -= 1) {
+    if (!isHidden(workspace, index)) {
+      return index
+    }
+  }
+  return null
+}
+
+function withFocusShowing(workspace: Workspace): Workspace {
+  if (!isHidden(workspace, workspace.activeGroup)) {
+    return workspace
+  }
+
+  const showing = nearestShowingEntry(workspace)
+  if (showing === null) {
+    return workspace
+  }
+  return { ...workspace, activeGroup: showing }
+}
+
+/** The workspace with invariants 2 and 3 restored: empty tab groups dropped, and focus moved off a hidden entry. */
+export function settled(workspace: Workspace): Workspace {
+  const pruned = withoutEmptyTabGroups(workspace)
+  return withFocusShowing(pruned)
+}
+
+export function openedAt(workspace: Workspace, groupIndex: number): Workspace {
+  if (!isHidden(workspace, groupIndex)) {
+    return workspace
+  }
+
+  const tabGroupId = workspace.groups[groupIndex].tabGroup
+  const tabGroups = workspace.tabGroups.map((tabGroup) => {
+    if (tabGroup.id === tabGroupId) {
+      return { ...tabGroup, collapsed: false }
+    }
+    return tabGroup
+  })
+
+  return { ...workspace, tabGroups }
 }
 
 export function addGroup(workspace: Workspace, group: Group): Workspace {
-  const groups = [...workspace.groups, group]
-  const activeGroup = groups.length - 1
-  return { groups, activeGroup }
+  const anchor = workspace.groups[workspace.activeGroup]
+  let tabGroup: TabGroupId | null = null
+  let index = workspace.groups.length
+  if (anchor !== undefined && anchor.tabGroup !== null) {
+    const block = blockOf(workspace, anchor.tabGroup)
+    if (block !== null) {
+      tabGroup = anchor.tabGroup
+      index = block.last + 1
+    }
+  }
+
+  const entry: Group = { ...group, tabGroup }
+  const groupsBefore = workspace.groups.slice(0, index)
+  const groupsAfter = workspace.groups.slice(index)
+  const groups = [...groupsBefore, entry, ...groupsAfter]
+
+  const added: Workspace = { ...workspace, groups, activeGroup: index }
+  return openedAt(added, index)
 }
 
 // Where an active index lands once the entry at `removed` is taken out.
@@ -77,7 +204,7 @@ export function closePane(workspace: Workspace, id: SessionId): Workspace {
     const groups = [...groupsBefore, ...groupsAfter]
     const activeGroup = indexAfterRemoval(workspace.activeGroup, groupIndex, groups.length)
 
-    return { groups, activeGroup }
+    return settled({ ...workspace, groups, activeGroup })
   }
 
   const survivorWidths = panes.map((pane) => pane.width)
@@ -92,7 +219,7 @@ export function closePane(workspace: Workspace, id: SessionId): Workspace {
   const groups = [...workspace.groups]
   groups[groupIndex] = updatedGroup
 
-  return { groups, activeGroup: workspace.activeGroup }
+  return settled({ ...workspace, groups })
 }
 
 export function moveGroup(workspace: Workspace, from: number, to: number): Workspace {
@@ -116,7 +243,7 @@ export function moveGroup(workspace: Workspace, from: number, to: number): Works
 
   const activeGroup = groups.findIndex((group) => group.id === activeGroupId)
 
-  return { groups, activeGroup }
+  return { ...workspace, groups, activeGroup }
 }
 
 function gapInRange(gap: number, length: number): boolean {
@@ -130,23 +257,113 @@ function indexAfterLift(gap: number, lifted: number): number {
   return gap
 }
 
+function gapInsideATabGroup(workspace: Workspace, gap: number): boolean {
+  return workspace.tabGroups.some((tabGroup) => {
+    const block = blockOf(workspace, tabGroup.id)
+    if (block === null) {
+      return false
+    }
+    return block.first < gap && gap <= block.last
+  })
+}
+
+function betweenIsAllowed(workspace: Workspace, drop: BetweenDrop): boolean {
+  if (!gapInRange(drop.index, workspace.groups.length)) {
+    return false
+  }
+  if (drop.tabGroup === null) {
+    return !gapInsideATabGroup(workspace, drop.index)
+  }
+
+  const block = blockOf(workspace, drop.tabGroup)
+  if (block === null) {
+    return false
+  }
+  return drop.index >= block.first && drop.index <= block.last + 1
+}
+
+function withEntryLabelled(
+  workspace: Workspace,
+  index: number,
+  tabGroup: TabGroupId | null
+): Workspace {
+  const entry = workspace.groups[index]
+  if (entry.tabGroup === tabGroup) {
+    return workspace
+  }
+
+  const groups = [...workspace.groups]
+  groups[index] = { ...entry, tabGroup }
+
+  return { ...workspace, groups }
+}
+
+function moveEntryToGap(
+  workspace: Workspace,
+  from: number,
+  gap: number,
+  tabGroup: TabGroupId | null
+): Workspace {
+  const to = indexAfterLift(gap, from)
+  const moved = moveGroup(workspace, from, to)
+  return withEntryLabelled(moved, to, tabGroup)
+}
+
 function dropGroup(workspace: Workspace, id: GroupId, drop: Drop): Workspace {
   if (drop.kind !== 'between') {
     return workspace
   }
 
   const from = workspace.groups.findIndex((group) => group.id === id)
-  if (from === -1 || !gapInRange(drop.index, workspace.groups.length)) {
+  if (from === -1) {
     return workspace
   }
 
-  const to = indexAfterLift(drop.index, from)
-  return moveGroup(workspace, from, to)
+  return moveEntryToGap(workspace, from, drop.index, drop.tabGroup)
 }
 
-function moveLoneGroupToGap(workspace: Workspace, from: number, gap: number): Workspace {
-  const to = indexAfterLift(gap, from)
-  const moved = moveGroup(workspace, from, to)
+function dropTabGroup(workspace: Workspace, id: TabGroupId, drop: Drop): Workspace {
+  if (drop.kind !== 'between' || drop.tabGroup !== null) {
+    return workspace
+  }
+
+  const block = blockOf(workspace, id)
+  if (block === null) {
+    return workspace
+  }
+
+  const onItsOwnBlockOrEdge = drop.index >= block.first && drop.index <= block.last + 1
+  if (onItsOwnBlockOrEdge) {
+    return workspace
+  }
+
+  const activeGroupId = workspace.groups[workspace.activeGroup].id
+  const blockSize = block.last - block.first + 1
+  const entries = workspace.groups.slice(block.first, block.last + 1)
+  const groupsBefore = workspace.groups.slice(0, block.first)
+  const groupsAfter = workspace.groups.slice(block.last + 1)
+  const rest = [...groupsBefore, ...groupsAfter]
+
+  let to = drop.index
+  if (drop.index > block.last) {
+    to = drop.index - blockSize
+  }
+
+  const restBefore = rest.slice(0, to)
+  const restAfter = rest.slice(to)
+  const groups = [...restBefore, ...entries, ...restAfter]
+  const activeGroup = groups.findIndex((group) => group.id === activeGroupId)
+
+  return { ...workspace, groups, activeGroup }
+}
+
+function moveLoneGroupToGap(
+  workspace: Workspace,
+  from: number,
+  gap: number,
+  tabGroup: TabGroupId | null
+): Workspace {
+  const moved = moveEntryToGap(workspace, from, gap, tabGroup)
   if (moved === workspace) {
     return workspace
   }
@@ -154,27 +371,32 @@ function moveLoneGroupToGap(workspace: Workspace, from: number, gap: number): Wo
   const movedId = workspace.groups[from].id
   const activeGroup = moved.groups.findIndex((group) => group.id === movedId)
 
-  return { groups: moved.groups, activeGroup }
+  return { ...moved, activeGroup }
 }
 
 function leaveToGap(
   workspace: Workspace,
   groupIndex: number,
   paneIndex: number,
-  gap: number,
+  drop: BetweenDrop,
   newGroup: GroupId
 ): Workspace {
   const pane = workspace.groups[groupIndex].panes[paneIndex]
   const closed = closePane(workspace, pane.id)
 
-  const alone: Group = { id: newGroup, panes: [{ ...pane, width: 1 }], activePane: 0 }
-  const groupsBefore = closed.groups.slice(0, gap)
-  const groupsAfter = closed.groups.slice(gap)
+  const alone: Group = {
+    id: newGroup,
+    panes: [{ ...pane, width: 1 }],
+    activePane: 0,
+    tabGroup: drop.tabGroup
+  }
+  const groupsBefore = closed.groups.slice(0, drop.index)
+  const groupsAfter = closed.groups.slice(drop.index)
   const groups = [...groupsBefore, alone, ...groupsAfter]
 
   const activeGroup = groups.findIndex((group) => group.id === newGroup)
 
-  return { groups, activeGroup }
+  return { ...closed, groups, activeGroup }
 }
 
 function reorderWithin(
@@ -202,7 +424,7 @@ function reorderWithin(
   const groups = [...workspace.groups]
   groups[groupIndex] = updatedGroup
 
-  return { groups, activeGroup: groupIndex }
+  return { ...workspace, groups, activeGroup: groupIndex }
 }
 
 function joinGroup(
@@ -231,7 +453,7 @@ function joinGroup(
   const groups = [...closed.groups]
   groups[closedTargetIndex] = joined
 
-  return { groups, activeGroup: closedTargetIndex }
+  return { ...closed, groups, activeGroup: closedTargetIndex }
 }
 
 function dropPane(
@@ -251,13 +473,10 @@ function dropPane(
   const paneIndex = group.panes.findIndex((pane) => pane.id === id)
 
   if (drop.kind === 'between') {
-    if (!gapInRange(drop.index, workspace.groups.length)) {
-      return workspace
-    }
     if (group.panes.length === 1) {
-      return moveLoneGroupToGap(workspace, groupIndex, drop.index)
+      return moveLoneGroupToGap(workspace, groupIndex, drop.index, drop.tabGroup)
     }
-    return leaveToGap(workspace, groupIndex, paneIndex, drop.index, newGroup)
+    return leaveToGap(workspace, groupIndex, paneIndex, drop, newGroup)
   }
 
   const targetIndex = workspace.groups.findIndex((candidate) => candidate.id === drop.group)
@@ -278,17 +497,38 @@ function dropPane(
   return joinGroup(workspace, groupIndex, paneIndex, targetIndex, drop.slot)
 }
 
+function dropDragged(
+  workspace: Workspace,
+  dragged: Dragged,
+  drop: Drop,
+  newGroup: GroupId
+): Workspace {
+  if (dragged.kind === 'tabGroup') {
+    return dropTabGroup(workspace, dragged.tabGroup, drop)
+  }
+  if (dragged.kind === 'group') {
+    return dropGroup(workspace, dragged.group, drop)
+  }
+
+  return dropPane(workspace, dragged.pane, drop, newGroup)
+}
+
 export function applyDrop(
   workspace: Workspace,
   dragged: Dragged,
   drop: Drop,
   newGroup: GroupId
 ): Workspace {
-  if (dragged.kind === 'group') {
-    return dropGroup(workspace, dragged.group, drop)
+  if (drop.kind === 'between' && !betweenIsAllowed(workspace, drop)) {
+    return workspace
   }
 
-  return dropPane(workspace, dragged.pane, drop, newGroup)
+  const dropped = dropDragged(workspace, dragged, drop, newGroup)
+  if (dropped === workspace) {
+    return workspace
+  }
+
+  return settled(dropped)
 }
 
 // A change that hands the pane back untouched leaves the workspace untouched too.
@@ -319,7 +559,7 @@ function withPaneChanged(
   const groups = [...workspace.groups]
   groups[groupIndex] = updatedGroup
 
-  return { groups, activeGroup: workspace.activeGroup }
+  return { ...workspace, groups }
 }
 
 export function renamePane(workspace: Workspace, id: SessionId, title: string): Workspace {
@@ -411,7 +651,8 @@ export function splitPane(workspace: Workspace, donor: SessionId, id: SessionId)
   const groups = [...workspace.groups]
   groups[groupIndex] = updatedGroup
 
-  return { groups, activeGroup: groupIndex }
+  const split: Workspace = { ...workspace, groups, activeGroup: groupIndex }
+  return openedAt(split, groupIndex)
 }
 
 export function forkPane(workspace: Workspace, source: SessionId, id: SessionId): Workspace {
@@ -466,7 +707,8 @@ export function activatePane(workspace: Workspace, id: SessionId): Workspace {
   const groups = [...workspace.groups]
   groups[groupIndex] = updatedGroup
 
-  return { groups, activeGroup: groupIndex }
+  const activated: Workspace = { ...workspace, groups, activeGroup: groupIndex }
+  return openedAt(activated, groupIndex)
 }
 
 function focusPaneByDelta(workspace: Workspace, delta: number): Workspace {
@@ -492,7 +734,7 @@ function focusPaneByDelta(workspace: Workspace, delta: number): Workspace {
   const groups = [...workspace.groups]
   groups[workspace.activeGroup] = updatedGroup
 
-  return { groups, activeGroup: workspace.activeGroup }
+  return { ...workspace, groups }
 }
 
 export function focusNextPane(workspace: Workspace): Workspace {
@@ -503,6 +745,18 @@ export function focusPreviousPane(workspace: Workspace): Workspace {
   return focusPaneByDelta(workspace, -1)
 }
 
+function nextShowingGroup(workspace: Workspace, delta: number): number | null {
+  const groupCount = workspace.groups.length
+  for (let step = 1; step < groupCount; step += 1) {
+    const stepped = workspace.activeGroup + delta * step
+    const wrapped = ((stepped % groupCount) + groupCount) % groupCount
+    if (!isHidden(workspace, wrapped)) {
+      return wrapped
+    }
+  }
+  return null
+}
+
 // Each group keeps its own activePane, so arriving back at a split group puts
 // you on the pane you were last using in it.
 function focusGroupByDelta(workspace: Workspace, delta: number): Workspace {
@@ -510,16 +764,12 @@ function focusGroupByDelta(workspace: Workspace, delta: number): Workspace {
     return workspace
   }
 
-  const groupCount = workspace.groups.length
-  let nextIndex = workspace.activeGroup + delta
-  if (nextIndex < 0) {
-    nextIndex = groupCount - 1
-  }
-  if (nextIndex >= groupCount) {
-    nextIndex = 0
+  const nextIndex = nextShowingGroup(workspace, delta)
+  if (nextIndex === null) {
+    return workspace
   }
 
-  return { groups: workspace.groups, activeGroup: nextIndex }
+  return { ...workspace, activeGroup: nextIndex }
 }
 
 export function focusNextGroup(workspace: Workspace): Workspace {
@@ -574,7 +824,7 @@ export function moveDivider(
   const groups = [...workspace.groups]
   groups[groupIndex] = updatedGroup
 
-  return { groups, activeGroup: workspace.activeGroup }
+  return { ...workspace, groups }
 }
 
 export function paneOf(group: Group): Pane {
