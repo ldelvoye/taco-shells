@@ -124,7 +124,8 @@ describe('dropFor with tab groups', () => {
       ['its own rows', { kind: 'tabGroup', tabGroup: 't1' }, { over: 'row', group: 1, pane: 0, fraction: 0.5 }, null],
       ['upper half of an open group, on a member', { kind: 'tabGroup', tabGroup: 't2' }, { over: 'row', group: 0, pane: 0, fraction: 0.5 }, { kind: 'between', index: 0, tabGroup: null }],
       ['lower half of an open group, on a member', { kind: 'tabGroup', tabGroup: 't2' }, { over: 'row', group: 1, pane: 0, fraction: 0.5 }, { kind: 'between', index: 2, tabGroup: null }],
-      ['under the last row, where it already is', { kind: 'tabGroup', tabGroup: 't2' }, { over: 'end' }, null]
+      ['under the last row, where it already is', { kind: 'tabGroup', tabGroup: 't2' }, { over: 'end' }, null],
+      ['a whole entry on the lower half of a member', { kind: 'group', group: 'c' }, { over: 'row', group: 0, pane: 0, fraction: 0.7 }, { kind: 'between', index: 1, tabGroup: 't1' }]
     ]
 
     for (const [label, dragged, point, expected] of cases) {
