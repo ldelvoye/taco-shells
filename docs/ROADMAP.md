@@ -1,6 +1,5 @@
 # Features
 
-- Chrome-style tab groups: gather terminals into a named, colored group in the sidebar that can be collapsed to a single row and moved as one.
 - Settings tab: `cmd+,` opens a tab with a control for every setting (theme, font and size, cursor, scrollback, restore on launch) instead of opening `settings.json` in `$EDITOR` in a new terminal. The file stays the source of truth: a change in the tab is written back to it and applies live, the same as a hand edit, so the write has to keep the comments and formatting the user put in the file. Keybindings can follow as a second section once settings work.
 
 # Architecture
