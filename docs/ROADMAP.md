@@ -1,6 +1,5 @@
 # Features
 
-- Move terminals in and out of splits: drag a standalone terminal into an existing split to add it as a pane, and drag a pane out of its split to make it a standalone terminal again.
 - Chrome-style tab groups: gather terminals into a named, colored group in the sidebar that can be collapsed to a single row and moved as one.
 
 # Architecture
