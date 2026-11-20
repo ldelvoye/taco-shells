@@ -7,6 +7,7 @@ import {
   rowsAfterScreen,
   rowsAfterSignal,
   signalForHook,
+  summaryState,
   waitingCount
 } from './rowState'
 
@@ -73,6 +74,22 @@ describe('row state', () => {
     const done = rowsAfterSignal(started, 'p1', A, 'stopped', false)
     expect(rowsAfterIdleTitle(needs, 'p1').get('p1')?.state).toBe('idle')
     expect(rowsAfterIdleTitle(done, 'p1')).toBe(done)
+  })
+
+  it('summarises a group by its most urgent pane, and by nothing when all are idle', () => {
+    const withP2 = rowsAfterSignal(started, 'p2', B, 'start', false)
+    const idle = ['p1', 'p2']
+    expect(summaryState(withP2, idle)).toBeNull()
+    expect(summaryState(withP2, ['p3'])).toBeNull()
+
+    const done = rowsAfterSignal(withP2, 'p1', A, 'stopped', false)
+    expect(summaryState(done, idle)).toBe('done')
+
+    const working = rowsAfterSignal(done, 'p2', B, 'working', false)
+    expect(summaryState(working, idle)).toBe('working')
+
+    const needs = rowsAfterSignal(working, 'p1', A, 'needs', false)
+    expect(summaryState(needs, idle)).toBe('needs')
   })
 
   it('counts the panes waiting on the user', () => {

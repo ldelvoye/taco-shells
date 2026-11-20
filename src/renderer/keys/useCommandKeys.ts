@@ -9,6 +9,11 @@ export function useCommandKeys(
 ): void {
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent): void {
+      // A text field keeps its keys: cmd+w must not close a terminal while a name is being typed.
+      if (event.target instanceof HTMLInputElement) {
+        return
+      }
+
       const commandId = commandForKeyStroke(bindings, event)
       if (!commandId) {
         return

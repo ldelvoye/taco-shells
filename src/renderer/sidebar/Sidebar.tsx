@@ -10,6 +10,7 @@ import {
 import type { SessionId } from '@shared/ipc'
 import { dropFor, rowPointIn } from '@shared/drop'
 import {
+  blockOf,
   type Dragged,
   type Drop,
   type Group,
@@ -17,14 +18,18 @@ import {
   type Pane,
   paneOf,
   type RowColor,
+  type TabGroup,
+  type TabGroupId,
   type Workspace
 } from '@shared/model'
-import type { ClaudeRows } from '@shared/rowState'
+import { type ClaudeRows, summaryState } from '@shared/rowState'
 import { RowColorPicker, rowColorVariable } from './RowColorPicker'
 import { SidebarDivider } from './SidebarDivider'
 import { SidebarTitlebar } from './SidebarTitlebar'
+import { TabGroupPopup } from './TabGroupPopup'
 
 const UNTITLED_ROW = 'Terminal'
+const UNNAMED_TAB_GROUP = 'Group'
 
 const CONNECTOR_FIRST = 'is-first'
 const CONNECTOR_MIDDLE = 'is-middle'
@@ -44,9 +49,16 @@ interface OpenPicker {
   preview: ColorPreview | null
 }
 
+interface OpenTabGroupPopup {
+  tabGroup: TabGroupId
+  x: number
+  y: number
+}
+
 interface SidebarProps {
   groups: Group[]
   activeGroup: number
+  tabGroups: TabGroup[]
   width: number
   fullScreen: boolean
   rowStates: ClaudeRows
@@ -54,6 +66,12 @@ interface SidebarProps {
   onDrop: (dragged: Dragged, drop: Drop) => void
   onColor: (sessionId: SessionId, color: RowColor | null) => void
   onFork: (sessionId: SessionId) => void
+  onNewTabGroup: (pane: SessionId) => TabGroupId
+  onRenameTabGroup: (id: TabGroupId, name: string) => void
+  onRecolorTabGroup: (id: TabGroupId, color: RowColor) => void
+  onUngroupTabGroup: (id: TabGroupId) => void
+  onToggleTabGroup: (id: TabGroupId) => void
+  onRefocus: () => void
   onResize: (width: number) => void
 }
 
@@ -80,7 +98,7 @@ function sameDrop(a: Drop | null, b: Drop | null): boolean {
     return a === b
   }
   if (a.kind === 'between' && b.kind === 'between') {
-    return a.index === b.index
+    return a.index === b.index && a.tabGroup === b.tabGroup
   }
   if (a.kind === 'into' && b.kind === 'into') {
     return a.group === b.group && a.slot === b.slot
@@ -93,6 +111,13 @@ function labelFor(title: string): string {
     return title
   }
   return UNTITLED_ROW
+}
+
+function tabGroupLabel(name: string): string {
+  if (name.trim()) {
+    return name
+  }
+  return UNNAMED_TAB_GROUP
 }
 
 // CSS, not box-drawing glyphs: their em box is shorter than a row, so the
@@ -116,19 +141,38 @@ export function Sidebar({
   width,
   fullScreen,
   rowStates,
+  tabGroups,
   onSelect,
   onDrop,
   onColor,
   onFork,
+  onNewTabGroup,
+  onRenameTabGroup,
+  onRecolorTabGroup,
+  onUngroupTabGroup,
+  onToggleTabGroup,
+  onRefocus,
   onResize
 }: SidebarProps): JSX.Element {
   const dragged = useRef<Dragged | null>(null)
   const [drop, setDrop] = useState<Drop | null>(null)
   const [picker, setPicker] = useState<OpenPicker | null>(null)
+  const [tabGroupPopup, setTabGroupPopup] = useState<OpenTabGroupPopup | null>(null)
+  const workspace: Workspace = { groups, activeGroup, tabGroups }
 
   const closePicker = useCallback(() => {
     setPicker(null)
   }, [])
+
+  const closeTabGroupPopup = useCallback(() => {
+    setTabGroupPopup(null)
+    onRefocus()
+  }, [onRefocus])
+
+  function openTabGroupPopup(event: MouseEvent<HTMLDivElement>, tabGroup: TabGroupId): void {
+    event.preventDefault()
+    setTabGroupPopup({ tabGroup, x: event.clientX, y: event.clientY })
+  }
 
   function openPicker(event: MouseEvent<HTMLDivElement>, paneId: SessionId): void {
     event.preventDefault()
@@ -172,7 +216,6 @@ export function Sidebar({
     const bounds = event.currentTarget.getBoundingClientRect()
     const offsetY = event.clientY - bounds.top
     const point = rowPointIn(groupIndex, paneCount, offsetY, bounds.height)
-    const workspace: Workspace = { groups, activeGroup, tabGroups: [] }
     return dropFor(workspace, dragging, { over: 'row', ...point })
   }
 
@@ -232,7 +275,7 @@ export function Sidebar({
   }
 
   const lastIndex = groups.length - 1
-  const rendered = groups.map((group, groupIndex) => {
+  const entries = groups.map((group, groupIndex) => {
     const paneCount = group.panes.length
     const activeInGroup = paneOf(group)
     const groupDragLabel = labelFor(activeInGroup.title)
@@ -345,6 +388,80 @@ export function Sidebar({
     )
   })
 
+  function renderTabGroup(tabGroup: TabGroup, first: number, last: number): JSX.Element {
+    const members = groups.slice(first, last + 1)
+    let shownEntries: JSX.Element[] = []
+    let className = 'tab-group'
+    let headerClassName = 'tab-group-header'
+    let count = null
+    if (tabGroup.collapsed) {
+      className += ' is-collapsed'
+      const memberPanes = members.flatMap((member) => member.panes)
+      const memberIds = memberPanes.map((pane) => pane.id)
+      const summary = summaryState(rowStates, memberIds)
+      let marker = null
+      if (summary !== null) {
+        marker = <span className="row-state" data-state={summary} />
+      }
+      count = (
+        <>
+          <span className="tab-group-count">{memberPanes.length}</span>
+          {marker}
+        </>
+      )
+      if (activeGroup >= first && activeGroup <= last) {
+        headerClassName += ' is-active'
+      }
+    } else {
+      shownEntries = entries.slice(first, last + 1)
+    }
+
+    const tabStyle = { '--tab-color': rowColorVariable(tabGroup.color) } as CSSProperties
+    return (
+      <div key={tabGroup.id} className={className} data-tab-group={tabGroup.id} style={tabStyle}>
+        <div
+          className={headerClassName}
+          onClick={() => {
+            onToggleTabGroup(tabGroup.id)
+          }}
+          onMouseDown={(event) => {
+            if (event.button === RIGHT_BUTTON) {
+              event.preventDefault()
+            }
+          }}
+          onContextMenu={(event) => {
+            openTabGroupPopup(event, tabGroup.id)
+          }}
+        >
+          <span className="tab-group-caret" />
+          <span className="tab-group-name">{tabGroupLabel(tabGroup.name)}</span>
+          {count}
+        </div>
+        {shownEntries}
+      </div>
+    )
+  }
+
+  const rendered: JSX.Element[] = []
+  let walkIndex = 0
+  while (walkIndex < groups.length) {
+    const entryTabGroup = groups[walkIndex].tabGroup
+    let tabGroup: TabGroup | undefined
+    let block = null
+    if (entryTabGroup !== null) {
+      tabGroup = tabGroups.find((candidate) => candidate.id === entryTabGroup)
+      block = blockOf(workspace, entryTabGroup)
+    }
+
+    if (tabGroup === undefined || block === null) {
+      rendered.push(entries[walkIndex])
+      walkIndex += 1
+    } else {
+      rendered.push(renderTabGroup(tabGroup, block.first, block.last))
+      walkIndex = block.last + 1
+    }
+  }
+
   const style = { '--sidebar-width': `${width}px` } as CSSProperties
 
   // A pane can exit while its picker is open, which takes the picker with it.
@@ -374,7 +491,37 @@ export function Sidebar({
             onFork(pickedPane.id)
             closePicker()
           }}
+          onNewGroup={() => {
+            const tabGroup = onNewTabGroup(pickedPane.id)
+            closePicker()
+            setTabGroupPopup({ tabGroup, x: picker.x, y: picker.y })
+          }}
           onClose={closePicker}
+        />
+      )
+    }
+  }
+
+  let groupPopup = null
+  if (tabGroupPopup !== null) {
+    const popupTabGroup = tabGroups.find((candidate) => candidate.id === tabGroupPopup.tabGroup)
+    if (popupTabGroup !== undefined) {
+      groupPopup = (
+        <TabGroupPopup
+          x={tabGroupPopup.x}
+          y={tabGroupPopup.y}
+          name={popupTabGroup.name}
+          color={popupTabGroup.color}
+          onRename={(name) => {
+            onRenameTabGroup(popupTabGroup.id, name)
+          }}
+          onRecolor={(color) => {
+            onRecolorTabGroup(popupTabGroup.id, color)
+          }}
+          onUngroup={() => {
+            onUngroupTabGroup(popupTabGroup.id)
+          }}
+          onClose={closeTabGroupPopup}
         />
       )
     }
@@ -388,6 +535,7 @@ export function Sidebar({
       </div>
       <SidebarDivider width={width} onResize={onResize} />
       {colorPicker}
+      {groupPopup}
     </aside>
   )
 }

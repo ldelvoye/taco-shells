@@ -25,9 +25,18 @@ import {
   type RowColor,
   setPaneColor,
   splitActivePane,
+  type TabGroup,
+  type TabGroupId,
   toggleActivePaneColor,
   type Workspace
 } from '@shared/model'
+import {
+  createTabGroup,
+  recolorTabGroup,
+  renameTabGroup,
+  toggleTabGroup,
+  ungroupTabGroup
+} from '@shared/tabGroups'
 import { claudeTitleOf } from '@shared/claudeTitle'
 import { forkNameFor } from '@shared/forkName'
 import {
@@ -89,6 +98,12 @@ function groupForSession(sessionId: SessionId): Group {
   }
 }
 
+function entryHolding(workspace: Workspace, pane: SessionId): Group | undefined {
+  return workspace.groups.find((group) => {
+    return group.panes.some((candidate) => candidate.id === pane)
+  })
+}
+
 function startOptionsOf(pane: SnapshotPane): PtyCreateOptions {
   if (pane.claude !== null) {
     return { resume: pane.claude }
@@ -141,7 +156,7 @@ export function App(): JSX.Element {
   const workspaceRef = useRef<Workspace | null>(workspace)
   const onScreenRef = useRef<SessionId[]>([])
   const rawTitlesRef = useRef(new Map<SessionId, string>())
-  const refocusAfterDrop = useRef(false)
+  const refocusPending = useRef(false)
   const commands = useMemo(() => createCommandRegistry(), [])
   const activeSessionId = activeSessionOf(workspace)
   const config = useConfig()
@@ -425,12 +440,12 @@ export function App(): JSX.Element {
     focusSession(activeSessionId)
   }, [activeSessionId])
 
-  // A drop moves a terminal to a new host, which blurs it even when it was already the active one.
+  // A sidebar action can take the keyboard off the active terminal without changing which one is active.
   useEffect(() => {
-    if (!refocusAfterDrop.current) {
+    if (!refocusPending.current) {
       return
     }
-    refocusAfterDrop.current = false
+    refocusPending.current = false
     if (!activeSessionId) {
       return
     }
@@ -496,12 +511,71 @@ export function App(): JSX.Element {
       const newGroup = nextGroupId()
       updateWorkspace((current) => {
         const next = applyDrop(current, dragged, drop, newGroup)
-        refocusAfterDrop.current = next !== current
+        refocusPending.current = next !== current
         return next
       })
     },
     [updateWorkspace]
   )
+
+  const newTabGroup = useCallback(
+    (pane: SessionId): string => {
+      const id = nextTabGroupId()
+      const current = workspaceRef.current
+      if (current === null) {
+        return id
+      }
+
+      const holder = entryHolding(current, pane)
+      if (holder === undefined) {
+        return id
+      }
+
+      const entryId = holder.id
+      updateWorkspace((latest) => createTabGroup(latest, entryId, id))
+      return id
+    },
+    [updateWorkspace]
+  )
+
+  const nameTabGroup = useCallback(
+    (id: TabGroupId, name: string) => {
+      updateWorkspace((current) => renameTabGroup(current, id, name))
+    },
+    [updateWorkspace]
+  )
+
+  const colorTabGroup = useCallback(
+    (id: TabGroupId, color: RowColor) => {
+      updateWorkspace((current) => recolorTabGroup(current, id, color))
+    },
+    [updateWorkspace]
+  )
+
+  const dissolveTabGroup = useCallback(
+    (id: TabGroupId) => {
+      updateWorkspace((current) => ungroupTabGroup(current, id))
+    },
+    [updateWorkspace]
+  )
+
+  const toggleCollapsed = useCallback(
+    (id: TabGroupId) => {
+      updateWorkspace((current) => {
+        const next = toggleTabGroup(current, id)
+        refocusPending.current = next !== current
+        return next
+      })
+    },
+    [updateWorkspace]
+  )
+
+  const refocusActive = useCallback(() => {
+    if (!activeSessionId) {
+      return
+    }
+    focusSession(activeSessionId)
+  }, [activeSessionId])
 
   const resizeGroup = useCallback(
     (groupIndex: number, dividerIndex: number, leftWidth: number) => {
@@ -559,9 +633,11 @@ export function App(): JSX.Element {
   useCommandKeys(commands, bindings)
 
   let groups: Group[] = []
+  let tabGroups: TabGroup[] = []
   let activeGroupIndex = 0
   if (workspace) {
     groups = workspace.groups
+    tabGroups = workspace.tabGroups
     activeGroupIndex = workspace.activeGroup
   }
 
@@ -576,6 +652,7 @@ export function App(): JSX.Element {
       <Sidebar
         groups={groups}
         activeGroup={activeGroupIndex}
+        tabGroups={tabGroups}
         width={sidebarWidth.width}
         fullScreen={fullScreen}
         rowStates={claudeRows}
@@ -583,6 +660,12 @@ export function App(): JSX.Element {
         onDrop={dropInSidebar}
         onColor={colorPane}
         onFork={forkTerminal}
+        onNewTabGroup={newTabGroup}
+        onRenameTabGroup={nameTabGroup}
+        onRecolorTabGroup={colorTabGroup}
+        onUngroupTabGroup={dissolveTabGroup}
+        onToggleTabGroup={toggleCollapsed}
+        onRefocus={refocusActive}
         onResize={sidebarWidth.resize}
       />
     )
