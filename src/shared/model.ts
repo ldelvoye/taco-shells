@@ -32,6 +32,10 @@ export interface Group {
   tabGroup: TabGroupId | null
 }
 
+/**
+ * The entries of one tab group sit next to each other in `groups`, every tab group has an entry,
+ * and the active entry is not in a collapsed tab group unless every entry is.
+ */
 export interface Workspace {
   groups: Group[]
   activeGroup: number
@@ -43,6 +47,10 @@ export type Dragged =
   | { kind: 'group'; group: GroupId }
   | { kind: 'tabGroup'; tabGroup: TabGroupId }
 
+/**
+ * Where a drag lands. `index` and `slot` count gaps in the list as it is before the move, and
+ * `tabGroup` is the tab group the dropped thing ends up in, or null for none.
+ */
 export type Drop =
   | { kind: 'between'; index: number; tabGroup: TabGroupId | null }
   | { kind: 'into'; group: GroupId; slot: number }
@@ -127,12 +135,13 @@ function withFocusShowing(workspace: Workspace): Workspace {
   return { ...workspace, activeGroup: showing }
 }
 
-/** The workspace with invariants 2 and 3 restored: empty tab groups dropped, and focus moved off a hidden entry. */
+/** The workspace with empty tab groups dropped and focus moved off a hidden entry. */
 export function settled(workspace: Workspace): Workspace {
   const pruned = withoutEmptyTabGroups(workspace)
   return withFocusShowing(pruned)
 }
 
+/** The workspace with the tab group of the entry at this index opened, if it was collapsed. */
 export function openedAt(workspace: Workspace, groupIndex: number): Workspace {
   if (!isHidden(workspace, groupIndex)) {
     return workspace
@@ -149,6 +158,7 @@ export function openedAt(workspace: Workspace, groupIndex: number): Workspace {
   return { ...workspace, tabGroups }
 }
 
+/** The workspace with a new active entry: last in the active entry's tab group, or last in the list when it has none. */
 export function addGroup(workspace: Workspace, group: Group): Workspace {
   const anchor = workspace.groups[workspace.activeGroup]
   let tabGroup: TabGroupId | null = null

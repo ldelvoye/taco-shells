@@ -12,6 +12,7 @@ function firstUnusedColor(workspace: Workspace): RowColor {
   return unused
 }
 
+// An entry that leaves a tab group to start its own lands right after it, so both stay in one piece.
 function slotAfterOldTabGroup(
   remaining: Group[],
   oldTabGroup: TabGroupId | null,

@@ -2,6 +2,8 @@ import type { SessionId } from './ipc'
 import type { GroupId, Group, Pane, RowColor, TabGroup, TabGroupId, Workspace } from './model'
 import { emptyWorkspace, MIN_PANE_WIDTH, openedAt, ROW_COLORS } from './model'
 
+// Tab groups were added without a new version: a file without them loads with none, and a build
+// from before them ignores the fields.
 export const SNAPSHOT_VERSION = 1
 
 const SESSION_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -173,6 +175,7 @@ function withKnownTabGroups(groups: SnapshotGroup[], recordCount: number): Snaps
   })
 }
 
+// A hand-edited file can split a tab group across the list; its later pieces load in no group.
 function withTabGroupsAdjacent(groups: SnapshotGroup[]): SnapshotGroup[] {
   const seen = new Set<number>()
   let previous: number | null = null
