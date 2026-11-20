@@ -4,6 +4,7 @@ import {
   type JSX,
   type MouseEvent,
   useCallback,
+  useEffect,
   useRef,
   useState
 } from 'react'
@@ -79,7 +80,7 @@ interface SidebarProps {
   onDrop: (dragged: Dragged, drop: Drop) => void
   onColor: (sessionId: SessionId, color: RowColor | null) => void
   onFork: (sessionId: SessionId) => void
-  onNewTabGroup: (pane: SessionId) => TabGroupId
+  onNewTabGroup: (pane: SessionId) => TabGroupId | null
   onRenameTabGroup: (id: TabGroupId, name: string) => void
   onRecolorTabGroup: (id: TabGroupId, color: RowColor) => void
   onUngroupTabGroup: (id: TabGroupId) => void
@@ -278,10 +279,23 @@ export function Sidebar({
     setPicker(null)
   }, [])
 
+  // The name field took the keyboard, so closing its popup hands it back to the terminal.
   const closeTabGroupPopup = useCallback(() => {
     setTabGroupPopup(null)
     onRefocus()
   }, [onRefocus])
+
+  // A tab group can vanish under its open popup, when its last terminal exits.
+  useEffect(() => {
+    if (tabGroupPopup === null) {
+      return
+    }
+    const stillThere = tabGroups.some((candidate) => candidate.id === tabGroupPopup.tabGroup)
+    if (stillThere) {
+      return
+    }
+    closeTabGroupPopup()
+  }, [tabGroupPopup, tabGroups, closeTabGroupPopup])
 
   function openTabGroupPopup(event: MouseEvent<HTMLDivElement>, tabGroup: TabGroupId): void {
     event.preventDefault()
@@ -402,7 +416,7 @@ export function Sidebar({
 
   const mark = dropMarkFor(workspace, drop)
 
-  const entries = groups.map((group, groupIndex) => {
+  const entryElements = groups.map((group, groupIndex) => {
     const paneCount = group.panes.length
     const activeInGroup = paneOf(group)
     const groupDragLabel = labelFor(activeInGroup.title)
@@ -537,21 +551,21 @@ export function Sidebar({
         headerClassName += ' is-active'
       }
     } else {
-      shownEntries = entries.slice(first, last + 1)
+      shownEntries = entryElements.slice(first, last + 1)
     }
 
     className += wrapperMarkClass(mark, tabGroup.id)
     headerClassName += headerMarkClass(mark, tabGroup.id)
 
     const tabStyle = { '--tab-color': rowColorVariable(tabGroup.color) } as CSSProperties
-    const dragLabel = tabGroupLabel(tabGroup.name)
+    const label = tabGroupLabel(tabGroup.name)
     return (
       <div key={tabGroup.id} className={className} data-tab-group={tabGroup.id} style={tabStyle}>
         <div
           className={headerClassName}
           draggable
           onDragStart={(event) => {
-            startDrag(event, { kind: 'tabGroup', tabGroup: tabGroup.id }, dragLabel)
+            startDrag(event, { kind: 'tabGroup', tabGroup: tabGroup.id }, label)
             showWholeGroup(event, '.tab-group')
           }}
           onDragOver={(event) => {
@@ -576,7 +590,7 @@ export function Sidebar({
           }}
         >
           <span className="tab-group-caret" />
-          <span className="tab-group-name">{tabGroupLabel(tabGroup.name)}</span>
+          <span className="tab-group-name">{label}</span>
           {count}
         </div>
         {shownEntries}
@@ -596,7 +610,7 @@ export function Sidebar({
     }
 
     if (tabGroup === undefined || block === null) {
-      rendered.push(entries[walkIndex])
+      rendered.push(entryElements[walkIndex])
       walkIndex += 1
     } else {
       rendered.push(renderTabGroup(tabGroup, block.first, block.last))
@@ -636,6 +650,9 @@ export function Sidebar({
           onNewGroup={() => {
             const tabGroup = onNewTabGroup(pickedPane.id)
             closePicker()
+            if (tabGroup === null) {
+              return
+            }
             setTabGroupPopup({ tabGroup, x: picker.x, y: picker.y })
           }}
           onClose={closePicker}
