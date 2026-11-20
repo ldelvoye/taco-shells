@@ -6,7 +6,7 @@ I like VS Code's terminal manager: a sidebar list where splits show up as couple
 
 So I'm building just that part as its own app.
 
-Early. Right now it runs as many terminals as you like and lists them in the sidebar, each row named by whatever the program in it publishes as its title. You switch by clicking a row and reorder by dragging one. Splitting a terminal puts its panes side by side, with a divider you can drag, and brackets their rows together in the sidebar so a group reads as a group. A split starts in the directory the terminal you split was sitting in.
+Early. Right now it runs as many terminals as you like and lists them in the sidebar, each row named by whatever the program in it publishes as its title. You switch by clicking a row and move a terminal by dragging its row: onto the edge of another row to reorder, onto the middle of one to join it in a split, and back out to stand alone. A split's bracket drags the whole split. Splitting a terminal puts its panes side by side, with a divider you can drag, and brackets their rows together in the sidebar so a group reads as a group. A split starts in the directory the terminal you split was sitting in.
 
 ## Installing
 
