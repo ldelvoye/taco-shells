@@ -208,11 +208,16 @@ export function Sidebar({
     setDrop(null)
   }
 
+  let gap: number | null = null
+  if (drop !== null && drop.kind === 'between') {
+    gap = drop.index
+  }
+
   const lastIndex = groups.length - 1
   const rendered = groups.map((group, groupIndex) => {
     const paneCount = group.panes.length
-    const shownWhileDragged = paneOf(group)
-    const groupDragLabel = labelFor(shownWhileDragged.title)
+    const activeInGroup = paneOf(group)
+    const groupDragLabel = labelFor(activeInGroup.title)
 
     let joinSlot: number | null = null
     if (drop !== null && drop.kind === 'into' && drop.group === group.id) {
@@ -293,20 +298,18 @@ export function Sidebar({
       )
     })
 
-    // A row drags its one terminal and the bracket drags the whole split, so the group only receives drops.
     let className = 'terminal-group'
-    if (drop !== null && drop.kind === 'between' && drop.index === groupIndex) {
+    if (gap === groupIndex) {
       className += ' drop-above'
     }
-    if (drop !== null && drop.kind === 'between' && drop.index === groups.length) {
-      if (groupIndex === lastIndex) {
-        className += ' drop-below'
-      }
+    if (groupIndex === lastIndex && gap === groups.length) {
+      className += ' drop-below'
     }
     if (joinSlot !== null) {
       className += ' is-join-target'
     }
 
+    // A row drags its one terminal and the bracket drags the whole split, so the group only receives drops.
     return (
       <div
         key={group.id}

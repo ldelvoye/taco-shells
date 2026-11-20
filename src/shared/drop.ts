@@ -1,6 +1,7 @@
 import type { Dragged, Drop, Group, Workspace } from './model'
 import { applyDrop } from './model'
 
+// Names the group a previewed drop would create; the preview is thrown away, so it never reaches the screen.
 const PREVIEW_GROUP = 'preview'
 
 export const EDGE_BAND = 0.25
@@ -21,23 +22,24 @@ export function rowPointIn(
 ): RowPoint {
   const rowHeight = height / paneCount
   const rowsDown = offset / rowHeight
-  const aboveEnd = Math.min(rowsDown, paneCount)
-  const withinGroup = Math.max(aboveEnd, 0)
+  const row = Math.floor(rowsDown)
 
   const lastPane = paneCount - 1
-  const pane = Math.min(Math.floor(withinGroup), lastPane)
-
-  const rawFraction = withinGroup - pane
-  const aboveZero = Math.max(rawFraction, 0)
-  const fraction = Math.min(aboveZero, 1)
+  const pane = clamp(row, 0, lastPane)
+  const fraction = clamp(rowsDown - pane, 0, 1)
 
   return { group, pane, fraction }
 }
 
+function clamp(value: number, lowest: number, highest: number): number {
+  const raised = Math.max(value, lowest)
+  return Math.min(raised, highest)
+}
+
 function candidateForGroup(group: Group, point: RowPoint): Drop {
   const rowsDown = point.pane + point.fraction
-  const position = rowsDown / group.panes.length
-  if (position < 0.5) {
+  const inUpperHalf = rowsDown / group.panes.length < 0.5
+  if (inUpperHalf) {
     return { kind: 'between', index: point.group }
   }
   return { kind: 'between', index: point.group + 1 }
@@ -74,6 +76,7 @@ export function dropFor(workspace: Workspace, dragged: Dragged, point: RowPoint)
     candidate = candidateForPane(group, point)
   }
 
+  // applyDrop hands back the same workspace for a drop that changes nothing or is refused.
   const applied = applyDrop(workspace, dragged, candidate, PREVIEW_GROUP)
   if (applied === workspace) {
     return null

@@ -5,11 +5,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { type App, KEY, launchApp } from './app'
 
-// Covers what the unit tests cannot: a real drag reaching the model, and a moved terminal still working. The band rule lives in shared/drop.test.ts.
+// Covers what the unit tests cannot: a real drag reaching the model, and a
+// moved terminal still working. The band rule lives in shared/drop.test.ts.
 
-function reportedColumns(file: string): number | null {
+function reportedColumns(file: string): number {
   if (!existsSync(file)) {
-    return null
+    return 0
   }
 
   const reported = readFileSync(file, 'utf8')
@@ -36,7 +37,7 @@ describe('dragging in the sidebar', () => {
     const after = join(directory, 'after')
 
     await app.runInPane('pty-2', `tput cols > ${before}.part; mv ${before}.part ${before}`)
-    await app.until('the shell has reported its width', () => reportedColumns(before) !== null)
+    await app.until('the shell has reported its width', () => reportedColumns(before) > 0)
 
     await app.dragRow(1, 0, 0.6)
 
@@ -49,13 +50,11 @@ describe('dragging in the sidebar', () => {
     expect(screen.terminalFocused).toBe(true)
 
     await app.runInPane('pty-2', `tput cols > ${after}.part; mv ${after}.part ${after}`)
-    await app.until('the moved shell has reported its width', () => reportedColumns(after) !== null)
+    await app.until('the moved shell has reported its width', () => reportedColumns(after) > 0)
 
     const columnsBefore = reportedColumns(before)
     const columnsAfter = reportedColumns(after)
-    expect(columnsBefore).not.toBeNull()
-    expect(columnsAfter).not.toBeNull()
-    expect(columnsAfter).toBeLessThan(columnsBefore! * 0.6)
+    expect(columnsAfter).toBeLessThan(columnsBefore * 0.6)
   })
 
   it('takes a pane out by the edge of a row, and moves a whole split by its bracket', async () => {
