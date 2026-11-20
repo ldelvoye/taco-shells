@@ -519,18 +519,18 @@ export function App(): JSX.Element {
   )
 
   const newTabGroup = useCallback(
-    (pane: SessionId): string => {
-      const id = nextTabGroupId()
+    (pane: SessionId): TabGroupId | null => {
       const current = workspaceRef.current
       if (current === null) {
-        return id
+        return null
       }
 
       const holder = entryHolding(current, pane)
       if (holder === undefined) {
-        return id
+        return null
       }
 
+      const id = nextTabGroupId()
       const entryId = holder.id
       updateWorkspace((latest) => createTabGroup(latest, entryId, id))
       return id

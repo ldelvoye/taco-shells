@@ -3,6 +3,8 @@ import { ROW_COLORS, type RowColor } from '@shared/model'
 import { rowColorVariable } from './RowColorPicker'
 import { usePopup } from './usePopup'
 
+const LINE_BREAKS = /[\r\n]+/g
+
 interface TabGroupPopupProps {
   x: number
   y: number
@@ -14,6 +16,7 @@ interface TabGroupPopupProps {
   onClose: () => void
 }
 
+// macOS gives a text field these keys through the Edit menu, and the app has none.
 function handleClipboardKey(
   event: KeyboardEvent<HTMLInputElement>,
   onRename: (name: string) => void
@@ -55,13 +58,18 @@ function handleClipboardKey(
 
   if (key === 'v') {
     event.preventDefault()
-    void window.tacoShells.clipboard.read().then((text) => {
+    void window.tacoShells.clipboard.read().then((clipboard) => {
+      // The popup can close while the clipboard is being read.
+      if (!field.isConnected) {
+        return
+      }
       const start = field.selectionStart
       const end = field.selectionEnd
       if (start === null || end === null) {
         return
       }
 
+      const text = clipboard.replace(LINE_BREAKS, ' ')
       const before = field.value.slice(0, start)
       const after = field.value.slice(end)
       const pasted = before + text + after
