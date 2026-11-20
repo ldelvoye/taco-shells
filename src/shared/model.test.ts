@@ -182,6 +182,11 @@ describe('applyDrop with tab groups', () => {
     const wholeSplit = applyDrop(start(), { kind: 'group', group: 'c' }, { kind: 'between', index: 0, tabGroup: 't1' }, 'new')
     expect(layout(wholeSplit)).toEqual(['t1:c', 't1:a', 't1:b', 't2:d'])
 
+    const split = makeGroupWithWidths('s', [0.5, 0.5], 0)
+    const withSplit = makeWorkspace([entry('a', 't1'), split], 1, [tab('t1')])
+    const paneOut = applyDrop(withSplit, { kind: 'pane', pane: 's-1' }, { kind: 'between', index: 1, tabGroup: 't1' }, 'new')
+    expect(layout(paneOut)).toEqual(['t1:a', 't1:new', '-:s'])
+
     const wholeGroup = applyDrop(start(), { kind: 'tabGroup', tabGroup: 't1' }, { kind: 'between', index: 4, tabGroup: null }, 'new')
     expect(layout(wholeGroup)).toEqual(['-:c', 't2:d', 't1:a', 't1:b'])
     expect(wholeGroup.activeGroup).toBe(0)

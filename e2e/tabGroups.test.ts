@@ -69,6 +69,11 @@ describe('tab groups', () => {
       expect(collapsed.rows).toHaveLength(1)
       expect(collapsed.rows[0].active).toBe(true)
       expect(collapsed.terminalFocused).toBe(true)
+
+      await app.clickHeader(0)
+      await app.until('the group is open again and the terminal has the keyboard back', (state) => {
+        return !state.headers[0].collapsed && state.terminalFocused
+      })
     } finally {
       await app.close()
     }

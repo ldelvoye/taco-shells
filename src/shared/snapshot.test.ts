@@ -226,10 +226,16 @@ describe('tab groups through a save and a restore', () => {
     const noClaude = (): null => null
 
     const snapshot = snapshotFrom(workspace, noCwd, noClaude)
+    expect(snapshot.tabGroups).toHaveLength(2)
+
     const reparsed = parseSnapshot(JSON.stringify(snapshot))
     if (reparsed === null) {
       throw new Error('expected a snapshot')
     }
+
+    const tooFewIds = workspaceFromSnapshot(reparsed, ['p1', 'p2', 'p3', 'p4'], ['g1', 'g2', 'g3', 'g4'], ['u1'])
+    expect(tooFewIds.groups).toEqual([])
+
     const restored = workspaceFromSnapshot(reparsed, ['p1', 'p2', 'p3', 'p4'], ['g1', 'g2', 'g3', 'g4'], ['u1', 'u2'])
 
     expect(restored.groups.map((group) => group.tabGroup)).toEqual(['u1', 'u1', null, 'u2'])

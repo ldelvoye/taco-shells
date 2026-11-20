@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest'
 
 import type { Group, TabGroup, Workspace } from './model'
-import { activatePane, addGroup, closePane, focusNextGroup, focusPreviousGroup, settled } from './model'
+import {
+  activatePane,
+  addGroup,
+  closePane,
+  focusNextGroup,
+  focusPreviousGroup,
+  settled,
+  splitActivePane
+} from './model'
 import {
   createTabGroup,
   recolorTabGroup,
@@ -48,6 +56,9 @@ describe('createTabGroup', () => {
     const replaced = createTabGroup(lastOfItsGroup, 'a', 'new')
     expect(layout(replaced)).toEqual(['new:a', '-:c'])
     expect(replaced.tabGroups.map((group) => group.id)).toEqual(['new'])
+
+    const allLoose = workspaceOf([entry('a'), entry('b'), entry('c')], 0)
+    expect(layout(createTabGroup(allLoose, 'b', 'new'))).toEqual(['-:a', 'new:b', '-:c'])
   })
 })
 
@@ -101,6 +112,9 @@ describe('a tab group as terminals close, open and take focus', () => {
     const opened = addGroup(allHidden, entry('n'))
     expect(layout(opened)).toEqual(['t1:a', 't1:n'])
     expect(opened.tabGroups[0].collapsed).toBe(false)
+
+    const splitWhileHidden = splitActivePane(allHidden, 'pane-new')
+    expect(splitWhileHidden.tabGroups[0].collapsed).toBe(false)
 
     const jumped = activatePane(hidden, 'pane-b')
     expect(jumped.tabGroups[0].collapsed).toBe(false)
