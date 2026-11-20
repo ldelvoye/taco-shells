@@ -84,6 +84,16 @@ export interface Row {
   connector: string
   active: boolean
   color: string | null
+  grouped: boolean
+}
+
+/** A tab group's header: every tab group has one, in sidebar order. */
+export interface Header {
+  name: string
+  collapsed: boolean
+  count: number | null
+  state: string | null
+  active: boolean
 }
 
 interface Point {
@@ -105,6 +115,7 @@ export interface VisiblePane {
 
 export interface Screen {
   rows: Row[]
+  headers: Header[]
   panes: VisiblePane[]
   groups: number
   dividers: number
@@ -115,6 +126,7 @@ export interface Screen {
   colorPickerOpen: boolean
   forkItem: 'absent' | 'enabled' | 'disabled'
   terminalFocused: boolean
+  nameFieldFocused: boolean
 }
 
 export type ProtocolParams = Record<string, unknown>
@@ -130,6 +142,13 @@ export interface App {
   doubleClickSidebarDivider(): Promise<void>
   clickVisiblePane(): Promise<void>
   rightClickRow(rowIndex: number): Promise<void>
+  clickNewGroupItem(): Promise<void>
+  clickHeader(headerIndex: number): Promise<void>
+  rightClickHeader(headerIndex: number): Promise<void>
+  clickUngroupItem(): Promise<void>
+  typeText(text: string): Promise<void>
+  dragRowToHeader(fromRow: number, headerIndex: number, fraction: number): Promise<void>
+  dragHeader(fromHeader: number, toRow: number, fraction: number): Promise<void>
   dragRow(fromRow: number, toRow: number, fraction: number): Promise<void>
   dragBracket(fromRow: number, toRow: number, fraction: number): Promise<void>
   hoverRow(rowIndex: number): Promise<void>
@@ -326,7 +345,27 @@ const SCREEN_SCRIPT = `JSON.stringify({
       label: row.querySelector('.row-label').textContent,
       connector: piece,
       active: row.classList.contains('is-active'),
-      color
+      color,
+      grouped: row.closest('.tab-group') !== null
+    }
+  }),
+  headers: [...document.querySelectorAll('.tab-group-header')].map((header) => {
+    const count = header.querySelector('.tab-group-count')
+    let countValue = null
+    if (count) {
+      countValue = Number(count.textContent)
+    }
+    const marker = header.querySelector('.row-state')
+    let state = null
+    if (marker && marker.dataset.state) {
+      state = marker.dataset.state
+    }
+    return {
+      name: header.querySelector('.tab-group-name').textContent,
+      collapsed: header.parentElement.classList.contains('is-collapsed'),
+      count: countValue,
+      state,
+      active: header.classList.contains('is-active')
     }
   }),
   panes: [...document.querySelectorAll('.pane-group:not(.is-inactive) .terminal-view')].map((view) => ({
@@ -368,7 +407,8 @@ const SCREEN_SCRIPT = `JSON.stringify({
     }
     return 'enabled'
   })(),
-  terminalFocused: document.querySelector('.xterm-helper-textarea:focus') !== null
+  terminalFocused: document.querySelector('.xterm-helper-textarea:focus') !== null,
+  nameFieldFocused: document.querySelector('.tab-group-name-field:focus') !== null
 })`
 
 export async function launchApp(options: LaunchOptions = {}): Promise<App> {
@@ -593,14 +633,42 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     await clickAt(centre, 'left')
   }
 
-  async function rowBox(rowIndex: number): Promise<RowBox> {
+  async function boxOf(selector: string, index: number): Promise<RowBox> {
     const boxScript = `JSON.stringify((() => {
-      const rows = document.querySelectorAll('.terminal-row')
-      const box = rows[${rowIndex}].getBoundingClientRect()
+      const elements = document.querySelectorAll('${selector}')
+      const box = elements[${index}].getBoundingClientRect()
       return { left: box.left, top: box.top, height: box.height }
     })())`
     const measured = await evaluate(boxScript)
     return JSON.parse(measured) as RowBox
+  }
+
+  async function rowBox(rowIndex: number): Promise<RowBox> {
+    return boxOf('.terminal-row', rowIndex)
+  }
+
+  async function clickNewGroupItem(): Promise<void> {
+    const centre = await hover('.row-new-group-item', 0)
+    await clickAt(centre, 'left')
+  }
+
+  async function clickHeader(headerIndex: number): Promise<void> {
+    const centre = await centreOf('.tab-group-header', headerIndex)
+    await clickAt(centre, 'left')
+  }
+
+  async function rightClickHeader(headerIndex: number): Promise<void> {
+    const centre = await centreOf('.tab-group-header', headerIndex)
+    await clickAt(centre, 'right')
+  }
+
+  async function clickUngroupItem(): Promise<void> {
+    const centre = await hover('.tab-group-ungroup', 0)
+    await clickAt(centre, 'left')
+  }
+
+  async function typeText(text: string): Promise<void> {
+    await send('Input.insertText', { text })
   }
 
   async function dragSidebar(source: Point, target: Point): Promise<void> {
@@ -651,6 +719,26 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
 
   async function dragBracket(fromRow: number, toRow: number, fraction: number): Promise<void> {
     await dragFromRow(BRACKET_HANDLE_OFFSET, fromRow, toRow, fraction)
+  }
+
+  async function dragRowToHeader(
+    fromRow: number,
+    headerIndex: number,
+    fraction: number
+  ): Promise<void> {
+    const from = await rowBox(fromRow)
+    const to = await boxOf('.tab-group-header', headerIndex)
+    const source = { x: from.left + ROW_HANDLE_OFFSET, y: from.top + from.height / 2 }
+    const target = { x: to.left + ROW_HANDLE_OFFSET, y: to.top + fraction * to.height }
+    await dragSidebar(source, target)
+  }
+
+  async function dragHeader(fromHeader: number, toRow: number, fraction: number): Promise<void> {
+    const from = await boxOf('.tab-group-header', fromHeader)
+    const to = await rowBox(toRow)
+    const source = { x: from.left + ROW_HANDLE_OFFSET, y: from.top + from.height / 2 }
+    const target = { x: to.left + ROW_HANDLE_OFFSET, y: to.top + fraction * to.height }
+    await dragSidebar(source, target)
   }
 
   async function runInPane(sessionId: string, command: string): Promise<void> {
@@ -766,6 +854,13 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     doubleClickSidebarDivider,
     clickVisiblePane,
     rightClickRow,
+    clickNewGroupItem,
+    clickHeader,
+    rightClickHeader,
+    clickUngroupItem,
+    typeText,
+    dragRowToHeader,
+    dragHeader,
     dragRow,
     dragBracket,
     hoverRow,
