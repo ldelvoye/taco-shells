@@ -22,6 +22,10 @@ const LAUNCH_TIMEOUT_MS = 20000
 const SETTLE_TIMEOUT_MS = 15000
 const SHUTDOWN_TIMEOUT_MS = 3000
 const POLL_INTERVAL_MS = 100
+const DRAG_START_TIMEOUT_MS = 3000
+const DRAG_STEPS = 8
+const ROW_HANDLE_OFFSET = 60
+const BRACKET_HANDLE_OFFSET = 13
 
 // xterm warns when a render task overruns its idle deadline, which a slow CI
 // runner does on its own; it says nothing about the app.
@@ -86,6 +90,12 @@ interface Point {
   y: number
 }
 
+interface RowBox {
+  left: number
+  top: number
+  height: number
+}
+
 /** A pane of the group currently on screen, left to right. */
 export interface VisiblePane {
   width: number
@@ -119,6 +129,8 @@ export interface App {
   doubleClickSidebarDivider(): Promise<void>
   clickVisiblePane(): Promise<void>
   rightClickRow(rowIndex: number): Promise<void>
+  dragRow(fromRow: number, toRow: number, fraction: number): Promise<void>
+  dragBracket(fromRow: number, toRow: number, fraction: number): Promise<void>
   hoverRow(rowIndex: number): Promise<void>
   hoverColorDot(color: string): Promise<void>
   clickColorDot(color: string): Promise<void>
@@ -405,6 +417,11 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
   const page = await openProtocol(await findDebuggerUrl(DEBUG_PORT, 'page'))
   const send = page.send
 
+  let interceptedDrag: ProtocolParams | null = null
+  page.onEvent('Input.dragIntercepted', (params) => {
+    interceptedDrag = params.data as ProtocolParams
+  })
+
   async function cdp(method: string, params: ProtocolParams = {}): Promise<ProtocolParams> {
     return send(method, params)
   }
@@ -575,6 +592,66 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     await clickAt(centre, 'left')
   }
 
+  async function rowBox(rowIndex: number): Promise<RowBox> {
+    const boxScript = `JSON.stringify((() => {
+      const rows = document.querySelectorAll('.terminal-row')
+      const box = rows[${rowIndex}].getBoundingClientRect()
+      return { left: box.left, top: box.top, height: box.height }
+    })())`
+    const measured = await evaluate(boxScript)
+    return JSON.parse(measured) as RowBox
+  }
+
+  async function dragSidebar(source: Point, target: Point): Promise<void> {
+    interceptedDrag = null
+    const held = { button: 'left', buttons: 1, clickCount: 1 }
+
+    await send('Input.setInterceptDrags', { enabled: true })
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...source, ...held })
+
+    let step = 1
+    while (step <= DRAG_STEPS) {
+      const progress = step / DRAG_STEPS
+      const x = source.x + (target.x - source.x) * progress
+      const y = source.y + (target.y - source.y) * progress
+      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, ...held })
+      step += 1
+    }
+
+    const data = await pollFor(
+      'the drag to start',
+      async () => interceptedDrag,
+      DRAG_START_TIMEOUT_MS
+    )
+
+    await send('Input.dispatchDragEvent', { type: 'dragEnter', ...target, data })
+    await send('Input.dispatchDragEvent', { type: 'dragOver', ...target, data })
+    await send('Input.dispatchDragEvent', { type: 'drop', ...target, data })
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...target, ...held })
+    await send('Input.setInterceptDrags', { enabled: false })
+  }
+
+  async function dragFromRow(
+    handleOffset: number,
+    fromRow: number,
+    toRow: number,
+    fraction: number
+  ): Promise<void> {
+    const from = await rowBox(fromRow)
+    const to = await rowBox(toRow)
+    const source = { x: from.left + handleOffset, y: from.top + from.height / 2 }
+    const target = { x: to.left + ROW_HANDLE_OFFSET, y: to.top + fraction * to.height }
+    await dragSidebar(source, target)
+  }
+
+  async function dragRow(fromRow: number, toRow: number, fraction: number): Promise<void> {
+    await dragFromRow(ROW_HANDLE_OFFSET, fromRow, toRow, fraction)
+  }
+
+  async function dragBracket(fromRow: number, toRow: number, fraction: number): Promise<void> {
+    await dragFromRow(BRACKET_HANDLE_OFFSET, fromRow, toRow, fraction)
+  }
+
   async function runInPane(sessionId: string, command: string): Promise<void> {
     const keystrokes = JSON.stringify(`${command}\r`)
     const target = JSON.stringify(sessionId)
@@ -688,6 +765,8 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     doubleClickSidebarDivider,
     clickVisiblePane,
     rightClickRow,
+    dragRow,
+    dragBracket,
     hoverRow,
     hoverColorDot,
     clickColorDot,

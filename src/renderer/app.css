@@ -128,6 +128,43 @@ body {
   box-shadow: inset 0 -2px 0 var(--row-marker);
 }
 
+.terminal-group {
+  position: relative;
+}
+
+.terminal-group.is-join-target {
+  background: color-mix(in srgb, var(--row-marker) 16%, transparent);
+}
+
+.terminal-group.is-join-target::before {
+  content: '';
+  position: absolute;
+  left: 13px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--row-marker);
+  pointer-events: none;
+}
+
+.terminal-row.drop-before::after,
+.terminal-row.drop-after::after {
+  content: '';
+  position: absolute;
+  left: 21px;
+  right: 0;
+  height: 2px;
+  background: var(--row-marker);
+}
+
+.terminal-row.drop-before::after {
+  top: 0;
+}
+
+.terminal-row.drop-after::after {
+  bottom: 0;
+}
+
 /* A fixed height rather than vertical padding, so a connector can stretch the
    full row and meet the one in the row below it. */
 .terminal-row {
@@ -300,13 +337,20 @@ body {
    the row's middle, and a stub reaching from it towards the label. */
 .row-connector {
   position: relative;
-  flex: 0 0 11px;
+  flex: 0 0 21px;
+  margin-left: -10px;
+  cursor: grab;
+}
+
+.terminal-group:has(.row-connector:hover) .row-connector::before,
+.terminal-group:has(.row-connector:hover) .row-connector::after {
+  background: var(--text-active);
 }
 
 .row-connector::before {
   content: '';
   position: absolute;
-  left: 3px;
+  left: 13px;
   width: 1px;
   background: var(--row-connector);
 }
@@ -315,7 +359,7 @@ body {
   content: '';
   position: absolute;
   top: 50%;
-  left: 3px;
+  left: 13px;
   width: 5px;
   height: 1px;
   background: var(--row-connector);
