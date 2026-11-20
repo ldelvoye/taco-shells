@@ -8,7 +8,17 @@ import {
   useState
 } from 'react'
 import type { SessionId } from '@shared/ipc'
-import { type Group, groupHasRoom, type Pane, paneOf, type RowColor } from '@shared/model'
+import { dropFor, rowPointIn } from '@shared/drop'
+import {
+  type Dragged,
+  type Drop,
+  type Group,
+  groupHasRoom,
+  type Pane,
+  paneOf,
+  type RowColor,
+  type Workspace
+} from '@shared/model'
 import type { ClaudeRows } from '@shared/rowState'
 import { RowColorPicker, rowColorVariable } from './RowColorPicker'
 import { SidebarDivider } from './SidebarDivider'
@@ -41,7 +51,7 @@ interface SidebarProps {
   fullScreen: boolean
   rowStates: ClaudeRows
   onSelect: (sessionId: SessionId) => void
-  onReorder: (from: number, to: number) => void
+  onDrop: (dragged: Dragged, drop: Drop) => void
   onColor: (sessionId: SessionId, color: RowColor | null) => void
   onFork: (sessionId: SessionId) => void
   onResize: (width: number) => void
@@ -63,6 +73,19 @@ function canForkRow(pane: Pane, groups: Group[], rowStates: ClaudeRows): boolean
     return false
   }
   return groupHasRoom(group)
+}
+
+function sameDrop(a: Drop | null, b: Drop | null): boolean {
+  if (a === null || b === null) {
+    return a === b
+  }
+  if (a.kind === 'between' && b.kind === 'between') {
+    return a.index === b.index
+  }
+  if (a.kind === 'into' && b.kind === 'into') {
+    return a.group === b.group && a.slot === b.slot
+  }
+  return false
 }
 
 function labelFor(title: string): string {
@@ -94,13 +117,13 @@ export function Sidebar({
   fullScreen,
   rowStates,
   onSelect,
-  onReorder,
+  onDrop,
   onColor,
   onFork,
   onResize
 }: SidebarProps): JSX.Element {
-  const dragged = useRef<number | null>(null)
-  const [insertAt, setInsertAt] = useState<number | null>(null)
+  const dragged = useRef<Dragged | null>(null)
+  const [drop, setDrop] = useState<Drop | null>(null)
   const [picker, setPicker] = useState<OpenPicker | null>(null)
 
   const closePicker = useCallback(() => {
@@ -119,66 +142,100 @@ export function Sidebar({
     return picker.preview.color
   }
 
-  function onDragStart(event: DragEvent<HTMLDivElement>, index: number, label: string): void {
-    dragged.current = index
+  function startDrag(event: DragEvent<HTMLElement>, what: Dragged, label: string): void {
+    dragged.current = what
     event.dataTransfer.effectAllowed = 'move'
-    // The reorder reads the index above, not this. The group carries its name so
-    // a drag that lands outside the sidebar drops something meaningful.
+    // The drop reads the ref above, not this. The label is what a drag that lands outside the sidebar drops.
     event.dataTransfer.setData('text/plain', label)
   }
 
-  function onDragOver(event: DragEvent<HTMLDivElement>, index: number): void {
-    if (dragged.current === null) {
+  // The bracket is what was grabbed, but the picture that follows the pointer is the whole split.
+  function showWholeGroup(event: DragEvent<HTMLElement>): void {
+    const groupElement = event.currentTarget.closest('.terminal-group')
+    if (groupElement === null) {
+      return
+    }
+
+    const bounds = groupElement.getBoundingClientRect()
+    const offsetX = event.clientX - bounds.left
+    const offsetY = event.clientY - bounds.top
+    event.dataTransfer.setDragImage(groupElement, offsetX, offsetY)
+  }
+
+  function dropAt(event: DragEvent<HTMLDivElement>, groupIndex: number): Drop | null {
+    const dragging = dragged.current
+    if (dragging === null) {
+      return null
+    }
+
+    const paneCount = groups[groupIndex].panes.length
+    const bounds = event.currentTarget.getBoundingClientRect()
+    const offsetY = event.clientY - bounds.top
+    const point = rowPointIn(groupIndex, paneCount, offsetY, bounds.height)
+    const workspace: Workspace = { groups, activeGroup }
+    return dropFor(workspace, dragging, point)
+  }
+
+  function onDragOver(event: DragEvent<HTMLDivElement>, groupIndex: number): void {
+    const next = dropAt(event, groupIndex)
+    if (next === null) {
+      setDrop(null)
       return
     }
 
     event.preventDefault()
     event.dataTransfer.dropEffect = 'move'
-
-    const bounds = event.currentTarget.getBoundingClientRect()
-    const offsetY = event.clientY - bounds.top
-    if (offsetY > bounds.height / 2) {
-      setInsertAt(index + 1)
-    } else {
-      setInsertAt(index)
+    if (!sameDrop(drop, next)) {
+      setDrop(next)
     }
   }
 
-  function onDrop(event: DragEvent<HTMLDivElement>): void {
+  function onDropOnGroup(event: DragEvent<HTMLDivElement>, groupIndex: number): void {
     event.preventDefault()
 
-    const from = dragged.current
-    const target = insertAt
+    const landed = dropAt(event, groupIndex)
+    const draggedValue = dragged.current
     endDrag()
 
-    if (from === null || target === null) {
+    if (draggedValue === null || landed === null) {
       return
     }
-
-    // The drop point is a gap between groups, so it counts the dragged group
-    // itself whenever that group sits above the gap.
-    let to = target
-    if (from < target) {
-      to = target - 1
-    }
-    onReorder(from, to)
+    onDrop(draggedValue, landed)
   }
 
   function endDrag(): void {
     dragged.current = null
-    setInsertAt(null)
+    setDrop(null)
   }
 
   const lastIndex = groups.length - 1
   const rendered = groups.map((group, groupIndex) => {
     const paneCount = group.panes.length
+    const shownWhileDragged = paneOf(group)
+    const groupDragLabel = labelFor(shownWhileDragged.title)
+
+    let joinSlot: number | null = null
+    if (drop !== null && drop.kind === 'into' && drop.group === group.id) {
+      joinSlot = drop.slot
+    }
+
     const rows = group.panes.map((pane, paneIndex) => {
       const label = labelFor(pane.title)
 
       let connector = null
       const connectorPiece = connectorFor(paneIndex, paneCount)
       if (connectorPiece) {
-        connector = <span className={`row-connector ${connectorPiece}`} />
+        connector = (
+          <span
+            className={`row-connector ${connectorPiece}`}
+            draggable
+            onDragStart={(event) => {
+              event.stopPropagation()
+              startDrag(event, { kind: 'group', group: group.id }, groupDragLabel)
+              showWholeGroup(event)
+            }}
+          />
+        )
       }
 
       let markerState: string | undefined
@@ -191,6 +248,12 @@ export function Sidebar({
       const isActivePane = groupIndex === activeGroup && paneIndex === group.activePane
       if (isActivePane) {
         className += ' is-active'
+      }
+      if (joinSlot === paneIndex) {
+        className += ' drop-before'
+      }
+      if (joinSlot === paneCount && paneIndex === paneCount - 1) {
+        className += ' drop-after'
       }
 
       let stripe = null
@@ -205,6 +268,10 @@ export function Sidebar({
           key={pane.id}
           className={className}
           title={label}
+          draggable
+          onDragStart={(event) => {
+            startDrag(event, { kind: 'pane', pane: pane.id }, label)
+          }}
           onClick={() => {
             onSelect(pane.id)
           }}
@@ -226,31 +293,30 @@ export function Sidebar({
       )
     })
 
-    // Dragging is a group-level gesture, so the group is what carries the drag
-    // handlers and the drop marker: its panes travel with it as one unit.
+    // A row drags its one terminal and the bracket drags the whole split, so the group only receives drops.
     let className = 'terminal-group'
-    if (insertAt === groupIndex) {
+    if (drop !== null && drop.kind === 'between' && drop.index === groupIndex) {
       className += ' drop-above'
     }
-    if (groupIndex === lastIndex && insertAt === groups.length) {
-      className += ' drop-below'
+    if (drop !== null && drop.kind === 'between' && drop.index === groups.length) {
+      if (groupIndex === lastIndex) {
+        className += ' drop-below'
+      }
     }
-
-    const shownWhileDragged = paneOf(group)
-    const dragLabel = labelFor(shownWhileDragged.title)
+    if (joinSlot !== null) {
+      className += ' is-join-target'
+    }
 
     return (
       <div
         key={group.id}
         className={className}
-        draggable
-        onDragStart={(event) => {
-          onDragStart(event, groupIndex, dragLabel)
-        }}
         onDragOver={(event) => {
           onDragOver(event, groupIndex)
         }}
-        onDrop={onDrop}
+        onDrop={(event) => {
+          onDropOnGroup(event, groupIndex)
+        }}
         onDragEnd={endDrag}
       >
         {rows}

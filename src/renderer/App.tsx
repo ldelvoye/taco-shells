@@ -7,9 +7,12 @@ import {
   activatePane,
   activePane,
   addGroup,
+  applyDrop,
   canSplitActivePane,
   canSplitPane,
   closePane,
+  type Dragged,
+  type Drop,
   emptyWorkspace,
   focusNextGroup,
   focusNextPane,
@@ -18,7 +21,6 @@ import {
   forkPane,
   type Group,
   moveDivider,
-  moveGroup,
   renamePane,
   type RowColor,
   setPaneColor,
@@ -126,6 +128,7 @@ export function App(): JSX.Element {
   const workspaceRef = useRef<Workspace | null>(workspace)
   const onScreenRef = useRef<SessionId[]>([])
   const rawTitlesRef = useRef(new Map<SessionId, string>())
+  const refocusAfterDrop = useRef(false)
   const commands = useMemo(() => createCommandRegistry(), [])
   const activeSessionId = activeSessionOf(workspace)
   const config = useConfig()
@@ -408,6 +411,18 @@ export function App(): JSX.Element {
     focusSession(activeSessionId)
   }, [activeSessionId])
 
+  // A drop moves a terminal to a new host, which blurs it even when it was already the active one.
+  useEffect(() => {
+    if (!refocusAfterDrop.current) {
+      return
+    }
+    refocusAfterDrop.current = false
+    if (!activeSessionId) {
+      return
+    }
+    focusSession(activeSessionId)
+  }, [workspace, activeSessionId])
+
   const closeActiveTerminal = useCallback(() => {
     if (!activeSessionId) {
       return
@@ -462,9 +477,11 @@ export function App(): JSX.Element {
     [updateWorkspace]
   )
 
-  const reorderGroups = useCallback(
-    (from: number, to: number) => {
-      updateWorkspace((current) => moveGroup(current, from, to))
+  const dropInSidebar = useCallback(
+    (dragged: Dragged, drop: Drop) => {
+      const newGroup = nextGroupId()
+      refocusAfterDrop.current = true
+      updateWorkspace((current) => applyDrop(current, dragged, drop, newGroup))
     },
     [updateWorkspace]
   )
@@ -546,7 +563,7 @@ export function App(): JSX.Element {
         fullScreen={fullScreen}
         rowStates={claudeRows}
         onSelect={selectPane}
-        onReorder={reorderGroups}
+        onDrop={dropInSidebar}
         onColor={colorPane}
         onFork={forkTerminal}
         onResize={sidebarWidth.resize}
