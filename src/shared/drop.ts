@@ -67,6 +67,8 @@ function candidateForPane(group: Group, point: RowPoint): Drop {
   return { kind: 'into', group: group.id, slot: point.pane + 1 }
 }
 
+// A header's top edge is outside its group. The rest is inside: first when the group is open,
+// last when it is collapsed, where the bottom edge is outside again.
 function candidateForHeader(
   workspace: Workspace,
   tabGroupId: TabGroupId,
@@ -116,6 +118,7 @@ function paneRowsIn(groups: Group[]): number {
   return groups.reduce((sum, group) => sum + group.panes.length, 0)
 }
 
+// Counts what the sidebar draws for a tab group: its header, then a row per pane unless it is collapsed.
 function linesOf(workspace: Workspace, tabGroup: TabGroup, first: number, last: number): number {
   if (tabGroup.collapsed) {
     return 1
