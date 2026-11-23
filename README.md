@@ -90,6 +90,10 @@ The markers come from Claude Code's hooks, so they need these entries next to th
 
 Right-click a row that is running Claude Code and pick **Fork with Claude**. A copy of the conversation opens in a split beside it, so you can try a second direction while the first carries on untouched, even mid-reply. The fork wears the same color as its original and its name starts with `⑂`, then `⑂2`, `⑂3` for the ones after it. The item is greyed out where there is no conversation to copy: on a terminal that is not running Claude Code, and on a brand-new session or a fresh fork until its first message. It needs the `SessionStart` hook entry that restoring does and the `UserPromptSubmit` one from the markers below.
 
+## Other coding agents
+
+Claude Code is the one agent Taco Shells supports today, but only one folder of the app is written for it. Support for an agent is a harness: a folder under `src/shared/harness/` that says how to read the agent's hook events, session ids and terminal title, and which commands resume and fork a session, plus a hook script in `hooks/` that posts those events to the app. [`types.ts`](src/shared/harness/types.ts) lists what a harness declares, and [`claude/`](src/shared/harness/claude) is the worked example. A new agent's script posts to `/agent-session/start`, `/agent-session/end` and `/agent-session/state` with its harness id in the body, and one line in [`registry.ts`](src/shared/harness/registry.ts) registers it.
+
 ## Settings
 
 It reads `~/.taco-shells/settings.json` and `~/.taco-shells/keybindings.json`, both written on first launch holding the defaults, so the file you open is the list of everything you can change. Edits apply when you save, without a restart. Comments and trailing commas are fine. Theme follows macOS unless you pin it to `light` or `dark`.
