@@ -47,14 +47,15 @@ export function rowsAfterSignal(
   onScreen: boolean
 ): AgentRows {
   const row = rows.get(pane)
+  const isCurrent = row !== undefined && row.harness === harness && row.sessionId === sessionId
   if (signal === 'start' || signal === 'resume') {
-    if (row !== undefined && row.sessionId === sessionId) {
+    if (isCurrent) {
       return rows
     }
     const hasConversation = signal === 'resume'
     return withRow(rows, pane, { harness, sessionId, state: 'idle', hasConversation })
   }
-  if (row === undefined || row.sessionId !== sessionId) {
+  if (row === undefined || !isCurrent) {
     return rows
   }
   if (signal === 'end') {
@@ -65,7 +66,7 @@ export function rowsAfterSignal(
   if (row.state === state && row.hasConversation) {
     return rows
   }
-  return withRow(rows, pane, { harness: row.harness, sessionId, state, hasConversation: true })
+  return withRow(rows, pane, { harness, sessionId, state, hasConversation: true })
 }
 
 export function rowsAfterScreen(rows: AgentRows, onScreen: readonly SessionId[]): AgentRows {

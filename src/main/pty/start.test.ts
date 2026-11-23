@@ -9,7 +9,7 @@ const noFork: Harness = {
   name: 'No Fork',
   isSessionId: (value): value is string => typeof value === 'string',
   signalFor: () => null,
-  resumeCommand: () => null
+  resumeCommand: (sessionId) => `nofork resume ${sessionId}\n`
 }
 
 describe('shellStartFor', () => {
@@ -45,12 +45,17 @@ describe('shellStartFor', () => {
     expect(shellStartFor({}, lookup)).toEqual({ cwd: null, cwdFrom: null, command: null })
   })
 
-  it("opens a plain shell when the session's harness is gone or cannot fork", () => {
+  it("resumes with the session's own harness, and opens a plain shell when it is gone or cannot fork", () => {
     const list = [claude, noFork]
     const gone = { harness: 'gone', sessionId: 'x1', cwd: '/work' }
     const stuck = { harness: 'nofork', sessionId: 'x2', cwd: '/other' }
     const lookup = () => stuck
 
+    expect(shellStartFor({ resume: stuck }, lookup, list)).toEqual({
+      cwd: '/other',
+      cwdFrom: null,
+      command: 'nofork resume x2\n'
+    })
     expect(shellStartFor({ resume: gone }, lookup, list)).toEqual({
       cwd: '/work',
       cwdFrom: null,

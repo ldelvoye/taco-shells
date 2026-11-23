@@ -73,7 +73,9 @@ export class SnapshotStore {
     }
 
     const entries = this.entriesFor(id)
-    const existing = entries.find((entry) => entry.session.sessionId === session.sessionId)
+    const existing = entries.find((entry) => {
+      return entry.session.harness === session.harness && entry.session.sessionId === session.sessionId
+    })
     if (existing === undefined) {
       entries.push({ session, provisionalSince: null })
     } else {
@@ -83,7 +85,7 @@ export class SnapshotStore {
   }
 
   /** An agent session that ended in a pane, dropped from what the pane resumes. */
-  recordAgentEnd(id: SessionId, sessionId: string): void {
+  recordAgentEnd(id: SessionId, harness: string, sessionId: string): void {
     if (this.frozen) {
       return
     }
@@ -93,7 +95,10 @@ export class SnapshotStore {
       return
     }
 
-    const remaining = entries.filter((entry) => entry.session.sessionId !== sessionId)
+    const remaining = entries.filter((entry) => {
+      const isEnded = entry.session.harness === harness && entry.session.sessionId === sessionId
+      return !isEnded
+    })
     if (remaining.length === 0) {
       this.agents.delete(id)
     } else {
