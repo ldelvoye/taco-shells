@@ -1,4 +1,4 @@
-import { type ClaudeSession, isSessionUuid } from '@shared/snapshot'
+import { isClaudeSessionId } from './sessionId'
 
 const UNTYPEABLE_CHARACTERS = /[\p{Cc}\p{Zl}\p{Zp}]/gu
 
@@ -7,19 +7,19 @@ const UNTYPEABLE_CHARACTERS = /[\p{Cc}\p{Zl}\p{Zp}]/gu
 const MAX_NAME_CHARACTERS = 200
 
 /** The line that resumes a Claude session in a shell, or null when its id is not a UUID. */
-export function resumeCommand(session: ClaudeSession): string | null {
-  if (!isSessionUuid(session.sessionId)) {
+export function claudeResumeCommand(sessionId: string): string | null {
+  if (!isClaudeSessionId(sessionId)) {
     return null
   }
-  return `claude --resume ${session.sessionId}\n`
+  return `claude --resume ${sessionId}\n`
 }
 
 /** The line that forks a Claude session under a name, or null when its id is not a UUID. */
-export function forkCommand(session: ClaudeSession, name: string): string | null {
-  if (!isSessionUuid(session.sessionId)) {
+export function claudeForkCommand(sessionId: string, name: string): string | null {
+  if (!isClaudeSessionId(sessionId)) {
     return null
   }
-  const base = `claude --resume ${session.sessionId} --fork-session`
+  const base = `claude --resume ${sessionId} --fork-session`
   const typeableName = name.replace(UNTYPEABLE_CHARACTERS, '')
   const characters = Array.from(typeableName)
   const keptCharacters = characters.slice(0, MAX_NAME_CHARACTERS)

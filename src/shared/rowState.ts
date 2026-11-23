@@ -1,13 +1,5 @@
 import type { SessionId } from './ipc'
 
-const NEEDS_TOOLS: ReadonlySet<string> = new Set(['AskUserQuestion', 'ExitPlanMode'])
-const NEEDS_NOTIFICATIONS: ReadonlySet<string> = new Set([
-  'permission_prompt',
-  'elicitation_dialog',
-  'elicitation_url_dialog',
-  'agent_needs_input'
-])
-
 export type RowState = 'working' | 'needs' | 'done' | 'idle'
 // 'resume' is a start whose session already holds a conversation.
 export type ClaudeSignal = 'start' | 'resume' | 'working' | 'needs' | 'stopped' | 'end'
@@ -19,28 +11,6 @@ export interface ClaudeRow {
 }
 
 export type ClaudeRows = ReadonlyMap<SessionId, ClaudeRow>
-
-export function signalForHook(event: string, detail: string | null): ClaudeSignal | null {
-  if (event === 'UserPromptSubmit' || event === 'PostToolUse') {
-    return 'working'
-  }
-  if (event === 'PreToolUse') {
-    if (detail !== null && NEEDS_TOOLS.has(detail)) {
-      return 'needs'
-    }
-    return 'working'
-  }
-  if (event === 'Notification') {
-    if (detail !== null && NEEDS_NOTIFICATIONS.has(detail)) {
-      return 'needs'
-    }
-    return null
-  }
-  if (event === 'Stop' || event === 'StopFailure') {
-    return 'stopped'
-  }
-  return null
-}
 
 function withRow(rows: ClaudeRows, pane: SessionId, row: ClaudeRow): ClaudeRows {
   const next = new Map(rows)

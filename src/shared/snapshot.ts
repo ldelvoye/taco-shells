@@ -1,12 +1,12 @@
 import type { SessionId } from './ipc'
 import type { GroupId, Group, Pane, RowColor, TabGroup, TabGroupId, Workspace } from './model'
+import { claude } from './harness/claude'
 import { emptyWorkspace, MIN_PANE_WIDTH, openedAt, ROW_COLORS } from './model'
 
 // Tab groups were added without a new version: a file without them loads with none, and a build
 // from before them ignores the fields.
 export const SNAPSHOT_VERSION = 1
 
-const SESSION_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 // The model's width floor caps a group at ten panes; a hand-edited file may not exceed it.
 const MAX_PANES_PER_GROUP = Math.floor(1 / MIN_PANE_WIDTH)
 
@@ -47,14 +47,6 @@ function isRecord(value: unknown): value is Loose {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-/** Whether a value is a Claude Code session id (a UUID string). */
-export function isSessionUuid(value: unknown): value is string {
-  if (typeof value !== 'string') {
-    return false
-  }
-  return SESSION_UUID.test(value)
-}
-
 function clampIndex(value: unknown, length: number): number {
   if (typeof value !== 'number' || !Number.isInteger(value)) {
     return 0
@@ -70,7 +62,7 @@ export function claudeSessionFrom(value: unknown): ClaudeSession | null {
     return null
   }
   const { sessionId, cwd } = value
-  if (!isSessionUuid(sessionId)) {
+  if (!claude.isSessionId(sessionId)) {
     return null
   }
   if (typeof cwd !== 'string' || cwd === '') {
