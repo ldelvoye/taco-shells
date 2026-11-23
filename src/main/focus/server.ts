@@ -2,6 +2,7 @@ import { unlinkSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { SessionId } from '@shared/ipc'
 import { claude } from '@shared/harness/claude'
+import { HARNESSES, harnessOf } from '@shared/harness/registry'
 import type { Harness } from '@shared/harness/types'
 import type { AgentSignal } from '@shared/rowState'
 import { type AgentSession, agentSessionFor } from '@shared/snapshot'
@@ -26,6 +27,9 @@ const ATTENTION_PATH = '/attention'
 const LEGACY_START_PATH = '/claude-session/start'
 const LEGACY_END_PATH = '/claude-session/end'
 const LEGACY_STATE_PATH = '/claude-session/state'
+const AGENT_START_PATH = '/agent-session/start'
+const AGENT_END_PATH = '/agent-session/end'
+const AGENT_STATE_PATH = '/agent-session/state'
 // Must match scripts/bundle.mjs, or promote cannot reach the running app.
 const UPDATE_CHECK_PATH = '/update/check'
 // A pid chain is a handful of numbers, so anything larger is not one of ours.
@@ -92,6 +96,16 @@ function pidsFrom(body: unknown): number[] | null {
 
   const finite = candidate.filter((value) => typeof value === 'number' && Number.isFinite(value))
   return finite
+}
+
+function harnessFrom(body: unknown, harnesses: readonly Harness[]): Harness | null {
+  if (typeof body !== 'object' || body === null) {
+    return null
+  }
+
+  const record = body as Record<string, unknown>
+  const candidate = record.harness
+  return harnessOf(candidate, harnesses)
 }
 
 function sessionIdFrom(harness: Harness, body: unknown): string | null {
@@ -169,6 +183,7 @@ function respond(response: ServerResponse, status: number, body: string): void {
 
 async function handleRequest(
   handlers: FocusServerHandlers,
+  harnesses: readonly Harness[],
   request: IncomingMessage,
   response: ServerResponse
 ): Promise<void> {
@@ -182,10 +197,14 @@ async function handleRequest(
 
   const isFocusTab = request.url === FOCUS_TAB_PATH
   const isAttention = request.url === ATTENTION_PATH
-  const isStart = request.url === LEGACY_START_PATH
-  const isEnd = request.url === LEGACY_END_PATH
-  const isState = request.url === LEGACY_STATE_PATH
-  const isKnownRoute = isFocusTab || isAttention || isStart || isEnd || isState
+  const isLegacyRoute =
+    request.url === LEGACY_START_PATH || request.url === LEGACY_END_PATH || request.url === LEGACY_STATE_PATH
+  const isAgentRoute =
+    request.url === AGENT_START_PATH || request.url === AGENT_END_PATH || request.url === AGENT_STATE_PATH
+  const isStart = request.url === LEGACY_START_PATH || request.url === AGENT_START_PATH
+  const isEnd = request.url === LEGACY_END_PATH || request.url === AGENT_END_PATH
+  const isState = request.url === LEGACY_STATE_PATH || request.url === AGENT_STATE_PATH
+  const isKnownRoute = isLegacyRoute || isAgentRoute || isFocusTab || isAttention
   if (request.method !== 'POST' || !isKnownRoute) {
     respond(response, 404, '')
     return
@@ -213,7 +232,15 @@ async function handleRequest(
     return
   }
 
-  const harness = claude
+  let harness: Harness = claude
+  if (isAgentRoute) {
+    const requested = harnessFrom(payload, harnesses)
+    if (requested === null) {
+      respond(response, 400, 'bad harness')
+      return
+    }
+    harness = requested
+  }
 
   let startedSession: AgentSession | null = null
   if (isStart) {
@@ -271,9 +298,13 @@ async function handleRequest(
   respond(response, 200, 'ok')
 }
 
-export function startFocusServer(handlers: FocusServerHandlers, portFilePath: string): () => void {
+export function startFocusServer(
+  handlers: FocusServerHandlers,
+  portFilePath: string,
+  harnesses: readonly Harness[] = HARNESSES
+): () => void {
   const server = createServer((request, response) => {
-    handleRequest(handlers, request, response).catch(() => {
+    handleRequest(handlers, harnesses, request, response).catch(() => {
       response.destroy()
     })
   })

@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import { claude } from '@shared/harness/claude'
+import type { Harness } from '@shared/harness/types'
 import type { SessionId } from '@shared/ipc'
 import type { AgentSignal } from '@shared/rowState'
 import type { AgentSession } from '@shared/snapshot'
@@ -236,6 +238,71 @@ describe('startFocusServer Claude session routes', () => {
     const response = await post(port, '/claude-session/state', body)
 
     expect(response.status).toBe(400)
+    expect(handlers.signals).toEqual([])
+  })
+})
+
+const fake: Harness = {
+  id: 'fake',
+  name: 'Fake',
+  isSessionId: (value: unknown): value is string => value === 'thr_1',
+  signalFor: (event: string) => {
+    if (event === 'Busy') {
+      return 'working'
+    }
+    return null
+  },
+  resumeCommand: () => null
+}
+
+describe('startFocusServer agent session routes', () => {
+  let handlers: FakeHandlers
+  let stop: () => void
+  let port: number
+
+  beforeEach(async () => {
+    handlers = createFakeHandlers()
+    handlers.sessionPids.set('pty-2', 222)
+    const portFilePath = freshPortFilePath()
+    stop = startFocusServer(handlers, portFilePath, [claude, fake])
+    port = await waitForPortFile(portFilePath)
+  })
+
+  afterEach(() => {
+    stop()
+  })
+
+  it('takes a session from any registered harness', async () => {
+    const start = { pids: [222], harness: 'fake', sessionId: 'thr_1', cwd: '/a' }
+    const state = { pids: [222], harness: 'fake', sessionId: 'thr_1', event: 'Busy' }
+
+    const started = await post(port, '/agent-session/start', start)
+    const signalled = await post(port, '/agent-session/state', state)
+
+    expect(started.status).toBe(200)
+    expect(signalled.status).toBe(200)
+    expect(handlers.started).toEqual([['pty-2', { harness: 'fake', sessionId: 'thr_1', cwd: '/a' }, false]])
+    expect(handlers.signals).toEqual([['pty-2', 'thr_1', 'working']])
+
+    const wrongHarness = await post(port, '/agent-session/start', { ...start, harness: 'claude' })
+    expect(wrongHarness.status).toBe(400)
+    expect(handlers.started).toHaveLength(1)
+  })
+
+  it('refuses a harness it does not know', async () => {
+    const base = { pids: [222], sessionId: 'thr_1', cwd: '/a', event: 'Busy' }
+
+    const start = await post(port, '/agent-session/start', { ...base, harness: 'gone' })
+    const end = await post(port, '/agent-session/end', { ...base, harness: 'gone' })
+    const state = await post(port, '/agent-session/state', { ...base, harness: 'gone' })
+    const missing = await post(port, '/agent-session/start', base)
+
+    const responses = [start, end, state, missing]
+    const bodies = await Promise.all(responses.map((response) => response.text()))
+    expect(responses.map((response) => response.status)).toEqual([400, 400, 400, 400])
+    expect(bodies).toEqual(['bad harness', 'bad harness', 'bad harness', 'bad harness'])
+    expect(handlers.started).toEqual([])
+    expect(handlers.ended).toEqual([])
     expect(handlers.signals).toEqual([])
   })
 })
