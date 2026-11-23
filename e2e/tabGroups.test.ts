@@ -3,12 +3,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-import { type App, KEY, launchApp } from './app'
+import { type App, KEY, launchApp, pollFor } from './app'
 
 // Covers what the unit tests cannot: the popups and a real drag reaching the
 // model, focus after a collapse, and groups surviving a restart.
 
 const KEYS_SETTLE_MS = 400
+const SHELL_EXIT_TIMEOUT_MS = 5000
 
 async function startGroupFromRow(app: App, rowIndex: number): Promise<void> {
   await app.rightClickRow(rowIndex)
@@ -74,6 +75,57 @@ describe('tab groups', () => {
       await app.until('the group is open again and the terminal has the keyboard back', (state) => {
         return !state.headers[0].collapsed && state.terminalFocused
       })
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('opens and closes terminals from the sidebar buttons', async () => {
+    const app = await launchApp()
+    try {
+      await app.clickNewTerminalButton()
+      const second = await app.until('a second terminal is active and focused', (state) => {
+        return state.rows.length === 2 && state.rows[1].active && state.terminalFocused
+      })
+      expect(second.rows).toHaveLength(2)
+
+      await startGroupFromRow(app, 0)
+      await app.press(KEY.escape)
+      await app.until('the popup is closed', (state) => !state.nameFieldFocused)
+      await app.clickRow(0)
+      await app.until('the grouped terminal is active', (state) => state.rows[0].active)
+
+      await app.clickNewTerminalButton()
+      const ungrouped = await app.until('a third terminal sits at the bottom', (state) => {
+        return state.rows.length === 3
+      })
+      expect(ungrouped.rows.map((row) => row.grouped)).toEqual([true, false, false])
+
+      await app.clickHeader(0)
+      await app.until('the group is collapsed', (state) => state.headers[0].collapsed)
+
+      await app.clickNewInHeader(0)
+      const joined = await app.until('the group is open with a new active terminal', (state) => {
+        return state.rows.length === 4 && !state.headers[0].collapsed && state.terminalFocused
+      })
+      expect(joined.rows.map((row) => row.grouped)).toEqual([true, true, false, false])
+      expect(joined.rows[1].active).toBe(true)
+
+      const shellsBefore = app.shellCount()
+      await app.clickCloseOnRow(2)
+      const closed = await app.until('the closed terminal is gone', (state) => state.rows.length === 3)
+      expect(closed.rows[1].active).toBe(true)
+      expect(closed.terminalFocused).toBe(true)
+      await pollFor(
+        'the closed terminal shell to exit',
+        async () => {
+          if (app.shellCount() === shellsBefore - 1) {
+            return true
+          }
+          return null
+        },
+        SHELL_EXIT_TIMEOUT_MS
+      )
     } finally {
       await app.close()
     }

@@ -24,7 +24,9 @@ import {
   type Workspace
 } from '@shared/model'
 import { type ClaudeRows, summaryState } from '@shared/rowState'
+import { PlusIcon, TrashIcon } from './icons'
 import { RowColorPicker, rowColorVariable } from './RowColorPicker'
+import { SidebarAction } from './SidebarAction'
 import { SidebarDivider } from './SidebarDivider'
 import { SidebarTitlebar } from './SidebarTitlebar'
 import { TabGroupPopup } from './TabGroupPopup'
@@ -77,6 +79,8 @@ interface SidebarProps {
   fullScreen: boolean
   rowStates: ClaudeRows
   onSelect: (sessionId: SessionId) => void
+  onClose: (sessionId: SessionId) => void
+  onNewTerminal: (tabGroup: TabGroupId | null) => void
   onDrop: (dragged: Dragged, drop: Drop) => void
   onColor: (sessionId: SessionId, color: RowColor | null) => void
   onFork: (sessionId: SessionId) => void
@@ -258,6 +262,8 @@ export function Sidebar({
   rowStates,
   tabGroups,
   onSelect,
+  onClose,
+  onNewTerminal,
   onDrop,
   onColor,
   onFork,
@@ -414,6 +420,10 @@ export function Sidebar({
     setDrop(null)
   }
 
+  function openUngroupedTerminal(): void {
+    onNewTerminal(null)
+  }
+
   const mark = dropMarkFor(workspace, drop)
 
   const entryElements = groups.map((group, groupIndex) => {
@@ -496,6 +506,15 @@ export function Sidebar({
           {connector}
           <span className="row-state" data-state={markerState} />
           <span className="row-label">{label}</span>
+          <SidebarAction
+            className="row-close"
+            label="Close terminal"
+            onActivate={() => {
+              onClose(pane.id)
+            }}
+          >
+            <TrashIcon />
+          </SidebarAction>
         </div>
       )
     })
@@ -592,6 +611,15 @@ export function Sidebar({
           <span className="tab-group-caret" />
           <span className="tab-group-name">{label}</span>
           {count}
+          <SidebarAction
+            className="tab-group-new"
+            label={`New terminal in ${label}`}
+            onActivate={() => {
+              onNewTerminal(tabGroup.id)
+            }}
+          >
+            <PlusIcon />
+          </SidebarAction>
         </div>
         {shownEntries}
       </div>
@@ -688,7 +716,7 @@ export function Sidebar({
 
   return (
     <aside className="sidebar" style={style}>
-      <SidebarTitlebar fullScreen={fullScreen} />
+      <SidebarTitlebar fullScreen={fullScreen} onNewTerminal={openUngroupedTerminal} />
       <div
         className="sidebar-rows"
         onDragOver={onDragOverEnd}
