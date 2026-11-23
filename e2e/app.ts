@@ -146,6 +146,10 @@ export interface App {
   clickHeader(headerIndex: number): Promise<void>
   rightClickHeader(headerIndex: number): Promise<void>
   clickUngroupItem(): Promise<void>
+  clickRow(rowIndex: number): Promise<void>
+  clickNewTerminalButton(): Promise<void>
+  clickNewInHeader(headerIndex: number): Promise<void>
+  clickCloseOnRow(rowIndex: number): Promise<void>
   typeText(text: string): Promise<void>
   dragRowToHeader(fromRow: number, headerIndex: number, fraction: number): Promise<void>
   dragHeader(fromHeader: number, toRow: number, fraction: number): Promise<void>
@@ -667,6 +671,31 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     await clickAt(centre, 'left')
   }
 
+  async function clickRow(rowIndex: number): Promise<void> {
+    const centre = await centreOf('.terminal-row', rowIndex)
+    await clickAt(centre, 'left')
+  }
+
+  // The button has no box until its row or header is hovered, and there is one per row or header.
+  async function clickButtonWithin(selector: string, index: number, button: string): Promise<void> {
+    await hover(selector, index)
+    const centre = await hover(button, index)
+    await clickAt(centre, 'left')
+  }
+
+  async function clickNewTerminalButton(): Promise<void> {
+    const centre = await centreOf('.sidebar-new', 0)
+    await clickAt(centre, 'left')
+  }
+
+  async function clickNewInHeader(headerIndex: number): Promise<void> {
+    await clickButtonWithin('.tab-group-header', headerIndex, '.tab-group-new')
+  }
+
+  async function clickCloseOnRow(rowIndex: number): Promise<void> {
+    await clickButtonWithin('.terminal-row', rowIndex, '.row-close')
+  }
+
   async function typeText(text: string): Promise<void> {
     await send('Input.insertText', { text })
   }
@@ -858,6 +887,10 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     clickHeader,
     rightClickHeader,
     clickUngroupItem,
+    clickRow,
+    clickNewTerminalButton,
+    clickNewInHeader,
+    clickCloseOnRow,
     typeText,
     dragRowToHeader,
     dragHeader,

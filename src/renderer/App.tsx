@@ -7,6 +7,7 @@ import {
   activatePane,
   activePane,
   addGroup,
+  addGroupTo,
   applyDrop,
   canSplitActivePane,
   canSplitPane,
@@ -180,21 +181,40 @@ export function App(): JSX.Element {
     })
   }, [])
 
-  const openTerminalRunning = useCallback((command: string | null) => {
-    void createSession().then((sessionId) => {
-      const group = groupForSession(sessionId)
-      setWorkspace((current) => {
-        let base = current
-        if (!base) {
-          base = emptyWorkspace()
+  const openTerminalPlaced = useCallback(
+    (place: (workspace: Workspace, group: Group) => Workspace, command: string | null) => {
+      void createSession().then((sessionId) => {
+        const group = groupForSession(sessionId)
+        setWorkspace((current) => {
+          let base = current
+          if (!base) {
+            base = emptyWorkspace()
+          }
+          return place(base, group)
+        })
+        if (command !== null) {
+          window.tacoShells.pty.write(sessionId, command)
         }
-        return addGroup(base, group)
       })
-      if (command !== null) {
-        window.tacoShells.pty.write(sessionId, command)
-      }
-    })
-  }, [])
+    },
+    []
+  )
+
+  const openTerminalRunning = useCallback(
+    (command: string | null) => {
+      openTerminalPlaced(addGroup, command)
+    },
+    [openTerminalPlaced]
+  )
+
+  const openTerminalIn = useCallback(
+    (tabGroup: TabGroupId | null) => {
+      openTerminalPlaced((workspace, group) => {
+        return addGroupTo(workspace, group, tabGroup)
+      }, null)
+    },
+    [openTerminalPlaced]
+  )
 
   const openTerminal = useCallback(() => {
     openTerminalRunning(null)
@@ -657,6 +677,8 @@ export function App(): JSX.Element {
         fullScreen={fullScreen}
         rowStates={claudeRows}
         onSelect={selectPane}
+        onClose={disposeSession}
+        onNewTerminal={openTerminalIn}
         onDrop={dropInSidebar}
         onColor={colorPane}
         onFork={forkTerminal}

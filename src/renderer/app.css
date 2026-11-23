@@ -345,6 +345,47 @@ body {
   margin-left: auto;
 }
 
+.sidebar-action {
+  display: none;
+  flex: 0 0 16px;
+  align-self: center;
+  align-items: center;
+  justify-content: center;
+  height: 16px;
+  margin-left: auto;
+  margin-right: -3px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  opacity: 0.5;
+  -webkit-app-region: no-drag;
+}
+
+.sidebar-action:hover {
+  opacity: 1;
+}
+
+.sidebar-action svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.terminal-row:hover .sidebar-action,
+.tab-group-header:hover .sidebar-action,
+.sidebar-titlebar .sidebar-action {
+  display: inline-flex;
+}
+
+.tab-group-header .row-state + .sidebar-action {
+  margin-left: 4px;
+}
+
 .tab-group-name-field {
   margin: 6px 6px 0;
   padding: 3px 6px;

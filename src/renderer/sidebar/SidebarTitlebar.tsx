@@ -1,14 +1,17 @@
 import type { JSX } from 'react'
 import markUrl from '../../../branding/icons/taco-shells-mark.svg'
+import { PlusIcon } from './icons'
+import { SidebarAction } from './SidebarAction'
 
 const STABLE_CHANNEL = 'stable'
 const WORDMARK = 'Taco Shells'
 
 interface SidebarTitlebarProps {
   fullScreen: boolean
+  onNewTerminal: () => void
 }
 
-export function SidebarTitlebar({ fullScreen }: SidebarTitlebarProps): JSX.Element {
+export function SidebarTitlebar({ fullScreen, onNewTerminal }: SidebarTitlebarProps): JSX.Element {
   let className = 'sidebar-titlebar'
   if (fullScreen) {
     className += ' is-full-screen'
@@ -26,6 +29,9 @@ export function SidebarTitlebar({ fullScreen }: SidebarTitlebarProps): JSX.Eleme
         <img className={markClassName} src={markUrl} alt="" draggable={false} />
         <span className="sidebar-wordmark">{WORDMARK}</span>
       </div>
+      <SidebarAction className="sidebar-new" label="New terminal" onActivate={onNewTerminal}>
+        <PlusIcon />
+      </SidebarAction>
     </div>
   )
 }
