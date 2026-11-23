@@ -1,6 +1,6 @@
+import { claudeForkCommand, claudeResumeCommand } from '@shared/harness/claude/commands'
 import type { PtyCreateOptions, SessionId } from '@shared/ipc'
 import type { ClaudeSession } from '@shared/snapshot'
-import { forkCommand, resumeCommand } from './resume'
 
 export interface ShellStart {
   cwd: string | null
@@ -14,7 +14,7 @@ export function shellStartFor(
   claudeSessionOf: (id: SessionId) => ClaudeSession | null
 ): ShellStart {
   if (options.resume !== undefined) {
-    const command = resumeCommand(options.resume)
+    const command = claudeResumeCommand(options.resume.sessionId)
     return { cwd: options.resume.cwd, cwdFrom: null, command }
   }
 
@@ -23,7 +23,7 @@ export function shellStartFor(
     if (source === null) {
       return { cwd: null, cwdFrom: options.fork.from, command: null }
     }
-    const command = forkCommand(source, options.fork.name)
+    const command = claudeForkCommand(source.sessionId, options.fork.name)
     return { cwd: source.cwd, cwdFrom: null, command }
   }
 

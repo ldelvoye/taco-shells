@@ -6,7 +6,6 @@ import {
   rowsAfterIdleTitle,
   rowsAfterScreen,
   rowsAfterSignal,
-  signalForHook,
   summaryState,
   waitingCount
 } from './rowState'
@@ -17,18 +16,6 @@ const empty: ClaudeRows = new Map()
 const started = rowsAfterSignal(empty, 'p1', A, 'start', false)
 
 describe('row state', () => {
-  it('maps hook events to signals, ignoring the idle reminder and subagents', () => {
-    expect(signalForHook('UserPromptSubmit', null)).toBe('working')
-    expect(signalForHook('PreToolUse', 'Bash')).toBe('working')
-    expect(signalForHook('PreToolUse', 'AskUserQuestion')).toBe('needs')
-    expect(signalForHook('Notification', 'permission_prompt')).toBe('needs')
-    expect(signalForHook('Notification', 'idle_prompt')).toBeNull()
-    expect(signalForHook('Notification', null)).toBeNull()
-    expect(signalForHook('Stop', null)).toBe('stopped')
-    expect(signalForHook('StopFailure', null)).toBe('stopped')
-    expect(signalForHook('SubagentStop', null)).toBeNull()
-  })
-
   it('marks a stop done only when the pane is off screen', () => {
     const working = rowsAfterSignal(started, 'p1', A, 'working', false)
     expect(rowsAfterSignal(working, 'p1', A, 'stopped', false).get('p1')?.state).toBe('done')

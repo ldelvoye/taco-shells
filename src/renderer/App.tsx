@@ -37,7 +37,7 @@ import {
   toggleTabGroup,
   ungroupTabGroup
 } from '@shared/tabGroups'
-import { claudeTitleOf } from '@shared/claudeTitle'
+import { claudeTitleOf } from '@shared/harness/claude/title'
 import { forkNameFor } from '@shared/forkName'
 import {
   type ClaudeRows,

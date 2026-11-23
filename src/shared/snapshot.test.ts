@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest'
 import type { Group, Workspace } from './model'
 import { emptyWorkspace } from './model'
 import {
-  isSessionUuid,
   paneCount,
   parseSnapshot,
   snapshotFrom,
@@ -17,16 +16,6 @@ function widthSum(snapshot: Snapshot, group: number): number {
   const widths = snapshot.groups[group].panes.map((pane) => pane.width)
   return widths.reduce((sum, width) => sum + width, 0)
 }
-
-describe('isSessionUuid', () => {
-  it('accepts a UUID in either case and rejects anything else', () => {
-    expect(isSessionUuid(SESSION_ID)).toBe(true)
-    expect(isSessionUuid(SESSION_ID.toUpperCase())).toBe(true)
-    expect(isSessionUuid(`${SESSION_ID}\n`)).toBe(false)
-    expect(isSessionUuid('--dangerously-skip-permissions')).toBe(false)
-    expect(isSessionUuid(42)).toBe(false)
-  })
-})
 
 describe('parseSnapshot', () => {
   it('yields null for text that cannot be a snapshot', () => {

@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest'
 
-import { claudeTitleOf } from './claudeTitle'
+import { claudeTitleOf } from './title'
 
 it('strips the leading glyph and reports whether it was the idle one', () => {
   expect(claudeTitleOf('✳ INFRENG-813')).toEqual({ name: 'INFRENG-813', idle: true })

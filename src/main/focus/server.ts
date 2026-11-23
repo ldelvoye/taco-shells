@@ -1,8 +1,9 @@
 import { unlinkSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { SessionId } from '@shared/ipc'
-import { type ClaudeSignal, signalForHook } from '@shared/rowState'
-import { type ClaudeSession, claudeSessionFrom, isSessionUuid } from '@shared/snapshot'
+import { claude } from '@shared/harness/claude'
+import type { ClaudeSignal } from '@shared/rowState'
+import { type ClaudeSession, claudeSessionFrom } from '@shared/snapshot'
 
 export interface FocusServerHandlers {
   sessionForPids(pids: number[]): SessionId | null
@@ -99,7 +100,7 @@ function sessionIdFrom(body: unknown): string | null {
 
   const record = body as Record<string, unknown>
   const candidate = record.sessionId
-  if (!isSessionUuid(candidate)) {
+  if (!claude.isSessionId(candidate)) {
     return null
   }
   return candidate
@@ -243,7 +244,7 @@ async function handleRequest(
       return
     }
     const detail = detailFrom(payload)
-    stateSignal = signalForHook(event, detail)
+    stateSignal = claude.signalFor(event, detail)
   }
 
   const sessionId = handlers.sessionForPids(pids)

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { forkCommand, resumeCommand } from './resume'
+import { claudeForkCommand, claudeResumeCommand } from '@shared/harness/claude/commands'
 import { shellStartFor } from './start'
 
 describe('shellStartFor', () => {
@@ -15,7 +15,7 @@ describe('shellStartFor', () => {
     expect(shellStartFor({ fork: { from: 'pty-1', name: '⑂ x' } }, lookup)).toEqual({
       cwd: '/work',
       cwdFrom: null,
-      command: forkCommand(known, '⑂ x')
+      command: claudeForkCommand(known.sessionId, '⑂ x')
     })
     expect(shellStartFor({ fork: { from: 'pty-9', name: '⑂ x' } }, lookup)).toEqual({
       cwd: null,
@@ -25,7 +25,7 @@ describe('shellStartFor', () => {
     expect(shellStartFor({ resume: known }, lookup)).toEqual({
       cwd: '/work',
       cwdFrom: null,
-      command: resumeCommand(known)
+      command: claudeResumeCommand(known.sessionId)
     })
     expect(shellStartFor({ cwdFrom: 'pty-1' }, lookup)).toEqual({
       cwd: null,
