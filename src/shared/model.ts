@@ -162,16 +162,29 @@ export function openedAt(workspace: Workspace, groupIndex: number): Workspace {
 export function addGroup(workspace: Workspace, group: Group): Workspace {
   const anchor = workspace.groups[workspace.activeGroup]
   let tabGroup: TabGroupId | null = null
+  if (anchor !== undefined) {
+    tabGroup = anchor.tabGroup
+  }
+  return addGroupTo(workspace, group, tabGroup)
+}
+
+/** The workspace with a new active entry last in this tab group, or last and ungrouped when the group is null or gone. */
+export function addGroupTo(
+  workspace: Workspace,
+  group: Group,
+  tabGroup: TabGroupId | null
+): Workspace {
+  let placedIn: TabGroupId | null = null
   let index = workspace.groups.length
-  if (anchor !== undefined && anchor.tabGroup !== null) {
-    const block = blockOf(workspace, anchor.tabGroup)
+  if (tabGroup !== null) {
+    const block = blockOf(workspace, tabGroup)
     if (block !== null) {
-      tabGroup = anchor.tabGroup
+      placedIn = tabGroup
       index = block.last + 1
     }
   }
 
-  const entry: Group = { ...group, tabGroup }
+  const entry: Group = { ...group, tabGroup: placedIn }
   const groupsBefore = workspace.groups.slice(0, index)
   const groupsAfter = workspace.groups.slice(index)
   const groups = [...groupsBefore, entry, ...groupsAfter]
