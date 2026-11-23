@@ -1,6 +1,6 @@
 import type { SessionId } from '@shared/ipc'
 import type { Workspace } from '@shared/model'
-import { type ClaudeSession, type Snapshot, snapshotFrom } from '@shared/snapshot'
+import { type AgentSession, type Snapshot, snapshotFrom } from '@shared/snapshot'
 import { processCwd } from '../pty/cwd'
 import type { PtySessions } from '../pty/sessions'
 import { readSnapshot, writeSnapshot } from './files'
@@ -10,8 +10,8 @@ export const CWD_REFRESH_MS = 30_000
 export const QUIT_HOLD_MS = 1000
 export const PROVISIONAL_TTL_MS = 60_000
 
-interface ClaudeEntry {
-  session: ClaudeSession
+interface AgentEntry {
+  session: AgentSession
   provisionalSince: number | null
 }
 
@@ -23,7 +23,7 @@ export class SnapshotStore {
   private readonly now: () => number
   private readonly initialSnapshot: Snapshot | null
   private readonly cwds = new Map<SessionId, string>()
-  private readonly claude = new Map<SessionId, ClaudeEntry[]>()
+  private readonly agents = new Map<SessionId, AgentEntry[]>()
   private readonly refreshTimer: ReturnType<typeof setInterval>
   private debounceTimer: ReturnType<typeof setTimeout> | null = null
   private latestWorkspace: Workspace | null = null
@@ -40,7 +40,7 @@ export class SnapshotStore {
         return
       }
       this.cwds.delete(id)
-      this.claude.delete(id)
+      this.agents.delete(id)
     })
 
     this.refreshTimer = setInterval(() => {
@@ -66,8 +66,8 @@ export class SnapshotStore {
     this.scheduleWrite()
   }
 
-  /** A Claude Code session that started in a pane; the newest one is what the pane resumes. */
-  recordClaudeStart(id: SessionId, session: ClaudeSession): void {
+  /** An agent session that started in a pane; the newest one is what the pane resumes. */
+  recordAgentStart(id: SessionId, session: AgentSession): void {
     if (this.frozen) {
       return
     }
@@ -82,22 +82,22 @@ export class SnapshotStore {
     this.scheduleWrite()
   }
 
-  /** A Claude Code session that ended in a pane, dropped from what the pane resumes. */
-  recordClaudeEnd(id: SessionId, sessionId: string): void {
+  /** An agent session that ended in a pane, dropped from what the pane resumes. */
+  recordAgentEnd(id: SessionId, sessionId: string): void {
     if (this.frozen) {
       return
     }
 
-    const entries = this.claude.get(id)
+    const entries = this.agents.get(id)
     if (entries === undefined) {
       return
     }
 
     const remaining = entries.filter((entry) => entry.session.sessionId !== sessionId)
     if (remaining.length === 0) {
-      this.claude.delete(id)
+      this.agents.delete(id)
     } else {
-      this.claude.set(id, remaining)
+      this.agents.set(id, remaining)
     }
     this.scheduleWrite()
   }
@@ -111,7 +111,7 @@ export class SnapshotStore {
   }
 
   /** A restored session, provisional until its SessionStart confirms it or PROVISIONAL_TTL_MS passes. */
-  seedClaude(id: SessionId, session: ClaudeSession): void {
+  seedAgent(id: SessionId, session: AgentSession): void {
     if (this.frozen) {
       return
     }
@@ -121,9 +121,9 @@ export class SnapshotStore {
   }
 
   // A pane's newest session is the one it resumes or forks: an older entry whose
-  // Claude died without a SessionEnd would otherwise pin the pane to a dead id for good.
-  claudeSessionOf(id: SessionId): ClaudeSession | null {
-    const entries = this.claude.get(id)
+  // agent died without a SessionEnd would otherwise pin the pane to a dead id for good.
+  agentSessionOf(id: SessionId): AgentSession | null {
+    const entries = this.agents.get(id)
     if (entries === undefined) {
       return null
     }
@@ -190,11 +190,11 @@ export class SnapshotStore {
       return
     }
 
-    this.dropExpiredClaude()
+    this.dropExpiredAgents()
     const snapshot = snapshotFrom(
       this.latestWorkspace,
       (id) => this.cwdOf(id),
-      (id) => this.claudeSessionOf(id)
+      (id) => this.agentSessionOf(id)
     )
     writeSnapshot(this.directory, snapshot)
   }
@@ -207,18 +207,18 @@ export class SnapshotStore {
     return cwd
   }
 
-  private entriesFor(id: SessionId): ClaudeEntry[] {
-    let entries = this.claude.get(id)
+  private entriesFor(id: SessionId): AgentEntry[] {
+    let entries = this.agents.get(id)
     if (entries === undefined) {
       entries = []
-      this.claude.set(id, entries)
+      this.agents.set(id, entries)
     }
     return entries
   }
 
-  private dropExpiredClaude(): void {
+  private dropExpiredAgents(): void {
     const now = this.now()
-    for (const [id, entries] of this.claude) {
+    for (const [id, entries] of this.agents) {
       const live = entries.filter((entry) => {
         if (entry.provisionalSince === null) {
           return true
@@ -226,9 +226,9 @@ export class SnapshotStore {
         return now - entry.provisionalSince <= PROVISIONAL_TTL_MS
       })
       if (live.length === 0) {
-        this.claude.delete(id)
+        this.agents.delete(id)
       } else {
-        this.claude.set(id, live)
+        this.agents.set(id, live)
       }
     }
   }

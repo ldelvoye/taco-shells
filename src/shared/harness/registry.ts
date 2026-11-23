@@ -1,5 +1,5 @@
 import { claude } from './claude'
-import type { Harness } from './types'
+import type { AgentTitle, Harness } from './types'
 
 export const HARNESSES: readonly Harness[] = [claude]
 export const DEFAULT_HARNESS: Harness = claude
@@ -10,4 +10,17 @@ export function harnessOf(id: unknown, harnesses: readonly Harness[] = HARNESSES
     return null
   }
   return found
+}
+
+/** A terminal title as a row name, read by the row's harness; the raw title, never idle, when it has no title reader. */
+export function agentTitleOf(
+  harnessId: string,
+  title: string,
+  harnesses: readonly Harness[] = HARNESSES
+): AgentTitle {
+  const harness = harnessOf(harnessId, harnesses)
+  if (harness === null || harness.titleOf === undefined) {
+    return { name: title, idle: false }
+  }
+  return harness.titleOf(title)
 }

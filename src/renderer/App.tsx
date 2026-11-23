@@ -37,10 +37,10 @@ import {
   toggleTabGroup,
   ungroupTabGroup
 } from '@shared/tabGroups'
-import { claudeTitleOf } from '@shared/harness/claude/title'
+import { agentTitleOf } from '@shared/harness/registry'
 import { forkNameFor } from '@shared/forkName'
 import {
-  type ClaudeRows,
+  type AgentRows,
   rowsAfterExit,
   rowsAfterIdleTitle,
   rowsAfterScreen,
@@ -105,8 +105,8 @@ function entryHolding(workspace: Workspace, pane: SessionId): Group | undefined 
 }
 
 function startOptionsOf(pane: SnapshotPane): PtyCreateOptions {
-  if (pane.claude !== null) {
-    return { resume: pane.claude }
+  if (pane.agent !== null) {
+    return { resume: pane.agent }
   } else if (typeof pane.cwd === 'string') {
     return { cwd: pane.cwd }
   } else {
@@ -151,8 +151,8 @@ export function App(): JSX.Element {
   const [sidebarVisible, setSidebarVisible] = useState(true)
   const [waiting, setWaiting] = useState<SessionId | null>(null)
   const [focusProblem, setFocusProblem] = useState<string | null>(null)
-  const [claudeRows, setClaudeRows] = useState<ClaudeRows>(() => new Map())
-  const claudeRowsRef = useRef<ClaudeRows>(claudeRows)
+  const [agentRows, setAgentRows] = useState<AgentRows>(() => new Map())
+  const agentRowsRef = useRef<AgentRows>(agentRows)
   const workspaceRef = useRef<Workspace | null>(workspace)
   const onScreenRef = useRef<SessionId[]>([])
   const rawTitlesRef = useRef(new Map<SessionId, string>())
@@ -264,7 +264,7 @@ export function App(): JSX.Element {
     splitOnceSpawned(activeSessionId, { cwdFrom: activeSessionId }, splitPane)
   }, [activeSessionId, workspace, splitOnceSpawned])
 
-  // The main process finds the Claude session to fork from the pane named here.
+  // The main process finds the agent session to fork from the pane named here.
   const forkTerminal = useCallback(
     (source: SessionId) => {
       if (!workspace) {
@@ -336,27 +336,27 @@ export function App(): JSX.Element {
     window.tacoShells.snapshot.workspaceChanged(workspace)
   }, [workspace])
 
-  const changeClaudeRows = useCallback((change: (rows: ClaudeRows) => ClaudeRows) => {
-    const next = change(claudeRowsRef.current)
-    claudeRowsRef.current = next
-    setClaudeRows(next)
+  const changeAgentRows = useCallback((change: (rows: AgentRows) => AgentRows) => {
+    const next = change(agentRowsRef.current)
+    agentRowsRef.current = next
+    setAgentRows(next)
   }, [])
 
   const handleTitle = useCallback(
     (sessionId: SessionId, title: string) => {
       rawTitlesRef.current.set(sessionId, title)
-      const hasRow = claudeRowsRef.current.has(sessionId)
-      if (!hasRow) {
+      const row = agentRowsRef.current.get(sessionId)
+      if (row === undefined) {
         updateWorkspace((current) => renamePane(current, sessionId, title))
         return
       }
-      const parsed = claudeTitleOf(title)
+      const parsed = agentTitleOf(row.harness, title)
       updateWorkspace((current) => renamePane(current, sessionId, parsed.name))
       if (parsed.idle) {
-        changeClaudeRows((rows) => rowsAfterIdleTitle(rows, sessionId))
+        changeAgentRows((rows) => rowsAfterIdleTitle(rows, sessionId))
       }
     },
-    [updateWorkspace, changeClaudeRows]
+    [updateWorkspace, changeAgentRows]
   )
 
   useEffect(() => {
@@ -364,10 +364,10 @@ export function App(): JSX.Element {
   }, [handleTitle])
 
   useEffect(() => {
-    return window.tacoShells.focus.onClaudeSignal((event) => {
+    return window.tacoShells.focus.onAgentSignal((event) => {
       const onScreen = onScreenRef.current.includes(event.id)
-      changeClaudeRows((rows) => {
-        return rowsAfterSignal(rows, event.id, event.claudeSessionId, event.signal, onScreen)
+      changeAgentRows((rows) => {
+        return rowsAfterSignal(rows, event.id, event.harness, event.sessionId, event.signal, onScreen)
       })
       const startsSession = event.signal === 'start' || event.signal === 'resume'
       if (!startsSession) {
@@ -379,14 +379,14 @@ export function App(): JSX.Element {
         handleTitle(event.id, rawTitle)
       }
     })
-  }, [changeClaudeRows, handleTitle])
+  }, [changeAgentRows, handleTitle])
 
   useEffect(() => {
     workspaceRef.current = workspace
     const onScreen = onScreenPanesOf(workspace)
     onScreenRef.current = onScreen
-    changeClaudeRows((rows) => rowsAfterScreen(rows, onScreen))
-  }, [workspace, changeClaudeRows])
+    changeAgentRows((rows) => rowsAfterScreen(rows, onScreen))
+  }, [workspace, changeAgentRows])
 
   // Clicking straight into a pane has to move the workspace's idea of the active
   // pane with it, or cmd+w would close a terminal the user is not typing in. The
@@ -438,10 +438,10 @@ export function App(): JSX.Element {
       disposeSession(event.id)
       rawTitlesRef.current.delete(event.id)
       updateWorkspace((current) => closePane(current, event.id))
-      changeClaudeRows((rows) => rowsAfterExit(rows, event.id))
+      changeAgentRows((rows) => rowsAfterExit(rows, event.id))
       setWaiting((current) => waitingAfterExit(current, event.id))
     })
-  }, [updateWorkspace, changeClaudeRows])
+  }, [updateWorkspace, changeAgentRows])
 
   // The terminals are the window's only contents, so losing the last of them is
   // the same gesture as closing the window.
@@ -677,7 +677,7 @@ export function App(): JSX.Element {
         tabGroups={tabGroups}
         width={sidebarWidth.width}
         fullScreen={fullScreen}
-        rowStates={claudeRows}
+        rowStates={agentRows}
         onSelect={selectPane}
         onClose={disposeSession}
         onNewTerminal={openTerminalIn}
@@ -699,7 +699,7 @@ export function App(): JSX.Element {
   // grows its own. It is the only place a frameless window can be dragged by.
   let paneTitlebar = null
   if (!sidebarVisible) {
-    const count = waitingCount(claudeRows)
+    const count = waitingCount(agentRows)
     let pill = null
     if (count > 0) {
       pill = (

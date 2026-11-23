@@ -4,14 +4,26 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { Workspace } from '@shared/model'
-import type { ClaudeSession } from '@shared/snapshot'
+import type { AgentSession } from '@shared/snapshot'
 import { readSnapshot } from './files'
 import { SnapshotStore } from './store'
 
 const PANE_ID = 'pty-1'
-const SESSION_A: ClaudeSession = { sessionId: '11111111-1111-4111-8111-111111111111', cwd: '/tmp/a' }
-const SESSION_B: ClaudeSession = { sessionId: '22222222-2222-4222-8222-222222222222', cwd: '/tmp/b' }
-const SESSION_C: ClaudeSession = { sessionId: '33333333-3333-4333-8333-333333333333', cwd: '/tmp/c' }
+const SESSION_A: AgentSession = {
+  harness: 'claude',
+  sessionId: '11111111-1111-4111-8111-111111111111',
+  cwd: '/tmp/a'
+}
+const SESSION_B: AgentSession = {
+  harness: 'claude',
+  sessionId: '22222222-2222-4222-8222-222222222222',
+  cwd: '/tmp/b'
+}
+const SESSION_C: AgentSession = {
+  harness: 'claude',
+  sessionId: '33333333-3333-4333-8333-333333333333',
+  cwd: '/tmp/c'
+}
 const WORKSPACE: Workspace = {
   groups: [
     {
@@ -31,13 +43,13 @@ describe('SnapshotStore Claude sessions', () => {
   let exitListener: (event: { id: string; exitCode: number }) => void
   let store: SnapshotStore
 
-  function claudeInFile(): ClaudeSession | null {
+  function agentInFile(): AgentSession | null {
     vi.advanceTimersByTime(300)
     const snapshot = readSnapshot(directory)
     if (snapshot === null) {
       throw new Error('no snapshot was written')
     }
-    return snapshot.groups[0].panes[0].claude
+    return snapshot.groups[0].panes[0].agent
   }
 
   beforeEach(() => {
@@ -68,63 +80,63 @@ describe('SnapshotStore Claude sessions', () => {
   })
 
   it('resumes the newest session when an older one died without an end', () => {
-    store.recordClaudeStart(PANE_ID, SESSION_A)
-    store.recordClaudeStart(PANE_ID, SESSION_B)
+    store.recordAgentStart(PANE_ID, SESSION_A)
+    store.recordAgentStart(PANE_ID, SESSION_B)
 
-    expect(claudeInFile()).toEqual(SESSION_B)
+    expect(agentInFile()).toEqual(SESSION_B)
   })
 
   it('keeps the older session when the newer one ends', () => {
-    store.recordClaudeStart(PANE_ID, SESSION_A)
-    store.recordClaudeStart(PANE_ID, SESSION_B)
-    store.recordClaudeEnd(PANE_ID, SESSION_B.sessionId)
+    store.recordAgentStart(PANE_ID, SESSION_A)
+    store.recordAgentStart(PANE_ID, SESSION_B)
+    store.recordAgentEnd(PANE_ID, SESSION_B.sessionId)
 
-    expect(claudeInFile()).toEqual(SESSION_A)
+    expect(agentInFile()).toEqual(SESSION_A)
   })
 
   it('follows /clear whichever of the end and the start arrives first', () => {
-    store.recordClaudeStart(PANE_ID, SESSION_A)
-    store.recordClaudeEnd(PANE_ID, SESSION_A.sessionId)
-    store.recordClaudeStart(PANE_ID, SESSION_C)
-    expect(claudeInFile()).toEqual(SESSION_C)
+    store.recordAgentStart(PANE_ID, SESSION_A)
+    store.recordAgentEnd(PANE_ID, SESSION_A.sessionId)
+    store.recordAgentStart(PANE_ID, SESSION_C)
+    expect(agentInFile()).toEqual(SESSION_C)
 
-    store.recordClaudeEnd(PANE_ID, SESSION_C.sessionId)
-    store.recordClaudeStart(PANE_ID, SESSION_A)
-    store.recordClaudeStart(PANE_ID, SESSION_C)
-    store.recordClaudeEnd(PANE_ID, SESSION_A.sessionId)
-    expect(claudeInFile()).toEqual(SESSION_C)
+    store.recordAgentEnd(PANE_ID, SESSION_C.sessionId)
+    store.recordAgentStart(PANE_ID, SESSION_A)
+    store.recordAgentStart(PANE_ID, SESSION_C)
+    store.recordAgentEnd(PANE_ID, SESSION_A.sessionId)
+    expect(agentInFile()).toEqual(SESSION_C)
   })
 
   it('keeps a seeded session once a start confirms it', () => {
-    store.seedClaude(PANE_ID, SESSION_A)
-    store.recordClaudeStart(PANE_ID, SESSION_A)
+    store.seedAgent(PANE_ID, SESSION_A)
+    store.recordAgentStart(PANE_ID, SESSION_A)
     now = 120_000
 
-    expect(claudeInFile()).toEqual(SESSION_A)
+    expect(agentInFile()).toEqual(SESSION_A)
   })
 
   it('drops a seeded session that is never confirmed', () => {
-    store.seedClaude(PANE_ID, SESSION_A)
+    store.seedAgent(PANE_ID, SESSION_A)
     now = 60_001
 
-    expect(claudeInFile()).toBeNull()
+    expect(agentInFile()).toBeNull()
   })
 
   it('ignores an end after freeze, and flushAtQuit still writes the entry', async () => {
-    store.recordClaudeStart(PANE_ID, SESSION_A)
+    store.recordAgentStart(PANE_ID, SESSION_A)
     store.freeze()
-    store.recordClaudeEnd(PANE_ID, SESSION_A.sessionId)
+    store.recordAgentEnd(PANE_ID, SESSION_A.sessionId)
     await store.flushAtQuit()
 
     const snapshot = readSnapshot(directory)
-    expect(snapshot?.groups[0].panes[0].claude).toEqual(SESSION_A)
+    expect(snapshot?.groups[0].panes[0].agent).toEqual(SESSION_A)
   })
 
   it('clears a pane entry when its pty exits', () => {
-    store.recordClaudeStart(PANE_ID, SESSION_A)
+    store.recordAgentStart(PANE_ID, SESSION_A)
     exitListener({ id: PANE_ID, exitCode: 0 })
     store.workspaceChanged(WORKSPACE)
 
-    expect(claudeInFile()).toBeNull()
+    expect(agentInFile()).toBeNull()
   })
 })

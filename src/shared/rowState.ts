@@ -2,29 +2,30 @@ import type { SessionId } from './ipc'
 
 export type RowState = 'working' | 'needs' | 'done' | 'idle'
 // 'resume' is a start whose session already holds a conversation.
-export type ClaudeSignal = 'start' | 'resume' | 'working' | 'needs' | 'stopped' | 'end'
+export type AgentSignal = 'start' | 'resume' | 'working' | 'needs' | 'stopped' | 'end'
 
-export interface ClaudeRow {
-  claudeSessionId: string
+export interface AgentRow {
+  harness: string
+  sessionId: string
   state: RowState
   hasConversation: boolean
 }
 
-export type ClaudeRows = ReadonlyMap<SessionId, ClaudeRow>
+export type AgentRows = ReadonlyMap<SessionId, AgentRow>
 
-function withRow(rows: ClaudeRows, pane: SessionId, row: ClaudeRow): ClaudeRows {
+function withRow(rows: AgentRows, pane: SessionId, row: AgentRow): AgentRows {
   const next = new Map(rows)
   next.set(pane, row)
   return next
 }
 
-function withoutRow(rows: ClaudeRows, pane: SessionId): ClaudeRows {
+function withoutRow(rows: AgentRows, pane: SessionId): AgentRows {
   const next = new Map(rows)
   next.delete(pane)
   return next
 }
 
-function stateAfterSignal(signal: ClaudeSignal, onScreen: boolean): RowState {
+function stateAfterSignal(signal: AgentSignal, onScreen: boolean): RowState {
   if (signal === 'stopped') {
     if (onScreen) {
       return 'idle'
@@ -38,21 +39,22 @@ function stateAfterSignal(signal: ClaudeSignal, onScreen: boolean): RowState {
 }
 
 export function rowsAfterSignal(
-  rows: ClaudeRows,
+  rows: AgentRows,
   pane: SessionId,
-  claudeSessionId: string,
-  signal: ClaudeSignal,
+  harness: string,
+  sessionId: string,
+  signal: AgentSignal,
   onScreen: boolean
-): ClaudeRows {
+): AgentRows {
   const row = rows.get(pane)
   if (signal === 'start' || signal === 'resume') {
-    if (row !== undefined && row.claudeSessionId === claudeSessionId) {
+    if (row !== undefined && row.sessionId === sessionId) {
       return rows
     }
     const hasConversation = signal === 'resume'
-    return withRow(rows, pane, { claudeSessionId, state: 'idle', hasConversation })
+    return withRow(rows, pane, { harness, sessionId, state: 'idle', hasConversation })
   }
-  if (row === undefined || row.claudeSessionId !== claudeSessionId) {
+  if (row === undefined || row.sessionId !== sessionId) {
     return rows
   }
   if (signal === 'end') {
@@ -63,10 +65,10 @@ export function rowsAfterSignal(
   if (row.state === state && row.hasConversation) {
     return rows
   }
-  return withRow(rows, pane, { claudeSessionId, state, hasConversation: true })
+  return withRow(rows, pane, { harness: row.harness, sessionId, state, hasConversation: true })
 }
 
-export function rowsAfterScreen(rows: ClaudeRows, onScreen: readonly SessionId[]): ClaudeRows {
+export function rowsAfterScreen(rows: AgentRows, onScreen: readonly SessionId[]): AgentRows {
   let next = rows
   for (const pane of onScreen) {
     const row = rows.get(pane)
@@ -78,7 +80,7 @@ export function rowsAfterScreen(rows: ClaudeRows, onScreen: readonly SessionId[]
 }
 
 // Stop does not fire when a turn is interrupted, so an idle title is the fallback that ends working and needs.
-export function rowsAfterIdleTitle(rows: ClaudeRows, pane: SessionId): ClaudeRows {
+export function rowsAfterIdleTitle(rows: AgentRows, pane: SessionId): AgentRows {
   const row = rows.get(pane)
   if (row === undefined) {
     return rows
@@ -89,7 +91,7 @@ export function rowsAfterIdleTitle(rows: ClaudeRows, pane: SessionId): ClaudeRow
   return rows
 }
 
-export function rowsAfterExit(rows: ClaudeRows, pane: SessionId): ClaudeRows {
+export function rowsAfterExit(rows: AgentRows, pane: SessionId): AgentRows {
   if (!rows.has(pane)) {
     return rows
   }
@@ -97,7 +99,7 @@ export function rowsAfterExit(rows: ClaudeRows, pane: SessionId): ClaudeRows {
 }
 
 /** The one state a collapsed group shows for the sessions inside it, or null when none is worth a marker. */
-export function summaryState(rows: ClaudeRows, panes: readonly SessionId[]): RowState | null {
+export function summaryState(rows: AgentRows, panes: readonly SessionId[]): RowState | null {
   const states: RowState[] = []
   for (const pane of panes) {
     const row = rows.get(pane)
@@ -117,7 +119,7 @@ export function summaryState(rows: ClaudeRows, panes: readonly SessionId[]): Row
   return null
 }
 
-export function waitingCount(rows: ClaudeRows): number {
+export function waitingCount(rows: AgentRows): number {
   let count = 0
   for (const row of rows.values()) {
     if (row.state === 'needs') {

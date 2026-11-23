@@ -31,7 +31,7 @@ export function usePopup(x: number, y: number, onClose: () => void): PopupHandle
   }, [x, y])
 
   useEffect(() => {
-    // Capture phase: Esc would otherwise reach the program in the terminal and interrupt Claude.
+    // Capture phase: Esc would otherwise reach the program in the terminal and interrupt an agent.
     function onKeyDown(event: KeyboardEvent): void {
       if (event.code !== 'Escape') {
         return

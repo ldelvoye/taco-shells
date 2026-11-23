@@ -8,7 +8,7 @@ import {
   snapshotFrom,
   workspaceFromSnapshot
 } from './snapshot'
-import type { ClaudeSession, Snapshot, SnapshotTabGroup } from './snapshot'
+import type { AgentSession, Snapshot, SnapshotTabGroup } from './snapshot'
 
 const SESSION_ID = '123e4567-e89b-12d3-a456-426614174000'
 
@@ -62,10 +62,10 @@ describe('parseSnapshot', () => {
     const [first, second] = snapshot.groups
     expect(first.activePane).toBe(0)
     expect(first.panes).toHaveLength(3)
-    expect(first.panes[0].claude).toEqual({ sessionId: SESSION_ID, cwd: '/a' })
+    expect(first.panes[0].agent).toEqual({ harness: 'claude', sessionId: SESSION_ID, cwd: '/a' })
     expect(first.panes[1].cwd).toBeNull()
-    expect(first.panes[1].claude).toBeNull()
-    expect(first.panes[2].claude).toBeNull()
+    expect(first.panes[1].agent).toBeNull()
+    expect(first.panes[2].agent).toBeNull()
     expect(first.panes.map((pane) => pane.color)).toEqual(['blue', null, null])
     expect(widthSum(snapshot, 0)).toBeCloseTo(1)
     expect(first.panes[2].width).toBeGreaterThan(0)
@@ -129,8 +129,31 @@ describe('parseSnapshot', () => {
   })
 })
 
+describe("a pane's saved session", () => {
+  function sessionOfPane(pane: Record<string, unknown>): AgentSession | null {
+    const group = { panes: [{ width: 1, cwd: null, ...pane }], activePane: 0 }
+    const text = JSON.stringify({ version: 1, activeGroup: 0, groups: [group] })
+    const snapshot = parseSnapshot(text)
+    if (snapshot === null) {
+      throw new Error('expected a snapshot')
+    }
+    return snapshot.groups[0].panes[0].agent
+  }
+
+  it("loads a pane's session from the agent field, or from the legacy claude field", () => {
+    const expected: AgentSession = { harness: 'claude', sessionId: SESSION_ID, cwd: '/a' }
+    const legacy = { sessionId: SESSION_ID, cwd: '/a' }
+
+    expect(sessionOfPane({ agent: expected })).toEqual(expected)
+    expect(sessionOfPane({ claude: legacy })).toEqual(expected)
+    expect(sessionOfPane({ agent: { ...expected, harness: 'nope' } })).toBeNull()
+    expect(sessionOfPane({ agent: { ...expected, sessionId: 'not-a-uuid' } })).toBeNull()
+    expect(sessionOfPane({ agent: { ...expected, sessionId: 'not-a-uuid' }, claude: legacy })).toBeNull()
+  })
+})
+
 describe('snapshot and workspace round trip', () => {
-  const claude: ClaudeSession = { sessionId: SESSION_ID, cwd: '/work' }
+  const claude: AgentSession = { harness: 'claude', sessionId: SESSION_ID, cwd: '/work' }
   const workspace: Workspace = {
     activeGroup: 1,
     tabGroups: [],
@@ -160,7 +183,7 @@ describe('snapshot and workspace round trip', () => {
     return `/dir/${id}`
   }
 
-  function claudeOf(id: string): ClaudeSession | null {
+  function claudeOf(id: string): AgentSession | null {
     if (id === 'pty-3') {
       return claude
     }
@@ -180,7 +203,7 @@ describe('snapshot and workspace round trip', () => {
       { id: 'b', title: '', width: 0.25, color: 'purple' },
       { id: 'c', title: '', width: 0.75, color: null }
     ])
-    expect(snapshot.groups[1].panes[1].claude).toEqual(claude)
+    expect(snapshot.groups[1].panes[1].agent).toEqual(claude)
     expect(snapshot.groups[1].panes[0].cwd).toBeNull()
   })
 

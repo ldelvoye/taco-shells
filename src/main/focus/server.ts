@@ -2,16 +2,17 @@ import { unlinkSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { SessionId } from '@shared/ipc'
 import { claude } from '@shared/harness/claude'
-import type { ClaudeSignal } from '@shared/rowState'
-import { type ClaudeSession, claudeSessionFrom } from '@shared/snapshot'
+import type { Harness } from '@shared/harness/types'
+import type { AgentSignal } from '@shared/rowState'
+import { type AgentSession, agentSessionFor } from '@shared/snapshot'
 
 export interface FocusServerHandlers {
   sessionForPids(pids: number[]): SessionId | null
   onFocus(id: SessionId): void
   onAttention(id: SessionId): void
-  onClaudeStart(id: SessionId, session: ClaudeSession, hasConversation: boolean): void
-  onClaudeEnd(id: SessionId, sessionId: string): void
-  onClaudeSignal(id: SessionId, claudeSessionId: string, signal: ClaudeSignal): void
+  onAgentStart(id: SessionId, session: AgentSession, hasConversation: boolean): void
+  onAgentEnd(id: SessionId, harness: string, sessionId: string): void
+  onAgentSignal(id: SessionId, harness: string, sessionId: string, signal: AgentSignal): void
   onUpdateCheck(): void
   onUnavailable(): void
 }
@@ -22,9 +23,9 @@ const LAST_PORT = 23460
 // /focus-tab switches to it at once. Merged, every ping would steal focus.
 const FOCUS_TAB_PATH = '/focus-tab'
 const ATTENTION_PATH = '/attention'
-const CLAUDE_START_PATH = '/claude-session/start'
-const CLAUDE_END_PATH = '/claude-session/end'
-const CLAUDE_STATE_PATH = '/claude-session/state'
+const LEGACY_START_PATH = '/claude-session/start'
+const LEGACY_END_PATH = '/claude-session/end'
+const LEGACY_STATE_PATH = '/claude-session/state'
 // Must match scripts/bundle.mjs, or promote cannot reach the running app.
 const UPDATE_CHECK_PATH = '/update/check'
 // A pid chain is a handful of numbers, so anything larger is not one of ours.
@@ -93,14 +94,14 @@ function pidsFrom(body: unknown): number[] | null {
   return finite
 }
 
-function sessionIdFrom(body: unknown): string | null {
+function sessionIdFrom(harness: Harness, body: unknown): string | null {
   if (typeof body !== 'object' || body === null) {
     return null
   }
 
   const record = body as Record<string, unknown>
   const candidate = record.sessionId
-  if (!claude.isSessionId(candidate)) {
+  if (!harness.isSessionId(candidate)) {
     return null
   }
   return candidate
@@ -181,10 +182,10 @@ async function handleRequest(
 
   const isFocusTab = request.url === FOCUS_TAB_PATH
   const isAttention = request.url === ATTENTION_PATH
-  const isClaudeStart = request.url === CLAUDE_START_PATH
-  const isClaudeEnd = request.url === CLAUDE_END_PATH
-  const isClaudeState = request.url === CLAUDE_STATE_PATH
-  const isKnownRoute = isFocusTab || isAttention || isClaudeStart || isClaudeEnd || isClaudeState
+  const isStart = request.url === LEGACY_START_PATH
+  const isEnd = request.url === LEGACY_END_PATH
+  const isState = request.url === LEGACY_STATE_PATH
+  const isKnownRoute = isFocusTab || isAttention || isStart || isEnd || isState
   if (request.method !== 'POST' || !isKnownRoute) {
     respond(response, 404, '')
     return
@@ -212,9 +213,11 @@ async function handleRequest(
     return
   }
 
-  let startedSession: ClaudeSession | null = null
-  if (isClaudeStart) {
-    startedSession = claudeSessionFrom(payload)
+  const harness = claude
+
+  let startedSession: AgentSession | null = null
+  if (isStart) {
+    startedSession = agentSessionFor(harness, payload)
     if (startedSession === null) {
       respond(response, 400, 'bad session')
       return
@@ -222,19 +225,19 @@ async function handleRequest(
   }
 
   let endedSessionId: string | null = null
-  if (isClaudeEnd) {
-    endedSessionId = sessionIdFrom(payload)
+  if (isEnd) {
+    endedSessionId = sessionIdFrom(harness, payload)
     if (endedSessionId === null) {
       respond(response, 400, 'bad session')
       return
     }
   }
 
-  let claudeSessionId: string | null = null
-  let stateSignal: ClaudeSignal | null = null
-  if (isClaudeState) {
-    claudeSessionId = sessionIdFrom(payload)
-    if (claudeSessionId === null) {
+  let signalSessionId: string | null = null
+  let stateSignal: AgentSignal | null = null
+  if (isState) {
+    signalSessionId = sessionIdFrom(harness, payload)
+    if (signalSessionId === null) {
       respond(response, 400, 'bad session')
       return
     }
@@ -244,26 +247,26 @@ async function handleRequest(
       return
     }
     const detail = detailFrom(payload)
-    stateSignal = claude.signalFor(event, detail)
+    stateSignal = harness.signalFor(event, detail)
   }
 
-  const sessionId = handlers.sessionForPids(pids)
-  if (sessionId === null) {
+  const paneId = handlers.sessionForPids(pids)
+  if (paneId === null) {
     respond(response, 404, 'not found')
     return
   }
 
   if (isFocusTab) {
-    handlers.onFocus(sessionId)
+    handlers.onFocus(paneId)
   } else if (isAttention) {
-    handlers.onAttention(sessionId)
+    handlers.onAttention(paneId)
   } else if (startedSession !== null) {
     const hasConversation = hasConversationFrom(payload)
-    handlers.onClaudeStart(sessionId, startedSession, hasConversation)
+    handlers.onAgentStart(paneId, startedSession, hasConversation)
   } else if (endedSessionId !== null) {
-    handlers.onClaudeEnd(sessionId, endedSessionId)
-  } else if (claudeSessionId !== null && stateSignal !== null) {
-    handlers.onClaudeSignal(sessionId, claudeSessionId, stateSignal)
+    handlers.onAgentEnd(paneId, harness.id, endedSessionId)
+  } else if (signalSessionId !== null && stateSignal !== null) {
+    handlers.onAgentSignal(paneId, harness.id, signalSessionId, stateSignal)
   }
   respond(response, 200, 'ok')
 }

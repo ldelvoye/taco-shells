@@ -7,6 +7,7 @@ interface RowColorPickerProps {
   y: number
   current: RowColor | null
   canFork: boolean
+  forkName: string
   onPreview: (color: RowColor | null) => void
   onPreviewEnd: () => void
   onPick: (color: RowColor | null) => void
@@ -24,6 +25,7 @@ export function RowColorPicker({
   y,
   current,
   canFork,
+  forkName,
   onPreview,
   onPreviewEnd,
   onPick,
@@ -86,7 +88,7 @@ export function RowColorPicker({
         />
       </div>
       <button type="button" className="row-fork-item" disabled={!canFork} onClick={onFork}>
-        Fork with Claude
+        Fork with {forkName}
       </button>
       <button type="button" className="row-fork-item row-new-group-item" onClick={onNewGroup}>
         New group

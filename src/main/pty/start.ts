@@ -1,6 +1,7 @@
-import { claudeForkCommand, claudeResumeCommand } from '@shared/harness/claude/commands'
+import { HARNESSES, harnessOf } from '@shared/harness/registry'
+import type { Harness } from '@shared/harness/types'
 import type { PtyCreateOptions, SessionId } from '@shared/ipc'
-import type { ClaudeSession } from '@shared/snapshot'
+import type { AgentSession } from '@shared/snapshot'
 
 export interface ShellStart {
   cwd: string | null
@@ -11,19 +12,28 @@ export interface ShellStart {
 /** Where a new shell starts and what is typed into it; a fork with no known session is a plain split. */
 export function shellStartFor(
   options: PtyCreateOptions,
-  claudeSessionOf: (id: SessionId) => ClaudeSession | null
+  agentSessionOf: (id: SessionId) => AgentSession | null,
+  harnesses: readonly Harness[] = HARNESSES
 ): ShellStart {
   if (options.resume !== undefined) {
-    const command = claudeResumeCommand(options.resume.sessionId)
+    const harness = harnessOf(options.resume.harness, harnesses)
+    if (harness === null) {
+      return { cwd: options.resume.cwd, cwdFrom: null, command: null }
+    }
+    const command = harness.resumeCommand(options.resume.sessionId)
     return { cwd: options.resume.cwd, cwdFrom: null, command }
   }
 
   if (options.fork !== undefined) {
-    const source = claudeSessionOf(options.fork.from)
+    const source = agentSessionOf(options.fork.from)
     if (source === null) {
       return { cwd: null, cwdFrom: options.fork.from, command: null }
     }
-    const command = claudeForkCommand(source.sessionId, options.fork.name)
+    const harness = harnessOf(source.harness, harnesses)
+    if (harness === null || harness.forkCommand === undefined) {
+      return { cwd: null, cwdFrom: options.fork.from, command: null }
+    }
+    const command = harness.forkCommand(source.sessionId, options.fork.name)
     return { cwd: source.cwd, cwdFrom: null, command }
   }
 

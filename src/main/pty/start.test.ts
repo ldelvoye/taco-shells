@@ -1,10 +1,20 @@
 import { describe, expect, it } from 'vitest'
 import { claudeForkCommand, claudeResumeCommand } from '@shared/harness/claude/commands'
+import type { Harness } from '@shared/harness/types'
+import { claude } from '@shared/harness/claude'
 import { shellStartFor } from './start'
+
+const noFork: Harness = {
+  id: 'nofork',
+  name: 'No Fork',
+  isSessionId: (value): value is string => typeof value === 'string',
+  signalFor: () => null,
+  resumeCommand: () => null
+}
 
 describe('shellStartFor', () => {
   it('starts a fork where its session lives, or as a plain split when it has none', () => {
-    const known = { sessionId: '123e4567-e89b-12d3-a456-426614174000', cwd: '/work' }
+    const known = { harness: 'claude', sessionId: '123e4567-e89b-12d3-a456-426614174000', cwd: '/work' }
     const lookup = (id: string) => {
       if (id === 'pty-1') {
         return known
@@ -33,5 +43,23 @@ describe('shellStartFor', () => {
       command: null
     })
     expect(shellStartFor({}, lookup)).toEqual({ cwd: null, cwdFrom: null, command: null })
+  })
+
+  it("opens a plain shell when the session's harness is gone or cannot fork", () => {
+    const list = [claude, noFork]
+    const gone = { harness: 'gone', sessionId: 'x1', cwd: '/work' }
+    const stuck = { harness: 'nofork', sessionId: 'x2', cwd: '/other' }
+    const lookup = () => stuck
+
+    expect(shellStartFor({ resume: gone }, lookup, list)).toEqual({
+      cwd: '/work',
+      cwdFrom: null,
+      command: null
+    })
+    expect(shellStartFor({ fork: { from: 'pty-1', name: '⑂ x' } }, lookup, list)).toEqual({
+      cwd: null,
+      cwdFrom: 'pty-1',
+      command: null
+    })
   })
 })

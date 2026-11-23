@@ -5,17 +5,17 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import type { SessionId } from '@shared/ipc'
-import type { ClaudeSignal } from '@shared/rowState'
-import type { ClaudeSession } from '@shared/snapshot'
+import type { AgentSignal } from '@shared/rowState'
+import type { AgentSession } from '@shared/snapshot'
 import { type FocusServerHandlers, startFocusServer } from './server'
 
 interface FakeHandlers extends FocusServerHandlers {
   sessionPids: Map<SessionId, number>
   focused: SessionId[]
   attended: SessionId[]
-  started: Array<[SessionId, ClaudeSession, boolean]>
+  started: Array<[SessionId, AgentSession, boolean]>
   ended: Array<[SessionId, string]>
-  signals: Array<[SessionId, string, ClaudeSignal]>
+  signals: Array<[SessionId, string, AgentSignal]>
   updateChecks: boolean[]
   unavailable: boolean[]
 }
@@ -24,9 +24,9 @@ function createFakeHandlers(): FakeHandlers {
   const sessionPids = new Map<SessionId, number>()
   const focused: SessionId[] = []
   const attended: SessionId[] = []
-  const started: Array<[SessionId, ClaudeSession, boolean]> = []
+  const started: Array<[SessionId, AgentSession, boolean]> = []
   const ended: Array<[SessionId, string]> = []
-  const signals: Array<[SessionId, string, ClaudeSignal]> = []
+  const signals: Array<[SessionId, string, AgentSignal]> = []
   const updateChecks: boolean[] = []
   const unavailable: boolean[] = []
 
@@ -42,13 +42,13 @@ function createFakeHandlers(): FakeHandlers {
     onUpdateCheck: () => {
       updateChecks.push(true)
     },
-    onClaudeSignal: (id: SessionId, claudeSessionId: string, signal: ClaudeSignal) => {
-      signals.push([id, claudeSessionId, signal])
+    onAgentSignal: (id: SessionId, _harness: string, sessionId: string, signal: AgentSignal) => {
+      signals.push([id, sessionId, signal])
     },
-    onClaudeStart: (id: SessionId, session: ClaudeSession, hasConversation: boolean) => {
+    onAgentStart: (id: SessionId, session: AgentSession, hasConversation: boolean) => {
       started.push([id, session, hasConversation])
     },
-    onClaudeEnd: (id: SessionId, sessionId: string) => {
+    onAgentEnd: (id: SessionId, _harness: string, sessionId: string) => {
       ended.push([id, sessionId])
     },
     onUnavailable: () => {
@@ -179,7 +179,7 @@ describe('startFocusServer Claude session routes', () => {
 
   it('records a valid start, and whether the session already holds a conversation', async () => {
     const body = { pids: [999, 222], sessionId: SESSION_ID, cwd: '/tmp/work' }
-    const session = { sessionId: SESSION_ID, cwd: '/tmp/work' }
+    const session = { harness: 'claude', sessionId: SESSION_ID, cwd: '/tmp/work' }
 
     const response = await post(port, '/claude-session/start', body)
     await post(port, '/claude-session/start', { ...body, hasConversation: true })

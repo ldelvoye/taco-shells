@@ -8,7 +8,7 @@ import { readSnapshot, snapshotPath, writeSnapshot } from './files'
 const SNAPSHOT: Snapshot = {
   version: SNAPSHOT_VERSION,
   groups: [
-    { panes: [{ width: 1, cwd: '/tmp', claude: null, color: null }], activePane: 0, tabGroup: null }
+    { panes: [{ width: 1, cwd: '/tmp', agent: null, color: null }], activePane: 0, tabGroup: null }
   ],
   activeGroup: 0,
   tabGroups: []
