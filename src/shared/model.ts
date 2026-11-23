@@ -693,24 +693,6 @@ export function forkPane(workspace: Workspace, source: SessionId, id: SessionId)
   return setPaneColor(split, id, sourcePane.color)
 }
 
-export function canSplitActivePane(workspace: Workspace): boolean {
-  const pane = activePane(workspace)
-  if (!pane) {
-    return false
-  }
-
-  return canSplitPane(workspace, pane.id)
-}
-
-export function splitActivePane(workspace: Workspace, id: SessionId): Workspace {
-  const pane = activePane(workspace)
-  if (!pane) {
-    return workspace
-  }
-
-  return splitPane(workspace, pane.id, id)
-}
-
 export function activatePane(workspace: Workspace, id: SessionId): Workspace {
   const groupIndex = workspace.groups.findIndex((group) =>
     group.panes.some((pane) => pane.id === id)

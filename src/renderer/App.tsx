@@ -9,7 +9,6 @@ import {
   addGroup,
   addGroupTo,
   applyDrop,
-  canSplitActivePane,
   canSplitPane,
   closePane,
   type Dragged,
@@ -25,7 +24,7 @@ import {
   renamePane,
   type RowColor,
   setPaneColor,
-  splitActivePane,
+  splitPane,
   type TabGroup,
   type TabGroupId,
   toggleActivePaneColor,
@@ -232,6 +231,23 @@ export function App(): JSX.Element {
     openTerminalRunning(command)
   }, [openTerminalRunning])
 
+  // The donor can close, or its group fill, while the shell is spawning: a shell
+  // with no pane to show it would keep running unseen.
+  const splitOnceSpawned = useCallback(
+    (donor: SessionId, options: PtyCreateOptions, place: typeof splitPane) => {
+      void createSession(options).then((sessionId) => {
+        const latest = workspaceRef.current
+        const stillSplittable = latest !== null && canSplitPane(latest, donor)
+        if (!stillSplittable) {
+          disposeSession(sessionId)
+          return
+        }
+        updateWorkspace((current) => place(current, donor, sessionId))
+      })
+    },
+    [updateWorkspace]
+  )
+
   // The new shell starts in the split terminal's directory, which the main
   // process resolves from the pty it names here.
   const splitTerminal = useCallback(() => {
@@ -241,16 +257,12 @@ export function App(): JSX.Element {
     if (!workspace) {
       return
     }
-    // Asked before the pty is spawned: a split the model would refuse must not
-    // leave a shell running with no pane to show it in.
-    if (!canSplitActivePane(workspace)) {
+    if (!canSplitPane(workspace, activeSessionId)) {
       return
     }
 
-    void createSession({ cwdFrom: activeSessionId }).then((sessionId) => {
-      updateWorkspace((current) => splitActivePane(current, sessionId))
-    })
-  }, [activeSessionId, workspace, updateWorkspace])
+    splitOnceSpawned(activeSessionId, { cwdFrom: activeSessionId }, splitPane)
+  }, [activeSessionId, workspace, splitOnceSpawned])
 
   // The main process finds the Claude session to fork from the pane named here.
   const forkTerminal = useCallback(
@@ -270,19 +282,9 @@ export function App(): JSX.Element {
       const titles = panes.map((pane) => pane.title)
       const name = forkNameFor(sourcePane.title, titles)
 
-      void createSession({ fork: { from: source, name } }).then((sessionId) => {
-        // The source can close, or its group fill, while the shell is spawning:
-        // a fork with no pane to show it would leave Claude running unseen.
-        const latest = workspaceRef.current
-        const stillForkable = latest !== null && canSplitPane(latest, source)
-        if (!stillForkable) {
-          disposeSession(sessionId)
-          return
-        }
-        updateWorkspace((current) => forkPane(current, source, sessionId))
-      })
+      splitOnceSpawned(source, { fork: { from: source, name } }, forkPane)
     },
-    [workspace, updateWorkspace]
+    [workspace, splitOnceSpawned]
   )
 
   // Panes are created in group order and workspaceFromSnapshot hands the ids

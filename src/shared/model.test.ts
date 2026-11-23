@@ -4,7 +4,7 @@ import type { Dragged, Drop, Group, TabGroup, Workspace } from './model'
 import {
   activatePane,
   applyDrop,
-  canSplitActivePane,
+  canSplitPane,
   closePane,
   emptyWorkspace,
   focusNextGroup,
@@ -17,7 +17,7 @@ import {
   moveGroup,
   renamePane,
   setPaneColor,
-  splitActivePane,
+  splitPane,
   toggleActivePaneColor
 } from './model'
 
@@ -224,12 +224,12 @@ describe('applyDrop with tab groups', () => {
   })
 })
 
-describe('splitActivePane', () => {
-  it('puts the new pane after the active one and levels the whole group', () => {
-    const group = makeGroupWithWidths('a', [0.5, 0.5], 0)
+describe('splitPane', () => {
+  it('puts the new pane after its donor and levels the whole group', () => {
+    const group = makeGroupWithWidths('a', [0.5, 0.5], 1)
     const workspace = makeWorkspace([group], 0)
 
-    const result = splitActivePane(workspace, 'new-pane')
+    const result = splitPane(workspace, 'a-0', 'new-pane')
 
     const resultGroup = result.groups[0]
     expect(resultGroup.panes.map((pane) => pane.id)).toEqual(['a-0', 'new-pane', 'a-1'])
@@ -285,8 +285,8 @@ describe('the minimum pane width', () => {
     let workspace = makeWorkspace([makeGroup('a', 'pane-a')], 0)
 
     let attempts = 0
-    while (canSplitActivePane(workspace) && attempts < 100) {
-      workspace = splitActivePane(workspace, `pane-${attempts}`)
+    while (canSplitPane(workspace, 'pane-a') && attempts < 100) {
+      workspace = splitPane(workspace, 'pane-a', `pane-${attempts}`)
       attempts += 1
     }
 
@@ -297,7 +297,7 @@ describe('the minimum pane width', () => {
     // Widths summing to 1 with none below a tenth leaves room for ten panes and
     // no more, so the group cannot grow without bound.
     expect(panes).toHaveLength(10)
-    expect(splitActivePane(workspace, 'one-too-many')).toBe(workspace)
+    expect(splitPane(workspace, 'pane-a', 'one-too-many')).toBe(workspace)
   })
 })
 
@@ -403,7 +403,7 @@ describe('unchanged operations', () => {
     expect(moveGroup(workspace, 0, 0)).toBe(workspace)
 
     const empty = emptyWorkspace()
-    expect(splitActivePane(empty, 'new-pane')).toBe(empty)
+    expect(splitPane(empty, 'pane-a', 'new-pane')).toBe(empty)
     expect(activatePane(workspace, 'pane-a')).toBe(workspace)
     expect(focusNextPane(workspace)).toBe(workspace)
 
