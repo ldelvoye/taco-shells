@@ -55,7 +55,7 @@ export function registerFocus(
         sendSignal(window, { id, harness: session.harness, sessionId: session.sessionId, signal })
       },
       onAgentEnd: (id: SessionId, harness: string, sessionId: string) => {
-        snapshotStore.recordAgentEnd(id, sessionId)
+        snapshotStore.recordAgentEnd(id, harness, sessionId)
         sendSignal(window, { id, harness, sessionId, signal: 'end' })
       },
       onAgentSignal: (id: SessionId, harness: string, sessionId: string, signal: AgentSignal) => {

@@ -89,21 +89,21 @@ describe('SnapshotStore Claude sessions', () => {
   it('keeps the older session when the newer one ends', () => {
     store.recordAgentStart(PANE_ID, SESSION_A)
     store.recordAgentStart(PANE_ID, SESSION_B)
-    store.recordAgentEnd(PANE_ID, SESSION_B.sessionId)
+    store.recordAgentEnd(PANE_ID, 'claude',SESSION_B.sessionId)
 
     expect(agentInFile()).toEqual(SESSION_A)
   })
 
   it('follows /clear whichever of the end and the start arrives first', () => {
     store.recordAgentStart(PANE_ID, SESSION_A)
-    store.recordAgentEnd(PANE_ID, SESSION_A.sessionId)
+    store.recordAgentEnd(PANE_ID, 'claude',SESSION_A.sessionId)
     store.recordAgentStart(PANE_ID, SESSION_C)
     expect(agentInFile()).toEqual(SESSION_C)
 
-    store.recordAgentEnd(PANE_ID, SESSION_C.sessionId)
+    store.recordAgentEnd(PANE_ID, 'claude',SESSION_C.sessionId)
     store.recordAgentStart(PANE_ID, SESSION_A)
     store.recordAgentStart(PANE_ID, SESSION_C)
-    store.recordAgentEnd(PANE_ID, SESSION_A.sessionId)
+    store.recordAgentEnd(PANE_ID, 'claude',SESSION_A.sessionId)
     expect(agentInFile()).toEqual(SESSION_C)
   })
 
@@ -125,7 +125,7 @@ describe('SnapshotStore Claude sessions', () => {
   it('ignores an end after freeze, and flushAtQuit still writes the entry', async () => {
     store.recordAgentStart(PANE_ID, SESSION_A)
     store.freeze()
-    store.recordAgentEnd(PANE_ID, SESSION_A.sessionId)
+    store.recordAgentEnd(PANE_ID, 'claude',SESSION_A.sessionId)
     await store.flushAtQuit()
 
     const snapshot = readSnapshot(directory)

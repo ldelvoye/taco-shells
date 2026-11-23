@@ -16,8 +16,8 @@ interface FakeHandlers extends FocusServerHandlers {
   focused: SessionId[]
   attended: SessionId[]
   started: Array<[SessionId, AgentSession, boolean]>
-  ended: Array<[SessionId, string]>
-  signals: Array<[SessionId, string, AgentSignal]>
+  ended: Array<[SessionId, string, string]>
+  signals: Array<[SessionId, string, string, AgentSignal]>
   updateChecks: boolean[]
   unavailable: boolean[]
 }
@@ -27,8 +27,8 @@ function createFakeHandlers(): FakeHandlers {
   const focused: SessionId[] = []
   const attended: SessionId[] = []
   const started: Array<[SessionId, AgentSession, boolean]> = []
-  const ended: Array<[SessionId, string]> = []
-  const signals: Array<[SessionId, string, AgentSignal]> = []
+  const ended: Array<[SessionId, string, string]> = []
+  const signals: Array<[SessionId, string, string, AgentSignal]> = []
   const updateChecks: boolean[] = []
   const unavailable: boolean[] = []
 
@@ -44,14 +44,14 @@ function createFakeHandlers(): FakeHandlers {
     onUpdateCheck: () => {
       updateChecks.push(true)
     },
-    onAgentSignal: (id: SessionId, _harness: string, sessionId: string, signal: AgentSignal) => {
-      signals.push([id, sessionId, signal])
+    onAgentSignal: (id: SessionId, harness: string, sessionId: string, signal: AgentSignal) => {
+      signals.push([id, harness, sessionId, signal])
     },
     onAgentStart: (id: SessionId, session: AgentSession, hasConversation: boolean) => {
       started.push([id, session, hasConversation])
     },
-    onAgentEnd: (id: SessionId, _harness: string, sessionId: string) => {
-      ended.push([id, sessionId])
+    onAgentEnd: (id: SessionId, harness: string, sessionId: string) => {
+      ended.push([id, harness, sessionId])
     },
     onUnavailable: () => {
       unavailable.push(true)
@@ -211,7 +211,7 @@ describe('startFocusServer Claude session routes', () => {
     const response = await post(port, '/claude-session/end', body)
 
     expect(response.status).toBe(200)
-    expect(handlers.ended).toEqual([['pty-2', SESSION_ID]])
+    expect(handlers.ended).toEqual([['pty-2', 'claude', SESSION_ID]])
   })
 
   it('forwards a hook event as its signal', async () => {
@@ -220,7 +220,7 @@ describe('startFocusServer Claude session routes', () => {
     const response = await post(port, '/claude-session/state', body)
 
     expect(response.status).toBe(200)
-    expect(handlers.signals).toEqual([['pty-2', SESSION_ID, 'needs']])
+    expect(handlers.signals).toEqual([['pty-2', 'claude', SESSION_ID, 'needs']])
   })
 
   it('drops hook events that carry no signal', async () => {
@@ -276,16 +276,22 @@ describe('startFocusServer agent session routes', () => {
     const start = { pids: [222], harness: 'fake', sessionId: 'thr_1', cwd: '/a' }
     const state = { pids: [222], harness: 'fake', sessionId: 'thr_1', event: 'Busy' }
 
+    const end = { pids: [222], harness: 'fake', sessionId: 'thr_1' }
+
     const started = await post(port, '/agent-session/start', start)
     const signalled = await post(port, '/agent-session/state', state)
+    const ended = await post(port, '/agent-session/end', end)
 
     expect(started.status).toBe(200)
     expect(signalled.status).toBe(200)
+    expect(ended.status).toBe(200)
     expect(handlers.started).toEqual([['pty-2', { harness: 'fake', sessionId: 'thr_1', cwd: '/a' }, false]])
-    expect(handlers.signals).toEqual([['pty-2', 'thr_1', 'working']])
+    expect(handlers.signals).toEqual([['pty-2', 'fake', 'thr_1', 'working']])
+    expect(handlers.ended).toEqual([['pty-2', 'fake', 'thr_1']])
 
-    const wrongHarness = await post(port, '/agent-session/start', { ...start, harness: 'claude' })
-    expect(wrongHarness.status).toBe(400)
+    // thr_1 is an id only the fake harness accepts
+    const fakeIdAsClaude = await post(port, '/agent-session/start', { ...start, harness: 'claude' })
+    expect(fakeIdAsClaude.status).toBe(400)
     expect(handlers.started).toHaveLength(1)
   })
 
