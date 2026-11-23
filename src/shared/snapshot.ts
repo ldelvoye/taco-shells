@@ -1,7 +1,6 @@
 import type { SessionId } from './ipc'
 import type { GroupId, Group, Pane, RowColor, TabGroup, TabGroupId, Workspace } from './model'
-import { claude } from './harness/claude'
-import { HARNESSES, harnessOf } from './harness/registry'
+import { HARNESSES, harnessOf, LEGACY_HARNESS } from './harness/registry'
 import type { Harness } from './harness/types'
 import { emptyWorkspace, MIN_PANE_WIDTH, openedAt, ROW_COLORS } from './model'
 
@@ -124,11 +123,12 @@ function parseGroup(value: unknown): SnapshotGroup | null {
       cwd = raw.cwd
     }
     const width = widths[index] / widthSum
+    // A file saved before harnesses holds the session under "claude", with no harness id.
     let agent: AgentSession | null
     if (raw.agent !== undefined) {
       agent = agentSessionFrom(raw.agent)
     } else {
-      agent = agentSessionFor(claude, raw.claude)
+      agent = agentSessionFor(LEGACY_HARNESS, raw.claude)
     }
     const color = rowColorFrom(raw.color)
     return { width, cwd, agent, color }

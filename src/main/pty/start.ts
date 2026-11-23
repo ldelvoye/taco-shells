@@ -9,7 +9,7 @@ export interface ShellStart {
   command: string | null
 }
 
-/** Where a new shell starts and what is typed into it; a fork with no known session is a plain split. */
+/** Where a new shell starts and what is typed into it; a resume or fork its harness cannot run is a plain shell. */
 export function shellStartFor(
   options: PtyCreateOptions,
   agentSessionOf: (id: SessionId) => AgentSession | null,

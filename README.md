@@ -92,7 +92,7 @@ Right-click a row that is running Claude Code and pick **Fork with Claude**. A c
 
 ## Other coding agents
 
-Claude Code is the one agent Taco Shells supports today, but only one folder of the app is written for it. Support for an agent is a harness: a folder under `src/shared/harness/` that says how to read the agent's hook events, session ids and terminal title, and which commands resume and fork a session, plus a hook script in `hooks/` that posts those events to the app. [`types.ts`](src/shared/harness/types.ts) lists what a harness declares, and [`claude/`](src/shared/harness/claude) is the worked example. A new agent's script posts to `/agent-session/start`, `/agent-session/end` and `/agent-session/state` with its harness id in the body, and one line in [`registry.ts`](src/shared/harness/registry.ts) registers it.
+Claude Code is the only agent Taco Shells supports today, and everything the app knows about it lives in one folder. Support for an agent is a harness: a folder under `src/shared/harness/` that says how to read the agent's hook events, session ids and terminal title, and which commands resume and fork a session. Each harness also has a hook script in `hooks/` that posts those events to the app. [`types.ts`](src/shared/harness/types.ts) lists what a harness declares, and [`claude/`](src/shared/harness/claude) is the worked example. A new agent's script posts to `/agent-session/start`, `/agent-session/end` and `/agent-session/state` with its harness id in the body, and one line in [`registry.ts`](src/shared/harness/registry.ts) registers it.
 
 ## Settings
 
