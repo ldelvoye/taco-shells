@@ -1,8 +1,8 @@
 import { app, type BrowserWindow } from 'electron'
-import { CHANNEL, type ClaudeSignalEvent, type SessionId } from '@shared/ipc'
-import type { ClaudeSignal } from '@shared/rowState'
+import { CHANNEL, type AgentSignalEvent, type SessionId } from '@shared/ipc'
+import type { AgentSignal } from '@shared/rowState'
 import { focusPortPath } from '../config/files'
-import type { ClaudeSession } from '@shared/snapshot'
+import type { AgentSession } from '@shared/snapshot'
 import type { PtySessions } from '../pty/sessions'
 import type { SnapshotStore } from '../snapshot/store'
 import { startFocusServer } from './server'
@@ -14,11 +14,11 @@ function sendToWindow(window: BrowserWindow, channel: string, id: SessionId): vo
   window.webContents.send(channel, id)
 }
 
-function sendSignal(window: BrowserWindow, event: ClaudeSignalEvent): void {
+function sendSignal(window: BrowserWindow, event: AgentSignalEvent): void {
   if (window.isDestroyed()) {
     return
   }
-  window.webContents.send(CHANNEL.claudeSignal, event)
+  window.webContents.send(CHANNEL.agentSignal, event)
 }
 
 function sendBare(window: BrowserWindow, channel: string): void {
@@ -46,20 +46,20 @@ export function registerFocus(
       onAttention: (id: SessionId) => {
         sendToWindow(window, CHANNEL.attentionSession, id)
       },
-      onClaudeStart: (id: SessionId, session: ClaudeSession, hasConversation: boolean) => {
-        snapshotStore.recordClaudeStart(id, session)
-        let signal: ClaudeSignal = 'start'
+      onAgentStart: (id: SessionId, session: AgentSession, hasConversation: boolean) => {
+        snapshotStore.recordAgentStart(id, session)
+        let signal: AgentSignal = 'start'
         if (hasConversation) {
           signal = 'resume'
         }
-        sendSignal(window, { id, claudeSessionId: session.sessionId, signal })
+        sendSignal(window, { id, harness: session.harness, sessionId: session.sessionId, signal })
       },
-      onClaudeEnd: (id: SessionId, sessionId: string) => {
-        snapshotStore.recordClaudeEnd(id, sessionId)
-        sendSignal(window, { id, claudeSessionId: sessionId, signal: 'end' })
+      onAgentEnd: (id: SessionId, harness: string, sessionId: string) => {
+        snapshotStore.recordAgentEnd(id, sessionId)
+        sendSignal(window, { id, harness, sessionId, signal: 'end' })
       },
-      onClaudeSignal: (id: SessionId, claudeSessionId: string, signal: ClaudeSignal) => {
-        sendSignal(window, { id, claudeSessionId, signal })
+      onAgentSignal: (id: SessionId, harness: string, sessionId: string, signal: AgentSignal) => {
+        sendSignal(window, { id, harness, sessionId, signal })
       },
       onUpdateCheck,
       onUnavailable: () => {

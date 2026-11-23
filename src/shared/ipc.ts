@@ -1,7 +1,7 @@
 import type { Config, ConfigFile } from './config'
 import type { Workspace } from './model'
-import type { ClaudeSignal } from './rowState'
-import type { ClaudeSession, Snapshot } from './snapshot'
+import type { AgentSignal } from './rowState'
+import type { AgentSession, Snapshot } from './snapshot'
 
 export type SessionId = string
 
@@ -13,7 +13,7 @@ export interface ForkRequest {
 export interface PtyCreateOptions {
   cwdFrom?: SessionId
   cwd?: string
-  resume?: ClaudeSession
+  resume?: AgentSession
   fork?: ForkRequest
 }
 
@@ -32,10 +32,11 @@ export interface PtyExitEvent {
   exitCode: number
 }
 
-export interface ClaudeSignalEvent {
+export interface AgentSignalEvent {
   id: SessionId
-  claudeSessionId: string
-  signal: ClaudeSignal
+  harness: string
+  sessionId: string
+  signal: AgentSignal
 }
 
 export const CHANNEL = {
@@ -53,7 +54,7 @@ export const CHANNEL = {
   configPath: 'config:path',
   focusSession: 'focus:session',
   attentionSession: 'attention:session',
-  claudeSignal: 'claude:signal',
+  agentSignal: 'agent:signal',
   appActivated: 'app:activated',
   focusUnavailable: 'focus:unavailable',
   fullScreenGet: 'full-screen:get',
@@ -91,7 +92,7 @@ export interface TacoShellsApi {
   focus: {
     onFocusSession(listener: (id: SessionId) => void): () => void
     onAttention(listener: (id: SessionId) => void): () => void
-    onClaudeSignal(listener: (event: ClaudeSignalEvent) => void): () => void
+    onAgentSignal(listener: (event: AgentSignalEvent) => void): () => void
     onActivated(listener: () => void): () => void
     onUnavailable(listener: () => void): () => void
   }

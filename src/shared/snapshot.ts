@@ -1,6 +1,8 @@
 import type { SessionId } from './ipc'
 import type { GroupId, Group, Pane, RowColor, TabGroup, TabGroupId, Workspace } from './model'
 import { claude } from './harness/claude'
+import { HARNESSES, harnessOf } from './harness/registry'
+import type { Harness } from './harness/types'
 import { emptyWorkspace, MIN_PANE_WIDTH, openedAt, ROW_COLORS } from './model'
 
 // Tab groups were added without a new version: a file without them loads with none, and a build
@@ -10,7 +12,8 @@ export const SNAPSHOT_VERSION = 1
 // The model's width floor caps a group at ten panes; a hand-edited file may not exceed it.
 const MAX_PANES_PER_GROUP = Math.floor(1 / MIN_PANE_WIDTH)
 
-export interface ClaudeSession {
+export interface AgentSession {
+  harness: string
   sessionId: string
   cwd: string
 }
@@ -18,7 +21,7 @@ export interface ClaudeSession {
 export interface SnapshotPane {
   width: number
   cwd: string | null
-  claude: ClaudeSession | null
+  agent: AgentSession | null
   color: RowColor | null
 }
 
@@ -56,19 +59,34 @@ function clampIndex(value: unknown, length: number): number {
   return Math.min(lastIndex, boundedBelow)
 }
 
-/** The Claude session a value describes: a UUID id and a non-empty directory, or null. */
-export function claudeSessionFrom(value: unknown): ClaudeSession | null {
+/** The session a value describes for one harness: an id that harness accepts and a non-empty directory, or null. */
+export function agentSessionFor(harness: Harness, value: unknown): AgentSession | null {
   if (!isRecord(value)) {
     return null
   }
   const { sessionId, cwd } = value
-  if (!claude.isSessionId(sessionId)) {
+  if (!harness.isSessionId(sessionId)) {
     return null
   }
   if (typeof cwd !== 'string' || cwd === '') {
     return null
   }
-  return { sessionId, cwd }
+  return { harness: harness.id, sessionId, cwd }
+}
+
+/** The session a saved value describes, looked up by its harness id, or null. */
+export function agentSessionFrom(
+  value: unknown,
+  harnesses: readonly Harness[] = HARNESSES
+): AgentSession | null {
+  if (!isRecord(value)) {
+    return null
+  }
+  const harness = harnessOf(value.harness, harnesses)
+  if (harness === null) {
+    return null
+  }
+  return agentSessionFor(harness, value)
 }
 
 function rowColorFrom(value: unknown): RowColor | null {
@@ -106,9 +124,14 @@ function parseGroup(value: unknown): SnapshotGroup | null {
       cwd = raw.cwd
     }
     const width = widths[index] / widthSum
-    const claude = claudeSessionFrom(raw.claude)
+    let agent: AgentSession | null
+    if (raw.agent !== undefined) {
+      agent = agentSessionFrom(raw.agent)
+    } else {
+      agent = agentSessionFor(claude, raw.claude)
+    }
     const color = rowColorFrom(raw.color)
-    return { width, cwd, claude, color }
+    return { width, cwd, agent, color }
   })
 
   const activePane = clampIndex(value.activePane, panes.length)
@@ -272,11 +295,11 @@ function snapshotIndexOf(ordered: TabGroup[], id: TabGroupId | null): number | n
   return index
 }
 
-/** The snapshot of a workspace, with each pane's directory and Claude session looked up by id. */
+/** The snapshot of a workspace, with each pane's directory and agent session looked up by id. */
 export function snapshotFrom(
   workspace: Workspace,
   cwdOf: (id: SessionId) => string | null,
-  claudeOf: (id: SessionId) => ClaudeSession | null
+  agentOf: (id: SessionId) => AgentSession | null
 ): Snapshot {
   const ordered = tabGroupsInOrder(workspace)
   const groups = workspace.groups.map((group): SnapshotGroup => {
@@ -284,7 +307,7 @@ export function snapshotFrom(
       return {
         width: pane.width,
         cwd: cwdOf(pane.id),
-        claude: claudeOf(pane.id),
+        agent: agentOf(pane.id),
         color: pane.color
       }
     })

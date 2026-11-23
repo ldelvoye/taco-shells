@@ -1,4 +1,4 @@
-import type { ClaudeSignal } from '../../rowState'
+import type { AgentSignal } from '../../rowState'
 
 const NEEDS_TOOLS: ReadonlySet<string> = new Set(['AskUserQuestion', 'ExitPlanMode'])
 const NEEDS_NOTIFICATIONS: ReadonlySet<string> = new Set([
@@ -8,7 +8,7 @@ const NEEDS_NOTIFICATIONS: ReadonlySet<string> = new Set([
   'agent_needs_input'
 ])
 
-export function claudeSignalFor(event: string, detail: string | null): ClaudeSignal | null {
+export function claudeSignalFor(event: string, detail: string | null): AgentSignal | null {
   if (event === 'UserPromptSubmit' || event === 'PostToolUse') {
     return 'working'
   }

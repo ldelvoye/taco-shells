@@ -18,8 +18,8 @@ export function registerIpc(
   ipcMain.handle(
     CHANNEL.ptyCreate,
     async (_event, size: PtySize, options: PtyCreateOptions = {}) => {
-      const claudeSessionOf = (id: SessionId) => snapshotStore.claudeSessionOf(id)
-      const start = shellStartFor(options, claudeSessionOf)
+      const agentSessionOf = (id: SessionId) => snapshotStore.agentSessionOf(id)
+      const start = shellStartFor(options, agentSessionOf)
       const id = await sessions.create(size, start)
       const startingDirectory = sessions.startingDirectory(id)
       if (startingDirectory !== null) {
@@ -27,7 +27,7 @@ export function registerIpc(
       }
       // A fork is not seeded: its session id is unknown until its SessionStart hook reports.
       if (options.resume !== undefined) {
-        snapshotStore.seedClaude(id, options.resume)
+        snapshotStore.seedAgent(id, options.resume)
       }
       return id
     }

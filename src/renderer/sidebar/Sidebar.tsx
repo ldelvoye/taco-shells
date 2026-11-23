@@ -23,7 +23,8 @@ import {
   type TabGroupId,
   type Workspace
 } from '@shared/model'
-import { type ClaudeRows, summaryState } from '@shared/rowState'
+import { DEFAULT_HARNESS, harnessOf } from '@shared/harness/registry'
+import { type AgentRows, summaryState } from '@shared/rowState'
 import { PlusIcon, TrashIcon } from './icons'
 import { RowColorPicker, rowColorVariable } from './RowColorPicker'
 import { SidebarAction } from './SidebarAction'
@@ -77,7 +78,7 @@ interface SidebarProps {
   tabGroups: TabGroup[]
   width: number
   fullScreen: boolean
-  rowStates: ClaudeRows
+  rowStates: AgentRows
   onSelect: (sessionId: SessionId) => void
   onClose: (sessionId: SessionId) => void
   onNewTerminal: (tabGroup: TabGroupId | null) => void
@@ -93,14 +94,18 @@ interface SidebarProps {
   onResize: (width: number) => void
 }
 
-// A row forks when it runs a Claude session with a conversation to copy and its
+// A row forks when its agent can fork, its session has a conversation to copy and its
 // group has room for the fork.
-function canForkRow(pane: Pane, groups: Group[], rowStates: ClaudeRows): boolean {
+function canForkRow(pane: Pane, groups: Group[], rowStates: AgentRows): boolean {
   const row = rowStates.get(pane.id)
   if (row === undefined) {
     return false
   }
   if (!row.hasConversation) {
+    return false
+  }
+  const harness = harnessOf(row.harness)
+  if (harness === null || harness.forkCommand === undefined) {
     return false
   }
 
@@ -109,6 +114,18 @@ function canForkRow(pane: Pane, groups: Group[], rowStates: ClaudeRows): boolean
     return false
   }
   return groupHasRoom(group)
+}
+
+function forkNameOf(pane: Pane, rowStates: AgentRows): string {
+  const row = rowStates.get(pane.id)
+  if (row === undefined) {
+    return DEFAULT_HARNESS.name
+  }
+  const harness = harnessOf(row.harness)
+  if (harness === null) {
+    return DEFAULT_HARNESS.name
+  }
+  return harness.name
 }
 
 function sameDrop(a: Drop | null, b: Drop | null): boolean {
@@ -456,9 +473,9 @@ export function Sidebar({
       }
 
       let markerState: string | undefined
-      const claudeRow = rowStates.get(pane.id)
-      if (claudeRow !== undefined) {
-        markerState = claudeRow.state
+      const agentRow = rowStates.get(pane.id)
+      if (agentRow !== undefined) {
+        markerState = agentRow.state
       }
 
       let className = 'terminal-row'
@@ -655,12 +672,14 @@ export function Sidebar({
     const pickedPane = panes.find((pane) => pane.id === picker.paneId)
     if (pickedPane !== undefined) {
       const canFork = canForkRow(pickedPane, groups, rowStates)
+      const forkName = forkNameOf(pickedPane, rowStates)
       colorPicker = (
         <RowColorPicker
           x={picker.x}
           y={picker.y}
           current={pickedPane.color}
           canFork={canFork}
+          forkName={forkName}
           onPreview={(color) => {
             setPicker({ ...picker, preview: { color } })
           }}
