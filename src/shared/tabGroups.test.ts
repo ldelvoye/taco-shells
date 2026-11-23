@@ -9,7 +9,7 @@ import {
   focusNextGroup,
   focusPreviousGroup,
   settled,
-  splitActivePane
+  splitPane
 } from './model'
 import {
   createTabGroup,
@@ -137,7 +137,7 @@ describe('a tab group as terminals close, open and take focus', () => {
     expect(layout(opened)).toEqual(['t1:a', 't1:n'])
     expect(opened.tabGroups[0].collapsed).toBe(false)
 
-    const splitWhileHidden = splitActivePane(allHidden, 'pane-new')
+    const splitWhileHidden = splitPane(allHidden, 'pane-a', 'pane-new')
     expect(splitWhileHidden.tabGroups[0].collapsed).toBe(false)
 
     const jumped = activatePane(hidden, 'pane-b')
