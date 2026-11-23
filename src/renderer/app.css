@@ -199,6 +199,10 @@ body {
   text-overflow: ellipsis;
 }
 
+.terminal-row.is-active .row-label {
+  font-weight: 600;
+}
+
 .row-color {
   position: absolute;
   left: 0;
