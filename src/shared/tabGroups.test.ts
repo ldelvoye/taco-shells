@@ -4,6 +4,7 @@ import type { Group, TabGroup, Workspace } from './model'
 import {
   activatePane,
   addGroup,
+  addGroupTo,
   closePane,
   focusNextGroup,
   focusPreviousGroup,
@@ -87,6 +88,29 @@ describe('toggleTabGroup', () => {
     const stillThere = toggleTabGroup(nowhereToGo, 't1')
     expect(stillThere.tabGroups[0].collapsed).toBe(true)
     expect(stillThere.activeGroup).toBe(0)
+  })
+})
+
+describe('addGroupTo', () => {
+  it('adds to the end of the named group, or ungrouped at the bottom', () => {
+    const fromLoose = workspaceOf([entry('a', 't1'), entry('b', 't1'), entry('c')], 2, [tab('t1')])
+    const intoGroup = addGroupTo(fromLoose, entry('n'), 't1')
+    expect(layout(intoGroup)).toEqual(['t1:a', 't1:b', 't1:n', '-:c'])
+    expect(intoGroup.activeGroup).toBe(2)
+
+    const fromGrouped = workspaceOf([entry('a', 't1'), entry('c')], 0, [tab('t1')])
+    const ungrouped = addGroupTo(fromGrouped, entry('n'), null)
+    expect(layout(ungrouped)).toEqual(['t1:a', '-:c', '-:n'])
+    expect(ungrouped.activeGroup).toBe(2)
+
+    const collapsed = workspaceOf([entry('a', 't1'), entry('c')], 1, [tab('t1', true)])
+    const opened = addGroupTo(collapsed, entry('n'), 't1')
+    expect(layout(opened)).toEqual(['t1:a', 't1:n', '-:c'])
+    expect(opened.tabGroups[0].collapsed).toBe(false)
+    expect(opened.activeGroup).toBe(1)
+
+    const gone = addGroupTo(fromGrouped, entry('n'), 'gone')
+    expect(layout(gone)).toEqual(['t1:a', '-:c', '-:n'])
   })
 })
 
