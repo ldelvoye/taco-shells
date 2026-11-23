@@ -3,6 +3,8 @@ import type { AgentTitle, Harness } from './types'
 
 export const HARNESSES: readonly Harness[] = [claude]
 export const DEFAULT_HARNESS: Harness = claude
+// Routes and saved files from before harnesses name no harness: they mean Claude.
+export const LEGACY_HARNESS: Harness = claude
 
 export function harnessOf(id: unknown, harnesses: readonly Harness[] = HARNESSES): Harness | null {
   const found = harnesses.find((harness) => harness.id === id)
@@ -12,7 +14,7 @@ export function harnessOf(id: unknown, harnesses: readonly Harness[] = HARNESSES
   return found
 }
 
-/** A terminal title as a row name, read by the row's harness; the raw title, never idle, when it has no title reader. */
+/** A terminal title as a row name, read by the row's harness; the raw title when the harness reads no titles. */
 export function agentTitleOf(
   harnessId: string,
   title: string,

@@ -116,7 +116,7 @@ function canForkRow(pane: Pane, groups: Group[], rowStates: AgentRows): boolean 
   return groupHasRoom(group)
 }
 
-function forkNameOf(pane: Pane, rowStates: AgentRows): string {
+function harnessNameOf(pane: Pane, rowStates: AgentRows): string {
   const row = rowStates.get(pane.id)
   if (row === undefined) {
     return DEFAULT_HARNESS.name
@@ -672,7 +672,7 @@ export function Sidebar({
     const pickedPane = panes.find((pane) => pane.id === picker.paneId)
     if (pickedPane !== undefined) {
       const canFork = canForkRow(pickedPane, groups, rowStates)
-      const forkName = forkNameOf(pickedPane, rowStates)
+      const forkName = harnessNameOf(pickedPane, rowStates)
       colorPicker = (
         <RowColorPicker
           x={picker.x}

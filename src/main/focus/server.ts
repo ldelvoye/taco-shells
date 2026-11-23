@@ -1,8 +1,7 @@
 import { unlinkSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { SessionId } from '@shared/ipc'
-import { claude } from '@shared/harness/claude'
-import { HARNESSES, harnessOf } from '@shared/harness/registry'
+import { HARNESSES, harnessOf, LEGACY_HARNESS } from '@shared/harness/registry'
 import type { Harness } from '@shared/harness/types'
 import type { AgentSignal } from '@shared/rowState'
 import { type AgentSession, agentSessionFor } from '@shared/snapshot'
@@ -24,6 +23,7 @@ const LAST_PORT = 23460
 // /focus-tab switches to it at once. Merged, every ping would steal focus.
 const FOCUS_TAB_PATH = '/focus-tab'
 const ATTENTION_PATH = '/attention'
+// Claude's hook script posts to these, from every checkout people have installed hooks from.
 const LEGACY_START_PATH = '/claude-session/start'
 const LEGACY_END_PATH = '/claude-session/end'
 const LEGACY_STATE_PATH = '/claude-session/state'
@@ -232,7 +232,7 @@ async function handleRequest(
     return
   }
 
-  let harness: Harness = claude
+  let harness: Harness = LEGACY_HARNESS
   if (isAgentRoute) {
     const requested = harnessFrom(payload, harnesses)
     if (requested === null) {
