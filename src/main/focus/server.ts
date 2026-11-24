@@ -1,5 +1,6 @@
 import { unlinkSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { FOCUS_FIRST_PORT, FOCUS_LAST_PORT } from '@shared/focusPorts'
 import type { SessionId } from '@shared/ipc'
 import { HARNESSES, harnessOf, LEGACY_HARNESS } from '@shared/harness/registry'
 import type { Harness } from '@shared/harness/types'
@@ -18,8 +19,6 @@ export interface FocusServerHandlers {
   onUnavailable(): void
 }
 
-const FIRST_PORT = 23456
-const LAST_PORT = 23460
 // Deliberately distinct: /attention only marks a pane as waiting, while
 // /focus-tab switches to it at once. Merged, every ping would steal focus.
 const FOCUS_TAB_PATH = '/focus-tab'
@@ -66,7 +65,7 @@ function attemptListen(
   function onError(error: NodeJS.ErrnoException): void {
     cleanup()
     const nextPort = port + 1
-    const outOfPorts = error.code !== 'EADDRINUSE' || nextPort > LAST_PORT
+    const outOfPorts = error.code !== 'EADDRINUSE' || nextPort > FOCUS_LAST_PORT
     if (outOfPorts) {
       onUnavailable()
       return
@@ -307,7 +306,7 @@ export function startFocusServer(
   let boundPort: number | null = null
   attemptListen(
     server,
-    FIRST_PORT,
+    FOCUS_FIRST_PORT,
     (port) => {
       boundPort = port
       writePortFile(portFilePath, port)

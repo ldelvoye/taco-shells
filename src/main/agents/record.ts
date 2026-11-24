@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isRecord } from '@shared/isRecord'
 
-const RECORD_FILE = 'agents.json'
+export const RECORD_FILE = 'agents.json'
 
 /** What the app remembers about one agent's setup: a decline, and the entries it wrote. */
 export interface AgentRecord {

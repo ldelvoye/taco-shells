@@ -1,4 +1,5 @@
 import { type JSX, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { FOCUS_FIRST_PORT, FOCUS_LAST_PORT } from '@shared/focusPorts'
 import type { PtyCreateOptions, SessionId } from '@shared/ipc'
 import { type Snapshot, type SnapshotPane, workspaceFromSnapshot } from '@shared/snapshot'
 import { paletteFor } from '@shared/theme'
@@ -71,8 +72,7 @@ import {
   onSessionTitle
 } from './terminal/registry'
 
-const FOCUS_PORTS_TAKEN =
-  'Ports 23456-23460 are all in use, so jumping to the terminal that wants you is off.'
+const FOCUS_PORTS_TAKEN = `Ports ${FOCUS_FIRST_PORT}-${FOCUS_LAST_PORT} are all in use, so jumping to the terminal that wants you is off.`
 
 let nextGroupNumber = 1
 
