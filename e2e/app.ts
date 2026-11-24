@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from 'node:child_process'
+import { type ChildProcess, execFileSync, spawn } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
@@ -211,6 +211,16 @@ interface Protocol {
 
 function sleep(milliseconds: number): Promise<void> {
   return new Promise((done) => setTimeout(done, milliseconds))
+}
+
+function whenExited(child: ChildProcess): Promise<void> {
+  const stopped = child.exitCode !== null || child.signalCode !== null
+  if (stopped) {
+    return Promise.resolve()
+  }
+  return new Promise((exited) => {
+    child.once('exit', () => exited())
+  })
 }
 
 function modifierMask(modifiers: Modifiers): number {
@@ -530,7 +540,17 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     electron.stderr.on('data', (chunk) => output.push(String(chunk)))
   }
 
-  const page = await openProtocol(await findDebuggerUrl(DEBUG_PORT, 'page'))
+  // An app left running after a failed launch keeps the debug port, and every later launch would attach to it.
+  let page: Protocol
+  try {
+    const debuggerUrl = await findDebuggerUrl(DEBUG_PORT, 'page')
+    page = await openProtocol(debuggerUrl)
+  } catch (failure) {
+    electron.kill('SIGKILL')
+    await whenExited(electron)
+    discardOwnedConfigDir()
+    throw failure
+  }
   const send = page.send
 
   let interceptedDrag: ProtocolParams | null = null
@@ -935,6 +955,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     }
 
     electron.kill('SIGKILL')
+    await whenExited(electron)
     page.close()
     discardOwnedConfigDir()
   }
@@ -956,16 +977,6 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
       return waitForExit()
     }
     await waitForExit()
-  }
-
-  await send('Runtime.enable', {})
-  if (options.window) {
-    try {
-      await placeWindow(options.window)
-    } catch (failure) {
-      electron.kill('SIGTERM')
-      throw failure
-    }
   }
 
   const app: App = {
@@ -1017,7 +1028,16 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     expectedRows = options.expectedRows
   }
   const waitDescription = `the app shows ${expectedRows} terminal rows`
-  await until(waitDescription, (state) => state.rows.length === expectedRows)
+  try {
+    await send('Runtime.enable', {})
+    if (options.window) {
+      await placeWindow(options.window)
+    }
+    await until(waitDescription, (state) => state.rows.length === expectedRows)
+  } catch (failure) {
+    await close().catch(() => undefined)
+    throw failure
+  }
 
   return app
 }
