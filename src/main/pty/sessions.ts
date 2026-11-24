@@ -95,7 +95,12 @@ export class PtySessions {
     if (!session) {
       return
     }
-    session.pty.resize(size.cols, size.rows)
+    // node-pty throws on a pty whose shell has just exited, which a resize can reach before the exit event does.
+    try {
+      session.pty.resize(size.cols, size.rows)
+    } catch {
+      return
+    }
   }
 
   kill(id: SessionId): void {
