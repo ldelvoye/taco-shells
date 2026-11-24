@@ -55,10 +55,42 @@ export type Drop =
   | { kind: 'between'; index: number; tabGroup: TabGroupId | null }
   | { kind: 'into'; group: GroupId; slot: number }
 
-type BetweenDrop = Extract<Drop, { kind: 'between' }>
+interface PaneLocation {
+  groupIndex: number
+  paneIndex: number
+}
 
 export function emptyWorkspace(): Workspace {
   return { groups: [], activeGroup: 0, tabGroups: [] }
+}
+
+export function locatePane(workspace: Workspace, id: SessionId): PaneLocation | null {
+  const groupIndex = workspace.groups.findIndex((group) =>
+    group.panes.some((pane) => pane.id === id)
+  )
+  if (groupIndex === -1) {
+    return null
+  }
+
+  const group = workspace.groups[groupIndex]
+  const paneIndex = group.panes.findIndex((pane) => pane.id === id)
+  return { groupIndex, paneIndex }
+}
+
+export function withGroupAt(workspace: Workspace, index: number, group: Group): Workspace {
+  const groups = spliced(workspace.groups, index, 1, [group])
+  return { ...workspace, groups }
+}
+
+export function spliced<T>(
+  items: readonly T[],
+  index: number,
+  removeCount: number,
+  inserted: readonly T[]
+): T[] {
+  const before = items.slice(0, index)
+  const after = items.slice(index + removeCount)
+  return [...before, ...inserted, ...after]
 }
 
 /** The first and last index of a tab group's entries, or null when it has none. */
@@ -185,9 +217,7 @@ export function addGroupTo(
   }
 
   const entry: Group = { ...group, tabGroup: placedIn }
-  const groupsBefore = workspace.groups.slice(0, index)
-  const groupsAfter = workspace.groups.slice(index)
-  const groups = [...groupsBefore, entry, ...groupsAfter]
+  const groups = spliced(workspace.groups, index, 0, [entry])
 
   const added: Workspace = { ...workspace, groups, activeGroup: index }
   return openedAt(added, index)
@@ -208,23 +238,17 @@ function indexAfterRemoval(active: number, removed: number, remaining: number): 
 }
 
 export function closePane(workspace: Workspace, id: SessionId): Workspace {
-  const groupIndex = workspace.groups.findIndex((group) =>
-    group.panes.some((pane) => pane.id === id)
-  )
-  if (groupIndex === -1) {
+  const location = locatePane(workspace, id)
+  if (location === null) {
     return workspace
   }
 
+  const { groupIndex, paneIndex } = location
   const group = workspace.groups[groupIndex]
-  const paneIndex = group.panes.findIndex((pane) => pane.id === id)
-  const panesBefore = group.panes.slice(0, paneIndex)
-  const panesAfter = group.panes.slice(paneIndex + 1)
-  const panes = [...panesBefore, ...panesAfter]
+  const panes = spliced(group.panes, paneIndex, 1, [])
 
   if (panes.length === 0) {
-    const groupsBefore = workspace.groups.slice(0, groupIndex)
-    const groupsAfter = workspace.groups.slice(groupIndex + 1)
-    const groups = [...groupsBefore, ...groupsAfter]
+    const groups = spliced(workspace.groups, groupIndex, 1, [])
     const activeGroup = indexAfterRemoval(workspace.activeGroup, groupIndex, groups.length)
 
     return settled({ ...workspace, groups, activeGroup })
@@ -239,319 +263,8 @@ export function closePane(workspace: Workspace, id: SessionId): Workspace {
 
   const activePaneIndex = indexAfterRemoval(group.activePane, paneIndex, panes.length)
   const updatedGroup: Group = { ...group, panes: redistributedPanes, activePane: activePaneIndex }
-  const groups = [...workspace.groups]
-  groups[groupIndex] = updatedGroup
 
-  return settled({ ...workspace, groups })
-}
-
-export function moveGroup(workspace: Workspace, from: number, to: number): Workspace {
-  const lastIndex = workspace.groups.length - 1
-  const fromInRange = from >= 0 && from <= lastIndex
-  const toInRange = to >= 0 && to <= lastIndex
-  if (!fromInRange || !toInRange || from === to) {
-    return workspace
-  }
-
-  const activeGroupId = workspace.groups[workspace.activeGroup].id
-
-  const groupsBefore = workspace.groups.slice(0, from)
-  const groupsAfter = workspace.groups.slice(from + 1)
-  const withoutMoved = [...groupsBefore, ...groupsAfter]
-
-  const moved = workspace.groups[from]
-  const before = withoutMoved.slice(0, to)
-  const after = withoutMoved.slice(to)
-  const groups = [...before, moved, ...after]
-
-  const activeGroup = groups.findIndex((group) => group.id === activeGroupId)
-
-  return { ...workspace, groups, activeGroup }
-}
-
-function gapInRange(gap: number, length: number): boolean {
-  return gap >= 0 && gap <= length
-}
-
-function indexAfterLift(gap: number, lifted: number): number {
-  if (gap > lifted) {
-    return gap - 1
-  }
-  return gap
-}
-
-function gapInsideATabGroup(workspace: Workspace, gap: number): boolean {
-  return workspace.tabGroups.some((tabGroup) => {
-    const block = blockOf(workspace, tabGroup.id)
-    if (block === null) {
-      return false
-    }
-    return block.first < gap && gap <= block.last
-  })
-}
-
-function betweenIsAllowed(workspace: Workspace, drop: BetweenDrop): boolean {
-  if (!gapInRange(drop.index, workspace.groups.length)) {
-    return false
-  }
-  if (drop.tabGroup === null) {
-    return !gapInsideATabGroup(workspace, drop.index)
-  }
-
-  const block = blockOf(workspace, drop.tabGroup)
-  if (block === null) {
-    return false
-  }
-  return drop.index >= block.first && drop.index <= block.last + 1
-}
-
-function withEntryLabelled(
-  workspace: Workspace,
-  index: number,
-  tabGroup: TabGroupId | null
-): Workspace {
-  const entry = workspace.groups[index]
-  if (entry.tabGroup === tabGroup) {
-    return workspace
-  }
-
-  const groups = [...workspace.groups]
-  groups[index] = { ...entry, tabGroup }
-
-  return { ...workspace, groups }
-}
-
-function moveEntryToGap(
-  workspace: Workspace,
-  from: number,
-  gap: number,
-  tabGroup: TabGroupId | null
-): Workspace {
-  const to = indexAfterLift(gap, from)
-  const moved = moveGroup(workspace, from, to)
-  return withEntryLabelled(moved, to, tabGroup)
-}
-
-function dropGroup(workspace: Workspace, id: GroupId, drop: Drop): Workspace {
-  if (drop.kind !== 'between') {
-    return workspace
-  }
-
-  const from = workspace.groups.findIndex((group) => group.id === id)
-  if (from === -1) {
-    return workspace
-  }
-
-  return moveEntryToGap(workspace, from, drop.index, drop.tabGroup)
-}
-
-function dropTabGroup(workspace: Workspace, id: TabGroupId, drop: Drop): Workspace {
-  if (drop.kind !== 'between' || drop.tabGroup !== null) {
-    return workspace
-  }
-
-  const block = blockOf(workspace, id)
-  if (block === null) {
-    return workspace
-  }
-
-  const onItsOwnBlockOrEdge = drop.index >= block.first && drop.index <= block.last + 1
-  if (onItsOwnBlockOrEdge) {
-    return workspace
-  }
-
-  const activeGroupId = workspace.groups[workspace.activeGroup].id
-  const blockSize = block.last - block.first + 1
-  const entries = workspace.groups.slice(block.first, block.last + 1)
-  const groupsBefore = workspace.groups.slice(0, block.first)
-  const groupsAfter = workspace.groups.slice(block.last + 1)
-  const rest = [...groupsBefore, ...groupsAfter]
-
-  let to = drop.index
-  if (drop.index > block.last) {
-    to = drop.index - blockSize
-  }
-
-  const restBefore = rest.slice(0, to)
-  const restAfter = rest.slice(to)
-  const groups = [...restBefore, ...entries, ...restAfter]
-  const activeGroup = groups.findIndex((group) => group.id === activeGroupId)
-
-  return { ...workspace, groups, activeGroup }
-}
-
-function moveLoneGroupToGap(
-  workspace: Workspace,
-  from: number,
-  gap: number,
-  tabGroup: TabGroupId | null
-): Workspace {
-  const moved = moveEntryToGap(workspace, from, gap, tabGroup)
-  if (moved === workspace) {
-    return workspace
-  }
-
-  const movedId = workspace.groups[from].id
-  const activeGroup = moved.groups.findIndex((group) => group.id === movedId)
-
-  return { ...moved, activeGroup }
-}
-
-function leaveToGap(
-  workspace: Workspace,
-  groupIndex: number,
-  paneIndex: number,
-  drop: BetweenDrop,
-  newGroup: GroupId
-): Workspace {
-  const pane = workspace.groups[groupIndex].panes[paneIndex]
-  const closed = closePane(workspace, pane.id)
-
-  const alone: Group = {
-    id: newGroup,
-    panes: [{ ...pane, width: 1 }],
-    activePane: 0,
-    tabGroup: drop.tabGroup
-  }
-  const groupsBefore = closed.groups.slice(0, drop.index)
-  const groupsAfter = closed.groups.slice(drop.index)
-  const groups = [...groupsBefore, alone, ...groupsAfter]
-
-  const activeGroup = groups.findIndex((group) => group.id === newGroup)
-
-  return { ...closed, groups, activeGroup }
-}
-
-function reorderWithin(
-  workspace: Workspace,
-  groupIndex: number,
-  paneIndex: number,
-  slot: number
-): Workspace {
-  const to = indexAfterLift(slot, paneIndex)
-  if (to === paneIndex) {
-    return workspace
-  }
-
-  const group = workspace.groups[groupIndex]
-  const pane = group.panes[paneIndex]
-  const panesBefore = group.panes.slice(0, paneIndex)
-  const panesAfter = group.panes.slice(paneIndex + 1)
-  const withoutMoved = [...panesBefore, ...panesAfter]
-
-  const before = withoutMoved.slice(0, to)
-  const after = withoutMoved.slice(to)
-  const panes = [...before, pane, ...after]
-
-  const updatedGroup: Group = { ...group, panes, activePane: to }
-  const groups = [...workspace.groups]
-  groups[groupIndex] = updatedGroup
-
-  return { ...workspace, groups, activeGroup: groupIndex }
-}
-
-function joinGroup(
-  workspace: Workspace,
-  groupIndex: number,
-  paneIndex: number,
-  targetIndex: number,
-  slot: number
-): Workspace {
-  const pane = workspace.groups[groupIndex].panes[paneIndex]
-  const targetId = workspace.groups[targetIndex].id
-  const closed = closePane(workspace, pane.id)
-
-  const closedTargetIndex = closed.groups.findIndex((group) => group.id === targetId)
-  const target = closed.groups[closedTargetIndex]
-  const panesBefore = target.panes.slice(0, slot)
-  const panesAfter = target.panes.slice(slot)
-  const arranged = [...panesBefore, pane, ...panesAfter]
-
-  const shareEach = 1 / arranged.length
-  const panes = arranged.map((arrangedPane) => {
-    return { ...arrangedPane, width: shareEach }
-  })
-
-  const joined: Group = { ...target, panes, activePane: slot }
-  const groups = [...closed.groups]
-  groups[closedTargetIndex] = joined
-
-  return { ...closed, groups, activeGroup: closedTargetIndex }
-}
-
-function dropPane(
-  workspace: Workspace,
-  id: SessionId,
-  drop: Drop,
-  newGroup: GroupId
-): Workspace {
-  const groupIndex = workspace.groups.findIndex((group) =>
-    group.panes.some((pane) => pane.id === id)
-  )
-  if (groupIndex === -1) {
-    return workspace
-  }
-
-  const group = workspace.groups[groupIndex]
-  const paneIndex = group.panes.findIndex((pane) => pane.id === id)
-
-  if (drop.kind === 'between') {
-    if (group.panes.length === 1) {
-      return moveLoneGroupToGap(workspace, groupIndex, drop.index, drop.tabGroup)
-    }
-    return leaveToGap(workspace, groupIndex, paneIndex, drop, newGroup)
-  }
-
-  const targetIndex = workspace.groups.findIndex((candidate) => candidate.id === drop.group)
-  if (targetIndex === -1) {
-    return workspace
-  }
-
-  const target = workspace.groups[targetIndex]
-  if (!gapInRange(drop.slot, target.panes.length)) {
-    return workspace
-  }
-  if (targetIndex === groupIndex) {
-    return reorderWithin(workspace, groupIndex, paneIndex, drop.slot)
-  }
-  if (!groupHasRoom(target)) {
-    return workspace
-  }
-  return joinGroup(workspace, groupIndex, paneIndex, targetIndex, drop.slot)
-}
-
-function dropDragged(
-  workspace: Workspace,
-  dragged: Dragged,
-  drop: Drop,
-  newGroup: GroupId
-): Workspace {
-  if (dragged.kind === 'tabGroup') {
-    return dropTabGroup(workspace, dragged.tabGroup, drop)
-  }
-  if (dragged.kind === 'group') {
-    return dropGroup(workspace, dragged.group, drop)
-  }
-
-  return dropPane(workspace, dragged.pane, drop, newGroup)
-}
-
-export function applyDrop(
-  workspace: Workspace,
-  dragged: Dragged,
-  drop: Drop,
-  newGroup: GroupId
-): Workspace {
-  if (drop.kind === 'between' && !betweenIsAllowed(workspace, drop)) {
-    return workspace
-  }
-
-  const dropped = dropDragged(workspace, dragged, drop, newGroup)
-  if (dropped === workspace) {
-    return workspace
-  }
-
-  return settled(dropped)
+  return settled(withGroupAt(workspace, groupIndex, updatedGroup))
 }
 
 // A change that hands the pane back untouched leaves the workspace untouched too.
@@ -560,29 +273,23 @@ function withPaneChanged(
   id: SessionId,
   change: (pane: Pane) => Pane
 ): Workspace {
-  const groupIndex = workspace.groups.findIndex((group) =>
-    group.panes.some((pane) => pane.id === id)
-  )
-  if (groupIndex === -1) {
+  const location = locatePane(workspace, id)
+  if (location === null) {
     return workspace
   }
 
+  const { groupIndex, paneIndex } = location
   const group = workspace.groups[groupIndex]
-  const paneIndex = group.panes.findIndex((pane) => pane.id === id)
   const pane = group.panes[paneIndex]
   const changed = change(pane)
   if (changed === pane) {
     return workspace
   }
 
-  const panes = [...group.panes]
-  panes[paneIndex] = changed
+  const panes = spliced(group.panes, paneIndex, 1, [changed])
 
   const updatedGroup: Group = { ...group, panes }
-  const groups = [...workspace.groups]
-  groups[groupIndex] = updatedGroup
-
-  return { ...workspace, groups }
+  return withGroupAt(workspace, groupIndex, updatedGroup)
 }
 
 export function renamePane(workspace: Workspace, id: SessionId, title: string): Workspace {
@@ -631,36 +338,31 @@ export function groupHasRoom(group: Group): boolean {
 }
 
 export function canSplitPane(workspace: Workspace, donor: SessionId): boolean {
-  const groupIndex = workspace.groups.findIndex((group) =>
-    group.panes.some((pane) => pane.id === donor)
-  )
-  if (groupIndex === -1) {
+  const location = locatePane(workspace, donor)
+  if (location === null) {
     return false
   }
 
-  const group = workspace.groups[groupIndex]
+  const group = workspace.groups[location.groupIndex]
   return groupHasRoom(group)
 }
 
 export function splitPane(workspace: Workspace, donor: SessionId, id: SessionId): Workspace {
-  const groupIndex = workspace.groups.findIndex((group) =>
-    group.panes.some((pane) => pane.id === donor)
-  )
-  if (groupIndex === -1) {
+  const location = locatePane(workspace, donor)
+  if (location === null) {
     return workspace
   }
 
+  const groupIndex = location.groupIndex
+  const donorIndex = location.paneIndex
   const group = workspace.groups[groupIndex]
   if (!groupHasRoom(group)) {
     return workspace
   }
 
-  const donorIndex = group.panes.findIndex((pane) => pane.id === donor)
   const newPane: Pane = { id, title: '', width: 0, color: null }
 
-  const panesBefore = group.panes.slice(0, donorIndex + 1)
-  const panesAfter = group.panes.slice(donorIndex + 1)
-  const arranged = [...panesBefore, newPane, ...panesAfter]
+  const arranged = spliced(group.panes, donorIndex + 1, 0, [newPane])
 
   // The whole group is levelled, not just the pane that was split. Giving the
   // new pane half of its donor would halve it again on the next split, so five
@@ -671,10 +373,9 @@ export function splitPane(workspace: Workspace, donor: SessionId, id: SessionId)
   })
 
   const updatedGroup: Group = { ...group, panes, activePane: donorIndex + 1 }
-  const groups = [...workspace.groups]
-  groups[groupIndex] = updatedGroup
+  const replaced = withGroupAt(workspace, groupIndex, updatedGroup)
 
-  const split: Workspace = { ...workspace, groups, activeGroup: groupIndex }
+  const split: Workspace = { ...replaced, activeGroup: groupIndex }
   return openedAt(split, groupIndex)
 }
 
@@ -694,25 +395,22 @@ export function forkPane(workspace: Workspace, source: SessionId, id: SessionId)
 }
 
 export function activatePane(workspace: Workspace, id: SessionId): Workspace {
-  const groupIndex = workspace.groups.findIndex((group) =>
-    group.panes.some((pane) => pane.id === id)
-  )
-  if (groupIndex === -1) {
+  const location = locatePane(workspace, id)
+  if (location === null) {
     return workspace
   }
 
+  const { groupIndex, paneIndex } = location
   const group = workspace.groups[groupIndex]
-  const paneIndex = group.panes.findIndex((pane) => pane.id === id)
   const alreadyActive = groupIndex === workspace.activeGroup && paneIndex === group.activePane
   if (alreadyActive) {
     return workspace
   }
 
   const updatedGroup: Group = { ...group, activePane: paneIndex }
-  const groups = [...workspace.groups]
-  groups[groupIndex] = updatedGroup
+  const replaced = withGroupAt(workspace, groupIndex, updatedGroup)
 
-  const activated: Workspace = { ...workspace, groups, activeGroup: groupIndex }
+  const activated: Workspace = { ...replaced, activeGroup: groupIndex }
   return openedAt(activated, groupIndex)
 }
 
@@ -736,10 +434,7 @@ function focusPaneByDelta(workspace: Workspace, delta: number): Workspace {
   }
 
   const updatedGroup: Group = { ...group, activePane: nextIndex }
-  const groups = [...workspace.groups]
-  groups[workspace.activeGroup] = updatedGroup
-
-  return { ...workspace, groups }
+  return withGroupAt(workspace, workspace.activeGroup, updatedGroup)
 }
 
 export function focusNextPane(workspace: Workspace): Workspace {
@@ -821,15 +516,10 @@ export function moveDivider(
   const updatedLeft: Pane = { ...left, width: clampedLeftWidth }
   const updatedRight: Pane = { ...right, width: rightWidth }
 
-  const panesBefore = group.panes.slice(0, dividerIndex)
-  const panesAfter = group.panes.slice(dividerIndex + 2)
-  const panes = [...panesBefore, updatedLeft, updatedRight, ...panesAfter]
+  const panes = spliced(group.panes, dividerIndex, 2, [updatedLeft, updatedRight])
 
   const updatedGroup: Group = { ...group, panes }
-  const groups = [...workspace.groups]
-  groups[groupIndex] = updatedGroup
-
-  return { ...workspace, groups }
+  return withGroupAt(workspace, groupIndex, updatedGroup)
 }
 
 export function paneOf(group: Group): Pane {

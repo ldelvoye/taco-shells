@@ -1,5 +1,6 @@
 import type { Dragged, Drop, Group, TabGroup, TabGroupId, Workspace } from './model'
-import { applyDrop, blockOf } from './model'
+import { applyDrop } from './applyDrop'
+import { blockOf } from './model'
 
 // Names the group a previewed drop would create; the preview is thrown away, so it never reaches the screen.
 const PREVIEW_GROUP = 'preview'

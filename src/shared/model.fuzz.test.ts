@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { applyDrop } from './applyDrop'
 import { dropFor } from './drop'
 import type { DropPoint } from './drop'
 import type { Dragged, Drop, Group, RowColor, Workspace } from './model'
@@ -9,7 +10,6 @@ import {
   activatePane,
   addGroup,
   addGroupTo,
-  applyDrop,
   closePane,
   emptyWorkspace,
   focusNextGroup,

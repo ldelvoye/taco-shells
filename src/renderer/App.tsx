@@ -4,12 +4,12 @@ import type { PtyCreateOptions, SessionId } from '@shared/ipc'
 import { type Snapshot, type SnapshotPane, workspaceFromSnapshot } from '@shared/snapshot'
 import { paletteFor } from '@shared/theme'
 import { waitingAfterAttention, waitingAfterExit, waitingAfterFocus } from '@shared/attention'
+import { applyDrop } from '@shared/applyDrop'
 import {
   activatePane,
   activePane,
   addGroup,
   addGroupTo,
-  applyDrop,
   canSplitPane,
   closePane,
   type Dragged,
