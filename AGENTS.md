@@ -13,6 +13,7 @@ src/main/       the Electron main process: windows, ptys, config, the menu
 src/preload/    the one bridge, exposed on window.tacoShells
 src/renderer/   React: the sidebar, panes, and the terminal views
 src/shared/     types and pure logic both sides import
+hooks/          the scripts an agent's hooks run, shipped beside the app as files
 e2e/            drives the real app over the Chrome DevTools protocol
 scripts/        build, install and release commands
 ```
@@ -43,7 +44,7 @@ A build from the working tree installs as **Taco Shells Dev**, beside the releas
 | bundle id | `com.ldelvoye.tacoshells` | `com.ldelvoye.tacoshells.dev` |
 | config    | `~/.taco-shells`          | `~/.taco-shells-dev`          |
 
-Each config directory holds `settings.json`, `keybindings.json` and `focus-port`, plus `workspace.json`, the workspace snapshot the app restores from, and `updates/`, the downloaded releases waiting to be applied.
+Each config directory holds `settings.json`, `keybindings.json` and `focus-port`, plus `workspace.json`, the workspace snapshot the app restores from, and `updates/`, the downloaded releases waiting to be applied. It also holds `hooks/`, the app's copy of the hook scripts, and `agents.json`, what the app remembers about each agent's setup.
 
 `TACO_SHELLS_UPDATE_FEED` turns the updater on in the dev channel, which otherwise never checks, and points it at a release JSON URL in place of GitHub's latest-release endpoint. The stable build ignores it and always follows GitHub. It exists for testing the updater against a local server.
 
@@ -54,6 +55,21 @@ Each config directory holds `settings.json`, `keybindings.json` and `focus-port`
 **The bundle ids differ, and that matters more than the names.** Two bundles claiming one id leaves LaunchServices picking between them.
 
 `scripts/identity.cjs` is CommonJS because `electron-builder.js` loads as CommonJS and both it and the ESM scripts must read one set of identities. `src/main/channel.ts` states the names and config directories a second time for the running app, since a source compiled into the bundle cannot import the build's config. Those two are the only copies.
+
+## Setting up an agent's hooks
+
+The app writes an agent's hook entries into the agent's own settings file, from the Agents menu and from a one-time offer in the window. `src/shared/harness/claude/setup.ts` is the source of truth for the entries Claude Code needs; the README does not list them. The scripts in `hooks/` ship as real files (`extraResources` in `electron-builder.js`) and are copied into the config directory's `hooks/` on every launch, so each app runs its own copy.
+
+**Only the stable app writes to real settings.** A dev build shows the menu with its action greyed out and never offers. It writes only when both `TACO_SHELLS_CONFIG_DIR` and `CLAUDE_CONFIG_DIR` are set, which is how the e2e suite drives the flow, and how to try it by hand without touching your own settings:
+
+```sh
+mkdir -p /tmp/ts-try/claude /tmp/ts-try/app && echo '{}' > /tmp/ts-try/claude/settings.json
+TACO_SHELLS_CONFIG_DIR=/tmp/ts-try/app CLAUDE_CONFIG_DIR=/tmp/ts-try/claude "/Applications/Taco Shells Dev.app/Contents/MacOS/Taco Shells Dev"
+```
+
+**A dev build cannot recognise the stable app's entries.** It must not hold the stable config directory's name (`e2e/bundle.test.ts`), so entries pointing into `~/.taco-shells/hooks/` read there as "Set up by hand".
+
+**The settings file is edited in place, one path at a time.** `hookSettings.ts` goes through `jsonc-parser`'s `modify` so the rest of the file keeps its bytes, and `flow.ts` writes with a plain `writeFileSync` because a rename would replace a `settings.json` that is a symlink into someone's dotfiles.
 
 ## Landing
 
