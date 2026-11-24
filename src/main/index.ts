@@ -8,6 +8,7 @@ import { registerFocus } from './focus'
 import { registerIpc } from './ipc'
 import { PtySessions } from './pty/sessions'
 import { SnapshotStore } from './snapshot/store'
+import type { Service } from './service'
 import { registerUpdates } from './update'
 import { ApplicationMenu } from './window/applicationMenu'
 import { createMainWindow, isBackgroundWindow } from './window/window'
@@ -15,11 +16,8 @@ import { createMainWindow, isBackgroundWindow } from './window/window'
 app.setName(applicationName)
 
 const sessions = new PtySessions()
-let store: ConfigStore | undefined
+const services: Service[] = []
 let snapshotStore: SnapshotStore | undefined
-let stopFocus: (() => void) | undefined
-let stopUpdates: (() => void) | undefined
-let stopAgents: (() => void) | undefined
 let flushed = false
 
 app.whenReady().then(() => {
@@ -34,22 +32,18 @@ app.whenReady().then(() => {
 
   const directory = configDirectory()
   const configStore = new ConfigStore(directory)
-  store = configStore
   const initialConfig = configStore.current()
   const palette = paletteFor(initialConfig.appearance)
   const window = createMainWindow(palette)
   const snapshots = new SnapshotStore(directory, sessions)
   snapshotStore = snapshots
   registerIpc(sessions, window, configStore, snapshots)
-  const registeredUpdates = registerUpdates(window, directory, applicationMenu)
-  let checkForUpdate = (): void => undefined
-  if (registeredUpdates !== null) {
-    stopUpdates = registeredUpdates.stop
-    checkForUpdate = registeredUpdates.checkNow
-  }
-  const registeredAgents = registerAgents(window, directory, configStore, applicationMenu, sessions)
-  stopAgents = registeredAgents.stop
-  stopFocus = registerFocus(sessions, window, directory, snapshots, checkForUpdate)
+  const updates = registerUpdates(window, directory, applicationMenu)
+  const agents = registerAgents(window, directory, configStore, applicationMenu, sessions)
+  const focus = registerFocus(sessions, window, directory, snapshots, () => {
+    updates.checkNow()
+  })
+  services.push(configStore, focus, updates, agents, snapshots)
 
   // Closing the window is the start of a quit, and the snapshot has to stop
   // changing from that moment, before the ptys go down with the process.
@@ -70,20 +64,8 @@ app.whenReady().then(() => {
 // The shells need no teardown: each one exits when its pty master closes with
 // the process.
 function stopEverything(): void {
-  if (store) {
-    store.stop()
-  }
-  if (stopFocus) {
-    stopFocus()
-  }
-  if (stopUpdates) {
-    stopUpdates()
-  }
-  if (stopAgents) {
-    stopAgents()
-  }
-  if (snapshotStore) {
-    snapshotStore.stop()
+  for (const service of services) {
+    service.stop()
   }
 }
 

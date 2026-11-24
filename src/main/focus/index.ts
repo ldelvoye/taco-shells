@@ -4,6 +4,7 @@ import type { AgentSignal } from '@shared/rowState'
 import { focusPortPath } from '../config/files'
 import type { AgentSession } from '@shared/snapshot'
 import type { PtySessions } from '../pty/sessions'
+import type { Service } from '../service'
 import type { SnapshotStore } from '../snapshot/store'
 import { sendToWindow } from '../window/send'
 import { startFocusServer } from './server'
@@ -14,7 +15,7 @@ export function registerFocus(
   directory: string,
   snapshotStore: SnapshotStore,
   onUpdateCheck: () => void
-): () => void {
+): Service {
   const portFilePath = focusPortPath(directory)
 
   const stopServer = startFocusServer(
@@ -57,8 +58,10 @@ export function registerFocus(
   }
   app.on('activate', onActivate)
 
-  return () => {
-    stopServer()
-    app.off('activate', onActivate)
+  return {
+    stop: () => {
+      stopServer()
+      app.off('activate', onActivate)
+    }
   }
 }
