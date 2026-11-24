@@ -21,7 +21,7 @@ import {
 } from '@shared/model'
 import { DEFAULT_HARNESS, harnessOf } from '@shared/harness/registry'
 import type { AgentRows } from '@shared/rowState'
-import { RowColorPicker } from './RowColorPicker'
+import { RowPopup } from './RowPopup'
 import type { SidebarActions } from './sidebarActions'
 import { SidebarDivider } from './SidebarDivider'
 import { SidebarEntry } from './SidebarEntry'
@@ -37,7 +37,7 @@ interface ColorPreview {
   color: RowColor | null
 }
 
-interface OpenPicker {
+interface OpenRowPopup {
   paneId: SessionId
   x: number
   y: number
@@ -102,14 +102,14 @@ export function Sidebar({
   onResize
 }: SidebarProps): JSX.Element {
   const drag = useSidebarDrag(workspace, actions.drop)
-  const [picker, setPicker] = useState<OpenPicker | null>(null)
+  const [rowPopup, setRowPopup] = useState<OpenRowPopup | null>(null)
   const [tabGroupPopup, setTabGroupPopup] = useState<OpenTabGroupPopup | null>(null)
   const groups = workspace.groups
   const activeGroup = workspace.activeGroup
   const tabGroups = workspace.tabGroups
 
-  const closePicker = useCallback(() => {
-    setPicker(null)
+  const closeRowPopup = useCallback(() => {
+    setRowPopup(null)
   }, [])
 
   // The name field took the keyboard, so closing its popup hands it back to the terminal.
@@ -135,16 +135,16 @@ export function Sidebar({
     setTabGroupPopup({ tabGroup, x: event.clientX, y: event.clientY })
   }
 
-  function openPicker(event: MouseEvent<HTMLDivElement>, paneId: SessionId): void {
+  function openRowPopup(event: MouseEvent<HTMLDivElement>, paneId: SessionId): void {
     event.preventDefault()
-    setPicker({ paneId, x: event.clientX, y: event.clientY, preview: null })
+    setRowPopup({ paneId, x: event.clientX, y: event.clientY, preview: null })
   }
 
   function shownColor(pane: Pane): RowColor | null {
-    if (picker === null || picker.paneId !== pane.id || picker.preview === null) {
+    if (rowPopup === null || rowPopup.paneId !== pane.id || rowPopup.preview === null) {
       return pane.color
     }
-    return picker.preview.color
+    return rowPopup.preview.color
   }
 
   // The empty space under the last row drops at the bottom of the list, in no group.
@@ -187,7 +187,7 @@ export function Sidebar({
           shownColor={shownColor}
           drag={drag}
           actions={actions}
-          onOpenPicker={openPicker}
+          onOpenRowPopup={openRowPopup}
         />
       )
       rendered.push(entry)
@@ -205,7 +205,7 @@ export function Sidebar({
           shownColor={shownColor}
           drag={drag}
           actions={actions}
-          onOpenPicker={openPicker}
+          onOpenRowPopup={openRowPopup}
           onOpenPopup={openTabGroupPopup}
         />
       )
@@ -216,44 +216,44 @@ export function Sidebar({
 
   const style = { '--sidebar-width': `${width}px` } as CSSProperties
 
-  // A pane can exit while its picker is open, which takes the picker with it.
-  let colorPicker = null
-  if (picker !== null) {
+  // A pane can exit while its popup is open, which takes the popup with it.
+  let rowPopupElement = null
+  if (rowPopup !== null) {
     const panes = groups.flatMap((group) => group.panes)
-    const pickedPane = panes.find((pane) => pane.id === picker.paneId)
+    const pickedPane = panes.find((pane) => pane.id === rowPopup.paneId)
     if (pickedPane !== undefined) {
       const canFork = canForkRow(pickedPane, groups, agentRows)
       const forkName = harnessNameOf(pickedPane, agentRows)
-      colorPicker = (
-        <RowColorPicker
-          x={picker.x}
-          y={picker.y}
+      rowPopupElement = (
+        <RowPopup
+          x={rowPopup.x}
+          y={rowPopup.y}
           current={pickedPane.color}
           canFork={canFork}
           forkName={forkName}
           onPreview={(color) => {
-            setPicker({ ...picker, preview: { color } })
+            setRowPopup({ ...rowPopup, preview: { color } })
           }}
           onPreviewEnd={() => {
-            setPicker({ ...picker, preview: null })
+            setRowPopup({ ...rowPopup, preview: null })
           }}
           onPick={(color) => {
             actions.colorPane(pickedPane.id, color)
-            closePicker()
+            closeRowPopup()
           }}
           onFork={() => {
             actions.fork(pickedPane.id)
-            closePicker()
+            closeRowPopup()
           }}
           onNewGroup={() => {
             const tabGroup = actions.newTabGroup(pickedPane.id)
-            closePicker()
+            closeRowPopup()
             if (tabGroup === null) {
               return
             }
-            setTabGroupPopup({ tabGroup, x: picker.x, y: picker.y })
+            setTabGroupPopup({ tabGroup, x: rowPopup.x, y: rowPopup.y })
           }}
-          onClose={closePicker}
+          onClose={closeRowPopup}
         />
       )
     }
@@ -296,7 +296,7 @@ export function Sidebar({
         {rendered}
       </div>
       <SidebarDivider width={width} onResize={onResize} />
-      {colorPicker}
+      {rowPopupElement}
       {groupPopup}
     </aside>
   )

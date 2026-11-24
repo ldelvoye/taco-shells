@@ -3,7 +3,7 @@ import type { SessionId } from '@shared/ipc'
 import { type Group, type Pane, paneOf, type RowColor } from '@shared/model'
 import type { RowState } from '@shared/rowState'
 import { TrashIcon } from './icons'
-import { rowColorVariable } from './RowColorPicker'
+import { rowColorVariable } from './rowColor'
 import { SidebarAction } from './SidebarAction'
 import type { SidebarActions } from './sidebarActions'
 import { RIGHT_BUTTON } from './sidebarShared'
@@ -25,7 +25,7 @@ interface TerminalRowProps {
   markerState: RowState | undefined
   drag: SidebarDrag
   actions: SidebarActions
-  onOpenPicker: (event: MouseEvent<HTMLDivElement>, paneId: SessionId) => void
+  onOpenRowPopup: (event: MouseEvent<HTMLDivElement>, paneId: SessionId) => void
 }
 
 function labelFor(title: string): string {
@@ -60,7 +60,7 @@ export function TerminalRow({
   markerState,
   drag,
   actions,
-  onOpenPicker
+  onOpenRowPopup
 }: TerminalRowProps): JSX.Element {
   const paneCount = group.panes.length
   const label = labelFor(pane.title)
@@ -112,13 +112,13 @@ export function TerminalRow({
         actions.select(pane.id)
       }}
       onMouseDown={(event) => {
-        // Keeps keyboard focus in the terminal: right-clicking a row only opens the picker.
+        // Keeps keyboard focus in the terminal: right-clicking a row only opens the popup.
         if (event.button === RIGHT_BUTTON) {
           event.preventDefault()
         }
       }}
       onContextMenu={(event) => {
-        onOpenPicker(event, pane.id)
+        onOpenRowPopup(event, pane.id)
       }}
     >
       {stripe}

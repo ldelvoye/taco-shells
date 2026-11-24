@@ -1,3 +1,5 @@
+/* Page */
+
 :root {
   --row-height: 22px;
   --row-padding: 10px;
@@ -25,6 +27,8 @@ body {
   height: 100%;
 }
 
+/* Sidebar frame */
+
 /* Without min-width, a flex item's automatic minimum is its content width, so a
    long row label would widen the sidebar past the width set here. */
 .sidebar {
@@ -43,32 +47,6 @@ body {
 .pane-titlebar {
   flex: 0 0 var(--titlebar-height);
   -webkit-app-region: drag;
-}
-
-.pane-titlebar {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  padding: 0 12px;
-}
-
-.waiting-pill {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 10px;
-  border: 1px solid var(--state-needs);
-  border-radius: 999px;
-  font-size: 12px;
-  color: var(--text);
-  user-select: none;
-}
-
-.waiting-pill-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--state-needs);
 }
 
 /* Past the traffic lights while windowed. Full screen hides them, so the mark
@@ -122,6 +100,31 @@ body {
   /* Keeps empty space under the last row: dropping there sends a terminal to the bottom of the list. */
   padding-bottom: var(--row-height);
 }
+
+/* The strip overlaps the titlebar above it, so without no-drag a grab near the
+   top moves the window instead of resizing the sidebar. */
+.sidebar-divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -3px;
+  width: 6px;
+  cursor: col-resize;
+  user-select: none;
+  -webkit-app-region: no-drag;
+}
+
+.sidebar-divider:hover::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: var(--row-marker);
+}
+
+/* Sidebar rows */
 
 /* An inset line rather than a border, so a group does not change height while a
    drag hovers over it. */
@@ -209,228 +212,6 @@ body {
   top: 0;
   bottom: 0;
   width: 6px;
-}
-
-.row-color-picker {
-  position: fixed;
-  z-index: 100;
-  display: flex;
-  flex-direction: column;
-  background: var(--chrome-background);
-  border: 1px solid var(--row-connector);
-  border-radius: 7px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-}
-
-.row-color-dots {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 8px 10px;
-}
-
-.row-fork-item {
-  padding: 6px 10px;
-  border: 0;
-  border-top: 1px solid var(--row-connector);
-  border-radius: 0 0 6px 6px;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
-  text-align: left;
-}
-
-.row-fork-item:hover:enabled {
-  background: var(--row-hover);
-}
-
-.row-fork-item:disabled {
-  opacity: 0.4;
-}
-
-.tab-group {
-  position: relative;
-  background: color-mix(in srgb, var(--tab-color) 13%, transparent);
-}
-
-.tab-group.drop-above::after,
-.tab-group.drop-below::after,
-.tab-group-header.drop-below::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 2px;
-  background: var(--row-marker);
-  pointer-events: none;
-}
-
-.tab-group.drop-above::after {
-  top: 0;
-}
-
-.tab-group.drop-below::after,
-.tab-group-header.drop-below::after {
-  bottom: 0;
-}
-
-.tab-group-header.drop-in-group::after {
-  background: var(--tab-color);
-}
-
-.terminal-group.drop-in-group.drop-above {
-  box-shadow: inset 0 2px 0 var(--tab-color);
-}
-
-.terminal-group.drop-in-group.drop-below {
-  box-shadow: inset 0 -2px 0 var(--tab-color);
-}
-
-.tab-group-header {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: var(--row-height);
-  padding: 0 var(--row-padding) 0 6px;
-  background: color-mix(in srgb, var(--tab-color) 34%, transparent);
-  cursor: default;
-  user-select: none;
-}
-
-.tab-group-header.is-active {
-  background: color-mix(in srgb, var(--tab-color) 60%, transparent);
-}
-
-.tab-group-header.is-drop-target {
-  background: color-mix(in srgb, var(--tab-color) 55%, transparent);
-  box-shadow: inset 0 0 0 1.5px var(--tab-color);
-}
-
-.tab-group-caret {
-  position: relative;
-  flex: 0 0 10px;
-  height: 10px;
-  color: var(--text);
-}
-
-.tab-group-caret::before {
-  content: '';
-  position: absolute;
-  left: 1px;
-  top: 3px;
-  border: 4px solid transparent;
-  border-bottom-width: 0;
-  border-top-color: currentColor;
-}
-
-.tab-group.is-collapsed .tab-group-caret::before {
-  left: 3px;
-  top: 1px;
-  border: 4px solid transparent;
-  border-right-width: 0;
-  border-left-color: currentColor;
-}
-
-.tab-group-name {
-  overflow: hidden;
-  color: var(--text-active);
-  font-weight: 600;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.tab-group-count {
-  font-size: 11.5px;
-}
-
-.tab-group-header .row-state {
-  margin-left: auto;
-}
-
-.sidebar-action {
-  display: none;
-  flex: 0 0 16px;
-  align-self: center;
-  align-items: center;
-  justify-content: center;
-  height: 16px;
-  margin-left: auto;
-  margin-right: -3px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  opacity: 0.5;
-  -webkit-app-region: no-drag;
-}
-
-.sidebar-action:hover {
-  opacity: 1;
-}
-
-.sidebar-action svg {
-  width: 13px;
-  height: 13px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.terminal-row:hover .sidebar-action,
-.tab-group-header:hover .sidebar-action,
-.sidebar-titlebar .sidebar-action {
-  display: inline-flex;
-}
-
-.tab-group-header .row-state + .sidebar-action {
-  margin-left: 4px;
-}
-
-.tab-group-name-field {
-  margin: 6px 6px 0;
-  padding: 3px 6px;
-  border: 1px solid var(--row-connector);
-  border-radius: 4px;
-  background: var(--terminal-background);
-  color: var(--text-active);
-  font: inherit;
-  font-size: 12px;
-}
-
-.row-color-dot {
-  position: relative;
-  box-sizing: border-box;
-  width: 14px;
-  height: 14px;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-}
-
-.row-color-dot.is-current {
-  box-shadow:
-    0 0 0 2px var(--chrome-background),
-    0 0 0 3.5px var(--text);
-}
-
-.row-color-dot.is-none {
-  background: transparent;
-  border: 1.5px solid var(--row-connector);
-}
-
-.row-color-dot.is-none::after {
-  content: '';
-  position: absolute;
-  left: 50%;
-  top: -1px;
-  bottom: -1px;
-  width: 1.5px;
-  background: var(--row-connector);
-  transform: rotate(45deg);
 }
 
 .row-state {
@@ -542,27 +323,260 @@ body {
   bottom: 50%;
 }
 
-/* The strip overlaps the titlebar above it, so without no-drag a grab near the
-   top moves the window instead of resizing the sidebar. */
-.sidebar-divider {
+/* Tab groups */
+
+.tab-group {
+  position: relative;
+  background: color-mix(in srgb, var(--tab-color) 13%, transparent);
+}
+
+.tab-group.drop-above::after,
+.tab-group.drop-below::after,
+.tab-group-header.drop-below::after {
+  content: '';
   position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--row-marker);
+  pointer-events: none;
+}
+
+.tab-group.drop-above::after {
   top: 0;
+}
+
+.tab-group.drop-below::after,
+.tab-group-header.drop-below::after {
   bottom: 0;
-  right: -3px;
-  width: 6px;
-  cursor: col-resize;
+}
+
+.tab-group-header.drop-in-group::after {
+  background: var(--tab-color);
+}
+
+.terminal-group.drop-in-group.drop-above {
+  box-shadow: inset 0 2px 0 var(--tab-color);
+}
+
+.terminal-group.drop-in-group.drop-below {
+  box-shadow: inset 0 -2px 0 var(--tab-color);
+}
+
+.tab-group-header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--row-height);
+  padding: 0 var(--row-padding) 0 6px;
+  background: color-mix(in srgb, var(--tab-color) 34%, transparent);
+  cursor: default;
   user-select: none;
+}
+
+.tab-group-header.is-active {
+  background: color-mix(in srgb, var(--tab-color) 60%, transparent);
+}
+
+.tab-group-header.is-drop-target {
+  background: color-mix(in srgb, var(--tab-color) 55%, transparent);
+  box-shadow: inset 0 0 0 1.5px var(--tab-color);
+}
+
+.tab-group-caret {
+  position: relative;
+  flex: 0 0 10px;
+  height: 10px;
+  color: var(--text);
+}
+
+.tab-group-caret::before {
+  content: '';
+  position: absolute;
+  left: 1px;
+  top: 3px;
+  border: 4px solid transparent;
+  border-bottom-width: 0;
+  border-top-color: currentColor;
+}
+
+.tab-group.is-collapsed .tab-group-caret::before {
+  left: 3px;
+  top: 1px;
+  border: 4px solid transparent;
+  border-right-width: 0;
+  border-left-color: currentColor;
+}
+
+.tab-group-name {
+  overflow: hidden;
+  color: var(--text-active);
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.tab-group-count {
+  font-size: 11.5px;
+}
+
+.tab-group-header .row-state {
+  margin-left: auto;
+}
+
+/* Sidebar actions */
+
+.sidebar-action {
+  display: none;
+  flex: 0 0 16px;
+  align-self: center;
+  align-items: center;
+  justify-content: center;
+  height: 16px;
+  margin-left: auto;
+  margin-right: -3px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  opacity: 0.5;
   -webkit-app-region: no-drag;
 }
 
-.sidebar-divider:hover::after {
+.sidebar-action:hover {
+  opacity: 1;
+}
+
+.sidebar-action svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.terminal-row:hover .sidebar-action,
+.tab-group-header:hover .sidebar-action,
+.sidebar-titlebar .sidebar-action {
+  display: inline-flex;
+}
+
+.tab-group-header .row-state + .sidebar-action {
+  margin-left: 4px;
+}
+
+/* Popups */
+
+.popup {
+  position: fixed;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  background: var(--chrome-background);
+  border: 1px solid var(--row-connector);
+  border-radius: 7px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.popup-dots {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+}
+
+.popup-item {
+  padding: 6px 10px;
+  border: 0;
+  border-top: 1px solid var(--row-connector);
+  border-radius: 0 0 6px 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+
+.popup-item:hover:enabled {
+  background: var(--row-hover);
+}
+
+.popup-item:disabled {
+  opacity: 0.4;
+}
+
+.tab-group-name-field {
+  margin: 6px 6px 0;
+  padding: 3px 6px;
+  border: 1px solid var(--row-connector);
+  border-radius: 4px;
+  background: var(--terminal-background);
+  color: var(--text-active);
+  font: inherit;
+  font-size: 12px;
+}
+
+.color-dot {
+  position: relative;
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+}
+
+.color-dot.is-current {
+  box-shadow:
+    0 0 0 2px var(--chrome-background),
+    0 0 0 3.5px var(--text);
+}
+
+.color-dot.is-none {
+  background: transparent;
+  border: 1.5px solid var(--row-connector);
+}
+
+.color-dot.is-none::after {
   content: '';
   position: absolute;
-  top: 0;
-  bottom: 0;
   left: 50%;
-  width: 1px;
-  background: var(--row-marker);
+  top: -1px;
+  bottom: -1px;
+  width: 1.5px;
+  background: var(--row-connector);
+  transform: rotate(45deg);
+}
+
+/* Terminal area */
+
+.pane-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 12px;
+}
+
+.waiting-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  border: 1px solid var(--state-needs);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text);
+  user-select: none;
+}
+
+.waiting-pill-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--state-needs);
 }
 
 .pane-column {
@@ -623,7 +637,18 @@ body {
   background: var(--row-marker);
 }
 
-.config-banner {
+.terminal-host {
+  width: 100%;
+  height: 100%;
+}
+
+.xterm .xterm-viewport {
+  scrollbar-width: thin;
+}
+
+/* Banners */
+
+.banner {
   flex: 0 0 auto;
   display: flex;
   align-items: flex-start;
@@ -634,18 +659,18 @@ body {
   color: var(--warning-text);
 }
 
-.config-problems {
+.banner-lines {
   flex: 1 1 auto;
   min-width: 0;
 }
 
-.config-problem {
+.banner-line {
   margin: 0;
   font-size: 12px;
   overflow-wrap: anywhere;
 }
 
-.config-dismiss {
+.banner-dismiss {
   flex: 0 0 auto;
   padding: 0 4px;
   border: none;
@@ -656,11 +681,11 @@ body {
   cursor: default;
 }
 
-.update-banner {
+.banner.is-notice {
   align-items: center;
 }
 
-.update-apply {
+.banner-action {
   flex: 0 0 auto;
   padding: 2px 8px;
   border: 1px solid var(--warning-border);
@@ -671,21 +696,12 @@ body {
   cursor: pointer;
 }
 
-.agent-banner .config-problem {
+.banner.is-agent .banner-line {
   flex: 1 1 auto;
   min-width: 0;
 }
 
-.agent-decline {
+.banner-action.is-quiet {
   border-color: transparent;
   opacity: 0.8;
-}
-
-.terminal-host {
-  width: 100%;
-  height: 100%;
-}
-
-.xterm .xterm-viewport {
-  scrollbar-width: thin;
 }

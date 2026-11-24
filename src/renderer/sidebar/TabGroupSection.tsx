@@ -5,7 +5,7 @@ import type { DropMark } from '@shared/dropMark'
 import type { Group, Pane, RowColor, TabGroup, TabGroupId } from '@shared/model'
 import { type AgentRows, summaryState } from '@shared/rowState'
 import { PlusIcon } from './icons'
-import { rowColorVariable } from './RowColorPicker'
+import { rowColorVariable } from './rowColor'
 import { SidebarAction } from './SidebarAction'
 import type { SidebarActions } from './sidebarActions'
 import { SidebarEntry } from './SidebarEntry'
@@ -24,7 +24,7 @@ interface TabGroupSectionProps {
   shownColor: (pane: Pane) => RowColor | null
   drag: SidebarDrag
   actions: SidebarActions
-  onOpenPicker: (event: MouseEvent<HTMLDivElement>, paneId: SessionId) => void
+  onOpenRowPopup: (event: MouseEvent<HTMLDivElement>, paneId: SessionId) => void
   onOpenPopup: (event: MouseEvent<HTMLDivElement>, tabGroup: TabGroupId) => void
 }
 
@@ -75,7 +75,7 @@ export function TabGroupSection({
   shownColor,
   drag,
   actions,
-  onOpenPicker,
+  onOpenRowPopup,
   onOpenPopup
 }: TabGroupSectionProps): JSX.Element {
   const members = groups.slice(first, last + 1)
@@ -114,7 +114,7 @@ export function TabGroupSection({
           shownColor={shownColor}
           drag={drag}
           actions={actions}
-          onOpenPicker={onOpenPicker}
+          onOpenRowPopup={onOpenRowPopup}
         />
       )
     })
