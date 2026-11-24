@@ -73,6 +73,7 @@ module.exports = {
     '!branding',
     '!scripts',
     '!e2e',
+    '!install.sh',
     '!electron.vite.config.ts',
     '!vitest.config.mts',
     '!vitest.e2e.config.mts',
@@ -91,10 +92,6 @@ module.exports = {
     bundleShortVersion: version,
     bundleVersion: buildVersion,
     target: [
-      {
-        target: 'dmg',
-        arch: 'arm64'
-      },
       {
         target: 'zip',
         arch: 'arm64'

@@ -2,11 +2,10 @@ import { describe, expect, it } from 'vitest'
 
 import { parseRelease } from './feed'
 
-const DMG = {
-  name: 'taco-shells-0.7.0-arm64.dmg',
-  size: 128478405,
-  browser_download_url:
-    'https://github.com/ldelvoye/taco-shells/releases/download/v0.7.0/taco-shells-0.7.0-arm64.dmg'
+const INSTALL_SCRIPT = {
+  name: 'install.sh',
+  size: 2400,
+  browser_download_url: 'https://github.com/ldelvoye/taco-shells/releases/download/v0.7.0/install.sh'
 }
 const ZIP = {
   name: 'taco-shells-0.7.0-arm64.zip',
@@ -16,7 +15,7 @@ const ZIP = {
 }
 
 function release(overrides: Record<string, unknown>): Record<string, unknown> {
-  return { tag_name: 'v0.7.0', prerelease: false, assets: [DMG, ZIP], ...overrides }
+  return { tag_name: 'v0.7.0', prerelease: false, assets: [INSTALL_SCRIPT, ZIP], ...overrides }
 }
 
 describe('the release the updater will offer', () => {
@@ -29,7 +28,7 @@ describe('the release the updater will offer', () => {
   })
 
   it('offers nothing for a release it cannot use', () => {
-    expect(parseRelease(release({ assets: [DMG] }))).toBeNull()
+    expect(parseRelease(release({ assets: [INSTALL_SCRIPT] }))).toBeNull()
     expect(parseRelease(release({ prerelease: true }))).toBeNull()
     expect(parseRelease(release({ assets: undefined }))).toBeNull()
     expect(parseRelease(release({ tag_name: 'nightly' }))).toBeNull()

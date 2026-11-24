@@ -5,7 +5,7 @@ import { basename, join } from 'node:path'
 
 const OUTPUT_DIRECTORY = 'dist.noindex'
 const APP_DIRECTORY = join(OUTPUT_DIRECTORY, 'mac-arm64')
-const ARTIFACT_SUFFIXES = ['.dmg', '.dmg.blockmap', '.zip', '.zip.blockmap']
+const ARTIFACT_SUFFIXES = ['.zip', '.zip.blockmap']
 // Must match src/main/config/files.ts and src/main/focus/server.ts, or promote
 // cannot reach the running app.
 const PORT_FILE = 'focus-port'
@@ -34,17 +34,12 @@ export function builtBundle() {
   return onlyFileEndingIn(APP_DIRECTORY, '.app')
 }
 
-/** The dmg the build last wrote. */
-export function builtDmg() {
-  return onlyFileEndingIn(OUTPUT_DIRECTORY, '.dmg')
-}
-
 /** The zip the build last wrote. */
 export function builtZip() {
   return onlyFileEndingIn(OUTPUT_DIRECTORY, '.zip')
 }
 
-/** Removes the dmgs and zips, and their blockmaps, that earlier builds left behind. */
+/** Removes the zips, and their blockmaps, that earlier builds left behind. */
 export function clearBuiltArtifacts() {
   if (!existsSync(OUTPUT_DIRECTORY)) {
     return
