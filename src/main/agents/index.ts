@@ -1,12 +1,16 @@
 import { homedir } from 'node:os'
-import { app, shell } from 'electron'
+import { app, type BrowserWindow, ipcMain, shell } from 'electron'
 import {
+  agentBannerOf,
   agentMenuOf,
+  type AgentBanner,
   type AgentMenu,
   type AgentMenuAction,
+  type AgentNotice,
   type AgentSetupState
 } from '@shared/agentSetup'
 import { HARNESSES } from '@shared/harness/registry'
+import { CHANNEL } from '@shared/ipc'
 import { isStable } from '../channel'
 import type { ConfigStore } from '../config'
 import type { AgentMenuEntry } from '../window/menu'
@@ -14,6 +18,7 @@ import type { ApplicationMenu } from '../window/applicationMenu'
 import {
   agentsOf,
   canWriteFor,
+  decline,
   keepCurrent,
   readState,
   removeSetup,
@@ -33,6 +38,13 @@ function reportProblem(problem: string | null): void {
   }
 }
 
+function sendToWindow(window: BrowserWindow, channel: string, payload: AgentBanner[]): void {
+  if (window.isDestroyed()) {
+    return
+  }
+  window.webContents.send(channel, payload)
+}
+
 function perform(action: AgentMenuAction, agent: Agent): string | null {
   switch (action) {
     case 'setUp':
@@ -46,6 +58,7 @@ function perform(action: AgentMenuAction, agent: Agent): string | null {
 
 /** The agents' hook scripts and menu entries, kept current while the app runs. */
 export function registerAgents(
+  window: BrowserWindow,
   configDirectory: string,
   store: ConfigStore,
   menu: ApplicationMenu
@@ -59,6 +72,9 @@ export function registerAgents(
 
   const home = homedir()
   const agents = agentsOf(HARNESSES, configDirectory, process.env, home)
+  // How each agent's last action went, kept until dismissed and shown in place of the offer.
+  const notices = new Map<string, AgentNotice>()
+  let sentBanners = ''
 
   function canWrite(agent: Agent): boolean {
     return canWriteFor(agent.setup, isStable, process.env)
@@ -75,15 +91,57 @@ export function registerAgents(
     return agentMenuOf(state, agent.setup.productName, mayWrite)
   }
 
+  function bannerOf(agent: Agent): AgentBanner | null {
+    const state = stateOf(agent)
+    const mayWrite = canWrite(agent)
+    let notice: AgentNotice | null = null
+    const found = notices.get(agent.id)
+    if (found !== undefined) {
+      notice = found
+    }
+    return agentBannerOf(agent.id, agent.setup.productName, state, mayWrite, notice)
+  }
+
+  function bannersOf(): AgentBanner[] {
+    const banners: AgentBanner[] = []
+    for (const agent of agents) {
+      const banner = bannerOf(agent)
+      if (banner !== null) {
+        banners.push(banner)
+      }
+    }
+    return banners
+  }
+
+  function noteOutcome(agent: Agent, clicked: AgentMenuAction, problem: string | null): void {
+    if (problem !== null) {
+      console.error(problem)
+      notices.set(agent.id, { kind: 'problem', text: problem })
+    } else if (clicked === 'remove') {
+      notices.delete(agent.id)
+    } else {
+      notices.set(agent.id, { kind: 'done' })
+    }
+  }
+
   // The file may have changed since the menu was built, so a click acts only
   // when the menu would still offer the action that was clicked.
   function act(agent: Agent, clicked: AgentMenuAction): void {
     const fresh = menuOf(agent)
     if (fresh.enabled && fresh.action === clicked) {
       const problem = perform(clicked, agent)
-      reportProblem(problem)
+      noteOutcome(agent, clicked, problem)
     }
     refresh()
+  }
+
+  function onAgent(channel: string, handle: (agent: Agent) => void): void {
+    ipcMain.on(channel, (_event, id: unknown) => {
+      const agent = agents.find((candidate) => candidate.id === id)
+      if (agent !== undefined) {
+        handle(agent)
+      }
+    })
   }
 
   function entryOf(agent: Agent): AgentMenuEntry {
@@ -103,7 +161,39 @@ export function registerAgents(
   function refresh(): void {
     const entries = agents.map(entryOf)
     menu.setAgents(entries)
+    const banners = bannersOf()
+    const serialized = JSON.stringify(banners)
+    if (serialized !== sentBanners) {
+      sentBanners = serialized
+      sendToWindow(window, CHANNEL.agentsChanged, banners)
+    }
   }
+
+  // A sendSync left unanswered hangs the renderer at startup, so this answers
+  // even when no harness declares a setup.
+  ipcMain.on(CHANNEL.agentsGet, (event) => {
+    const banners = bannersOf()
+    sentBanners = JSON.stringify(banners)
+    event.returnValue = banners
+  })
+
+  onAgent(CHANNEL.agentsSetUp, (agent) => {
+    act(agent, 'setUp')
+  })
+
+  onAgent(CHANNEL.agentsDecline, (agent) => {
+    const problem = decline(agent)
+    if (problem !== null) {
+      console.error(problem)
+      notices.set(agent.id, { kind: 'problem', text: problem })
+    }
+    refresh()
+  })
+
+  onAgent(CHANNEL.agentsDismiss, (agent) => {
+    notices.delete(agent.id)
+    refresh()
+  })
 
   for (const agent of agents) {
     if (canWrite(agent) && stateOf(agent) === 'setUp') {
@@ -125,6 +215,10 @@ export function registerAgents(
   return {
     stop: () => {
       app.off('did-become-active', onActive)
+      ipcMain.removeAllListeners(CHANNEL.agentsGet)
+      ipcMain.removeAllListeners(CHANNEL.agentsSetUp)
+      ipcMain.removeAllListeners(CHANNEL.agentsDecline)
+      ipcMain.removeAllListeners(CHANNEL.agentsDismiss)
     }
   }
 }

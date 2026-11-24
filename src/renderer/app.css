@@ -671,6 +671,16 @@ body {
   cursor: pointer;
 }
 
+.agent-banner .config-problem {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.agent-decline {
+  border-color: transparent;
+  opacity: 0.8;
+}
+
 .terminal-host {
   width: 100%;
   height: 100%;

@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import type { AgentBanner } from '@shared/agentSetup'
 import type { Config, ConfigFile } from '@shared/config'
 import {
   CHANNEL,
@@ -66,6 +67,13 @@ const api: TacoShellsApi = {
     onReady: (listener: (version: string) => void) => subscribe(CHANNEL.updateReady, listener),
     onProblem: (listener: (message: string) => void) => subscribe(CHANNEL.updateProblem, listener),
     apply: () => ipcRenderer.send(CHANNEL.updateApply)
+  },
+  agents: {
+    initial: ipcRenderer.sendSync(CHANNEL.agentsGet) as AgentBanner[],
+    onChange: (listener: (banners: AgentBanner[]) => void) => subscribe(CHANNEL.agentsChanged, listener),
+    setUp: (harness: string) => ipcRenderer.send(CHANNEL.agentsSetUp, harness),
+    decline: (harness: string) => ipcRenderer.send(CHANNEL.agentsDecline, harness),
+    dismiss: (harness: string) => ipcRenderer.send(CHANNEL.agentsDismiss, harness)
   }
 }
 
