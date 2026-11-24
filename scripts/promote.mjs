@@ -88,7 +88,7 @@ run('npm', 'run', 'e2e')
 // The only build that brands itself stable. Everything else, a plain
 // `npm run install-app` included, produces the dev app instead.
 const stableChannel = { [identity.CHANNEL_VARIABLE]: identity.STABLE_CHANNEL }
-// builtZip refuses to choose between two, so the last promotion's zip would
+// builtZip refuses to choose between two zips, so the last promotion's would
 // fail this one.
 clearBuiltArtifacts()
 runWith(stableChannel, 'npm', 'run', 'dist')

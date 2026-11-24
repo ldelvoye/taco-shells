@@ -108,7 +108,7 @@ v0.2.2     cleanup, then promoted
 
 **`install-app` refuses while the app is running**, because ditto over a live bundle leaves it misbehaving until relaunch, and quitting it for you would take the user's open shells.
 
-**Both builds are ad-hoc signed and not notarised.** `codesign --verify` complains and that is expected; do not go chasing it. It matters only for a copy downloaded in a *browser*, which macOS reports as damaged until the quarantine flag is cleared. `install.sh` avoids that because `curl` does not quarantine what it fetches, and the README covers the by-hand path. Do not add a dmg back: it can only be downloaded in a browser.
+**Both builds are ad-hoc signed and not notarised.** `codesign --verify` complains and that is expected; do not go chasing it. It matters only for a copy downloaded in a *browser*, which macOS reports as damaged until the quarantine flag is cleared. `install.sh` avoids that because `curl` does not quarantine what it fetches, and the README covers the by-hand path. No dmg is shipped: one can only be downloaded in a browser.
 
 **An e2e test must not assume the machine's shell.** The app opens whatever `shellPath()` resolves — the user's login shell — and CI runs on a machine whose login shell differs from yours and which has no shell dotfiles at all. Two tests assumed otherwise and passed locally for weeks before the first CI run failed them: one counted processes matching a hardcoded `zsh -l`, and one read a pane's directory out of the sidebar row, which only carries one because a *user's* prompt configuration publishes it as the window title. Stock macOS `/etc/zshrc` does not. Ask the shell to report what you need instead of reading it off the chrome.
 
