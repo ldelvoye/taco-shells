@@ -10,7 +10,6 @@
 
 # Architecture
 
-- Sidebar in pieces. `Sidebar.tsx` is one 750-line component. It should receive the workspace whole instead of rebuilding it from three props. The code that decides where the drop line is drawn is pure and untested, and belongs beside `shared/drop.ts` with tests. A row, a tab group's section and the drag handling are each their own piece. Easier once the workspace state has moved.
 - One banner and one popup. The config, update and agent strips share their look by wearing each other's class names, and the tab group popup does the same with the row popup's. A `Banner` component and neutral popup class names replace that, and `app.css` is reordered under section comments rather than split. This includes renaming `RowColorPicker`: it is the whole right-click popup of a row now, and holds Fork with Claude beside the color dots, so the component, its file and its props should be named for the popup, not for the colors.
 - The legacy session routes go. Claude's hook script posts to `/agent-session/*` now, and the focus server still answers `/claude-session/*` for copies of the script from before that. Delete those routes once no hand-wired setup points at an older copy.
 
