@@ -178,7 +178,9 @@ describe('the Agents menu', () => {
     })
     try {
       const reading = await untilMenu(app, STATUS_NOT_SET_UP, ACTION_SET_UP)
+      expect(reading.statusKind).toBe('header')
       expect(reading.enabled).toBe(false)
+      expect(reading.note).toContain('Development builds')
 
       await app.clickAgentAction()
       await app.pause(SETTLE_PAUSE_MS)
