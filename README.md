@@ -10,15 +10,21 @@ Early. Right now it runs as many terminals as you like and lists them in the sid
 
 ## Installing
 
-Download the dmg from [the latest release](https://github.com/ldelvoye/taco-shells/releases/latest) and drag Taco Shells into Applications.
+Paste this into a terminal:
 
-It won't open yet. The app is signed only ad-hoc and isn't notarised, so macOS reports a downloaded copy as damaged rather than merely unverified, and offers no way past it. One command fixes that:
+```sh
+curl -fsSL https://github.com/ldelvoye/taco-shells/releases/latest/download/install.sh | sh
+```
+
+It downloads the latest stable release, puts Taco Shells in Applications and opens it. [The script](install.sh) is short enough to read first. It needs a Mac with Apple silicon.
+
+To install by hand, download the zip from [the latest release](https://github.com/ldelvoye/taco-shells/releases/latest), unzip it and drag Taco Shells into Applications. A copy downloaded in a browser won't open yet: the app is signed only ad-hoc and isn't notarised, so macOS reports it as damaged and offers no way past it. One command fixes that:
 
 ```sh
 xattr -dr com.apple.quarantine "/Applications/Taco Shells.app"
 ```
 
-Once it's installed, the app checks for a new stable release, downloads it in the background, and offers a restart that swaps in the new version and brings your terminals back. Only the first install is the dmg.
+Once it's installed, the app checks for a new stable release, downloads it in the background, and offers a restart that swaps in the new version and brings your terminals back.
 
 Releases marked as pre-releases are points in the project's history rather than builds to install; they carry no download.
 

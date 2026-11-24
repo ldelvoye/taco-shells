@@ -2,7 +2,7 @@ import { changeList, changesSince, fail, lastTag, messagesSince, run, tryGit } f
 import { FIRST_VERSION, nextVersion, tagFor, versionOfTag } from './version.mjs'
 
 const NO_BINARY_NOTE = `This release is a point in main's history, not a build to install. It carries
-no download: a dmg is large and you can build one in about forty seconds with
+no download: a build is large and you can make one in about forty seconds with
 \`npm run install-app\`, which installs it as **Taco Shells Dev**, beside the
 stable app rather than over it.
 

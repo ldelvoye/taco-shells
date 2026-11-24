@@ -26,7 +26,7 @@ npm test             # the pure units, ~150ms
 npm run e2e          # builds, then drives the real app
 npm run test:e2e     # the same, then installs it
 npm run install-app  # build and install Taco Shells Dev
-npm run dist         # app and dmg into dist.noindex/
+npm run dist         # app and zip into dist.noindex/
 npm run promote      # mark a version stable (see below)
 npm run record:clip  # builds, then films a portfolio clip into dist.noindex/ (-- taco for the other scene)
 ```
@@ -90,7 +90,7 @@ v0.2.2     cleanup, then promoted
 
 **Tags are the source of truth. `package.json`'s version is not** — it sits at `0.0.0` and is read only as a floor before the first tag exists. This was chosen over a `chore(release):` commit per merge so main's history stays the commits someone actually wrote. The cost is that `electron-builder.js` overrides `bundleShortVersion`, `bundleVersion` and `artifactName`, which would otherwise all come from package.json.
 
-**Promotion is a rebuild.** `npm run promote` refuses unless HEAD is exactly on a version tag with a clean tree, then rebuilds under the stable identity, installs it unless the app is running (see Landing), attaches the dmg and the zip to the release that already exists and clears its prerelease flag. The dmg is for the first install; the zip is what the in-app updater downloads. `--publish` is what makes it touch GitHub; without it nothing is published.
+**Promotion is a rebuild.** `npm run promote` refuses unless HEAD is exactly on a version tag with a clean tree, then rebuilds under the stable identity, installs it unless the app is running (see Landing), attaches `install.sh` and the zip to the release that already exists and clears its prerelease flag. The script is the first install: it is what the README's `curl` line fetches from `/releases/latest`, and it downloads the zip. The zip is also what the in-app updater downloads. `--publish` is what makes it touch GitHub; without it nothing is published.
 
 **Promotion rewrites the release notes**, because the ones a prerelease carries say it has no download. They are generated from the commits since the last release, and `--notes-file=some.md` replaces that body outright for a release where the list of commits is not the story. Note the consequence: setting a release's notes by hand *before* promoting it achieves nothing, since promotion overwrites them. Pass the file, or edit afterwards.
 
@@ -108,7 +108,7 @@ v0.2.2     cleanup, then promoted
 
 **`install-app` refuses while the app is running**, because ditto over a live bundle leaves it misbehaving until relaunch, and quitting it for you would take the user's open shells.
 
-**Both builds are ad-hoc signed and not notarised.** `codesign --verify` complains and that is expected; do not go chasing it. It matters only for a *downloaded* copy, which macOS reports as damaged until the quarantine flag is cleared — the README says how.
+**Both builds are ad-hoc signed and not notarised.** `codesign --verify` complains and that is expected; do not go chasing it. It matters only for a copy downloaded in a *browser*, which macOS reports as damaged until the quarantine flag is cleared. `install.sh` avoids that because `curl` does not quarantine what it fetches, and the README covers the by-hand path. Do not add a dmg back: it can only be downloaded in a browser.
 
 **An e2e test must not assume the machine's shell.** The app opens whatever `shellPath()` resolves — the user's login shell — and CI runs on a machine whose login shell differs from yours and which has no shell dotfiles at all. Two tests assumed otherwise and passed locally for weeks before the first CI run failed them: one counted processes matching a hardcoded `zsh -l`, and one read a pane's directory out of the sidebar row, which only carries one because a *user's* prompt configuration publishes it as the window title. Stock macOS `/etc/zshrc` does not. Ask the shell to report what you need instead of reading it off the chrome.
 
