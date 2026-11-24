@@ -5,6 +5,7 @@ import { CHANNEL } from '@shared/ipc'
 import { isVersion } from '@shared/version'
 import { isStable } from '../channel'
 import type { ApplicationMenu } from '../window/applicationMenu'
+import { sendToWindow } from '../window/send'
 import { helperArguments, installedBundlePath } from './apply'
 import { UpdateChecker, type UpdateEvents } from './checker'
 import { updatesDirectory } from './download'
@@ -43,13 +44,6 @@ function resolveCurrentVersion(): string | null {
     return null
   }
   return UNVERSIONED
-}
-
-function sendToWindow(window: BrowserWindow, channel: string, payload: string): void {
-  if (window.isDestroyed()) {
-    return
-  }
-  window.webContents.send(channel, payload)
 }
 
 /** The update checks and the apply handler, or null when this build does not update. */
