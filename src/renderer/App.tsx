@@ -1,7 +1,7 @@
 import { type JSX, useCallback, useEffect, useMemo, useState } from 'react'
 import { FOCUS_FIRST_PORT, FOCUS_LAST_PORT } from '@shared/focusPorts'
 import { paletteFor } from '@shared/theme'
-import type { Group, TabGroup } from '@shared/model'
+import { emptyWorkspace, type Workspace } from '@shared/model'
 import { waitingCount } from '@shared/rowState'
 import { createCommandRegistry } from './commands/registry'
 import { registerTerminalCommands } from './commands/terminal'
@@ -102,14 +102,12 @@ export function App(): JSX.Element {
 
   useCommandKeys(commands, bindings)
 
-  let groups: Group[] = []
-  let tabGroups: TabGroup[] = []
-  let activeGroupIndex = 0
+  let shownWorkspace: Workspace = emptyWorkspace()
   if (workspace) {
-    groups = workspace.groups
-    tabGroups = workspace.tabGroups
-    activeGroupIndex = workspace.activeGroup
+    shownWorkspace = workspace
   }
+  const groups = shownWorkspace.groups
+  const activeGroupIndex = shownWorkspace.activeGroup
 
   let problems = config.problems
   if (focusProblem) {
@@ -120,24 +118,11 @@ export function App(): JSX.Element {
   if (sidebarVisible) {
     sidebar = (
       <Sidebar
-        groups={groups}
-        activeGroup={activeGroupIndex}
-        tabGroups={tabGroups}
+        workspace={shownWorkspace}
+        agentRows={agentRows}
+        actions={operations}
         width={sidebarWidth.width}
         fullScreen={fullScreen}
-        rowStates={agentRows}
-        onSelect={operations.select}
-        onClose={operations.close}
-        onNewTerminal={operations.openTerminalIn}
-        onDrop={operations.drop}
-        onColor={operations.colorPane}
-        onFork={operations.fork}
-        onNewTabGroup={operations.newTabGroup}
-        onRenameTabGroup={operations.renameTabGroup}
-        onRecolorTabGroup={operations.recolorTabGroup}
-        onUngroupTabGroup={operations.ungroupTabGroup}
-        onToggleTabGroup={operations.toggleTabGroup}
-        onRefocus={operations.refocusActive}
         onResize={sidebarWidth.resize}
       />
     )

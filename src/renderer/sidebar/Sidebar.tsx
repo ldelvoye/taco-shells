@@ -5,42 +5,30 @@ import {
   type MouseEvent,
   useCallback,
   useEffect,
-  useRef,
   useState
 } from 'react'
 import type { SessionId } from '@shared/ipc'
-import { type DropPoint, dropFor, rowPointIn } from '@shared/drop'
-import { type DropMark, dropMarkFor, sameDrop } from '@shared/dropMark'
+import type { DropPoint } from '@shared/drop'
 import {
   blockOf,
-  type Dragged,
-  type Drop,
   type Group,
   groupHasRoom,
   type Pane,
-  paneOf,
   type RowColor,
   type TabGroup,
   type TabGroupId,
   type Workspace
 } from '@shared/model'
 import { DEFAULT_HARNESS, harnessOf } from '@shared/harness/registry'
-import { type AgentRows, summaryState } from '@shared/rowState'
-import { PlusIcon, TrashIcon } from './icons'
-import { RowColorPicker, rowColorVariable } from './RowColorPicker'
-import { SidebarAction } from './SidebarAction'
+import type { AgentRows } from '@shared/rowState'
+import { RowColorPicker } from './RowColorPicker'
+import type { SidebarActions } from './sidebarActions'
 import { SidebarDivider } from './SidebarDivider'
+import { SidebarEntry } from './SidebarEntry'
 import { SidebarTitlebar } from './SidebarTitlebar'
 import { TabGroupPopup } from './TabGroupPopup'
-
-const UNTITLED_ROW = 'Terminal'
-const UNNAMED_TAB_GROUP = 'Group'
-
-const CONNECTOR_FIRST = 'is-first'
-const CONNECTOR_MIDDLE = 'is-middle'
-const CONNECTOR_LAST = 'is-last'
-
-const RIGHT_BUTTON = 2
+import { TabGroupSection } from './TabGroupSection'
+import { useSidebarDrag } from './useSidebarDrag'
 
 const END_POINT: DropPoint = { over: 'end' }
 
@@ -63,24 +51,11 @@ interface OpenTabGroupPopup {
 }
 
 interface SidebarProps {
-  groups: Group[]
-  activeGroup: number
-  tabGroups: TabGroup[]
+  workspace: Workspace
+  agentRows: AgentRows
+  actions: SidebarActions
   width: number
   fullScreen: boolean
-  rowStates: AgentRows
-  onSelect: (sessionId: SessionId) => void
-  onClose: (sessionId: SessionId) => void
-  onNewTerminal: (tabGroup: TabGroupId | null) => void
-  onDrop: (dragged: Dragged, drop: Drop) => void
-  onColor: (sessionId: SessionId, color: RowColor | null) => void
-  onFork: (sessionId: SessionId) => void
-  onNewTabGroup: (pane: SessionId) => TabGroupId | null
-  onRenameTabGroup: (id: TabGroupId, name: string) => void
-  onRecolorTabGroup: (id: TabGroupId, color: RowColor) => void
-  onUngroupTabGroup: (id: TabGroupId) => void
-  onToggleTabGroup: (id: TabGroupId) => void
-  onRefocus: () => void
   onResize: (width: number) => void
 }
 
@@ -118,109 +93,20 @@ function harnessNameOf(pane: Pane, rowStates: AgentRows): string {
   return harness.name
 }
 
-function edgeClass(mark: DropMark): string {
-  if (mark.edge === 'whole') {
-    return ' is-drop-target'
-  }
-
-  let className = ' drop-above'
-  if (mark.edge === 'below') {
-    className = ' drop-below'
-  }
-  if (mark.tabGroup !== null) {
-    className += ' drop-in-group'
-  }
-  return className
-}
-
-function entryMarkClass(mark: DropMark | null, index: number): string {
-  if (mark === null) {
-    return ''
-  }
-  const target = mark.target
-  if (target.on !== 'entry' || target.index !== index) {
-    return ''
-  }
-  return edgeClass(mark)
-}
-
-function wrapperMarkClass(mark: DropMark | null, id: TabGroupId): string {
-  if (mark === null) {
-    return ''
-  }
-  const target = mark.target
-  if (target.on !== 'wrapper' || target.tabGroup !== id) {
-    return ''
-  }
-  return edgeClass(mark)
-}
-
-function headerMarkClass(mark: DropMark | null, id: TabGroupId): string {
-  if (mark === null) {
-    return ''
-  }
-  const target = mark.target
-  if (target.on !== 'header' || target.tabGroup !== id) {
-    return ''
-  }
-  return edgeClass(mark)
-}
-
-function labelFor(title: string): string {
-  if (title) {
-    return title
-  }
-  return UNTITLED_ROW
-}
-
-function tabGroupLabel(name: string): string {
-  if (name.trim()) {
-    return name
-  }
-  return UNNAMED_TAB_GROUP
-}
-
-// CSS, not box-drawing glyphs: their em box is shorter than a row, so the
-// strokes of adjacent rows would not quite meet.
-function connectorFor(paneIndex: number, paneCount: number): string | null {
-  if (paneCount < 2) {
-    return null
-  }
-  if (paneIndex === 0) {
-    return CONNECTOR_FIRST
-  }
-  if (paneIndex === paneCount - 1) {
-    return CONNECTOR_LAST
-  }
-  return CONNECTOR_MIDDLE
-}
-
 export function Sidebar({
-  groups,
-  activeGroup,
+  workspace,
+  agentRows,
+  actions,
   width,
   fullScreen,
-  rowStates,
-  tabGroups,
-  onSelect,
-  onClose,
-  onNewTerminal,
-  onDrop,
-  onColor,
-  onFork,
-  onNewTabGroup,
-  onRenameTabGroup,
-  onRecolorTabGroup,
-  onUngroupTabGroup,
-  onToggleTabGroup,
-  onRefocus,
   onResize
 }: SidebarProps): JSX.Element {
-  const dragged = useRef<Dragged | null>(null)
-  const [drop, setDrop] = useState<Drop | null>(null)
+  const drag = useSidebarDrag(workspace, actions.drop)
   const [picker, setPicker] = useState<OpenPicker | null>(null)
   const [tabGroupPopup, setTabGroupPopup] = useState<OpenTabGroupPopup | null>(null)
-  const workspace: Workspace = { groups, activeGroup, tabGroups }
+  const groups = workspace.groups
+  const activeGroup = workspace.activeGroup
+  const tabGroups = workspace.tabGroups
 
   const closePicker = useCallback(() => {
     setPicker(null)
@@ -229,8 +115,8 @@ export function Sidebar({
   // The name field took the keyboard, so closing its popup hands it back to the terminal.
   const closeTabGroupPopup = useCallback(() => {
     setTabGroupPopup(null)
-    onRefocus()
-  }, [onRefocus])
+    actions.refocusActive()
+  }, [actions])
 
   // A tab group can vanish under its open popup, when its last terminal exits.
   useEffect(() => {
@@ -261,316 +147,28 @@ export function Sidebar({
     return picker.preview.color
   }
 
-  function startDrag(event: DragEvent<HTMLElement>, what: Dragged, label: string): void {
-    dragged.current = what
-    event.dataTransfer.effectAllowed = 'move'
-    // The drop reads the ref above, not this. The label is what a drag that lands outside the sidebar drops.
-    event.dataTransfer.setData('text/plain', label)
-  }
-
-  // The bracket is what was grabbed, but the picture that follows the pointer is the whole split.
-  function showWholeGroup(event: DragEvent<HTMLElement>, selector: string): void {
-    const shown = event.currentTarget.closest(selector)
-    if (shown === null) {
-      return
-    }
-
-    const bounds = shown.getBoundingClientRect()
-    const offsetX = event.clientX - bounds.left
-    const offsetY = event.clientY - bounds.top
-    event.dataTransfer.setDragImage(shown, offsetX, offsetY)
-  }
-
-  function rowPointOf(event: DragEvent<HTMLDivElement>, groupIndex: number): DropPoint {
-    const paneCount = groups[groupIndex].panes.length
-    const bounds = event.currentTarget.getBoundingClientRect()
-    const offsetY = event.clientY - bounds.top
-    const point = rowPointIn(groupIndex, paneCount, offsetY, bounds.height)
-    return { over: 'row', ...point }
-  }
-
-  function headerPointOf(event: DragEvent<HTMLDivElement>, tabGroup: TabGroupId): DropPoint {
-    const bounds = event.currentTarget.getBoundingClientRect()
-    const offsetY = event.clientY - bounds.top
-    const raised = Math.max(offsetY / bounds.height, 0)
-    const fraction = Math.min(raised, 1)
-    return { over: 'header', tabGroup, fraction }
-  }
-
-  function dropAt(point: DropPoint): Drop | null {
-    const dragging = dragged.current
-    if (dragging === null) {
-      return null
-    }
-    return dropFor(workspace, dragging, point)
-  }
-
-  function onDragOver(event: DragEvent<HTMLDivElement>, point: DropPoint): void {
-    const next = dropAt(point)
-    if (next === null) {
-      setDrop(null)
-      return
-    }
-
-    event.preventDefault()
-    event.dataTransfer.dropEffect = 'move'
-    if (!sameDrop(drop, next)) {
-      setDrop(next)
-    }
-  }
-
-  function onDropAt(event: DragEvent<HTMLDivElement>, point: DropPoint): void {
-    event.preventDefault()
-
-    const landed = dropAt(point)
-    const draggedValue = dragged.current
-    endDrag()
-
-    if (draggedValue === null || landed === null) {
-      return
-    }
-    onDrop(draggedValue, landed)
-  }
-
-  function endDrag(): void {
-    dragged.current = null
-    setDrop(null)
-  }
-
   // The empty space under the last row drops at the bottom of the list, in no group.
   function onDragOverEnd(event: DragEvent<HTMLDivElement>): void {
     if (event.target === event.currentTarget) {
-      onDragOver(event, END_POINT)
+      drag.over(event, END_POINT)
     }
   }
 
   function onDropOnEnd(event: DragEvent<HTMLDivElement>): void {
     if (event.target === event.currentTarget) {
-      onDropAt(event, END_POINT)
+      drag.dropAt(event, END_POINT)
     }
-  }
-
-  // A dragleave also fires when the pointer moves between two rows, so only one that ends outside the rows counts.
-  function onDragLeaveRows(event: DragEvent<HTMLDivElement>): void {
-    const bounds = event.currentTarget.getBoundingClientRect()
-    const insideAcross = event.clientX >= bounds.left && event.clientX < bounds.right
-    const insideDown = event.clientY >= bounds.top && event.clientY < bounds.bottom
-    if (insideAcross && insideDown) {
-      return
-    }
-    setDrop(null)
   }
 
   function openUngroupedTerminal(): void {
-    onNewTerminal(null)
-  }
-
-  const mark = dropMarkFor(workspace, drop)
-
-  const entryElements = groups.map((group, groupIndex) => {
-    const paneCount = group.panes.length
-    const activeInGroup = paneOf(group)
-    const groupDragLabel = labelFor(activeInGroup.title)
-
-    let joinSlot: number | null = null
-    if (drop !== null && drop.kind === 'into' && drop.group === group.id) {
-      joinSlot = drop.slot
-    }
-
-    const rows = group.panes.map((pane, paneIndex) => {
-      const label = labelFor(pane.title)
-
-      let connector = null
-      const connectorPiece = connectorFor(paneIndex, paneCount)
-      if (connectorPiece) {
-        connector = (
-          <span
-            className={`row-connector ${connectorPiece}`}
-            draggable
-            onDragStart={(event) => {
-              event.stopPropagation()
-              startDrag(event, { kind: 'group', group: group.id }, groupDragLabel)
-              showWholeGroup(event, '.terminal-group')
-            }}
-          />
-        )
-      }
-
-      let markerState: string | undefined
-      const agentRow = rowStates.get(pane.id)
-      if (agentRow !== undefined) {
-        markerState = agentRow.state
-      }
-
-      let className = 'terminal-row'
-      const isActivePane = groupIndex === activeGroup && paneIndex === group.activePane
-      if (isActivePane) {
-        className += ' is-active'
-      }
-      if (joinSlot === paneIndex) {
-        className += ' drop-before'
-      }
-      if (joinSlot === paneCount && paneIndex === paneCount - 1) {
-        className += ' drop-after'
-      }
-
-      let stripe = null
-      const color = shownColor(pane)
-      if (color !== null) {
-        const background = rowColorVariable(color)
-        stripe = <span className="row-color" data-color={color} style={{ background }} />
-      }
-
-      return (
-        <div
-          key={pane.id}
-          className={className}
-          title={label}
-          draggable
-          onDragStart={(event) => {
-            startDrag(event, { kind: 'pane', pane: pane.id }, label)
-          }}
-          onClick={() => {
-            onSelect(pane.id)
-          }}
-          onMouseDown={(event) => {
-            // Keeps keyboard focus in the terminal: right-clicking a row only opens the picker.
-            if (event.button === RIGHT_BUTTON) {
-              event.preventDefault()
-            }
-          }}
-          onContextMenu={(event) => {
-            openPicker(event, pane.id)
-          }}
-        >
-          {stripe}
-          {connector}
-          <span className="row-state" data-state={markerState} />
-          <span className="row-label">{label}</span>
-          <SidebarAction
-            className="row-close"
-            label="Close terminal"
-            onActivate={() => {
-              onClose(pane.id)
-            }}
-          >
-            <TrashIcon />
-          </SidebarAction>
-        </div>
-      )
-    })
-
-    let className = 'terminal-group'
-    className += entryMarkClass(mark, groupIndex)
-    if (joinSlot !== null) {
-      className += ' is-join-target'
-    }
-
-    // A row drags its one terminal and the bracket drags the whole split, so the group only receives drops.
-    return (
-      <div
-        key={group.id}
-        className={className}
-        onDragOver={(event) => {
-          const point = rowPointOf(event, groupIndex)
-          onDragOver(event, point)
-        }}
-        onDrop={(event) => {
-          const point = rowPointOf(event, groupIndex)
-          onDropAt(event, point)
-        }}
-        onDragEnd={endDrag}
-      >
-        {rows}
-      </div>
-    )
-  })
-
-  function renderTabGroup(tabGroup: TabGroup, first: number, last: number): JSX.Element {
-    const members = groups.slice(first, last + 1)
-    let shownEntries: JSX.Element[] = []
-    let className = 'tab-group'
-    let headerClassName = 'tab-group-header'
-    let count = null
-    if (tabGroup.collapsed) {
-      className += ' is-collapsed'
-      const memberPanes = members.flatMap((member) => member.panes)
-      const memberIds = memberPanes.map((pane) => pane.id)
-      const summary = summaryState(rowStates, memberIds)
-      let marker = null
-      if (summary !== null) {
-        marker = <span className="row-state" data-state={summary} />
-      }
-      count = (
-        <>
-          <span className="tab-group-count">{memberPanes.length}</span>
-          {marker}
-        </>
-      )
-      if (activeGroup >= first && activeGroup <= last) {
-        headerClassName += ' is-active'
-      }
-    } else {
-      shownEntries = entryElements.slice(first, last + 1)
-    }
-
-    className += wrapperMarkClass(mark, tabGroup.id)
-    headerClassName += headerMarkClass(mark, tabGroup.id)
-
-    const tabStyle = { '--tab-color': rowColorVariable(tabGroup.color) } as CSSProperties
-    const label = tabGroupLabel(tabGroup.name)
-    return (
-      <div key={tabGroup.id} className={className} data-tab-group={tabGroup.id} style={tabStyle}>
-        <div
-          className={headerClassName}
-          draggable
-          onDragStart={(event) => {
-            startDrag(event, { kind: 'tabGroup', tabGroup: tabGroup.id }, label)
-            showWholeGroup(event, '.tab-group')
-          }}
-          onDragOver={(event) => {
-            const point = headerPointOf(event, tabGroup.id)
-            onDragOver(event, point)
-          }}
-          onDrop={(event) => {
-            const point = headerPointOf(event, tabGroup.id)
-            onDropAt(event, point)
-          }}
-          onDragEnd={endDrag}
-          onClick={() => {
-            onToggleTabGroup(tabGroup.id)
-          }}
-          onMouseDown={(event) => {
-            if (event.button === RIGHT_BUTTON) {
-              event.preventDefault()
-            }
-          }}
-          onContextMenu={(event) => {
-            openTabGroupPopup(event, tabGroup.id)
-          }}
-        >
-          <span className="tab-group-caret" />
-          <span className="tab-group-name">{label}</span>
-          {count}
-          <SidebarAction
-            className="tab-group-new"
-            label={`New terminal in ${label}`}
-            onActivate={() => {
-              onNewTerminal(tabGroup.id)
-            }}
-          >
-            <PlusIcon />
-          </SidebarAction>
-        </div>
-        {shownEntries}
-      </div>
-    )
+    actions.openTerminalIn(null)
   }
 
   const rendered: JSX.Element[] = []
   let walkIndex = 0
   while (walkIndex < groups.length) {
-    const entryTabGroup = groups[walkIndex].tabGroup
+    const group = groups[walkIndex]
+    const entryTabGroup = group.tabGroup
     let tabGroup: TabGroup | undefined
     let block = null
     if (entryTabGroup !== null) {
@@ -579,10 +177,39 @@ export function Sidebar({
     }
 
     if (tabGroup === undefined || block === null) {
-      rendered.push(entryElements[walkIndex])
+      const entry = (
+        <SidebarEntry
+          key={group.id}
+          group={group}
+          groupIndex={walkIndex}
+          activeGroup={activeGroup}
+          agentRows={agentRows}
+          shownColor={shownColor}
+          drag={drag}
+          actions={actions}
+          onOpenPicker={openPicker}
+        />
+      )
+      rendered.push(entry)
       walkIndex += 1
     } else {
-      rendered.push(renderTabGroup(tabGroup, block.first, block.last))
+      const section = (
+        <TabGroupSection
+          key={tabGroup.id}
+          tabGroup={tabGroup}
+          groups={groups}
+          first={block.first}
+          last={block.last}
+          activeGroup={activeGroup}
+          agentRows={agentRows}
+          shownColor={shownColor}
+          drag={drag}
+          actions={actions}
+          onOpenPicker={openPicker}
+          onOpenPopup={openTabGroupPopup}
+        />
+      )
+      rendered.push(section)
       walkIndex = block.last + 1
     }
   }
@@ -595,8 +222,8 @@ export function Sidebar({
     const panes = groups.flatMap((group) => group.panes)
     const pickedPane = panes.find((pane) => pane.id === picker.paneId)
     if (pickedPane !== undefined) {
-      const canFork = canForkRow(pickedPane, groups, rowStates)
-      const forkName = harnessNameOf(pickedPane, rowStates)
+      const canFork = canForkRow(pickedPane, groups, agentRows)
+      const forkName = harnessNameOf(pickedPane, agentRows)
       colorPicker = (
         <RowColorPicker
           x={picker.x}
@@ -611,15 +238,15 @@ export function Sidebar({
             setPicker({ ...picker, preview: null })
           }}
           onPick={(color) => {
-            onColor(pickedPane.id, color)
+            actions.colorPane(pickedPane.id, color)
             closePicker()
           }}
           onFork={() => {
-            onFork(pickedPane.id)
+            actions.fork(pickedPane.id)
             closePicker()
           }}
           onNewGroup={() => {
-            const tabGroup = onNewTabGroup(pickedPane.id)
+            const tabGroup = actions.newTabGroup(pickedPane.id)
             closePicker()
             if (tabGroup === null) {
               return
@@ -643,13 +270,13 @@ export function Sidebar({
           name={popupTabGroup.name}
           color={popupTabGroup.color}
           onRename={(name) => {
-            onRenameTabGroup(popupTabGroup.id, name)
+            actions.renameTabGroup(popupTabGroup.id, name)
           }}
           onRecolor={(color) => {
-            onRecolorTabGroup(popupTabGroup.id, color)
+            actions.recolorTabGroup(popupTabGroup.id, color)
           }}
           onUngroup={() => {
-            onUngroupTabGroup(popupTabGroup.id)
+            actions.ungroupTabGroup(popupTabGroup.id)
           }}
           onClose={closeTabGroupPopup}
         />
@@ -664,7 +291,7 @@ export function Sidebar({
         className="sidebar-rows"
         onDragOver={onDragOverEnd}
         onDrop={onDropOnEnd}
-        onDragLeave={onDragLeaveRows}
+        onDragLeave={drag.leaveRows}
       >
         {rendered}
       </div>
