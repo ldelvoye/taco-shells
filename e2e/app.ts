@@ -28,6 +28,14 @@ const DRAG_STEPS = 8
 const ROW_HANDLE_OFFSET = 60
 const BRACKET_HANDLE_OFFSET = 13
 
+const AGENT_MENU_BODY = `return JSON.stringify({
+      status: items[0].label,
+      actionLabel: items[2].label,
+      enabled: items[2].enabled
+    })`
+const AGENT_CLICK_BODY = `items[2].click()
+    return ''`
+
 // xterm warns when a render task overruns its idle deadline, which a slow CI
 // runner does on its own; it says nothing about the app.
 const XTERM_DEADLINE_WARNING = 'task queue exceeded allotted deadline'
@@ -70,12 +78,19 @@ export interface WindowPlacement {
   height: number
 }
 
-/** What a launch may override: the config directory, anything the shells inherit, and whether the window is shown. */
+/** What a launch may override: the config directory, anything the shells inherit, whether the window is shown, and the main-process inspector. */
 export interface LaunchOptions {
   configDir?: string
   env?: Record<string, string>
   expectedRows?: number
   window?: WindowPlacement
+  mainInspector?: boolean
+}
+
+export interface AgentMenuReading {
+  status: string
+  actionLabel: string
+  enabled: boolean
 }
 
 /** A sidebar row: every pane of every group has one, in sidebar order. */
@@ -166,6 +181,9 @@ export interface App {
   rendererConsole(): string[]
   chromeBackground(): Promise<string>
   configProblems(): Promise<string[]>
+  agentMenu(): Promise<AgentMenuReading>
+  clickAgentAction(): Promise<void>
+  emitInMain(event: string): Promise<void>
   close(): Promise<void>
   quitGracefully(): Promise<void>
   waitForExit(): Promise<void>
@@ -322,13 +340,56 @@ function placementScript(placement: WindowPlacement): string {
   })()`
 }
 
-async function placeWindow(placement: WindowPlacement): Promise<void> {
-  const main = await openProtocol(await findDebuggerUrl(INSPECT_PORT, 'node'))
-  const outcome = await main.send('Runtime.evaluate', { expression: placementScript(placement) })
+async function evaluateInMain(expression: string): Promise<string> {
+  const url = await findDebuggerUrl(INSPECT_PORT, 'node')
+  const main = await openProtocol(url)
+  const outcome = await main.send('Runtime.evaluate', { expression, returnByValue: true })
   main.close()
   if (outcome.exceptionDetails) {
-    throw new Error(`placing the window failed: ${JSON.stringify(outcome.exceptionDetails)}`)
+    throw new Error(`evaluating in the main process failed: ${JSON.stringify(outcome.exceptionDetails)}`)
   }
+  const result = outcome.result as { value?: unknown }
+  if (typeof result.value === 'string') {
+    return result.value
+  }
+  return ''
+}
+
+async function placeWindow(placement: WindowPlacement): Promise<void> {
+  const script = placementScript(placement)
+  await evaluateInMain(script)
+}
+
+function agentItemsScript(body: string): string {
+  return `(() => {
+    const { Menu } = process.mainModule.require('electron')
+    const agents = Menu.getApplicationMenu().items.find((item) => item.label === 'Agents')
+    if (!agents) {
+      throw new Error('the application menu has no Agents menu')
+    }
+    const firstAgent = agents.submenu.items[0]
+    const items = firstAgent.submenu.items
+    ${body}
+  })()`
+}
+
+async function agentMenu(): Promise<AgentMenuReading> {
+  const script = agentItemsScript(AGENT_MENU_BODY)
+  const reading = await evaluateInMain(script)
+  return JSON.parse(reading) as AgentMenuReading
+}
+
+async function clickAgentAction(): Promise<void> {
+  const script = agentItemsScript(AGENT_CLICK_BODY)
+  await evaluateInMain(script)
+}
+
+async function emitInMain(event: string): Promise<void> {
+  const name = JSON.stringify(event)
+  await evaluateInMain(`(() => {
+    process.mainModule.require('electron').app.emit(${name})
+    return ''
+  })()`)
 }
 
 // The sidebar's rows and the on-screen group's panes are two separate lists:
@@ -421,6 +482,9 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     ELECTRON_ENABLE_LOGGING: '1',
     TACO_SHELLS_BACKGROUND_WINDOW: '1'
   }
+  // A developer who exports CLAUDE_CONFIG_DIR must not have the suite pointed
+  // at their real Claude settings; a test that wants one passes its own.
+  delete env.CLAUDE_CONFIG_DIR
   // A launch with no directory of its own still gets one, so that no test can
   // read the config belonging to whoever is running it.
   let ownedConfigDir: string | null = null
@@ -435,14 +499,13 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
   }
 
   const launchArguments = ['.', `--remote-debugging-port=${DEBUG_PORT}`]
+  if (options.window || options.mainInspector) {
+    launchArguments.push(`--inspect=${INSPECT_PORT}`)
+  }
   if (options.window) {
     // The window is shown behind whatever the user is doing, and Chromium
     // stops painting an occluded window unless told not to.
-    launchArguments.push(
-      `--inspect=${INSPECT_PORT}`,
-      '--disable-backgrounding-occluded-windows',
-      '--disable-renderer-backgrounding'
-    )
+    launchArguments.push('--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding')
   }
 
   const electron = spawn(ELECTRON_BINARY, launchArguments, {
@@ -907,6 +970,9 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     rendererConsole,
     chromeBackground,
     configProblems,
+    agentMenu,
+    clickAgentAction,
+    emitInMain,
     close,
     quitGracefully,
     waitForExit

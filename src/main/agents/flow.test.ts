@@ -31,6 +31,7 @@ const SESSION_SCRIPT = 'taco-shells-claude-session.sh'
 const ATTENTION_SCRIPT = 'taco-shells-attention.sh'
 
 const setup = claude.setup as HarnessSetup
+const ENTRY_COUNT = setup.entries.length
 
 let appDirectory = ''
 let agentDirectory = ''
@@ -84,11 +85,11 @@ describe('the agent setup flow', () => {
     expect(setUp(agent)).toBeNull()
 
     const commands = commandsIn(agent.paths.settingsPath)
-    expect(commands).toHaveLength(10)
+    expect(commands).toHaveLength(ENTRY_COUNT)
     expect(commands.every((command) => command.startsWith(agent.paths.hooksDirectory))).toBe(true)
     const record = readAgentRecord(appDirectory, claude.id)
     expect(record.declined).toBe(false)
-    expect(record.written).toHaveLength(10)
+    expect(record.written).toHaveLength(ENTRY_COUNT)
     expect(readState(agent, true)).toBe('setUp')
 
     const missing = agentFor(join(extraDirectory, 'absent'))
@@ -124,8 +125,8 @@ describe('the agent setup flow', () => {
 
     expect(keepCurrent(agent)).toBeNull()
 
-    expect(commandsIn(agent.paths.settingsPath)).toHaveLength(10)
-    expect(readAgentRecord(appDirectory, claude.id).written).toHaveLength(10)
+    expect(commandsIn(agent.paths.settingsPath)).toHaveLength(ENTRY_COUNT)
+    expect(readAgentRecord(appDirectory, claude.id).written).toHaveLength(ENTRY_COUNT)
   })
 
   it('removes its entries and counts as a decline', () => {
@@ -133,7 +134,7 @@ describe('the agent setup flow', () => {
     const mine = '/Users/x/bin/my-hook.sh'
     writeJson(agent.paths.settingsPath, { hooks: { Stop: [userHook(mine)] } })
     setUp(agent)
-    expect(commandsIn(agent.paths.settingsPath)).toHaveLength(11)
+    expect(commandsIn(agent.paths.settingsPath)).toHaveLength(ENTRY_COUNT + 1)
 
     expect(removeSetup(agent)).toBeNull()
 
@@ -162,7 +163,7 @@ describe('the agent setup flow', () => {
     const commands = commandsIn(agent.paths.settingsPath)
     expect(commands.some((command) => command.includes('/code/taco-shells/hooks/'))).toBe(false)
     const managed = commands.filter((command) => command.startsWith(agent.paths.hooksDirectory))
-    expect(managed).toHaveLength(10)
+    expect(managed).toHaveLength(ENTRY_COUNT)
     expect(commands).toContain(mine)
     expect(readState(agent, true)).toBe('setUp')
   })
@@ -189,7 +190,7 @@ describe('the agent setup flow', () => {
     expect(setUp(agent)).toBeNull()
 
     expect(lstatSync(agent.paths.settingsPath).isSymbolicLink()).toBe(true)
-    expect(commandsIn(realPath)).toHaveLength(10)
+    expect(commandsIn(realPath)).toHaveLength(ENTRY_COUNT)
   })
 
   it('remembers a decline without touching the entries it wrote', () => {
@@ -202,7 +203,7 @@ describe('the agent setup flow', () => {
 
     const record = readAgentRecord(appDirectory, claude.id)
     expect(record.declined).toBe(true)
-    expect(record.written).toHaveLength(10)
+    expect(record.written).toHaveLength(ENTRY_COUNT)
     expect(readState(agent, true)).toBe('setUp')
   })
 

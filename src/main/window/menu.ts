@@ -1,14 +1,48 @@
 import { app, Menu, type MenuItemConstructorOptions } from 'electron'
+import type { AgentMenu } from '@shared/agentSetup'
+
+const AGENTS_LABEL = 'Agents'
+const SHOW_SCRIPTS_LABEL = 'Show Hook Scripts in Finder'
 
 export interface ReadyUpdate {
   version: string
   onApply: () => void
 }
 
+export interface AgentMenuEntry {
+  name: string
+  menu: AgentMenu
+  onAction: () => void
+  onShowScripts: () => void
+}
+
+export interface ApplicationMenuState {
+  readyUpdate: ReadyUpdate | null
+  agents: AgentMenuEntry[]
+}
+
+function agentSubmenu(entry: AgentMenuEntry): MenuItemConstructorOptions {
+  const status: MenuItemConstructorOptions = { label: entry.menu.status, enabled: false }
+  const action: MenuItemConstructorOptions = {
+    label: entry.menu.actionLabel,
+    enabled: entry.menu.enabled,
+    click: entry.onAction
+  }
+  const showScripts: MenuItemConstructorOptions = { label: SHOW_SCRIPTS_LABEL, click: entry.onShowScripts }
+  const submenu: MenuItemConstructorOptions[] = [
+    status,
+    { type: 'separator' },
+    action,
+    { type: 'separator' },
+    showScripts
+  ]
+  return { label: entry.name, submenu }
+}
+
 // No Edit menu: its copy and paste roles would claim cmd+c and cmd+v, and a menu
 // accelerator fires before the renderer sees the keydown.
 // No Close item: its cmd+w has to stay free for closing a terminal.
-export function buildApplicationMenu(readyUpdate: ReadyUpdate | null = null): Menu {
+export function buildApplicationMenu(state: ApplicationMenuState): Menu {
   const template: MenuItemConstructorOptions[] = [
     {
       label: app.name,
@@ -25,13 +59,20 @@ export function buildApplicationMenu(readyUpdate: ReadyUpdate | null = null): Me
     {
       label: 'View',
       submenu: [{ role: 'toggleDevTools' }]
-    },
-    {
-      label: 'Window',
-      submenu: [{ role: 'minimize' }, { role: 'zoom' }]
     }
   ]
 
+  if (state.agents.length > 0) {
+    const agentSubmenus = state.agents.map(agentSubmenu)
+    template.push({ label: AGENTS_LABEL, submenu: agentSubmenus })
+  }
+
+  template.push({
+    label: 'Window',
+    submenu: [{ role: 'minimize' }, { role: 'zoom' }]
+  })
+
+  const readyUpdate = state.readyUpdate
   if (readyUpdate !== null) {
     template.push({
       label: 'Update',
