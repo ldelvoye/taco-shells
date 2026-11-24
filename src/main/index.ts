@@ -58,6 +58,10 @@ app.whenReady().then(() => {
   })
 
   configStore.onChange((config) => {
+    // The store keeps running after the window closes, until the snapshot's last write is done.
+    if (window.isDestroyed()) {
+      return
+    }
     const nextPalette = paletteFor(config.appearance)
     window.setBackgroundColor(nextPalette.chrome.terminalBackground)
   })
