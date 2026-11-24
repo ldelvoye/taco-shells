@@ -2,7 +2,6 @@ import { existsSync, readFileSync } from 'node:fs'
 
 import {
   appIsRunning,
-  builtDmg,
   builtZip,
   clearBuiltArtifacts,
   requestUpdateCheck
@@ -12,16 +11,14 @@ import { changeList, commandSucceeds, fail, git, lastTag, run, runWith, tryGit }
 import { isVersion, versionOfTag } from './version.mjs'
 
 const STABLE_APP = identity.installedPathFor(identity.STABLE)
+const INSTALL_SCRIPT = 'install.sh'
 
 const INSTALL_NOTES = `## Installing
 
-Download the dmg, open it, and drag Taco Shells into Applications. macOS refuses
-to open it until the quarantine flag is cleared:
+    curl -fsSL https://github.com/ldelvoye/taco-shells/releases/latest/download/install.sh | sh
 
-    xattr -dr com.apple.quarantine "/Applications/Taco Shells.app"
-
-The app is ad-hoc signed and not notarised, so a downloaded copy is reported as
-damaged rather than merely unverified until that attribute is gone.`
+That puts the latest stable release in Applications and opens it. From then on the
+app updates itself.`
 
 const args = process.argv.slice(2)
 const publishing = args.includes('--publish')
@@ -59,6 +56,10 @@ if (notesFile && !existsSync(notesFile)) {
   fail(`no notes file at ${notesFile}.`)
 }
 
+if (!existsSync(INSTALL_SCRIPT)) {
+  fail(`no ${INSTALL_SCRIPT} at the repo root to attach to the release.`)
+}
+
 const uncommitted = git('status', '--porcelain')
 if (uncommitted) {
   fail(`the working tree has uncommitted changes, so a build would not be ${tag}:\n${uncommitted}`)
@@ -87,15 +88,10 @@ run('npm', 'run', 'e2e')
 // The only build that brands itself stable. Everything else, a plain
 // `npm run install-app` included, produces the dev app instead.
 const stableChannel = { [identity.CHANNEL_VARIABLE]: identity.STABLE_CHANNEL }
-// builtDmg and builtZip refuse to choose between two, so the last promotion's
-// files would fail this one.
+// builtZip refuses to choose between two, so the last promotion's zip would
+// fail this one.
 clearBuiltArtifacts()
 runWith(stableChannel, 'npm', 'run', 'dist')
-
-const dmg = builtDmg()
-if (!dmg) {
-  fail('the build did not produce a dmg.')
-}
 
 const zip = builtZip()
 if (!zip) {
@@ -123,7 +119,7 @@ Dry run: ${tag} was not promoted on GitHub.
 
 ${STABLE_APP} is now ${version}, built and installed locally.
 
-Adding --publish would attach ${dmg} and ${zip} to the ${tag} release, clear its prerelease
+Adding --publish would attach ${INSTALL_SCRIPT} and ${zip} to the ${tag} release, clear its prerelease
 flag so GitHub lists it as Latest, and write its notes from ${notesSource}.
 `)
   process.exit(0)
@@ -137,7 +133,7 @@ if (notesFile) {
   notes = `${changeList(previous)}\n\n${INSTALL_NOTES}`
 }
 
-run('gh', 'release', 'upload', tag, dmg, zip, '--clobber')
+run('gh', 'release', 'upload', tag, INSTALL_SCRIPT, zip, '--clobber')
 run('gh', 'release', 'edit', tag, '--prerelease=false', '--latest', '--notes', notes)
 
 let installLine = `installed ${STABLE_APP}`
@@ -152,6 +148,6 @@ if (handingOffToRunningApp) {
 
 console.log(`
 Promoted ${version}.
-  release   ${tag} is now Latest, carrying ${dmg} and ${zip}
+  release   ${tag} is now Latest, carrying ${INSTALL_SCRIPT} and ${zip}
   ${installLine}
 `)
