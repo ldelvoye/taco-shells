@@ -4,6 +4,7 @@ import { app, type BrowserWindow, ipcMain, net } from 'electron'
 import { CHANNEL } from '@shared/ipc'
 import { isVersion } from '@shared/version'
 import { isStable } from '../channel'
+import type { Service } from '../service'
 import type { ApplicationMenu } from '../window/applicationMenu'
 import { sendToWindow } from '../window/send'
 import { helperArguments, installedBundlePath } from './apply'
@@ -16,9 +17,8 @@ const HELPER_NAME = 'update-helper.sh'
 const NOT_IN_APPLICATIONS = 'Taco Shells can only update itself from /Applications.'
 const UNVERSIONED = '0.0.0'
 
-export interface RegisteredUpdates {
-  stop: () => void
-  checkNow: () => void
+export interface UpdateService extends Service {
+  checkNow(): void
 }
 
 // The stable build always follows GitHub. The feed override is a test seam for
@@ -46,12 +46,12 @@ function resolveCurrentVersion(): string | null {
   return UNVERSIONED
 }
 
-/** The update checks and the apply handler, or null when this build does not update. */
+/** The update checks and the apply handler. In a build that does not update, the check does nothing. */
 export function registerUpdates(
   window: BrowserWindow,
   configDirectory: string,
   menu: ApplicationMenu
-): RegisteredUpdates | null {
+): UpdateService {
   let checker: UpdateChecker | null = null
 
   // A sendSync left unanswered hangs the renderer at startup, so this answers
@@ -72,7 +72,12 @@ export function registerUpdates(
   const feedUrl = resolveFeedUrl()
   const currentVersion = resolveCurrentVersion()
   if (feedUrl === null || currentVersion === null) {
-    return null
+    return {
+      stop: () => {
+        ipcMain.removeAllListeners(CHANNEL.updateGet)
+      },
+      checkNow: () => undefined
+    }
   }
 
   const events: UpdateEvents = {
