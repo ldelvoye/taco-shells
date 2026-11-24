@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import { applyEdits, modify, type FormattingOptions, type JSONPath } from 'jsonc-parser'
 import type { HookWiring } from '@shared/agentSetup'
 import type { HarnessSetup, HookEntry } from '@shared/harness/types'
+import { isRecord } from '@shared/isRecord'
 import { parseJsonc } from '../config/jsonc'
 
 const EMPTY_FILE = '{}'
@@ -38,10 +39,6 @@ function refusal(problem: string): HookSettingsResult {
 
 function unchanged(): HookSettingsResult {
   return { text: null, problem: null }
-}
-
-function isRecord(value: unknown): value is JsonRecord {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function readHooks(text: string, label: string): HooksRead {

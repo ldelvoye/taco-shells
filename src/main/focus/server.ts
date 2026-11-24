@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { SessionId } from '@shared/ipc'
 import { HARNESSES, harnessOf, LEGACY_HARNESS } from '@shared/harness/registry'
 import type { Harness } from '@shared/harness/types'
+import { isRecord } from '@shared/isRecord'
 import type { AgentSignal } from '@shared/rowState'
 import { type AgentSession, agentSessionFor } from '@shared/snapshot'
 
@@ -84,12 +85,11 @@ function attemptListen(
 }
 
 function pidsFrom(body: unknown): number[] | null {
-  if (typeof body !== 'object' || body === null) {
+  if (!isRecord(body)) {
     return null
   }
 
-  const record = body as Record<string, unknown>
-  const candidate = record.pids
+  const candidate = body.pids
   if (!Array.isArray(candidate) || candidate.length === 0) {
     return null
   }
@@ -99,22 +99,20 @@ function pidsFrom(body: unknown): number[] | null {
 }
 
 function harnessFrom(body: unknown, harnesses: readonly Harness[]): Harness | null {
-  if (typeof body !== 'object' || body === null) {
+  if (!isRecord(body)) {
     return null
   }
 
-  const record = body as Record<string, unknown>
-  const candidate = record.harness
+  const candidate = body.harness
   return harnessOf(candidate, harnesses)
 }
 
 function sessionIdFrom(harness: Harness, body: unknown): string | null {
-  if (typeof body !== 'object' || body === null) {
+  if (!isRecord(body)) {
     return null
   }
 
-  const record = body as Record<string, unknown>
-  const candidate = record.sessionId
+  const candidate = body.sessionId
   if (!harness.isSessionId(candidate)) {
     return null
   }
@@ -122,21 +120,19 @@ function sessionIdFrom(harness: Harness, body: unknown): string | null {
 }
 
 function hasConversationFrom(body: unknown): boolean {
-  if (typeof body !== 'object' || body === null) {
+  if (!isRecord(body)) {
     return false
   }
 
-  const record = body as Record<string, unknown>
-  return record.hasConversation === true
+  return body.hasConversation === true
 }
 
 function eventFrom(body: unknown): string | null {
-  if (typeof body !== 'object' || body === null) {
+  if (!isRecord(body)) {
     return null
   }
 
-  const record = body as Record<string, unknown>
-  const candidate = record.event
+  const candidate = body.event
   if (typeof candidate !== 'string') {
     return null
   }
@@ -144,12 +140,11 @@ function eventFrom(body: unknown): string | null {
 }
 
 function detailFrom(body: unknown): string | null {
-  if (typeof body !== 'object' || body === null) {
+  if (!isRecord(body)) {
     return null
   }
 
-  const record = body as Record<string, unknown>
-  const candidate = record.detail
+  const candidate = body.detail
   if (typeof candidate !== 'string' || candidate === '') {
     return null
   }
