@@ -42,9 +42,9 @@ function readMarker(installDirectory) {
   return readFileSync(markerPath, 'utf8')
 }
 
-function makeFixtureZip() {
+function makeFixtureZip(bundleName = APP_NAME) {
   const directory = makeTempDirectory()
-  const bundle = join(directory, APP_NAME)
+  const bundle = join(directory, bundleName)
   const zip = join(directory, 'app.zip')
   writeMarker(bundle, 'new')
   execFileSync('ditto', ['-c', '-k', '--keepParent', bundle, zip])
@@ -58,6 +58,12 @@ function makeOpenStub() {
   writeFileSync(stub, `#!/bin/sh\necho "$@" >> "${record}"\n`)
   chmodSync(stub, 0o755)
   return { directory, record }
+}
+
+function makeCommandFail(openStub, command) {
+  const stub = join(openStub.directory, command)
+  writeFileSync(stub, '#!/bin/sh\nexit 1\n')
+  chmodSync(stub, 0o755)
 }
 
 function install(installDirectory, zipUrl, openStub) {
@@ -131,11 +137,33 @@ describe('install.sh', () => {
     expect(readMarker(installDirectory)).toBe('new')
   })
 
+  it('replaces an install it cannot delete', () => {
+    const zip = makeFixtureZip()
+    const installDirectory = makeTempDirectory()
+    const openStub = makeOpenStub()
+    const oldContents = join(installDirectory, APP_NAME, 'Contents')
+    writeMarker(join(installDirectory, APP_NAME), 'old')
+    chmodSync(oldContents, 0o555)
+
+    try {
+      install(installDirectory, `file://${zip}`, openStub)
+
+      expect(readMarker(installDirectory)).toBe('new')
+    } finally {
+      execFileSync('chmod', ['-R', 'u+w', installDirectory])
+    }
+  })
+
   it('leaves the install alone when the download or the zip is bad', () => {
     const scratch = makeTempDirectory()
     const notAZip = join(scratch, 'not-a-zip.zip')
     writeFileSync(notAZip, 'this is not a zip')
-    const badUrls = [`file://${join(scratch, 'missing.zip')}`, `file://${notAZip}`]
+    const zipOfAnotherApp = makeFixtureZip('Another.app')
+    const badUrls = [
+      `file://${join(scratch, 'missing.zip')}`,
+      `file://${notAZip}`,
+      `file://${zipOfAnotherApp}`
+    ]
 
     for (const url of badUrls) {
       const installDirectory = makeTempDirectory()
@@ -148,6 +176,19 @@ describe('install.sh', () => {
       expect(readMarker(installDirectory)).toBe('old')
       expect(openWasCalled(openStub)).toBe(false)
     }
+  })
+
+  it('leaves the install alone when the new app cannot be moved in', () => {
+    const zip = makeFixtureZip()
+    const installDirectory = makeTempDirectory()
+    const openStub = makeOpenStub()
+    makeCommandFail(openStub, 'mv')
+    writeMarker(join(installDirectory, APP_NAME), 'old')
+
+    const status = installFailureStatus(installDirectory, `file://${zip}`, openStub)
+
+    expect(status).not.toBe(0)
+    expect(readMarker(installDirectory)).toBe('old')
   })
 
   it('refuses while the app is running', async () => {
