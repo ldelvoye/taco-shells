@@ -209,6 +209,17 @@ interface Protocol {
   onClose(listener: () => void): void
 }
 
+interface PendingReply {
+  answer: (result: ProtocolParams) => void
+  fail: (reason: Error) => void
+}
+
+class PageClosedError extends Error {
+  constructor() {
+    super('the page closed before it answered')
+  }
+}
+
 function sleep(milliseconds: number): Promise<void> {
   return new Promise((done) => setTimeout(done, milliseconds))
 }
@@ -286,8 +297,19 @@ async function openProtocol(url: string): Promise<Protocol> {
   await new Promise((opened) => socket.addEventListener('open', opened))
 
   let nextMessageId = 1
-  const awaitingReply = new Map<number, (result: ProtocolParams) => void>()
+  let closed = false
+  const awaitingReply = new Map<number, PendingReply>()
   const eventListeners = new Map<string, ((params: ProtocolParams) => void)[]>()
+
+  // A page that has gone never answers, and a request left waiting on it would hang its test.
+  socket.addEventListener('close', () => {
+    closed = true
+    for (const pending of awaitingReply.values()) {
+      const reason = new PageClosedError()
+      pending.fail(reason)
+    }
+    awaitingReply.clear()
+  })
 
   socket.addEventListener('message', (event) => {
     const message = JSON.parse(String(event.data))
@@ -301,19 +323,24 @@ async function openProtocol(url: string): Promise<Protocol> {
       }
       return
     }
-    const reply = awaitingReply.get(message.id)
-    if (!reply) {
+    const pending = awaitingReply.get(message.id)
+    if (!pending) {
       return
     }
     awaitingReply.delete(message.id)
-    reply(message.result)
+    pending.answer(message.result)
   })
 
   function send(method: string, params: ProtocolParams): Promise<ProtocolParams> {
+    if (closed) {
+      const reason = new PageClosedError()
+      return Promise.reject(reason)
+    }
+
     const id = nextMessageId
     nextMessageId += 1
     socket.send(JSON.stringify({ id, method, params }))
-    return new Promise((resolved) => awaitingReply.set(id, resolved))
+    return new Promise((answer, fail) => awaitingReply.set(id, { answer, fail }))
   }
 
   function onEvent(method: string, listener: (params: ProtocolParams) => void): void {
@@ -608,8 +635,16 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
       autoRepeat: held
     }
 
-    await send('Input.dispatchKeyEvent', { ...stroke, type: 'rawKeyDown' })
-    await send('Input.dispatchKeyEvent', { ...stroke, type: 'keyUp' })
+    // A key that closes the window takes the page with it, and the rest of the stroke has nowhere to go.
+    try {
+      await send('Input.dispatchKeyEvent', { ...stroke, type: 'rawKeyDown' })
+      await send('Input.dispatchKeyEvent', { ...stroke, type: 'keyUp' })
+    } catch (error) {
+      if (error instanceof PageClosedError) {
+        return
+      }
+      throw error
+    }
   }
 
   async function press(key: Key, modifiers: Modifiers = {}): Promise<void> {

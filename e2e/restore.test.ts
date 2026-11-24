@@ -79,11 +79,20 @@ describe('restoring a saved workspace', () => {
 
     const app = await launchApp({ configDir })
     try {
+      const neverAnswered = { expression: 'new Promise(() => {})', awaitPromise: true }
+      const unanswered = app.cdp('Runtime.evaluate', neverAnswered)
+      const outcome = unanswered.then(
+        () => 'answered',
+        () => 'failed'
+      )
+
       await app.press(KEY.w, { cmd: true })
       await app.waitForExit()
 
       const snapshot = savedSnapshot(configDir)
       expect(snapshot.groups).toEqual([])
+      // A request the app quit before answering has to fail, or whatever awaits it hangs.
+      expect(await outcome).toBe('failed')
     } finally {
       await app.close()
       rmSync(configDir, { recursive: true, force: true })
