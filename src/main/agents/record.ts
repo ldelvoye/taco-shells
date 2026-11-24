@@ -43,10 +43,6 @@ function readRecordFile(configDirectory: string): RecordFile {
 
 export function readAgentRecord(configDirectory: string, harnessId: string): AgentRecord {
   const file = readRecordFile(configDirectory)
-  if (!Object.prototype.hasOwnProperty.call(file, harnessId)) {
-    return emptyRecord()
-  }
-
   const entry = file[harnessId]
   if (!isPlainObject(entry)) {
     return emptyRecord()
@@ -54,7 +50,7 @@ export function readAgentRecord(configDirectory: string, harnessId: string): Age
   if (typeof entry.declined !== 'boolean' || !isStringArray(entry.written)) {
     return emptyRecord()
   }
-  return { declined: entry.declined, written: [...entry.written] }
+  return { declined: entry.declined, written: entry.written }
 }
 
 export function writeAgentRecord(configDirectory: string, harnessId: string, record: AgentRecord): void {

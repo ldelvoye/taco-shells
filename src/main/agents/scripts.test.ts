@@ -43,10 +43,12 @@ describe('copyHookScripts', () => {
   it('copies every script and makes it runnable', () => {
     const source = makeSource()
     const destination = destinationFor(source)
+    mkdirSync(join(source, 'not-a-script'))
 
     const problems = copyHookScripts(source, destination)
 
     expect(problems).toEqual([])
+    expect(existsSync(join(destination, 'not-a-script'))).toBe(false)
     for (const name of ['one.sh', 'two.sh']) {
       const stats = statSync(join(destination, name))
       expect(stats.mode & 0o111).not.toBe(0)

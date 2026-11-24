@@ -3,6 +3,7 @@ import { app, type BrowserWindow, ipcMain, shell } from 'electron'
 import {
   agentBannerOf,
   agentMenuOf,
+  agentNoticeAfter,
   type AgentBanner,
   type AgentMenu,
   type AgentMenuAction,
@@ -116,11 +117,12 @@ export function registerAgents(
   function noteOutcome(agent: Agent, clicked: AgentMenuAction, problem: string | null): void {
     if (problem !== null) {
       console.error(problem)
-      notices.set(agent.id, { kind: 'problem', text: problem })
-    } else if (clicked === 'remove') {
+    }
+    const notice = agentNoticeAfter(clicked, problem)
+    if (notice === null) {
       notices.delete(agent.id)
     } else {
-      notices.set(agent.id, { kind: 'done' })
+      notices.set(agent.id, notice)
     }
   }
 
