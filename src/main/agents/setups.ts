@@ -117,6 +117,7 @@ export class AgentSetups {
   banners(): AgentBanner[] {
     const readings = this.readAll()
     const banners = this.bannersFrom(readings)
+    // The synchronous read counts as sent, so the next refresh skips an identical push.
     this.sentBanners = JSON.stringify(banners)
     return banners
   }
@@ -232,9 +233,7 @@ export class AgentSetups {
   }
 
   private noteOutcome(agent: Agent, clicked: AgentMenuAction, problem: string | null): void {
-    if (problem !== null) {
-      console.error(problem)
-    }
+    reportProblem(problem)
     const notice = agentNoticeAfter(clicked, problem)
     if (notice === null) {
       this.notices.delete(agent.id)
