@@ -55,7 +55,10 @@ module.exports = {
 
   extraMetadata: { version },
 
-  extraResources: [{ from: 'resources/update-helper.sh', to: 'update-helper.sh' }],
+  extraResources: [
+    { from: 'resources/update-helper.sh', to: 'update-helper.sh' },
+    { from: 'hooks', to: 'hooks' }
+  ],
 
   // Spotlight skips a directory named .noindex, so the build output does not show
   // up as a second, staler Taco Shells beside the installed one.
