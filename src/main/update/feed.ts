@@ -1,3 +1,4 @@
+import { isRecord } from '@shared/isRecord'
 import { isVersion } from '@shared/version'
 
 const TAG_PREFIX = 'v'
@@ -18,10 +19,6 @@ interface ReleaseAsset {
 // Must match the artifactName template in electron-builder.js, or no release ever offers an update.
 export function assetNameFor(version: string): string {
   return `taco-shells-${version}-arm64.zip`
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
 }
 
 function findAsset(assets: unknown[], name: string): ReleaseAsset | null {

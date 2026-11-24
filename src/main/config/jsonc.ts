@@ -1,4 +1,5 @@
 import { parse, printParseErrorCode, type ParseError } from 'jsonc-parser'
+import { isRecord } from '@shared/isRecord'
 
 const PARSE_OPTIONS = { allowTrailingComma: true, allowEmptyContent: true }
 
@@ -45,10 +46,9 @@ export function parseJsonc(text: string, label: string): JsoncResult {
     return { value: {}, problems: [] }
   }
 
-  const isObject = typeof value === 'object' && value !== null && !Array.isArray(value)
-  if (!isObject) {
+  if (!isRecord(value)) {
     return { value: null, problems: [`${label}: the file must hold a JSON object`] }
   }
 
-  return { value: value as Record<string, unknown>, problems: [] }
+  return { value, problems: [] }
 }

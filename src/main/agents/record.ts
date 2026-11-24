@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { isRecord } from '@shared/isRecord'
 
 const RECORD_FILE = 'agents.json'
 
@@ -13,10 +14,6 @@ type RecordFile = Record<string, unknown>
 
 function emptyRecord(): AgentRecord {
   return { declined: false, written: [] }
-}
-
-function isPlainObject(value: unknown): value is RecordFile {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -35,7 +32,7 @@ function readRecordFile(configDirectory: string): RecordFile {
   } catch {
     return {}
   }
-  if (!isPlainObject(parsed)) {
+  if (!isRecord(parsed)) {
     return {}
   }
   return parsed
@@ -44,7 +41,7 @@ function readRecordFile(configDirectory: string): RecordFile {
 export function readAgentRecord(configDirectory: string, harnessId: string): AgentRecord {
   const file = readRecordFile(configDirectory)
   const entry = file[harnessId]
-  if (!isPlainObject(entry)) {
+  if (!isRecord(entry)) {
     return emptyRecord()
   }
   if (typeof entry.declined !== 'boolean' || !isStringArray(entry.written)) {

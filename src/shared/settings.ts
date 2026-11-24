@@ -1,3 +1,5 @@
+import { isRecord } from './isRecord'
+
 export type ThemeChoice = 'system' | 'light' | 'dark'
 export type CursorStyle = 'block' | 'underline' | 'bar'
 
@@ -91,7 +93,7 @@ function isValidatedKey(key: string): key is keyof Settings {
 }
 
 export function applySettingsLayer(base: Settings, layer: unknown, label: string): SettingsLayerResult {
-  if (typeof layer !== 'object' || layer === null || Array.isArray(layer)) {
+  if (!isRecord(layer)) {
     return { settings: base, problems: [`${label}: the file must hold a JSON object`] }
   }
 

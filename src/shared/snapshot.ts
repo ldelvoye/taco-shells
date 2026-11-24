@@ -2,6 +2,7 @@ import type { SessionId } from './ipc'
 import type { GroupId, Group, Pane, RowColor, TabGroup, TabGroupId, Workspace } from './model'
 import { HARNESSES, harnessOf, LEGACY_HARNESS } from './harness/registry'
 import type { Harness } from './harness/types'
+import { isRecord } from './isRecord'
 import { emptyWorkspace, MIN_PANE_WIDTH, openedAt, ROW_COLORS } from './model'
 
 // Tab groups were added without a new version: a file without them loads with none, and a build
@@ -44,10 +45,6 @@ export interface Snapshot {
 }
 
 type Loose = Record<string, unknown>
-
-function isRecord(value: unknown): value is Loose {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
 
 function clampIndex(value: unknown, length: number): number {
   if (typeof value !== 'number' || !Number.isInteger(value)) {

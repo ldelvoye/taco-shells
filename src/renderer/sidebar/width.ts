@@ -1,3 +1,5 @@
+import { isRecord } from '@shared/isRecord'
+
 export const DEFAULT_SIDEBAR_WIDTH = 220
 export const MIN_SIDEBAR_WIDTH = 140
 export const MAX_SIDEBAR_SHARE = 0.5
@@ -28,11 +30,11 @@ export function parseRemembered(stored: string | null): RememberedWidths {
     return {}
   }
 
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+  if (!isRecord(parsed)) {
     return {}
   }
 
-  const entries = Object.entries(parsed as Record<string, unknown>)
+  const entries = Object.entries(parsed)
   const cleaned: RememberedWidths = {}
   for (const [key, value] of entries) {
     if (isCleanEntry(key, value)) {
