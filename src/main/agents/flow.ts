@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { agentSetupStateOf, type AgentSetupState } from '@shared/agentSetup'
 import type { Harness, HarnessSetup } from '@shared/harness/types'
+import { CONFIG_DIRECTORY_VARIABLE } from '../config/files'
 import { errorMessage } from '../errorMessage'
 import {
   addEntries,
@@ -11,11 +12,8 @@ import {
   removeManagedEntries,
   type HookSettingsResult
 } from './hookSettings'
-import { readAgentRecord, writeAgentRecord, type AgentRecord } from './record'
+import { readAgentRecord, RECORD_FILE, writeAgentRecord, type AgentRecord } from './record'
 import { hooksDirectory } from './scripts'
-
-const RECORD_FILE_NAME = 'agents.json'
-const DEV_CONFIG_DIRECTORY_VARIABLE = 'TACO_SHELLS_CONFIG_DIR'
 
 /** Where one agent's files and the app's own files for it live. */
 export interface AgentPaths {
@@ -77,7 +75,7 @@ function saveRecord(agent: Agent, record: AgentRecord): string | null {
   try {
     writeAgentRecord(configDirectory, agent.id, record)
   } catch (error) {
-    const path = join(configDirectory, RECORD_FILE_NAME)
+    const path = join(configDirectory, RECORD_FILE)
     const message = errorMessage(error)
     return `${path} could not be written: ${message}`
   }
@@ -142,7 +140,7 @@ export function canWriteFor(setup: HarnessSetup, isStable: boolean, env: NodeJS.
   if (isStable) {
     return true
   }
-  const hasAppOverride = isSet(env[DEV_CONFIG_DIRECTORY_VARIABLE])
+  const hasAppOverride = isSet(env[CONFIG_DIRECTORY_VARIABLE])
   const hasAgentOverride = isSet(env[setup.configDirectoryVariable])
   return hasAppOverride && hasAgentOverride
 }

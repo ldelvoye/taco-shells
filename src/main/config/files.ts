@@ -8,6 +8,7 @@ import { errorMessage } from '../errorMessage'
 const SETTINGS_FILE = 'settings.json'
 const KEYBINDINGS_FILE = 'keybindings.json'
 const FOCUS_PORT_FILE = 'focus-port'
+export const CONFIG_DIRECTORY_VARIABLE = 'TACO_SHELLS_CONFIG_DIR'
 const WATCH_DEBOUNCE_MS = 100
 
 export interface ConfigTexts {
@@ -26,7 +27,7 @@ function isFileExistsError(error: unknown): boolean {
 // TACO_SHELLS_CONFIG_DIR is what keeps the e2e suite out of the real config
 // directory, which it would otherwise seed and read.
 export function configDirectory(): string {
-  const override = process.env.TACO_SHELLS_CONFIG_DIR
+  const override = process.env[CONFIG_DIRECTORY_VARIABLE]
   let directory: string
   if (override) {
     directory = override
