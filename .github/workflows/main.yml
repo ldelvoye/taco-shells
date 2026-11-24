@@ -25,9 +25,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # The prerelease number counts commits since the last stable tag, and
-          # the notes read the log, so a shallow clone would get both wrong.
+          # The version comes from the tags and the notes read the log, so a
+          # shallow clone would get both wrong.
           fetch-depth: 0
+          # Keeps the write token out of .git/config, where install scripts and
+          # tests could read it. The release step is handed it as GH_TOKEN.
+          persist-credentials: false
 
       - name: Lockfile resolves through Socket Firewall
         run: "! grep -nE '\"resolved\": \"https?://' package-lock.json | grep -v '\"resolved\": \"https://sfw.security.sentry.io/npm/'"
