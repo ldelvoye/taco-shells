@@ -479,9 +479,9 @@ const SCREEN_SCRIPT = `JSON.stringify({
       return textWidth > availableWidth
     })
   })(),
-  colorPickerOpen: document.querySelector('.row-color-picker') !== null,
+  colorPickerOpen: document.querySelector('.popup') !== null,
   forkItem: (() => {
-    const item = document.querySelector('.row-fork-item')
+    const item = document.querySelector('.popup-item')
     if (!item) {
       return 'absent'
     }
@@ -715,16 +715,16 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
   }
 
   async function hoverColorDot(color: string): Promise<void> {
-    await hover(`.row-color-dot[data-color=${color}]`, 0)
+    await hover(`.color-dot[data-color=${color}]`, 0)
   }
 
   async function clickColorDot(color: string): Promise<void> {
-    const centre = await hover(`.row-color-dot[data-color=${color}]`, 0)
+    const centre = await hover(`.color-dot[data-color=${color}]`, 0)
     await clickAt(centre, 'left')
   }
 
   async function clickForkItem(): Promise<void> {
-    const centre = await hover('.row-fork-item', 0)
+    const centre = await hover('.popup-item', 0)
     await clickAt(centre, 'left')
   }
 
@@ -905,14 +905,14 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
 
   async function configProblems(): Promise<string[]> {
     const raw = await evaluate(
-      "JSON.stringify([...document.querySelectorAll('.config-problem')].map((el) => el.textContent))"
+      "JSON.stringify([...document.querySelectorAll('.banner-line')].map((el) => el.textContent))"
     )
     return JSON.parse(raw) as string[]
   }
 
   async function agentBanners(): Promise<string[]> {
     const raw = await evaluate(
-      "JSON.stringify([...document.querySelectorAll('.agent-banner .config-problem')].map((el) => el.textContent))"
+      "JSON.stringify([...document.querySelectorAll('.is-agent .banner-line')].map((el) => el.textContent))"
     )
     return JSON.parse(raw) as string[]
   }
@@ -920,7 +920,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
   async function clickBannerButton(label: string): Promise<void> {
     const wanted = JSON.stringify(label)
     const clicked = await evaluate(`(() => {
-      const buttons = [...document.querySelectorAll('.agent-banner button')]
+      const buttons = [...document.querySelectorAll('.is-agent button')]
       const button = buttons.find(
         (el) => el.textContent === ${wanted} || el.getAttribute('aria-label') === ${wanted}
       )

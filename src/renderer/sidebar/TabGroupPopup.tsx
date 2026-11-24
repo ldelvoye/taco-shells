@@ -1,6 +1,6 @@
 import { type JSX, type KeyboardEvent, useEffect, useRef } from 'react'
 import { ROW_COLORS, type RowColor } from '@shared/model'
-import { rowColorVariable } from './RowColorPicker'
+import { rowColorVariable } from './rowColor'
 import { usePopup } from './usePopup'
 
 const LINE_BREAKS = /[\r\n]+/g
@@ -104,7 +104,7 @@ export function TabGroupPopup({
   }, [])
 
   const dots = ROW_COLORS.map((dotColor) => {
-    let className = 'row-color-dot'
+    let className = 'color-dot'
     if (dotColor === color) {
       className += ' is-current'
     }
@@ -129,7 +129,7 @@ export function TabGroupPopup({
   })
 
   return (
-    <div ref={popup} className="row-color-picker tab-group-popup" style={position}>
+    <div ref={popup} className="popup tab-group-popup" style={position}>
       <input
         ref={field}
         className="tab-group-name-field"
@@ -148,10 +148,10 @@ export function TabGroupPopup({
           handleClipboardKey(event, onRename)
         }}
       />
-      <div className="row-color-dots">{dots}</div>
+      <div className="popup-dots">{dots}</div>
       <button
         type="button"
-        className="row-fork-item tab-group-ungroup"
+        className="popup-item tab-group-ungroup"
         onMouseDown={(event) => {
           event.preventDefault()
         }}

@@ -1,4 +1,5 @@
 import { type JSX, useState } from 'react'
+import { Banner, BannerDismiss, BannerLine, BannerLines } from '../banner/Banner'
 
 interface ConfigBannerProps {
   problems: string[]
@@ -16,23 +17,17 @@ export function ConfigBanner({ problems }: ConfigBannerProps): JSX.Element | nul
   }
 
   return (
-    <div className="config-banner">
-      <div className="config-problems">
+    <Banner kind="plain">
+      <BannerLines>
         {problems.map((problem) => (
-          <p key={problem} className="config-problem">
-            {problem}
-          </p>
+          <BannerLine key={problem}>{problem}</BannerLine>
         ))}
-      </div>
-      <button
-        className="config-dismiss"
-        aria-label="Dismiss"
-        onClick={() => {
+      </BannerLines>
+      <BannerDismiss
+        onDismiss={() => {
           setDismissed(signature)
         }}
-      >
-        ×
-      </button>
-    </div>
+      />
+    </Banner>
   )
 }

@@ -17,7 +17,7 @@ interface SidebarEntryProps {
   shownColor: (pane: Pane) => RowColor | null
   drag: SidebarDrag
   actions: SidebarActions
-  onOpenPicker: (event: MouseEvent<HTMLDivElement>, paneId: SessionId) => void
+  onOpenRowPopup: (event: MouseEvent<HTMLDivElement>, paneId: SessionId) => void
 }
 
 function entryMarkClass(mark: DropMark | null, index: number): string {
@@ -39,7 +39,7 @@ export function SidebarEntry({
   shownColor,
   drag,
   actions,
-  onOpenPicker
+  onOpenRowPopup
 }: SidebarEntryProps): JSX.Element {
   function rowPointOf(event: DragEvent<HTMLDivElement>): DropPoint {
     const paneCount = group.panes.length
@@ -76,7 +76,7 @@ export function SidebarEntry({
         markerState={markerState}
         drag={drag}
         actions={actions}
-        onOpenPicker={onOpenPicker}
+        onOpenRowPopup={onOpenRowPopup}
       />
     )
   })

@@ -1,5 +1,6 @@
 import type { JSX } from 'react'
 import type { AgentBanner } from '@shared/agentSetup'
+import { Banner, BannerAction, BannerDismiss, BannerLine } from '../banner/Banner'
 
 interface AgentBannersProps {
   banners: AgentBanner[]
@@ -17,43 +18,38 @@ export function AgentBanners(props: AgentBannersProps): JSX.Element | null {
 
   const strips = banners.map((banner) => {
     let buttons = (
-      <button
-        className="config-dismiss"
-        aria-label="Dismiss"
-        onClick={() => {
+      <BannerDismiss
+        onDismiss={() => {
           onDismiss(banner.harness)
         }}
-      >
-        ×
-      </button>
+      />
     )
     if (banner.kind === 'offer') {
       buttons = (
         <>
-          <button
-            className="update-apply"
+          <BannerAction
             onClick={() => {
               onSetUp(banner.harness)
             }}
           >
             Set up
-          </button>
-          <button
-            className="update-apply agent-decline"
+          </BannerAction>
+          <BannerAction
+            quiet
             onClick={() => {
               onDecline(banner.harness)
             }}
           >
             Not now
-          </button>
+          </BannerAction>
         </>
       )
     }
     return (
-      <div key={banner.harness} className="config-banner update-banner agent-banner">
-        <p className="config-problem">{banner.text}</p>
+      <Banner key={banner.harness} kind="agent">
+        <BannerLine>{banner.text}</BannerLine>
         {buttons}
-      </div>
+      </Banner>
     )
   })
 

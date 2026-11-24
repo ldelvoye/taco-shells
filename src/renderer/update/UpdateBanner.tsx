@@ -1,4 +1,5 @@
 import { type JSX, useState } from 'react'
+import { Banner, BannerAction, BannerDismiss, BannerLine } from '../banner/Banner'
 
 interface UpdateBannerProps {
   version: string | null
@@ -17,28 +18,20 @@ export function UpdateBanner({ version, problem, onApply }: UpdateBannerProps): 
     return null
   }
 
-  let action = (
-    <button className="update-apply" onClick={onApply}>
-      Restart to update
-    </button>
-  )
+  let action = <BannerAction onClick={onApply}>Restart to update</BannerAction>
   if (problem !== null) {
-    action = <p className="config-problem">{problem}</p>
+    action = <BannerLine>{problem}</BannerLine>
   }
 
   return (
-    <div className="config-banner update-banner">
-      <p className="config-problem">Taco Shells {version} is ready.</p>
+    <Banner kind="notice">
+      <BannerLine>Taco Shells {version} is ready.</BannerLine>
       {action}
-      <button
-        className="config-dismiss"
-        aria-label="Dismiss"
-        onClick={() => {
+      <BannerDismiss
+        onDismiss={() => {
           setDismissed(version)
         }}
-      >
-        ×
-      </button>
-    </div>
+      />
+    </Banner>
   )
 }

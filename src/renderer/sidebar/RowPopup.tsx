@@ -1,8 +1,9 @@
 import type { JSX } from 'react'
 import { ROW_COLORS, type RowColor } from '@shared/model'
+import { rowColorVariable } from './rowColor'
 import { usePopup } from './usePopup'
 
-interface RowColorPickerProps {
+interface RowPopupProps {
   x: number
   y: number
   current: RowColor | null
@@ -16,11 +17,7 @@ interface RowColorPickerProps {
   onClose: () => void
 }
 
-export function rowColorVariable(color: RowColor): string {
-  return `var(--row-color-${color})`
-}
-
-export function RowColorPicker({
+export function RowPopup({
   x,
   y,
   current,
@@ -32,11 +29,11 @@ export function RowColorPicker({
   onFork,
   onNewGroup,
   onClose
-}: RowColorPickerProps): JSX.Element {
+}: RowPopupProps): JSX.Element {
   const { popup, position } = usePopup(x, y, onClose)
 
   const dots = ROW_COLORS.map((color) => {
-    let className = 'row-color-dot'
+    let className = 'color-dot'
     if (color === current) {
       className += ' is-current'
     }
@@ -64,18 +61,18 @@ export function RowColorPicker({
   return (
     <div
       ref={popup}
-      className="row-color-picker"
+      className="popup"
       style={position}
       // Keeps keyboard focus in the terminal while the popup is clicked.
       onMouseDown={(event) => {
         event.preventDefault()
       }}
     >
-      <div className="row-color-dots">
+      <div className="popup-dots">
         {dots}
         <button
           type="button"
-          className="row-color-dot is-none"
+          className="color-dot is-none"
           data-color="none"
           aria-label="no color"
           onMouseEnter={() => {
@@ -87,10 +84,10 @@ export function RowColorPicker({
           }}
         />
       </div>
-      <button type="button" className="row-fork-item" disabled={!canFork} onClick={onFork}>
+      <button type="button" className="popup-item" disabled={!canFork} onClick={onFork}>
         Fork with {forkName}
       </button>
-      <button type="button" className="row-fork-item row-new-group-item" onClick={onNewGroup}>
+      <button type="button" className="popup-item row-new-group-item" onClick={onNewGroup}>
         New group
       </button>
     </div>
