@@ -14,6 +14,9 @@ const STATUS_SET_UP = 'Set up'
 const STATUS_NOT_INSTALLED = 'Not installed'
 const ACTION_SET_UP = 'Set Up Claude Code'
 const ACTION_REMOVE = 'Remove Setup'
+const STATUS_OFF = 'Turned off in settings'
+const OFFER_TEXT = 'Set up Claude Code to see which session needs you, restore conversations and fork them.'
+const DONE_TEXT = 'Claude Code is set up. Markers start with your next session.'
 
 const USER_COMMAND = '/some/user/script.sh'
 const USER_SETTINGS = {
@@ -77,6 +80,23 @@ async function untilMenu(app: App, status: string, actionLabel: string): Promise
   )
 }
 
+async function untilBanners(app: App, description: string, expected: string[]): Promise<void> {
+  await pollFor(
+    `the strip to show ${description}`,
+    async () => {
+      const texts = await app.agentBanners()
+      if (texts.length !== expected.length) {
+        return null
+      }
+      if (texts.some((text, index) => text !== expected[index])) {
+        return null
+      }
+      return texts
+    },
+    MENU_POLL_TIMEOUT_MS
+  )
+}
+
 async function setUpFromMenu(app: App): Promise<void> {
   const before = await untilMenu(app, STATUS_NOT_SET_UP, ACTION_SET_UP)
   expect(before.enabled).toBe(true)
@@ -117,8 +137,10 @@ describe('the Agents menu', () => {
     let firstClosed = false
     try {
       await setUpFromMenu(app)
+      await untilBanners(app, 'the done line', [DONE_TEXT])
       await app.clickAgentAction()
       await untilMenu(app, STATUS_NOT_SET_UP, ACTION_SET_UP)
+      await untilBanners(app, 'no strip', [])
 
       expect(managedCommands(claudeDir, configDir)).toHaveLength(0)
       expect(allCommands(claudeDir)).toContain(USER_COMMAND)
@@ -177,15 +199,107 @@ describe('the Agents menu', () => {
     try {
       const before = await untilMenu(app, STATUS_NOT_INSTALLED, ACTION_SET_UP)
       expect(before.enabled).toBe(false)
+      expect(await app.agentBanners()).toEqual([])
 
       mkdirSync(claudeDir)
       await app.emitInMain('did-become-active')
       const after = await untilMenu(app, STATUS_NOT_SET_UP, ACTION_SET_UP)
       expect(after.enabled).toBe(true)
+      await untilBanners(app, 'the offer', [OFFER_TEXT])
     } finally {
       await app.close()
       rmSync(configDir, { recursive: true, force: true })
       rmSync(parent, { recursive: true, force: true })
+    }
+  })
+
+  it('offers once and sets up from the strip', async () => {
+    const configDir = scratchDirectory('config')
+    const claudeDir = scratchClaudeDirectory()
+
+    const app = await launchApp({ configDir, mainInspector: true, env: { CLAUDE_CONFIG_DIR: claudeDir } })
+    try {
+      await untilBanners(app, 'the offer', [OFFER_TEXT])
+      await app.clickBannerButton('Set up')
+      await untilBanners(app, 'the done line', [DONE_TEXT])
+      expect(managedCommands(claudeDir, configDir)).toHaveLength(EXPECTED_HOOK_COUNT)
+
+      await app.clickBannerButton('Dismiss')
+      await untilBanners(app, 'no strip', [])
+    } finally {
+      await app.close()
+      rmSync(configDir, { recursive: true, force: true })
+      rmSync(claudeDir, { recursive: true, force: true })
+    }
+  })
+
+  it('does not offer again after Not now', async () => {
+    const configDir = scratchDirectory('config')
+    const claudeDir = scratchClaudeDirectory()
+    const env = { CLAUDE_CONFIG_DIR: claudeDir }
+
+    const app = await launchApp({ configDir, mainInspector: true, env })
+    let relaunched: App | null = null
+    let firstClosed = false
+    try {
+      await untilBanners(app, 'the offer', [OFFER_TEXT])
+      await app.clickBannerButton('Not now')
+      await untilBanners(app, 'no strip', [])
+
+      await app.close()
+      firstClosed = true
+      relaunched = await launchApp({ configDir, mainInspector: true, env })
+      const reading = await untilMenu(relaunched, STATUS_NOT_SET_UP, ACTION_SET_UP)
+      expect(reading.enabled).toBe(true)
+      await relaunched.pause(SETTLE_PAUSE_MS)
+      expect(await relaunched.agentBanners()).toEqual([])
+    } finally {
+      if (relaunched !== null) {
+        await relaunched.close()
+      }
+      if (!firstClosed) {
+        await app.close()
+      }
+      rmSync(configDir, { recursive: true, force: true })
+      rmSync(claudeDir, { recursive: true, force: true })
+    }
+  })
+
+  it('stays quiet when turned off', async () => {
+    const configDir = scratchDirectory('config')
+    const claudeDir = scratchClaudeDirectory()
+    writeFileSync(join(configDir, 'settings.json'), JSON.stringify({ manageAgentHooks: false }))
+
+    const app = await launchApp({ configDir, mainInspector: true, env: { CLAUDE_CONFIG_DIR: claudeDir } })
+    try {
+      const reading = await untilMenu(app, STATUS_OFF, ACTION_SET_UP)
+      expect(reading.enabled).toBe(false)
+      await app.pause(SETTLE_PAUSE_MS)
+      expect(await app.agentBanners()).toEqual([])
+    } finally {
+      await app.close()
+      rmSync(configDir, { recursive: true, force: true })
+      rmSync(claudeDir, { recursive: true, force: true })
+    }
+  })
+
+  it('says why when the settings file cannot be edited', async () => {
+    const configDir = scratchDirectory('config')
+    const claudeDir = scratchDirectory('claude')
+    const settingsPath = join(claudeDir, 'settings.json')
+    writeFileSync(settingsPath, '{ not json')
+
+    const app = await launchApp({ configDir, mainInspector: true, env: { CLAUDE_CONFIG_DIR: claudeDir } })
+    try {
+      await untilBanners(app, 'the offer', [OFFER_TEXT])
+      await app.clickBannerButton('Set up')
+      const problem = `${settingsPath} could not be read as JSON, so nothing was changed.`
+      await untilBanners(app, 'the problem', [problem])
+      expect(readFileSync(settingsPath, 'utf8')).toBe('{ not json')
+    } finally {
+      await app.close()
+      rmSync(configDir, { recursive: true, force: true })
+      rmSync(claudeDir, { recursive: true, force: true })
     }
   })
 })

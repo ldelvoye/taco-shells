@@ -1,3 +1,4 @@
+import type { AgentBanner } from './agentSetup'
 import type { Config, ConfigFile } from './config'
 import type { Workspace } from './model'
 import type { AgentSignal } from './rowState'
@@ -64,7 +65,12 @@ export const CHANNEL = {
   updateGet: 'update:get',
   updateReady: 'update:ready',
   updateProblem: 'update:problem',
-  updateApply: 'update:apply'
+  updateApply: 'update:apply',
+  agentsGet: 'agents:get',
+  agentsChanged: 'agents:changed',
+  agentsSetUp: 'agents:set-up',
+  agentsDecline: 'agents:decline',
+  agentsDismiss: 'agents:dismiss'
 } as const
 
 /** Everything the renderer may ask the main process to do, exposed on `window.tacoShells`. */
@@ -109,5 +115,12 @@ export interface TacoShellsApi {
     onReady(listener: (version: string) => void): () => void
     onProblem(listener: (message: string) => void): () => void
     apply(): void
+  }
+  agents: {
+    initial: AgentBanner[]
+    onChange(listener: (banners: AgentBanner[]) => void): () => void
+    setUp(harness: string): void
+    decline(harness: string): void
+    dismiss(harness: string): void
   }
 }

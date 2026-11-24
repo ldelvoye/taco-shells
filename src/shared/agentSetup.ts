@@ -29,6 +29,25 @@ export interface AgentMenu {
   enabled: boolean
 }
 
+export type AgentBannerKind = 'offer' | 'done' | 'problem'
+
+/** One line in the strip about one agent: the offer to set it up, or how the last action went. */
+export interface AgentBanner {
+  harness: string
+  kind: AgentBannerKind
+  text: string
+}
+
+export type AgentNotice = { kind: 'done' } | { kind: 'problem'; text: string }
+
+function offerText(productName: string): string {
+  return `Set up ${productName} to see which session needs you, restore conversations and fork them.`
+}
+
+function doneText(productName: string): string {
+  return `${productName} is set up. Markers start with your next session.`
+}
+
 export function agentSetupStateOf(facts: AgentSetupFacts): AgentSetupState {
   if (!facts.installed) {
     return 'notInstalled'
@@ -63,4 +82,26 @@ export function agentMenuOf(state: AgentSetupState, productName: string, canWrit
     case 'notSetUp':
       return { status: STATUS_NOT_SET_UP, action: 'setUp', actionLabel: setUpLabel, enabled: canWrite }
   }
+}
+
+export function agentBannerOf(
+  harness: string,
+  productName: string,
+  state: AgentSetupState,
+  canWrite: boolean,
+  notice: AgentNotice | null
+): AgentBanner | null {
+  if (notice !== null && notice.kind === 'problem') {
+    return { harness, kind: 'problem', text: notice.text }
+  }
+  // A done line outlives the click that earned it only while the agent is still set up.
+  if (notice !== null && state === 'setUp') {
+    const text = doneText(productName)
+    return { harness, kind: 'done', text }
+  }
+  if (state === 'notSetUp' && canWrite) {
+    const text = offerText(productName)
+    return { harness, kind: 'offer', text }
+  }
+  return null
 }

@@ -53,6 +53,8 @@ import { registerWorkspaceCommands } from './commands/workspace'
 import { ConfigBanner } from './config/ConfigBanner'
 import { applyChromePalette } from './config/palette'
 import { useConfig } from './config/useConfig'
+import { AgentBanners } from './agents/AgentBanners'
+import { useAgentBanners } from './agents/useAgentBanners'
 import { UpdateBanner } from './update/UpdateBanner'
 import { useUpdate } from './update/useUpdate'
 import { useCommandKeys } from './keys/useCommandKeys'
@@ -164,9 +166,22 @@ export function App(): JSX.Element {
   const sidebarWidth = useSidebarWidth()
   const fullScreen = useFullScreen()
   const update = useUpdate()
+  const agentBanners = useAgentBanners()
 
   const applyUpdate = useCallback(() => {
     window.tacoShells.update.apply()
+  }, [])
+
+  const setUpAgent = useCallback((harness: string) => {
+    window.tacoShells.agents.setUp(harness)
+  }, [])
+
+  const declineAgent = useCallback((harness: string) => {
+    window.tacoShells.agents.decline(harness)
+  }, [])
+
+  const dismissAgent = useCallback((harness: string) => {
+    window.tacoShells.agents.dismiss(harness)
   }, [])
 
   // Changes before the first terminal exists are dropped: there is nothing yet
@@ -719,6 +734,12 @@ export function App(): JSX.Element {
         {paneTitlebar}
         <ConfigBanner problems={problems} />
         <UpdateBanner version={update.ready} problem={update.problem} onApply={applyUpdate} />
+        <AgentBanners
+          banners={agentBanners}
+          onSetUp={setUpAgent}
+          onDecline={declineAgent}
+          onDismiss={dismissAgent}
+        />
         <PaneArea groups={groups} activeGroup={activeGroupIndex} onResize={resizeGroup} />
       </div>
     </div>

@@ -47,7 +47,7 @@ app.whenReady().then(() => {
     stopUpdates = registeredUpdates.stop
     checkForUpdate = registeredUpdates.checkNow
   }
-  const registeredAgents = registerAgents(directory, configStore, applicationMenu)
+  const registeredAgents = registerAgents(window, directory, configStore, applicationMenu)
   stopAgents = registeredAgents.stop
   stopFocus = registerFocus(sessions, window, directory, snapshots, checkForUpdate)
 

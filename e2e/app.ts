@@ -28,6 +28,8 @@ const DRAG_STEPS = 8
 const ROW_HANDLE_OFFSET = 60
 const BRACKET_HANDLE_OFFSET = 13
 
+const NO_CLAUDE_DIRECTORY = 'no-claude'
+
 const AGENT_MENU_BODY = `return JSON.stringify({
       status: items[0].label,
       actionLabel: items[2].label,
@@ -181,6 +183,8 @@ export interface App {
   rendererConsole(): string[]
   chromeBackground(): Promise<string>
   configProblems(): Promise<string[]>
+  agentBanners(): Promise<string[]>
+  clickBannerButton(label: string): Promise<void>
   agentMenu(): Promise<AgentMenuReading>
   clickAgentAction(): Promise<void>
   emitInMain(event: string): Promise<void>
@@ -482,9 +486,6 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     ELECTRON_ENABLE_LOGGING: '1',
     TACO_SHELLS_BACKGROUND_WINDOW: '1'
   }
-  // A developer who exports CLAUDE_CONFIG_DIR must not have the suite pointed
-  // at their real Claude settings; a test that wants one passes its own.
-  delete env.CLAUDE_CONFIG_DIR
   // A launch with no directory of its own still gets one, so that no test can
   // read the config belonging to whoever is running it.
   let ownedConfigDir: string | null = null
@@ -494,6 +495,9 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     ownedConfigDir = mkdtempSync(join(tmpdir(), 'taco-shells-e2e-config-'))
     env.TACO_SHELLS_CONFIG_DIR = ownedConfigDir
   }
+  // The same goes for Claude Code's settings: the app is pointed at a directory
+  // that does not exist unless a test passes its own.
+  env.CLAUDE_CONFIG_DIR = join(env.TACO_SHELLS_CONFIG_DIR, NO_CLAUDE_DIRECTORY)
   if (options.env) {
     Object.assign(env, options.env)
   }
@@ -882,6 +886,31 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     return JSON.parse(raw) as string[]
   }
 
+  async function agentBanners(): Promise<string[]> {
+    const raw = await evaluate(
+      "JSON.stringify([...document.querySelectorAll('.agent-banner .config-problem')].map((el) => el.textContent))"
+    )
+    return JSON.parse(raw) as string[]
+  }
+
+  async function clickBannerButton(label: string): Promise<void> {
+    const wanted = JSON.stringify(label)
+    const clicked = await evaluate(`(() => {
+      const buttons = [...document.querySelectorAll('.agent-banner button')]
+      const button = buttons.find(
+        (el) => el.textContent === ${wanted} || el.getAttribute('aria-label') === ${wanted}
+      )
+      if (!button) {
+        return 'missing'
+      }
+      button.click()
+      return 'clicked'
+    })()`)
+    if (clicked !== 'clicked') {
+      throw new Error(`no banner button labelled ${label}`)
+    }
+  }
+
   function discardOwnedConfigDir(): void {
     if (ownedConfigDir === null) {
       return
@@ -970,6 +999,8 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     rendererConsole,
     chromeBackground,
     configProblems,
+    agentBanners,
+    clickBannerButton,
     agentMenu,
     clickAgentAction,
     emitInMain,
