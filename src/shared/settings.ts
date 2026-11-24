@@ -10,6 +10,7 @@ export interface Settings {
   cursorBlink: boolean
   cursorStyle: CursorStyle
   restoreOnLaunch: boolean
+  manageAgentHooks: boolean
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -20,7 +21,8 @@ export const DEFAULT_SETTINGS: Settings = {
   scrollSensitivity: 1,
   cursorBlink: true,
   cursorStyle: 'block',
-  restoreOnLaunch: true
+  restoreOnLaunch: true,
+  manageAgentHooks: true
 }
 
 export interface SettingsLayerResult {
@@ -80,7 +82,8 @@ const VALIDATORS: SettingRules = {
   scrollSensitivity: { check: isPositiveNumber, requirement: 'must be a number greater than 0' },
   cursorBlink: { check: isBoolean, requirement: 'must be true or false' },
   cursorStyle: { check: isCursorStyle, requirement: 'must be "block", "underline" or "bar"' },
-  restoreOnLaunch: { check: isBoolean, requirement: 'must be true or false' }
+  restoreOnLaunch: { check: isBoolean, requirement: 'must be true or false' },
+  manageAgentHooks: { check: isBoolean, requirement: 'must be true or false' }
 }
 
 function isValidatedKey(key: string): key is keyof Settings {
