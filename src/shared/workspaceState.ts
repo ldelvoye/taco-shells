@@ -43,10 +43,13 @@ import {
 } from './tabGroups'
 
 export interface WorkspaceState {
+  // Null is the app before its first terminal exists, which is not the same
+  // state as a workspace whose last terminal has just closed.
   workspace: Workspace | null
   agentRows: AgentRows
   waiting: SessionId | null
   rawTitles: ReadonlyMap<SessionId, string>
+  // Bumped when a drop or a collapse has to hand the keyboard back to the active terminal.
   refocus: number
 }
 
@@ -116,6 +119,8 @@ function baseWorkspace(workspace: Workspace | null): Workspace {
   return workspace
 }
 
+// Changes before the first terminal exists are dropped: there is nothing yet
+// for them to describe.
 function workspaceEdit(
   state: WorkspaceState,
   change: (workspace: Workspace) => Workspace
@@ -216,6 +221,7 @@ function agentSignalled(state: WorkspaceState, event: AgentSignalEvent): Workspa
     return signalled
   }
 
+  // A title can arrive before the start signal creates the row, so the last one is read again now.
   const rawTitle = signalled.rawTitles.get(event.id)
   if (rawTitle === undefined) {
     return signalled
@@ -294,6 +300,7 @@ function eventApplied(state: WorkspaceState, event: WorkspaceEvent): WorkspaceSt
   }
 }
 
+// What is on screen and which pane is active follow from the workspace, so both are settled on every change to it.
 function settledAfterWorkspaceChange(before: WorkspaceState, after: WorkspaceState): WorkspaceState {
   if (after.workspace === before.workspace) {
     return after
@@ -312,6 +319,16 @@ function sameSlices(a: WorkspaceState, b: WorkspaceState): boolean {
     a.agentRows === b.agentRows &&
     a.waiting === b.waiting &&
     a.rawTitles === b.rawTitles &&
+    a.refocus === b.refocus
+  )
+}
+
+// Raw titles are bookkeeping for the title replay and are never drawn, so a change to them alone is not worth a render.
+export function drawsTheSame(a: WorkspaceState, b: WorkspaceState): boolean {
+  return (
+    a.workspace === b.workspace &&
+    a.agentRows === b.agentRows &&
+    a.waiting === b.waiting &&
     a.refocus === b.refocus
   )
 }
