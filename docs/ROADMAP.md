@@ -5,8 +5,7 @@
 
 # Distribution
 
-- An install a stranger can finish. A dmg downloaded in a browser reports as damaged until the `xattr` command in the README is run. Candidates: an install script served from the site (a file fetched by `curl` is not quarantined, which needs confirming on a Mac with Gatekeeper on), or signing and notarising with a Developer ID. The other half is done: the app now wires Claude Code's hooks itself, from the installed copy. This comes before the release page, which can only show the install that exists.
-- Release page at `tacoshells.dev`: a page whose job is to get someone who has never heard of Taco Shells to a working install. It leads with what the app does and how to install it, and its download points at GitHub's `/releases/latest`, which is already the stable link. The domain is not bought yet; it was open on Namecheap on 2026-11-23. Still to decide: where the page's source lives and where it is hosted.
+- Release page at `tacoshells.dev`: a page whose job is to get someone who has never heard of Taco Shells to a working install. It leads with what the app does and the install command from the README in a box with a copy button, and has no download button: a build downloaded in a browser reports as damaged. The page can serve `install.sh` at its own address or redirect to the copy on GitHub's `/releases/latest`. The domain is not bought yet; it was open on Namecheap on 2026-11-23. Still to decide: where the page's source lives and where it is hosted.
 
 # Architecture
 
