@@ -174,6 +174,20 @@ describe('applyDrop with tab groups', () => {
     expect(wholeGroup.activeGroup).toBe(0)
   })
 
+  it('moves a whole tab group to a gap past or before its block, keeping its order and the active entry', () => {
+    const groups = [entry('x'), entry('a', 't1'), entry('b', 't1'), entry('y'), entry('z')]
+    const workspace = makeWorkspace(groups, 2, [tab('t1')])
+    const dragged: Dragged = { kind: 'tabGroup', tabGroup: 't1' }
+
+    const past = applyDrop(workspace, dragged, { kind: 'between', index: 4, tabGroup: null }, 'new')
+    expect(layout(past)).toEqual(['-:x', '-:y', 't1:a', 't1:b', '-:z'])
+    expect(past.groups[past.activeGroup].id).toBe('b')
+
+    const before = applyDrop(workspace, dragged, { kind: 'between', index: 0, tabGroup: null }, 'new')
+    expect(layout(before)).toEqual(['t1:a', 't1:b', '-:x', '-:y', '-:z'])
+    expect(before.groups[before.activeGroup].id).toBe('b')
+  })
+
   it('moves focus on when a dropped terminal lands in a collapsed group', () => {
     const groups = [entry('a'), entry('b', 't1'), entry('c')]
     const hidden = makeWorkspace(groups, 0, [tab('t1', true)])
