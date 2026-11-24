@@ -64,6 +64,7 @@ export function emptyWorkspace(): Workspace {
   return { groups: [], activeGroup: 0, tabGroups: [] }
 }
 
+/** The group and pane index of the pane with this id, or null when it is not open. */
 export function locatePane(workspace: Workspace, id: SessionId): PaneLocation | null {
   const groupIndex = workspace.groups.findIndex((group) =>
     group.panes.some((pane) => pane.id === id)
@@ -77,11 +78,13 @@ export function locatePane(workspace: Workspace, id: SessionId): PaneLocation | 
   return { groupIndex, paneIndex }
 }
 
+/** The workspace with the group at this index replaced. */
 export function withGroupAt(workspace: Workspace, index: number, group: Group): Workspace {
   const groups = spliced(workspace.groups, index, 1, [group])
   return { ...workspace, groups }
 }
 
+/** A copy of the list with removeCount items at index replaced by inserted. */
 export function spliced<T>(
   items: readonly T[],
   index: number,
