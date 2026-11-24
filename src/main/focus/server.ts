@@ -2,7 +2,7 @@ import { unlinkSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { FOCUS_FIRST_PORT, FOCUS_LAST_PORT } from '@shared/focusPorts'
 import type { SessionId } from '@shared/ipc'
-import { HARNESSES, harnessOf, LEGACY_HARNESS } from '@shared/harness/registry'
+import { HARNESSES, harnessOf } from '@shared/harness/registry'
 import type { Harness } from '@shared/harness/types'
 import { isRecord } from '@shared/isRecord'
 import type { AgentSignal } from '@shared/rowState'
@@ -23,10 +23,6 @@ export interface FocusServerHandlers {
 // /focus-tab switches to it at once. Merged, every ping would steal focus.
 const FOCUS_TAB_PATH = '/focus-tab'
 const ATTENTION_PATH = '/attention'
-// Copies of Claude's hook script from before it moved to the agent routes still post to these.
-const LEGACY_START_PATH = '/claude-session/start'
-const LEGACY_END_PATH = '/claude-session/end'
-const LEGACY_STATE_PATH = '/claude-session/state'
 const AGENT_START_PATH = '/agent-session/start'
 const AGENT_END_PATH = '/agent-session/end'
 const AGENT_STATE_PATH = '/agent-session/state'
@@ -191,14 +187,12 @@ async function handleRequest(
 
   const isFocusTab = request.url === FOCUS_TAB_PATH
   const isAttention = request.url === ATTENTION_PATH
-  const isLegacyRoute =
-    request.url === LEGACY_START_PATH || request.url === LEGACY_END_PATH || request.url === LEGACY_STATE_PATH
   const isAgentRoute =
     request.url === AGENT_START_PATH || request.url === AGENT_END_PATH || request.url === AGENT_STATE_PATH
-  const isStart = request.url === LEGACY_START_PATH || request.url === AGENT_START_PATH
-  const isEnd = request.url === LEGACY_END_PATH || request.url === AGENT_END_PATH
-  const isState = request.url === LEGACY_STATE_PATH || request.url === AGENT_STATE_PATH
-  const isKnownRoute = isLegacyRoute || isAgentRoute || isFocusTab || isAttention
+  const isStart = request.url === AGENT_START_PATH
+  const isEnd = request.url === AGENT_END_PATH
+  const isState = request.url === AGENT_STATE_PATH
+  const isKnownRoute = isAgentRoute || isFocusTab || isAttention
   if (request.method !== 'POST' || !isKnownRoute) {
     respond(response, 404, '')
     return
@@ -226,49 +220,49 @@ async function handleRequest(
     return
   }
 
-  let harness: Harness = LEGACY_HARNESS
+  let harnessId: string | null = null
+  let startedSession: AgentSession | null = null
+  let endedSessionId: string | null = null
+  let signalSessionId: string | null = null
+  let stateSignal: AgentSignal | null = null
   if (isAgentRoute) {
-    const requested = harnessFrom(payload, harnesses)
-    if (requested === null) {
+    const harness = harnessFrom(payload, harnesses)
+    if (harness === null) {
       respond(response, 400, 'bad harness')
       return
     }
-    harness = requested
-  }
+    harnessId = harness.id
 
-  let startedSession: AgentSession | null = null
-  if (isStart) {
-    startedSession = agentSessionFor(harness, payload)
-    if (startedSession === null) {
-      respond(response, 400, 'bad session')
-      return
+    if (isStart) {
+      startedSession = agentSessionFor(harness, payload)
+      if (startedSession === null) {
+        respond(response, 400, 'bad session')
+        return
+      }
     }
-  }
 
-  let endedSessionId: string | null = null
-  if (isEnd) {
-    endedSessionId = sessionIdFrom(harness, payload)
-    if (endedSessionId === null) {
-      respond(response, 400, 'bad session')
-      return
+    if (isEnd) {
+      endedSessionId = sessionIdFrom(harness, payload)
+      if (endedSessionId === null) {
+        respond(response, 400, 'bad session')
+        return
+      }
     }
-  }
 
-  let signalSessionId: string | null = null
-  let stateSignal: AgentSignal | null = null
-  if (isState) {
-    signalSessionId = sessionIdFrom(harness, payload)
-    if (signalSessionId === null) {
-      respond(response, 400, 'bad session')
-      return
+    if (isState) {
+      signalSessionId = sessionIdFrom(harness, payload)
+      if (signalSessionId === null) {
+        respond(response, 400, 'bad session')
+        return
+      }
+      const event = eventFrom(payload)
+      if (event === null) {
+        respond(response, 400, 'bad event')
+        return
+      }
+      const detail = detailFrom(payload)
+      stateSignal = harness.signalFor(event, detail)
     }
-    const event = eventFrom(payload)
-    if (event === null) {
-      respond(response, 400, 'bad event')
-      return
-    }
-    const detail = detailFrom(payload)
-    stateSignal = harness.signalFor(event, detail)
   }
 
   const paneId = handlers.sessionForPids(pids)
@@ -284,10 +278,10 @@ async function handleRequest(
   } else if (startedSession !== null) {
     const hasConversation = hasConversationFrom(payload)
     handlers.onAgentStart(paneId, startedSession, hasConversation)
-  } else if (endedSessionId !== null) {
-    handlers.onAgentEnd(paneId, harness.id, endedSessionId)
-  } else if (signalSessionId !== null && stateSignal !== null) {
-    handlers.onAgentSignal(paneId, harness.id, signalSessionId, stateSignal)
+  } else if (harnessId !== null && endedSessionId !== null) {
+    handlers.onAgentEnd(paneId, harnessId, endedSessionId)
+  } else if (harnessId !== null && signalSessionId !== null && stateSignal !== null) {
+    handlers.onAgentSignal(paneId, harnessId, signalSessionId, stateSignal)
   }
   respond(response, 200, 'ok')
 }

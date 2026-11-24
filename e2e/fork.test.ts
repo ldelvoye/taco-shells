@@ -66,8 +66,8 @@ describe('fork with Claude', () => {
       const portText = readFileSync(join(configDir, 'focus-port'), 'utf8')
       const port = portText.trim()
 
-      const hook = { pids: [pid], sessionId: CLAUDE_SESSION_ID }
-      await postToFocusServer(port, '/claude-session/start', { ...hook, cwd: workDir })
+      const hook = { harness: 'claude', pids: [pid], sessionId: CLAUDE_SESSION_ID }
+      await postToFocusServer(port, '/agent-session/start', { ...hook, cwd: workDir })
       await app.until('the row is known to run Claude', (state) => state.rows[0].label === title)
 
       await app.rightClickRow(0)
@@ -76,7 +76,7 @@ describe('fork with Claude', () => {
       await app.clickColorDot('blue')
       await app.until('the picker closes', (state) => !state.colorPickerOpen)
 
-      await postToFocusServer(port, '/claude-session/state', { ...hook, event: 'UserPromptSubmit' })
+      await postToFocusServer(port, '/agent-session/state', { ...hook, event: 'UserPromptSubmit' })
       await app.rightClickRow(0)
       await app.until('the fork item is offered', (state) => state.forkItem === 'enabled')
       await app.clickForkItem()

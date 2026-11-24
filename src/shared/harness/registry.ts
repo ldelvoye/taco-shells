@@ -3,7 +3,7 @@ import type { AgentTitle, Harness } from './types'
 
 export const HARNESSES: readonly Harness[] = [claude]
 export const DEFAULT_HARNESS: Harness = claude
-// Routes and saved files from before harnesses name no harness: they mean Claude.
+// Saved files from before harnesses name no harness: they mean Claude.
 export const LEGACY_HARNESS: Harness = claude
 
 export function harnessOf(id: unknown, harnesses: readonly Harness[] = HARNESSES): Harness | null {

@@ -177,7 +177,7 @@ describe('startFocusServer', () => {
   })
 })
 
-describe('startFocusServer Claude session routes', () => {
+describe('startFocusServer agent session routes, for Claude', () => {
   const SESSION_ID = '123e4567-e89b-12d3-a456-426614174000'
   let handlers: FakeHandlers
   let stop: () => void
@@ -196,12 +196,12 @@ describe('startFocusServer Claude session routes', () => {
   })
 
   it('records a valid start, and whether the session already holds a conversation', async () => {
-    const body = { pids: [999, 222], sessionId: SESSION_ID, cwd: '/tmp/work' }
+    const body = { harness: 'claude', pids: [999, 222], sessionId: SESSION_ID, cwd: '/tmp/work' }
     const session = { harness: 'claude', sessionId: SESSION_ID, cwd: '/tmp/work' }
 
-    const response = await post(port, '/claude-session/start', body)
-    await post(port, '/claude-session/start', { ...body, hasConversation: true })
-    await post(port, '/claude-session/start', { ...body, hasConversation: 'yes' })
+    const response = await post(port, '/agent-session/start', body)
+    await post(port, '/agent-session/start', { ...body, hasConversation: true })
+    await post(port, '/agent-session/start', { ...body, hasConversation: 'yes' })
 
     expect(response.status).toBe(200)
     expect(handlers.started).toEqual([
@@ -212,9 +212,15 @@ describe('startFocusServer Claude session routes', () => {
   })
 
   it('answers 400 and records nothing for a malformed session', async () => {
-    const badId = await post(port, '/claude-session/start', { pids: [222], sessionId: 'abc', cwd: '/tmp/work' })
-    const noCwd = await post(port, '/claude-session/start', { pids: [222], sessionId: SESSION_ID })
-    const badEndId = await post(port, '/claude-session/end', { pids: [222], sessionId: 'abc' })
+    const harness = 'claude'
+    const badId = await post(port, '/agent-session/start', {
+      harness,
+      pids: [222],
+      sessionId: 'abc',
+      cwd: '/tmp/work'
+    })
+    const noCwd = await post(port, '/agent-session/start', { harness, pids: [222], sessionId: SESSION_ID })
+    const badEndId = await post(port, '/agent-session/end', { harness, pids: [222], sessionId: 'abc' })
 
     expect([badId.status, noCwd.status, badEndId.status]).toEqual([400, 400, 400])
     expect(handlers.started).toEqual([])
@@ -222,36 +228,48 @@ describe('startFocusServer Claude session routes', () => {
   })
 
   it('records a valid end', async () => {
-    const body = { pids: [222], sessionId: SESSION_ID }
+    const body = { harness: 'claude', pids: [222], sessionId: SESSION_ID }
 
-    const response = await post(port, '/claude-session/end', body)
+    const response = await post(port, '/agent-session/end', body)
 
     expect(response.status).toBe(200)
     expect(handlers.ended).toEqual([['pty-2', 'claude', SESSION_ID]])
   })
 
   it('forwards a hook event as its signal', async () => {
-    const body = { pids: [222], sessionId: SESSION_ID, event: 'Notification', detail: 'permission_prompt' }
+    const body = {
+      harness: 'claude',
+      pids: [222],
+      sessionId: SESSION_ID,
+      event: 'Notification',
+      detail: 'permission_prompt'
+    }
 
-    const response = await post(port, '/claude-session/state', body)
+    const response = await post(port, '/agent-session/state', body)
 
     expect(response.status).toBe(200)
     expect(handlers.signals).toEqual([['pty-2', 'claude', SESSION_ID, 'needs']])
   })
 
   it('drops hook events that carry no signal', async () => {
-    const body = { pids: [222], sessionId: SESSION_ID, event: 'Notification', detail: 'idle_prompt' }
+    const body = {
+      harness: 'claude',
+      pids: [222],
+      sessionId: SESSION_ID,
+      event: 'Notification',
+      detail: 'idle_prompt'
+    }
 
-    const response = await post(port, '/claude-session/state', body)
+    const response = await post(port, '/agent-session/state', body)
 
     expect(response.status).toBe(200)
     expect(handlers.signals).toEqual([])
   })
 
   it('rejects a state post without a valid session id', async () => {
-    const body = { pids: [222], sessionId: 'nope', event: 'Stop' }
+    const body = { harness: 'claude', pids: [222], sessionId: 'nope', event: 'Stop' }
 
-    const response = await post(port, '/claude-session/state', body)
+    const response = await post(port, '/agent-session/state', body)
 
     expect(response.status).toBe(400)
     expect(handlers.signals).toEqual([])
