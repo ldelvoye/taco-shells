@@ -5,28 +5,8 @@ import { focusPortPath } from '../config/files'
 import type { AgentSession } from '@shared/snapshot'
 import type { PtySessions } from '../pty/sessions'
 import type { SnapshotStore } from '../snapshot/store'
+import { sendToWindow } from '../window/send'
 import { startFocusServer } from './server'
-
-function sendToWindow(window: BrowserWindow, channel: string, id: SessionId): void {
-  if (window.isDestroyed()) {
-    return
-  }
-  window.webContents.send(channel, id)
-}
-
-function sendSignal(window: BrowserWindow, event: AgentSignalEvent): void {
-  if (window.isDestroyed()) {
-    return
-  }
-  window.webContents.send(CHANNEL.agentSignal, event)
-}
-
-function sendBare(window: BrowserWindow, channel: string): void {
-  if (window.isDestroyed()) {
-    return
-  }
-  window.webContents.send(channel)
-}
 
 export function registerFocus(
   sessions: PtySessions,
@@ -52,25 +32,28 @@ export function registerFocus(
         if (hasConversation) {
           signal = 'resume'
         }
-        sendSignal(window, { id, harness: session.harness, sessionId: session.sessionId, signal })
+        const event: AgentSignalEvent = { id, harness: session.harness, sessionId: session.sessionId, signal }
+        sendToWindow(window, CHANNEL.agentSignal, event)
       },
       onAgentEnd: (id: SessionId, harness: string, sessionId: string) => {
         snapshotStore.recordAgentEnd(id, harness, sessionId)
-        sendSignal(window, { id, harness, sessionId, signal: 'end' })
+        const event: AgentSignalEvent = { id, harness, sessionId, signal: 'end' }
+        sendToWindow(window, CHANNEL.agentSignal, event)
       },
       onAgentSignal: (id: SessionId, harness: string, sessionId: string, signal: AgentSignal) => {
-        sendSignal(window, { id, harness, sessionId, signal })
+        const event: AgentSignalEvent = { id, harness, sessionId, signal }
+        sendToWindow(window, CHANNEL.agentSignal, event)
       },
       onUpdateCheck,
       onUnavailable: () => {
-        sendBare(window, CHANNEL.focusUnavailable)
+        sendToWindow(window, CHANNEL.focusUnavailable)
       }
     },
     portFilePath
   )
 
   const onActivate = (): void => {
-    sendBare(window, CHANNEL.appActivated)
+    sendToWindow(window, CHANNEL.appActivated)
   }
   app.on('activate', onActivate)
 

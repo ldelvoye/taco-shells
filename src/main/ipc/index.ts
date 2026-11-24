@@ -8,6 +8,7 @@ import { isOpenableLink } from '../links'
 import type { PtySessions } from '../pty/sessions'
 import { shellStartFor } from '../pty/start'
 import type { SnapshotStore } from '../snapshot/store'
+import { sendToWindow } from '../window/send'
 
 export function registerIpc(
   sessions: PtySessions,
@@ -69,37 +70,22 @@ export function registerIpc(
     snapshotStore.workspaceChanged(workspace)
   })
 
-  const sendFullScreen = (fullScreen: boolean): void => {
-    if (window.isDestroyed()) {
-      return
-    }
-    window.webContents.send(CHANNEL.fullScreenChanged, fullScreen)
-  }
   window.on('enter-full-screen', () => {
-    sendFullScreen(true)
+    sendToWindow(window, CHANNEL.fullScreenChanged, true)
   })
   window.on('leave-full-screen', () => {
-    sendFullScreen(false)
+    sendToWindow(window, CHANNEL.fullScreenChanged, false)
   })
 
   sessions.onData((event) => {
-    if (window.isDestroyed()) {
-      return
-    }
-    window.webContents.send(CHANNEL.ptyData, event)
+    sendToWindow(window, CHANNEL.ptyData, event)
   })
 
   sessions.onExit((event) => {
-    if (window.isDestroyed()) {
-      return
-    }
-    window.webContents.send(CHANNEL.ptyExit, event)
+    sendToWindow(window, CHANNEL.ptyExit, event)
   })
 
   store.onChange((config) => {
-    if (window.isDestroyed()) {
-      return
-    }
-    window.webContents.send(CHANNEL.configChanged, config)
+    sendToWindow(window, CHANNEL.configChanged, config)
   })
 }

@@ -19,6 +19,7 @@ import { foregroundCommands } from '../pty/foreground'
 import type { PtySessions } from '../pty/sessions'
 import type { AgentMenuEntry } from '../window/menu'
 import type { ApplicationMenu } from '../window/applicationMenu'
+import { sendToWindow } from '../window/send'
 import {
   agentsOf,
   canWriteFor,
@@ -43,13 +44,6 @@ function reportProblem(problem: string | null): void {
   if (problem !== null) {
     console.error(problem)
   }
-}
-
-function sendToWindow(window: BrowserWindow, channel: string, payload: AgentBanner[]): void {
-  if (window.isDestroyed()) {
-    return
-  }
-  window.webContents.send(channel, payload)
 }
 
 function perform(action: AgentMenuAction, agent: Agent): string | null {
