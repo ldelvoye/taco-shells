@@ -26,6 +26,15 @@ describe('agent record', () => {
     expect(readAgentRecord(directory, 'other')).toEqual(other)
   })
 
+  it('creates the config directory when it is not there yet', () => {
+    const fresh = join(directory, 'not', 'yet')
+    const record = { declined: true, written: [] }
+
+    writeAgentRecord(fresh, 'claude', record)
+
+    expect(readAgentRecord(fresh, 'claude')).toEqual(record)
+  })
+
   it('reads a broken file as nothing recorded', () => {
     const nothing = { declined: false, written: [] }
     const file = join(directory, 'agents.json')
@@ -35,7 +44,19 @@ describe('agent record', () => {
     writeFileSync(file, 'not json')
     expect(readAgentRecord(directory, 'claude')).toEqual(nothing)
 
-    writeFileSync(file, '{"claude": {"declined": "yes", "written": []}}')
-    expect(readAgentRecord(directory, 'claude')).toEqual(nothing)
+    const broken = [
+      '{"claude": {"declined": "yes", "written": []}}',
+      '{"claude": {"declined": true, "written": "Stop:x.sh"}}',
+      '{"claude": {"declined": true, "written": [1]}}'
+    ]
+    for (const text of broken) {
+      writeFileSync(file, text)
+      expect(readAgentRecord(directory, 'claude')).toEqual(nothing)
+    }
+
+    writeFileSync(file, '{"claude": {"declined": true, "written": []}}')
+    for (const inherited of ['toString', '__proto__', 'constructor']) {
+      expect(readAgentRecord(directory, inherited)).toEqual(nothing)
+    }
   })
 })

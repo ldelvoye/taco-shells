@@ -162,7 +162,11 @@ describe('hookWiringOf', () => {
     expect(hookWiringOf('{ not json', SETUP, HOOKS_DIRECTORY)).toBe('none')
     expect(hookWiringOf(userOnly, SETUP, HOOKS_DIRECTORY)).toBe('none')
 
-    const lookalikes = ['/opt/Users/x/.taco-shells/hooks/other.sh', `/x/my-${ATTENTION}.bak`]
+    const lookalikes = [
+      '/opt/Users/x/.taco-shells/hooks/other.sh',
+      `${HOOKS_DIRECTORY}-extra/other.sh`,
+      `/x/my-${ATTENTION}.bak`
+    ]
     for (const command of lookalikes) {
       const text = JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command }] }] } })
       expect(hookWiringOf(text, SETUP, HOOKS_DIRECTORY)).toBe('none')

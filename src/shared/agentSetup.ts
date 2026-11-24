@@ -84,6 +84,17 @@ export function agentMenuOf(state: AgentSetupState, productName: string, canWrit
   }
 }
 
+/** What an action leaves in the strip: its problem, a done line after setting up, nothing after a removal. */
+export function agentNoticeAfter(action: AgentMenuAction, problem: string | null): AgentNotice | null {
+  if (problem !== null) {
+    return { kind: 'problem', text: problem }
+  }
+  if (action === 'remove') {
+    return null
+  }
+  return { kind: 'done' }
+}
+
 export function agentBannerOf(
   harness: string,
   productName: string,

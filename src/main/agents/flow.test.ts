@@ -121,12 +121,14 @@ describe('the agent setup flow', () => {
     writeJson(agent.paths.settingsPath, settings)
     const record = readAgentRecord(appDirectory, claude.id)
     const written = record.written.filter((key) => !key.startsWith('StopFailure:'))
-    writeJson(join(appDirectory, 'agents.json'), { [claude.id]: { declined: false, written } })
+    writeJson(join(appDirectory, 'agents.json'), { [claude.id]: { declined: true, written } })
 
     expect(keepCurrent(agent)).toBeNull()
 
     expect(commandsIn(agent.paths.settingsPath)).toHaveLength(ENTRY_COUNT)
-    expect(readAgentRecord(appDirectory, claude.id).written).toHaveLength(ENTRY_COUNT)
+    const kept = readAgentRecord(appDirectory, claude.id)
+    expect(kept.written).toHaveLength(ENTRY_COUNT)
+    expect(kept.declined).toBe(true)
   })
 
   it('removes its entries and counts as a decline', () => {
@@ -216,5 +218,24 @@ describe('the agent setup flow', () => {
     expect(canWriteFor(setup, false, { [app]: '/a', [agentVariable]: '/b' })).toBe(true)
     expect(canWriteFor(setup, false, { [app]: '', [agentVariable]: '/b' })).toBe(false)
     expect(canWriteFor(setup, true, {})).toBe(true)
+  })
+
+  it('looks under home when the agent directory variable is empty or missing', () => {
+    const underHome = join('/Users/x', setup.defaultConfigDirectory)
+    for (const env of [{}, { CLAUDE_CONFIG_DIR: '' }]) {
+      const paths = agentPathsOf(setup, appDirectory, env, '/Users/x')
+      expect(paths.agentDirectory).toBe(underHome)
+    }
+    const moved = agentPathsOf(setup, appDirectory, { CLAUDE_CONFIG_DIR: '/elsewhere' }, '/Users/x')
+    expect(moved.agentDirectory).toBe('/elsewhere')
+  })
+
+  it('reports a decline it could not record', () => {
+    const agent = agentFor(agentDirectory)
+    mkdirSync(join(appDirectory, 'agents.json'))
+
+    const problem = decline(agent)
+
+    expect(problem).toContain('agents.json could not be written')
   })
 })

@@ -265,10 +265,11 @@ describe('the Agents menu', () => {
     }
   })
 
-  it('stays quiet when turned off', async () => {
+  it('stays quiet while turned off, and offers once turned back on', async () => {
     const configDir = scratchDirectory('config')
     const claudeDir = scratchClaudeDirectory()
-    writeFileSync(join(configDir, 'settings.json'), JSON.stringify({ manageAgentHooks: false }))
+    const appSettingsPath = join(configDir, 'settings.json')
+    writeFileSync(appSettingsPath, JSON.stringify({ manageAgentHooks: false }))
 
     const app = await launchApp({ configDir, mainInspector: true, env: { CLAUDE_CONFIG_DIR: claudeDir } })
     try {
@@ -276,6 +277,39 @@ describe('the Agents menu', () => {
       expect(reading.enabled).toBe(false)
       await app.pause(SETTLE_PAUSE_MS)
       expect(await app.agentBanners()).toEqual([])
+
+      writeFileSync(appSettingsPath, JSON.stringify({ manageAgentHooks: true }))
+      await untilBanners(app, 'the offer', [OFFER_TEXT])
+      const turnedOn = await untilMenu(app, STATUS_NOT_SET_UP, ACTION_SET_UP)
+      expect(turnedOn.enabled).toBe(true)
+    } finally {
+      await app.close()
+      rmSync(configDir, { recursive: true, force: true })
+      rmSync(claudeDir, { recursive: true, force: true })
+    }
+  })
+
+  it('says so when Not now cannot be remembered', async () => {
+    const configDir = scratchDirectory('config')
+    const claudeDir = scratchClaudeDirectory()
+    const recordPath = join(configDir, 'agents.json')
+    mkdirSync(recordPath)
+
+    const app = await launchApp({ configDir, mainInspector: true, env: { CLAUDE_CONFIG_DIR: claudeDir } })
+    try {
+      await untilBanners(app, 'the offer', [OFFER_TEXT])
+      await app.clickBannerButton('Not now')
+      await pollFor(
+        'the strip to say the decline was not recorded',
+        async () => {
+          const texts = await app.agentBanners()
+          if (texts.length !== 1 || !texts[0].startsWith(`${recordPath} could not be written`)) {
+            return null
+          }
+          return texts
+        },
+        MENU_POLL_TIMEOUT_MS
+      )
     } finally {
       await app.close()
       rmSync(configDir, { recursive: true, force: true })

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { agentBannerOf, agentMenuOf, agentSetupStateOf } from './agentSetup'
+import { agentBannerOf, agentMenuOf, agentNoticeAfter, agentSetupStateOf } from './agentSetup'
 import type { AgentNotice, AgentSetupFacts, AgentSetupState } from './agentSetup'
 
 describe('agent setup', () => {
@@ -79,6 +79,13 @@ describe('agent setup', () => {
 
     const done = agentBannerOf('claude', 'Claude Code', 'setUp', true, { kind: 'done' })
     expect(done?.kind).toBe('done')
+  })
+
+  it('leaves a done line after setting up, nothing after a removal, and the problem after a failure', () => {
+    expect(agentNoticeAfter('setUp', null)).toEqual({ kind: 'done' })
+    expect(agentNoticeAfter('switch', null)).toEqual({ kind: 'done' })
+    expect(agentNoticeAfter('remove', null)).toBeNull()
+    expect(agentNoticeAfter('remove', 'it broke')).toEqual({ kind: 'problem', text: 'it broke' })
   })
 
   it('stops saying an agent is set up once it no longer is', () => {
