@@ -5,6 +5,24 @@ export interface AgentTitle {
   idle: boolean
 }
 
+export interface HookEntry {
+  event: string
+  script: string
+  async: boolean
+}
+
+/** How the app wires an agent's hooks. */
+export interface HarnessSetup {
+  /** The agent's name in the Agents menu and the offer: "Claude Code". */
+  productName: string
+  /** The environment variable that moves the agent's config directory. */
+  configDirectoryVariable: string
+  /** The config directory's name under home when the variable is unset. */
+  defaultConfigDirectory: string
+  settingsFile: string
+  entries: readonly HookEntry[]
+}
+
 /** What the app knows about one coding agent. */
 export interface Harness {
   /** The agent's name on the wire and in the saved workspace. */
@@ -21,4 +39,6 @@ export interface Harness {
   resumeCommand(sessionId: string): string | null
   /** The line typed into a shell to fork a session under a name. Without it, rows never offer Fork. */
   forkCommand?(sessionId: string, name: string): string | null
+  /** The hooks the app can wire; without it the agent has no Agents menu entry and no offer. */
+  setup?: HarnessSetup
 }
