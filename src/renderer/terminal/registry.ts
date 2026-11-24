@@ -167,6 +167,9 @@ export function detachSession(id: SessionId): void {
 }
 
 export function disposeSession(id: SessionId): void {
+  // Before the handle check: output arriving after a close is buffered again, and the pty's exit then calls this with no handle left.
+  pendingOutput.delete(id)
+
   const handle = handles.get(id)
   if (!handle) {
     return
@@ -175,7 +178,6 @@ export function disposeSession(id: SessionId): void {
   detachSession(id)
   handle.term.dispose()
   handles.delete(id)
-  pendingOutput.delete(id)
   window.tacoShells.pty.kill(id)
 }
 
