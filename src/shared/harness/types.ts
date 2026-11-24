@@ -15,6 +15,8 @@ export interface HookEntry {
 export interface HarnessSetup {
   /** The agent's name in the Agents menu and the offer: "Claude Code". */
   productName: string
+  /** The names the agent's CLI runs under in a terminal: "claude". */
+  commands: readonly string[]
   /** The environment variable that moves the agent's config directory. */
   configDirectoryVariable: string
   /** The config directory's name under home when the variable is unset. */

@@ -58,7 +58,7 @@ Each config directory holds `settings.json`, `keybindings.json` and `focus-port`
 
 ## Setting up an agent's hooks
 
-The app writes an agent's hook entries into the agent's own settings file, from the Agents menu and from a one-time offer in the window. `src/shared/harness/claude/setup.ts` is the source of truth for the entries Claude Code needs; the README does not list them. The scripts in `hooks/` ship as real files (`extraResources` in `electron-builder.js`) and are copied into the config directory's `hooks/` on every launch, so each app runs its own copy.
+The app writes an agent's hook entries into the agent's own settings file, from the Agents menu and from a one-time offer in the window. The offer waits until the agent is seen running in a terminal: on a submitted line, `src/main/pty/foreground.ts` reads that terminal's foreground programs and matches them against the setup's `commands`. `src/shared/harness/claude/setup.ts` is the source of truth for the entries Claude Code needs; the README does not list them. The scripts in `hooks/` ship as real files (`extraResources` in `electron-builder.js`) and are copied into the config directory's `hooks/` on every launch, so each app runs its own copy.
 
 **Only the stable app writes to real settings.** A dev build shows the menu with its action greyed out, a line under it saying why, and never offers. It writes only when both `TACO_SHELLS_CONFIG_DIR` and `CLAUDE_CONFIG_DIR` are set, which is how the e2e suite drives the flow, and how to try it by hand without touching your own settings:
 

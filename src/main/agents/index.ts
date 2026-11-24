@@ -4,6 +4,7 @@ import {
   agentBannerOf,
   agentMenuOf,
   agentNoticeAfter,
+  runsAgent,
   type AgentBanner,
   type AgentMenu,
   type AgentMenuAction,
@@ -11,9 +12,11 @@ import {
   type AgentSetupState
 } from '@shared/agentSetup'
 import { HARNESSES } from '@shared/harness/registry'
-import { CHANNEL } from '@shared/ipc'
+import { CHANNEL, type SessionId } from '@shared/ipc'
 import { isStable } from '../channel'
 import type { ConfigStore } from '../config'
+import { foregroundCommands } from '../pty/foreground'
+import type { PtySessions } from '../pty/sessions'
 import type { AgentMenuEntry } from '../window/menu'
 import type { ApplicationMenu } from '../window/applicationMenu'
 import {
@@ -28,6 +31,9 @@ import {
   type Agent
 } from './flow'
 import { copyHookScripts, hookScriptsSource, hooksDirectory } from './scripts'
+
+// Long enough for the shell to have started the command that was just submitted.
+const SUBMIT_CHECK_DELAY_MS = 1000
 
 export interface RegisteredAgents {
   stop: () => void
@@ -62,7 +68,8 @@ export function registerAgents(
   window: BrowserWindow,
   configDirectory: string,
   store: ConfigStore,
-  menu: ApplicationMenu
+  menu: ApplicationMenu,
+  sessions: PtySessions
 ): RegisteredAgents {
   const source = hookScriptsSource(app.isPackaged, process.resourcesPath, app.getAppPath())
   const destination = hooksDirectory(configDirectory)
@@ -76,6 +83,11 @@ export function registerAgents(
   // How each agent's last action went, kept until dismissed and shown in place of the offer.
   const notices = new Map<string, AgentNotice>()
   let sentBanners = ''
+  // Agents seen running in a terminal since launch. Not saved, so an unanswered offer waits for the next run.
+  const seen = new Set<string>()
+  // Agents whose offer only waits on being seen. Kept by refresh, so a submitted line costs nothing while it is empty.
+  let awaiting: Agent[] = []
+  const pendingChecks = new Map<SessionId, ReturnType<typeof setTimeout>>()
 
   function canWrite(agent: Agent): boolean {
     return canWriteFor(agent.setup, isStable, process.env)
@@ -100,7 +112,8 @@ export function registerAgents(
     if (found !== undefined) {
       notice = found
     }
-    return agentBannerOf(agent.id, agent.setup.productName, state, mayWrite, notice)
+    const wasSeen = seen.has(agent.id)
+    return agentBannerOf(agent.id, agent.setup.productName, state, mayWrite, notice, wasSeen)
   }
 
   function bannersOf(): AgentBanner[] {
@@ -161,6 +174,9 @@ export function registerAgents(
   }
 
   function refresh(): void {
+    awaiting = agents.filter((agent) => {
+      return !seen.has(agent.id) && canWrite(agent) && stateOf(agent) === 'notSetUp'
+    })
     const entries = agents.map(entryOf)
     menu.setAgents(entries)
     const banners = bannersOf()
@@ -208,6 +224,40 @@ export function registerAgents(
     refresh()
   }
 
+  async function noticeAgentsIn(id: SessionId): Promise<void> {
+    const pid = sessions.pidOf(id)
+    if (pid === null) {
+      return
+    }
+    const commandLines = await foregroundCommands(pid)
+    let added = false
+    for (const agent of awaiting) {
+      if (runsAgent(commandLines, agent.setup.commands)) {
+        seen.add(agent.id)
+        added = true
+      }
+    }
+    if (added) {
+      refresh()
+    }
+  }
+
+  // An offer waits until its agent is seen running, so a launch never opens with a row of strips.
+  sessions.onSubmit((id) => {
+    if (awaiting.length === 0) {
+      return
+    }
+    const earlier = pendingChecks.get(id)
+    if (earlier !== undefined) {
+      clearTimeout(earlier)
+    }
+    const timer = setTimeout(() => {
+      pendingChecks.delete(id)
+      void noticeAgentsIn(id)
+    }, SUBMIT_CHECK_DELAY_MS)
+    pendingChecks.set(id, timer)
+  })
+
   refresh()
   app.on('did-become-active', onActive)
   store.onChange(() => {
@@ -216,6 +266,10 @@ export function registerAgents(
 
   return {
     stop: () => {
+      for (const timer of pendingChecks.values()) {
+        clearTimeout(timer)
+      }
+      pendingChecks.clear()
       app.off('did-become-active', onActive)
       ipcMain.removeAllListeners(CHANNEL.agentsGet)
       ipcMain.removeAllListeners(CHANNEL.agentsSetUp)

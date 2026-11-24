@@ -23,6 +23,7 @@ const ENTRIES: readonly HookEntry[] = [
 
 const SETUP: HarnessSetup = {
   productName: 'Claude Code',
+  commands: ['claude'],
   configDirectoryVariable: 'CLAUDE_CONFIG_DIR',
   defaultConfigDirectory: '.claude',
   settingsFile: 'settings.json',
