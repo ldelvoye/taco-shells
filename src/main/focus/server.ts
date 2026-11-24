@@ -23,7 +23,7 @@ export interface FocusServerHandlers {
 // /focus-tab switches to it at once. Merged, every ping would steal focus.
 const FOCUS_TAB_PATH = '/focus-tab'
 const ATTENTION_PATH = '/attention'
-// Claude's hook script posts to these, from every checkout people have installed hooks from.
+// Copies of Claude's hook script from before it moved to the agent routes still post to these.
 const LEGACY_START_PATH = '/claude-session/start'
 const LEGACY_END_PATH = '/claude-session/end'
 const LEGACY_STATE_PATH = '/claude-session/state'

@@ -1,7 +1,8 @@
+import { spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { claude } from '@shared/harness/claude'
@@ -10,6 +11,8 @@ import type { SessionId } from '@shared/ipc'
 import type { AgentSignal } from '@shared/rowState'
 import type { AgentSession } from '@shared/snapshot'
 import { type FocusServerHandlers, startFocusServer } from './server'
+
+const SESSION_SCRIPT = join(import.meta.dirname, '..', '..', '..', 'hooks', 'taco-shells-claude-session.sh')
 
 interface FakeHandlers extends FocusServerHandlers {
   sessionPids: Map<SessionId, number>
@@ -99,6 +102,19 @@ function post(port: number, path: string, body: unknown): Promise<Response> {
 function freshPortFilePath(): string {
   const directory = mkdtempSync(join(tmpdir(), 'taco-shells-focus-test-'))
   return join(directory, 'focus-port')
+}
+
+// Not spawnSync: the server it posts to runs in this process and has to stay free to answer.
+function runSessionScript(configDirectory: string, hookInput: unknown): Promise<void> {
+  const env = { TACO_SHELLS_CONFIG_DIR: configDirectory, PATH: '/bin:/usr/bin' }
+  const child = spawn('/bin/sh', [SESSION_SCRIPT], { env, stdio: ['pipe', 'ignore', 'ignore'] })
+  const input = JSON.stringify(hookInput)
+  child.stdin.end(input)
+  return new Promise((resolve) => {
+    child.on('close', () => {
+      resolve()
+    })
+  })
 }
 
 describe('startFocusServer', () => {
@@ -323,6 +339,48 @@ function bindBlocker(port: number): Promise<Server> {
     })
   })
 }
+
+describe("Claude's hook script", () => {
+  const SESSION_ID = '123e4567-e89b-12d3-a456-426614174000'
+  let handlers: FakeHandlers
+  let stop: () => void
+  let configDirectory: string
+
+  beforeEach(async () => {
+    handlers = createFakeHandlers()
+    // The script sends its own ancestors, and the first of them is this process.
+    handlers.sessionPids.set('pty-2', process.pid)
+    const portFilePath = freshPortFilePath()
+    configDirectory = dirname(portFilePath)
+    stop = startFocusServer(handlers, portFilePath)
+    await waitForPortFile(portFilePath)
+  })
+
+  afterEach(() => {
+    stop()
+  })
+
+  it('has every kind of post it sends accepted', async () => {
+    const session = { session_id: SESSION_ID }
+    const start = { ...session, hook_event_name: 'SessionStart', cwd: '/tmp/work', source: 'resume' }
+    const prompt = { ...session, hook_event_name: 'UserPromptSubmit' }
+    const permission = { ...session, hook_event_name: 'Notification', notification_type: 'permission_prompt' }
+    const end = { ...session, hook_event_name: 'SessionEnd' }
+
+    await runSessionScript(configDirectory, start)
+    await runSessionScript(configDirectory, prompt)
+    await runSessionScript(configDirectory, permission)
+    await runSessionScript(configDirectory, end)
+
+    const startedSession = { harness: 'claude', sessionId: SESSION_ID, cwd: '/tmp/work' }
+    expect(handlers.started).toEqual([['pty-2', startedSession, true]])
+    expect(handlers.signals).toEqual([
+      ['pty-2', 'claude', SESSION_ID, 'working'],
+      ['pty-2', 'claude', SESSION_ID, 'needs']
+    ])
+    expect(handlers.ended).toEqual([['pty-2', 'claude', SESSION_ID]])
+  })
+})
 
 describe('startFocusServer port selection', () => {
   it('says so rather than failing silently when every port is taken', async () => {
