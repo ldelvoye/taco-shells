@@ -20,17 +20,22 @@ name=$(basename "$installed" .app)
 stamp=$(date +%Y%m%d-%H%M%S)
 trashed="$HOME/.Trash/$name $stamp.app"
 
+# The app has quit by now, so every failure below reopens the installed app rather than leave nothing running.
 if ! mv "$installed" "$trashed"; then
+  open "$installed"
   exit 1
 fi
 
 if ! mv "$extracted" "$installed"; then
-  mv "$trashed" "$installed"
+  if mv "$trashed" "$installed"; then
+    open "$installed"
+  fi
   exit 1
 fi
 
 if ! open "$installed"; then
-  mv "$installed" "$extracted"
-  mv "$trashed" "$installed"
+  if mv "$installed" "$extracted" && mv "$trashed" "$installed"; then
+    open "$installed"
+  fi
   exit 1
 fi
