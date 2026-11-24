@@ -32,10 +32,12 @@ const NO_CLAUDE_DIRECTORY = 'no-claude'
 
 const AGENT_MENU_BODY = `return JSON.stringify({
       status: items[0].label,
-      actionLabel: items[2].label,
-      enabled: items[2].enabled
+      statusKind: items[0].type,
+      actionLabel: items[1].label,
+      enabled: items[1].enabled,
+      note: items[1].sublabel
     })`
-const AGENT_CLICK_BODY = `items[2].click()
+const AGENT_CLICK_BODY = `items[1].click()
     return ''`
 
 // xterm warns when a render task overruns its idle deadline, which a slow CI
@@ -91,8 +93,10 @@ export interface LaunchOptions {
 
 export interface AgentMenuReading {
   status: string
+  statusKind: string
   actionLabel: string
   enabled: boolean
+  note: string
 }
 
 /** A sidebar row: every pane of every group has one, in sidebar order. */

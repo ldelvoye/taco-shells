@@ -22,20 +22,18 @@ export interface ApplicationMenuState {
 }
 
 function agentSubmenu(entry: AgentMenuEntry): MenuItemConstructorOptions {
-  const status: MenuItemConstructorOptions = { label: entry.menu.status, enabled: false }
+  // A header reads as a caption, where a disabled item reads as an action that is unavailable.
+  const status: MenuItemConstructorOptions = { type: 'header', label: entry.menu.status }
   const action: MenuItemConstructorOptions = {
     label: entry.menu.actionLabel,
     enabled: entry.menu.enabled,
     click: entry.onAction
   }
+  if (entry.menu.note !== null) {
+    action.sublabel = entry.menu.note
+  }
   const showScripts: MenuItemConstructorOptions = { label: SHOW_SCRIPTS_LABEL, click: entry.onShowScripts }
-  const submenu: MenuItemConstructorOptions[] = [
-    status,
-    { type: 'separator' },
-    action,
-    { type: 'separator' },
-    showScripts
-  ]
+  const submenu: MenuItemConstructorOptions[] = [status, action, { type: 'separator' }, showScripts]
   return { label: entry.name, submenu }
 }
 

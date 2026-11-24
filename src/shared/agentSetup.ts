@@ -5,6 +5,7 @@ const STATUS_SET_UP = 'Set up'
 const STATUS_NOT_SET_UP = 'Not set up'
 const LABEL_SWITCH = 'Switch to Managed Setup'
 const LABEL_REMOVE = 'Remove Setup'
+const NOTE_BUILD_MAY_NOT_WRITE = 'Development builds leave your settings alone'
 
 /** Who wired an agent's hooks in its settings file: nobody, the app, or the user by hand. */
 export type HookWiring = 'none' | 'managed' | 'byHand'
@@ -27,6 +28,8 @@ export interface AgentMenu {
   action: AgentMenuAction
   actionLabel: string
   enabled: boolean
+  /** Why the action is greyed out, when the status line does not already say. */
+  note: string | null
 }
 
 export type AgentBannerKind = 'offer' | 'done' | 'problem'
@@ -67,20 +70,34 @@ export function agentSetupStateOf(facts: AgentSetupFacts): AgentSetupState {
   return 'notSetUp'
 }
 
+function noteOf(canWrite: boolean): string | null {
+  if (canWrite) {
+    return null
+  }
+  return NOTE_BUILD_MAY_NOT_WRITE
+}
+
 export function agentMenuOf(state: AgentSetupState, productName: string, canWrite: boolean): AgentMenu {
   const setUpLabel = `Set Up ${productName}`
+  const note = noteOf(canWrite)
   switch (state) {
     case 'notInstalled':
-      return { status: STATUS_NOT_INSTALLED, action: 'setUp', actionLabel: setUpLabel, enabled: false }
+      return {
+        status: STATUS_NOT_INSTALLED,
+        action: 'setUp',
+        actionLabel: setUpLabel,
+        enabled: false,
+        note: null
+      }
     case 'off':
-      return { status: STATUS_OFF, action: 'setUp', actionLabel: setUpLabel, enabled: false }
+      return { status: STATUS_OFF, action: 'setUp', actionLabel: setUpLabel, enabled: false, note: null }
     case 'byHand':
-      return { status: STATUS_BY_HAND, action: 'switch', actionLabel: LABEL_SWITCH, enabled: canWrite }
+      return { status: STATUS_BY_HAND, action: 'switch', actionLabel: LABEL_SWITCH, enabled: canWrite, note }
     case 'setUp':
-      return { status: STATUS_SET_UP, action: 'remove', actionLabel: LABEL_REMOVE, enabled: canWrite }
+      return { status: STATUS_SET_UP, action: 'remove', actionLabel: LABEL_REMOVE, enabled: canWrite, note }
     case 'declined':
     case 'notSetUp':
-      return { status: STATUS_NOT_SET_UP, action: 'setUp', actionLabel: setUpLabel, enabled: canWrite }
+      return { status: STATUS_NOT_SET_UP, action: 'setUp', actionLabel: setUpLabel, enabled: canWrite, note }
   }
 }
 

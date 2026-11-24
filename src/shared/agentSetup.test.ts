@@ -50,7 +50,11 @@ describe('agent setup', () => {
       const expectedWhenWritable = !alwaysDisabled.includes(state)
 
       expect(writable.enabled).toBe(expectedWhenWritable)
+      expect(writable.note).toBeNull()
       expect(readOnly.enabled).toBe(false)
+      // The status line already explains the always-disabled states; only the build's own refusal needs a note.
+      const hasNote = readOnly.note !== null
+      expect(hasNote).toBe(expectedWhenWritable)
     }
 
     expect(agentMenuOf('byHand', 'Claude Code', true).action).toBe('switch')
