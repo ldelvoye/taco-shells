@@ -21,6 +21,7 @@ check_platform() {
   fi
 }
 
+# TACO_SHELLS_INSTALL_DIR and TACO_SHELLS_ZIP_URL exist for scripts/install.test.mjs.
 choose_install_dir() {
   if [ -n "${TACO_SHELLS_INSTALL_DIR:-}" ]; then
     install_dir="$TACO_SHELLS_INSTALL_DIR"
@@ -48,6 +49,7 @@ latest_zip_url() {
     *) fail "could not find a stable release to install." ;;
   esac
   version="${tag#v}"
+  # Must match the artifactName template in electron-builder.js.
   zip_url="$REPO_URL/releases/download/$tag/taco-shells-$version-arm64.zip"
 }
 
@@ -59,9 +61,17 @@ choose_zip_url() {
   fi
 }
 
+clean_up() {
+  if ! rm -rf "$work_dir" "$staged" "$retired" 2>/dev/null; then
+    echo "taco-shells: could not remove the old copy at $retired." >&2
+  fi
+}
+
 download_and_unpack() {
   work_dir=$(mktemp -d)
-  trap 'rm -rf "$work_dir"' EXIT
+  staged="$install_dir/.taco-shells-install.$$"
+  retired="$staged.old"
+  trap clean_up EXIT
   zip_file="$work_dir/taco-shells.zip"
   unpacked="$work_dir/unpacked"
   echo "Downloading $zip_url"
@@ -76,10 +86,23 @@ download_and_unpack() {
 
 replace_install() {
   target="$install_dir/$APP_NAME"
-  rm -rf "$target"
-  mv "$unpacked/$APP_NAME" "$target"
+  # The new app lands beside the old one and the two swap by rename, so a failure at any step leaves the old one whole.
+  mv "$unpacked/$APP_NAME" "$staged" ||
+    fail "could not copy the app into $install_dir."
+  if [ -e "$target" ] || [ -L "$target" ]; then
+    mv "$target" "$retired" ||
+      fail "could not move the existing install aside."
+  fi
+  if ! mv "$staged" "$target"; then
+    if [ -e "$retired" ]; then
+      mv "$retired" "$target"
+    fi
+    fail "could not put the app in $install_dir."
+  fi
   echo "Installed $APP_NAME to $install_dir."
-  open "$target"
+  if ! open "$target"; then
+    echo "taco-shells: installed, but could not open the app." >&2
+  fi
 }
 
 main() {
