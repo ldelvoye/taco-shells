@@ -78,6 +78,10 @@ describe('workspace state', () => {
 
     const idle = reduceWorkspaceState(working, { type: 'titleChanged', pane: 'p1', title: '✳ Fix bug' })
     expect(idle.agentRows.get('p1')?.state).toBe('idle')
+
+    const titledP2 = reduceWorkspaceState(idle, { type: 'titleChanged', pane: 'p2', title: '✳ Ship it' })
+    const resumed = reduceWorkspaceState(titledP2, signal('p2', 'resume'))
+    expect(titleOf(resumed, 'p2')).toBe('Ship it')
   })
 
   it('bumps refocus on a drop or a toggle only when the workspace changed', () => {
@@ -147,6 +151,9 @@ describe('workspace state', () => {
 
     const shown = reduceWorkspaceState(done, { type: 'focusMoved', move: 'previousGroup' })
     expect(shown.agentRows.get('p1')?.state).toBe('idle')
+
+    const stoppedOnScreen = dispatch(done, signal('p2', 'start'), signal('p2', 'working'), signal('p2', 'stopped'))
+    expect(stoppedOnScreen.agentRows.get('p2')?.state).toBe('idle')
   })
 
   it('returns the same state object when an event changes nothing', () => {

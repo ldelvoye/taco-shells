@@ -1,53 +1,8 @@
-import { type JSX, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type JSX, useCallback, useEffect, useMemo, useState } from 'react'
 import { FOCUS_FIRST_PORT, FOCUS_LAST_PORT } from '@shared/focusPorts'
-import type { PtyCreateOptions, SessionId } from '@shared/ipc'
-import { type Snapshot, type SnapshotPane, workspaceFromSnapshot } from '@shared/snapshot'
 import { paletteFor } from '@shared/theme'
-import { waitingAfterAttention, waitingAfterExit, waitingAfterFocus } from '@shared/attention'
-import { applyDrop } from '@shared/applyDrop'
-import {
-  activatePane,
-  activePane,
-  addGroup,
-  addGroupTo,
-  canSplitPane,
-  closePane,
-  type Dragged,
-  type Drop,
-  emptyWorkspace,
-  focusNextGroup,
-  focusNextPane,
-  focusPreviousGroup,
-  focusPreviousPane,
-  forkPane,
-  type Group,
-  moveDivider,
-  renamePane,
-  type RowColor,
-  setPaneColor,
-  splitPane,
-  type TabGroup,
-  type TabGroupId,
-  toggleActivePaneColor,
-  type Workspace
-} from '@shared/model'
-import {
-  createTabGroup,
-  recolorTabGroup,
-  renameTabGroup,
-  toggleTabGroup,
-  ungroupTabGroup
-} from '@shared/tabGroups'
-import { agentTitleOf } from '@shared/harness/registry'
-import { forkNameFor } from '@shared/forkName'
-import {
-  type AgentRows,
-  rowsAfterExit,
-  rowsAfterIdleTitle,
-  rowsAfterScreen,
-  rowsAfterSignal,
-  waitingCount
-} from '@shared/rowState'
+import type { Group, TabGroup } from '@shared/model'
+import { waitingCount } from '@shared/rowState'
 import { createCommandRegistry } from './commands/registry'
 import { registerTerminalCommands } from './commands/terminal'
 import { registerWorkspaceCommands } from './commands/workspace'
@@ -63,104 +18,18 @@ import { PaneArea } from './layout/PaneArea'
 import { Sidebar } from './sidebar/Sidebar'
 import { useFullScreen } from './sidebar/useFullScreen'
 import { useSidebarWidth } from './sidebar/useSidebarWidth'
-import {
-  applyTerminalConfig,
-  createSession,
-  disposeSession,
-  focusSession,
-  onSessionFocus,
-  onSessionTitle
-} from './terminal/registry'
+import { applyTerminalConfig } from './terminal/registry'
+import { useWorkspace } from './workspace/useWorkspace'
 
 const FOCUS_PORTS_TAKEN = `Ports ${FOCUS_FIRST_PORT}-${FOCUS_LAST_PORT} are all in use, so jumping to the terminal that wants you is off.`
 
-let nextGroupNumber = 1
-
-function nextGroupId(): string {
-  const id = `group-${nextGroupNumber}`
-  nextGroupNumber += 1
-  return id
-}
-
-let nextTabGroupNumber = 1
-
-function nextTabGroupId(): string {
-  const id = `tab-group-${nextTabGroupNumber}`
-  nextTabGroupNumber += 1
-  return id
-}
-
-function groupForSession(sessionId: SessionId): Group {
-  const id = nextGroupId()
-  return {
-    id,
-    panes: [{ id: sessionId, title: '', width: 1, color: null }],
-    activePane: 0,
-    tabGroup: null
-  }
-}
-
-function entryHolding(workspace: Workspace, pane: SessionId): Group | undefined {
-  return workspace.groups.find((group) => {
-    return group.panes.some((candidate) => candidate.id === pane)
-  })
-}
-
-function startOptionsOf(pane: SnapshotPane): PtyCreateOptions {
-  if (pane.agent !== null) {
-    return { resume: pane.agent }
-  } else if (typeof pane.cwd === 'string') {
-    return { cwd: pane.cwd }
-  } else {
-    return {}
-  }
-}
-
-// The shell resolves EDITOR, not us: on a GUI launch the app's own environment
-// does not have it, because it is set in the files an interactive shell reads.
-function editorCommand(path: string): string {
-  return `\${EDITOR:-vi} '${path}'\n`
-}
-
-function activeSessionOf(workspace: Workspace | null): SessionId | null {
-  if (!workspace) {
-    return null
-  }
-
-  const pane = activePane(workspace)
-  if (!pane) {
-    return null
-  }
-
-  return pane.id
-}
-
-function onScreenPanesOf(workspace: Workspace | null): SessionId[] {
-  if (!workspace) {
-    return []
-  }
-  const group = workspace.groups[workspace.activeGroup]
-  if (!group) {
-    return []
-  }
-  return group.panes.map((pane) => pane.id)
-}
-
 export function App(): JSX.Element {
-  // Null is the app before its first terminal exists, which is not the same
-  // state as a workspace whose last terminal has just closed.
-  const [workspace, setWorkspace] = useState<Workspace | null>(null)
+  const { state, operations } = useWorkspace()
+  const workspace = state.workspace
+  const agentRows = state.agentRows
   const [sidebarVisible, setSidebarVisible] = useState(true)
-  const [waiting, setWaiting] = useState<SessionId | null>(null)
   const [focusProblem, setFocusProblem] = useState<string | null>(null)
-  const [agentRows, setAgentRows] = useState<AgentRows>(() => new Map())
-  const agentRowsRef = useRef<AgentRows>(agentRows)
-  const workspaceRef = useRef<Workspace | null>(workspace)
-  const onScreenRef = useRef<SessionId[]>([])
-  const rawTitlesRef = useRef(new Map<SessionId, string>())
-  const refocusPending = useRef(false)
   const commands = useMemo(() => createCommandRegistry(), [])
-  const activeSessionId = activeSessionOf(workspace)
   const config = useConfig()
   const bindings = useMemo(() => new Map(config.bindings), [config.bindings])
   const sidebarWidth = useSidebarWidth()
@@ -184,347 +53,11 @@ export function App(): JSX.Element {
     window.tacoShells.agents.dismiss(harness)
   }, [])
 
-  // Changes before the first terminal exists are dropped: there is nothing yet
-  // for them to describe.
-  const updateWorkspace = useCallback((change: (workspace: Workspace) => Workspace) => {
-    setWorkspace((current) => {
-      if (!current) {
-        return current
-      }
-      return change(current)
-    })
-  }, [])
-
-  const openTerminalPlaced = useCallback(
-    (place: (workspace: Workspace, group: Group) => Workspace, command: string | null) => {
-      void createSession().then((sessionId) => {
-        const group = groupForSession(sessionId)
-        setWorkspace((current) => {
-          let base = current
-          if (!base) {
-            base = emptyWorkspace()
-          }
-          return place(base, group)
-        })
-        if (command !== null) {
-          window.tacoShells.pty.write(sessionId, command)
-        }
-      })
-    },
-    []
-  )
-
-  const openTerminalRunning = useCallback(
-    (command: string | null) => {
-      openTerminalPlaced(addGroup, command)
-    },
-    [openTerminalPlaced]
-  )
-
-  const openTerminalIn = useCallback(
-    (tabGroup: TabGroupId | null) => {
-      openTerminalPlaced((workspace, group) => {
-        return addGroupTo(workspace, group, tabGroup)
-      }, null)
-    },
-    [openTerminalPlaced]
-  )
-
-  const openTerminal = useCallback(() => {
-    openTerminalRunning(null)
-  }, [openTerminalRunning])
-
-  const openSettings = useCallback(() => {
-    const path = window.tacoShells.config.pathOf('settings')
-    const command = editorCommand(path)
-    openTerminalRunning(command)
-  }, [openTerminalRunning])
-
-  const openKeybindings = useCallback(() => {
-    const path = window.tacoShells.config.pathOf('keybindings')
-    const command = editorCommand(path)
-    openTerminalRunning(command)
-  }, [openTerminalRunning])
-
-  // The donor can close, or its group fill, while the shell is spawning: a shell
-  // with no pane to show it would keep running unseen.
-  const splitOnceSpawned = useCallback(
-    (donor: SessionId, options: PtyCreateOptions, place: typeof splitPane) => {
-      void createSession(options).then((sessionId) => {
-        const latest = workspaceRef.current
-        const stillSplittable = latest !== null && canSplitPane(latest, donor)
-        if (!stillSplittable) {
-          disposeSession(sessionId)
-          return
-        }
-        updateWorkspace((current) => place(current, donor, sessionId))
-      })
-    },
-    [updateWorkspace]
-  )
-
-  // The new shell starts in the split terminal's directory, which the main
-  // process resolves from the pty it names here.
-  const splitTerminal = useCallback(() => {
-    if (!activeSessionId) {
-      return
-    }
-    if (!workspace) {
-      return
-    }
-    if (!canSplitPane(workspace, activeSessionId)) {
-      return
-    }
-
-    splitOnceSpawned(activeSessionId, { cwdFrom: activeSessionId }, splitPane)
-  }, [activeSessionId, workspace, splitOnceSpawned])
-
-  // The main process finds the agent session to fork from the pane named here.
-  const forkTerminal = useCallback(
-    (source: SessionId) => {
-      if (!workspace) {
-        return
-      }
-      if (!canSplitPane(workspace, source)) {
-        return
-      }
-
-      const panes = workspace.groups.flatMap((group) => group.panes)
-      const sourcePane = panes.find((pane) => pane.id === source)
-      if (!sourcePane) {
-        return
-      }
-      const titles = panes.map((pane) => pane.title)
-      const name = forkNameFor(sourcePane.title, titles)
-
-      splitOnceSpawned(source, { fork: { from: source, name } }, forkPane)
-    },
-    [workspace, splitOnceSpawned]
-  )
-
-  // Panes are created in group order and workspaceFromSnapshot hands the ids
-  // back out in that same order, so the two loops have to walk the same list.
-  const restoreWorkspace = useCallback(
-    async (snapshot: Snapshot) => {
-      const sessionIds: SessionId[] = []
-      let restored: Workspace = emptyWorkspace()
-      try {
-        for (const group of snapshot.groups) {
-          for (const pane of group.panes) {
-            const startOptions = startOptionsOf(pane)
-            const sessionId = await createSession(startOptions)
-            sessionIds.push(sessionId)
-          }
-        }
-        const groupIds = snapshot.groups.map(() => nextGroupId())
-        const tabGroupIds = snapshot.tabGroups.map(() => nextTabGroupId())
-        restored = workspaceFromSnapshot(snapshot, sessionIds, groupIds, tabGroupIds)
-      } catch {
-        restored = emptyWorkspace()
-      }
-
-      if (restored.groups.length === 0) {
-        for (const sessionId of sessionIds) {
-          disposeSession(sessionId)
-        }
-        openTerminal()
-        return
-      }
-      setWorkspace(restored)
-    },
-    [openTerminal]
-  )
-
-  useEffect(() => {
-    const initial = window.tacoShells.snapshot.initial
-    if (initial === null || initial.groups.length === 0) {
-      openTerminal()
-      return
-    }
-    void restoreWorkspace(initial)
-  }, [openTerminal, restoreWorkspace])
-
-  useEffect(() => {
-    if (!workspace) {
-      return
-    }
-    window.tacoShells.snapshot.workspaceChanged(workspace)
-  }, [workspace])
-
-  const changeAgentRows = useCallback((change: (rows: AgentRows) => AgentRows) => {
-    const next = change(agentRowsRef.current)
-    agentRowsRef.current = next
-    setAgentRows(next)
-  }, [])
-
-  const handleTitle = useCallback(
-    (sessionId: SessionId, title: string) => {
-      rawTitlesRef.current.set(sessionId, title)
-      const row = agentRowsRef.current.get(sessionId)
-      if (row === undefined) {
-        updateWorkspace((current) => renamePane(current, sessionId, title))
-        return
-      }
-      const parsed = agentTitleOf(row.harness, title)
-      updateWorkspace((current) => renamePane(current, sessionId, parsed.name))
-      if (parsed.idle) {
-        changeAgentRows((rows) => rowsAfterIdleTitle(rows, sessionId))
-      }
-    },
-    [updateWorkspace, changeAgentRows]
-  )
-
-  useEffect(() => {
-    return onSessionTitle(handleTitle)
-  }, [handleTitle])
-
-  useEffect(() => {
-    return window.tacoShells.focus.onAgentSignal((event) => {
-      const onScreen = onScreenRef.current.includes(event.id)
-      changeAgentRows((rows) => {
-        return rowsAfterSignal(rows, event.id, event.harness, event.sessionId, event.signal, onScreen)
-      })
-      const startsSession = event.signal === 'start' || event.signal === 'resume'
-      if (!startsSession) {
-        return
-      }
-      // A title can arrive before SessionStart has created the row, so replay the last one through the stripping path.
-      const rawTitle = rawTitlesRef.current.get(event.id)
-      if (rawTitle !== undefined) {
-        handleTitle(event.id, rawTitle)
-      }
-    })
-  }, [changeAgentRows, handleTitle])
-
-  useEffect(() => {
-    workspaceRef.current = workspace
-    const onScreen = onScreenPanesOf(workspace)
-    onScreenRef.current = onScreen
-    changeAgentRows((rows) => rowsAfterScreen(rows, onScreen))
-  }, [workspace, changeAgentRows])
-
-  // Clicking straight into a pane has to move the workspace's idea of the active
-  // pane with it, or cmd+w would close a terminal the user is not typing in. The
-  // effect below refocuses on that change, but activatePane returns the
-  // workspace untouched once the pane is already active, so this cannot loop.
-  useEffect(() => {
-    return onSessionFocus((sessionId) => {
-      updateWorkspace((current) => activatePane(current, sessionId))
-    })
-  }, [updateWorkspace])
-
-  useEffect(() => {
-    return window.tacoShells.focus.onAttention((id) => {
-      setWaiting((current) => waitingAfterAttention(current, id, activeSessionId))
-    })
-  }, [activeSessionId])
-
-  useEffect(() => {
-    return window.tacoShells.focus.onActivated(() => {
-      if (waiting === null) {
-        return
-      }
-      updateWorkspace((current) => activatePane(current, waiting))
-      focusSession(waiting)
-    })
-  }, [waiting, updateWorkspace])
-
-  useEffect(() => {
-    return window.tacoShells.focus.onFocusSession((id) => {
-      updateWorkspace((current) => activatePane(current, id))
-      focusSession(id)
-    })
-  }, [updateWorkspace])
-
-  useEffect(() => {
-    setWaiting((current) => waitingAfterFocus(current, activeSessionId))
-  }, [activeSessionId])
-
   useEffect(() => {
     return window.tacoShells.focus.onUnavailable(() => {
       setFocusProblem(FOCUS_PORTS_TAKEN)
     })
   }, [])
-
-  // A pane leaves the workspace when its pty exits and at no other time, so
-  // typing `exit` and closing the terminal from the app take one path.
-  useEffect(() => {
-    return window.tacoShells.pty.onExit((event) => {
-      disposeSession(event.id)
-      rawTitlesRef.current.delete(event.id)
-      updateWorkspace((current) => closePane(current, event.id))
-      changeAgentRows((rows) => rowsAfterExit(rows, event.id))
-      setWaiting((current) => waitingAfterExit(current, event.id))
-    })
-  }, [updateWorkspace, changeAgentRows])
-
-  // The terminals are the window's only contents, so losing the last of them is
-  // the same gesture as closing the window.
-  useEffect(() => {
-    if (!workspace) {
-      return
-    }
-    if (workspace.groups.length > 0) {
-      return
-    }
-    window.close()
-  }, [workspace])
-
-  useEffect(() => {
-    if (!activeSessionId) {
-      return
-    }
-    focusSession(activeSessionId)
-  }, [activeSessionId])
-
-  // A sidebar action can take the keyboard off the active terminal without changing which one is active.
-  useEffect(() => {
-    if (!refocusPending.current) {
-      return
-    }
-    refocusPending.current = false
-    if (!activeSessionId) {
-      return
-    }
-    focusSession(activeSessionId)
-  }, [workspace, activeSessionId])
-
-  const closeActiveTerminal = useCallback(() => {
-    if (!activeSessionId) {
-      return
-    }
-    disposeSession(activeSessionId)
-  }, [activeSessionId])
-
-  const focusNext = useCallback(() => {
-    updateWorkspace((current) => focusNextPane(current))
-  }, [updateWorkspace])
-
-  const focusPrevious = useCallback(() => {
-    updateWorkspace((current) => focusPreviousPane(current))
-  }, [updateWorkspace])
-
-  const focusNextTerminal = useCallback(() => {
-    updateWorkspace((current) => focusNextGroup(current))
-  }, [updateWorkspace])
-
-  const focusPreviousTerminal = useCallback(() => {
-    updateWorkspace((current) => focusPreviousGroup(current))
-  }, [updateWorkspace])
-
-  const colorPane = useCallback(
-    (sessionId: SessionId, color: RowColor | null) => {
-      updateWorkspace((current) => setPaneColor(current, sessionId, color))
-    },
-    [updateWorkspace]
-  )
-
-  const toggleActiveColor = useCallback(
-    (color: RowColor) => {
-      updateWorkspace((current) => toggleActivePaneColor(current, color))
-    },
-    [updateWorkspace]
-  )
 
   const toggleSidebar = useCallback(() => {
     setSidebarVisible((visible) => {
@@ -532,130 +65,30 @@ export function App(): JSX.Element {
     })
   }, [])
 
-  // Focused here rather than left to the effect above, because clicking the row
-  // of the pane that is already active changes no state and so would fire no
-  // effect, while the click itself has already taken focus off the terminal.
-  const selectPane = useCallback(
-    (sessionId: SessionId) => {
-      updateWorkspace((current) => activatePane(current, sessionId))
-      focusSession(sessionId)
-    },
-    [updateWorkspace]
-  )
-
-  const dropInSidebar = useCallback(
-    (dragged: Dragged, drop: Drop) => {
-      const newGroup = nextGroupId()
-      updateWorkspace((current) => {
-        const next = applyDrop(current, dragged, drop, newGroup)
-        refocusPending.current = next !== current
-        return next
-      })
-    },
-    [updateWorkspace]
-  )
-
-  const newTabGroup = useCallback(
-    (pane: SessionId): TabGroupId | null => {
-      const current = workspaceRef.current
-      if (current === null) {
-        return null
-      }
-
-      const holder = entryHolding(current, pane)
-      if (holder === undefined) {
-        return null
-      }
-
-      const id = nextTabGroupId()
-      const entryId = holder.id
-      updateWorkspace((latest) => createTabGroup(latest, entryId, id))
-      return id
-    },
-    [updateWorkspace]
-  )
-
-  const nameTabGroup = useCallback(
-    (id: TabGroupId, name: string) => {
-      updateWorkspace((current) => renameTabGroup(current, id, name))
-    },
-    [updateWorkspace]
-  )
-
-  const colorTabGroup = useCallback(
-    (id: TabGroupId, color: RowColor) => {
-      updateWorkspace((current) => recolorTabGroup(current, id, color))
-    },
-    [updateWorkspace]
-  )
-
-  const dissolveTabGroup = useCallback(
-    (id: TabGroupId) => {
-      updateWorkspace((current) => ungroupTabGroup(current, id))
-    },
-    [updateWorkspace]
-  )
-
-  const toggleCollapsed = useCallback(
-    (id: TabGroupId) => {
-      updateWorkspace((current) => {
-        const next = toggleTabGroup(current, id)
-        refocusPending.current = next !== current
-        return next
-      })
-    },
-    [updateWorkspace]
-  )
-
-  const refocusActive = useCallback(() => {
-    if (!activeSessionId) {
-      return
-    }
-    focusSession(activeSessionId)
-  }, [activeSessionId])
-
-  const resizeGroup = useCallback(
-    (groupIndex: number, dividerIndex: number, leftWidth: number) => {
-      updateWorkspace((current) => moveDivider(current, groupIndex, dividerIndex, leftWidth))
-    },
-    [updateWorkspace]
-  )
-
   useEffect(() => {
     registerWorkspaceCommands(commands, {
-      openTerminal,
-      splitTerminal,
-      closeActiveTerminal,
-      focusNextPane: focusNext,
-      focusPreviousPane: focusPrevious,
-      focusNextGroup: focusNextTerminal,
-      focusPreviousGroup: focusPreviousTerminal,
-      toggleActiveColor,
+      openTerminal: operations.openTerminal,
+      splitTerminal: operations.splitActive,
+      closeActiveTerminal: operations.closeActive,
+      focusNextPane: () => {
+        operations.moveFocus('nextPane')
+      },
+      focusPreviousPane: () => {
+        operations.moveFocus('previousPane')
+      },
+      focusNextGroup: () => {
+        operations.moveFocus('nextGroup')
+      },
+      focusPreviousGroup: () => {
+        operations.moveFocus('previousGroup')
+      },
+      toggleActiveColor: operations.toggleActiveColor,
       toggleSidebar,
-      openSettings,
-      openKeybindings
+      openSettings: operations.openSettings,
+      openKeybindings: operations.openKeybindings
     })
-  }, [
-    commands,
-    openTerminal,
-    splitTerminal,
-    closeActiveTerminal,
-    focusNext,
-    focusPrevious,
-    focusNextTerminal,
-    focusPreviousTerminal,
-    toggleActiveColor,
-    toggleSidebar,
-    openSettings,
-    openKeybindings
-  ])
-
-  useEffect(() => {
-    if (!activeSessionId) {
-      return
-    }
-    registerTerminalCommands(commands, activeSessionId)
-  }, [commands, activeSessionId])
+    registerTerminalCommands(commands, operations.activeSession)
+  }, [commands, operations, toggleSidebar])
 
   useEffect(() => {
     const palette = paletteFor(config.appearance)
@@ -693,18 +126,18 @@ export function App(): JSX.Element {
         width={sidebarWidth.width}
         fullScreen={fullScreen}
         rowStates={agentRows}
-        onSelect={selectPane}
-        onClose={disposeSession}
-        onNewTerminal={openTerminalIn}
-        onDrop={dropInSidebar}
-        onColor={colorPane}
-        onFork={forkTerminal}
-        onNewTabGroup={newTabGroup}
-        onRenameTabGroup={nameTabGroup}
-        onRecolorTabGroup={colorTabGroup}
-        onUngroupTabGroup={dissolveTabGroup}
-        onToggleTabGroup={toggleCollapsed}
-        onRefocus={refocusActive}
+        onSelect={operations.select}
+        onClose={operations.close}
+        onNewTerminal={operations.openTerminalIn}
+        onDrop={operations.drop}
+        onColor={operations.colorPane}
+        onFork={operations.fork}
+        onNewTabGroup={operations.newTabGroup}
+        onRenameTabGroup={operations.renameTabGroup}
+        onRecolorTabGroup={operations.recolorTabGroup}
+        onUngroupTabGroup={operations.ungroupTabGroup}
+        onToggleTabGroup={operations.toggleTabGroup}
+        onRefocus={operations.refocusActive}
         onResize={sidebarWidth.resize}
       />
     )
@@ -740,7 +173,7 @@ export function App(): JSX.Element {
           onDecline={declineAgent}
           onDismiss={dismissAgent}
         />
-        <PaneArea groups={groups} activeGroup={activeGroupIndex} onResize={resizeGroup} />
+        <PaneArea groups={groups} activeGroup={activeGroupIndex} onResize={operations.resizeGroup} />
       </div>
     </div>
   )

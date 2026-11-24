@@ -1,3 +1,4 @@
+import type { Terminal } from '@xterm/xterm'
 import type { CommandId } from '@shared/commands'
 import type { SessionId } from '@shared/ipc'
 import { sessionTerminal } from '../terminal/registry'
@@ -26,9 +27,12 @@ const LINE_EDITING_KEYS: ReadonlyArray<readonly [CommandId, string]> = [
   ['terminal.insertNewline', ESC_CR]
 ]
 
-export function registerTerminalCommands(registry: CommandRegistry, sessionId: SessionId): void {
+export function registerTerminalCommands(
+  registry: CommandRegistry,
+  activeSession: () => SessionId | null
+): void {
   registry.register('terminal.copy', () => {
-    const term = sessionTerminal(sessionId)
+    const term = activeTerminal(activeSession)
     if (!term) {
       return
     }
@@ -45,7 +49,7 @@ export function registerTerminalCommands(registry: CommandRegistry, sessionId: S
   // text in the bracketed-paste markers, without which the shell runs every line
   // of a multi-line paste the moment it arrives.
   registry.register('terminal.paste', async () => {
-    const term = sessionTerminal(sessionId)
+    const term = activeTerminal(activeSession)
     if (!term) {
       return
     }
@@ -59,7 +63,7 @@ export function registerTerminalCommands(registry: CommandRegistry, sessionId: S
   })
 
   registry.register('terminal.clear', () => {
-    const term = sessionTerminal(sessionId)
+    const term = activeTerminal(activeSession)
     if (!term) {
       return
     }
@@ -69,7 +73,7 @@ export function registerTerminalCommands(registry: CommandRegistry, sessionId: S
 
   for (const [commandId, keys] of LINE_EDITING_KEYS) {
     registry.register(commandId, () => {
-      const term = sessionTerminal(sessionId)
+      const term = activeTerminal(activeSession)
       if (!term) {
         return
       }
@@ -77,4 +81,12 @@ export function registerTerminalCommands(registry: CommandRegistry, sessionId: S
       term.input(keys)
     })
   }
+}
+
+function activeTerminal(activeSession: () => SessionId | null): Terminal | null {
+  const sessionId = activeSession()
+  if (sessionId === null) {
+    return null
+  }
+  return sessionTerminal(sessionId)
 }
