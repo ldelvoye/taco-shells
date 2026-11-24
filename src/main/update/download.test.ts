@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { downloadAndExtract, extractedAppIn, removeOtherVersions } from './download'
 import type { ReleaseInfo } from './feed'
@@ -70,6 +70,30 @@ describe('downloading an update', () => {
 
     expect(afterThrow).toBeNull()
     expect(afterNotFound).toBeNull()
+  })
+
+  it('gives up on a download that never answers', async () => {
+    const release = releaseWithSize(zipBytes.length)
+    const stalledUntilAborted: typeof fetch = (_input, init) => {
+      return new Promise((_resolve, reject) => {
+        if (init === undefined || !init.signal) {
+          return
+        }
+        init.signal.addEventListener('abort', () => {
+          reject(new Error('aborted'))
+        })
+      })
+    }
+
+    vi.useFakeTimers()
+    try {
+      const download = downloadAndExtract(release, join(scratch, 'updates-stalled'), stalledUntilAborted)
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000)
+
+      expect(await download).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

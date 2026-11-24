@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { promisify } from 'node:util'
+import { deadlineAfter } from './deadline'
 import type { ReleaseInfo } from './feed'
 
 const execFileAsync = promisify(execFile)
@@ -12,6 +13,8 @@ const UPDATES_DIRECTORY_NAME = 'updates'
 const ZIP_NAME = 'taco-shells.zip'
 const STAGING_SUFFIX = '.partial'
 const APP_SUFFIX = '.app'
+// For the whole download, not for a pause in it: past this it is given up on and tried again at the next check.
+const DOWNLOAD_TIMEOUT_MS = 30 * 60 * 1000
 const EXTRACT_TIMEOUT_MS = 120_000
 
 /** The directory under the config directory that holds downloaded updates. */
@@ -91,10 +94,11 @@ export async function downloadAndExtract(
   // Extracted under a name that is not a version, so a crash mid-extract leaves
   // nothing the next launch could adopt as a ready app.
   const stagingDirectory = `${versionDirectory}${STAGING_SUFFIX}`
+  const deadline = deadlineAfter(DOWNLOAD_TIMEOUT_MS)
   try {
     removeDirectory(stagingDirectory)
     mkdirSync(stagingDirectory, { recursive: true })
-    const response = await fetchImpl(release.assetUrl, { cache: 'no-store' })
+    const response = await fetchImpl(release.assetUrl, { cache: 'no-store', signal: deadline.signal })
     if (!response.ok) {
       removeDirectory(stagingDirectory)
       return null
@@ -118,5 +122,7 @@ export async function downloadAndExtract(
   } catch {
     removeDirectory(stagingDirectory)
     return null
+  } finally {
+    deadline.clear()
   }
 }
