@@ -38,11 +38,11 @@ if [ "$event" = "SessionStart" ]; then
   if [ "$start_source" = "resume" ] || [ "$start_source" = "compact" ]; then
     has_conversation=true
   fi
-  route="/claude-session/start"
-  body="{\"pids\":[$pids],\"sessionId\":\"$session_id\",\"cwd\":\"$cwd\",\"hasConversation\":$has_conversation}"
+  route="/agent-session/start"
+  body="{\"pids\":[$pids],\"harness\":\"claude\",\"sessionId\":\"$session_id\",\"cwd\":\"$cwd\",\"hasConversation\":$has_conversation}"
 elif [ "$event" = "SessionEnd" ]; then
-  route="/claude-session/end"
-  body="{\"pids\":[$pids],\"sessionId\":\"$session_id\"}"
+  route="/agent-session/end"
+  body="{\"pids\":[$pids],\"harness\":\"claude\",\"sessionId\":\"$session_id\"}"
 elif [ "$event" = "UserPromptSubmit" ] || [ "$event" = "PreToolUse" ] || [ "$event" = "PostToolUse" ] \
   || [ "$event" = "Notification" ] || [ "$event" = "Stop" ] || [ "$event" = "StopFailure" ]; then
   detail=""
@@ -51,11 +51,11 @@ elif [ "$event" = "UserPromptSubmit" ] || [ "$event" = "PreToolUse" ] || [ "$eve
   elif [ "$event" = "Notification" ]; then
     detail="$notification_type"
   fi
-  route="/claude-session/state"
+  route="/agent-session/state"
   if [ -n "$detail" ]; then
-    body="{\"pids\":[$pids],\"sessionId\":\"$session_id\",\"event\":\"$event\",\"detail\":\"$detail\"}"
+    body="{\"pids\":[$pids],\"harness\":\"claude\",\"sessionId\":\"$session_id\",\"event\":\"$event\",\"detail\":\"$detail\"}"
   else
-    body="{\"pids\":[$pids],\"sessionId\":\"$session_id\",\"event\":\"$event\"}"
+    body="{\"pids\":[$pids],\"harness\":\"claude\",\"sessionId\":\"$session_id\",\"event\":\"$event\"}"
   fi
 else
   exit 0
