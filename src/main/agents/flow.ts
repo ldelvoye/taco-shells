@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { agentSetupStateOf, type AgentSetupState } from '@shared/agentSetup'
 import type { Harness, HarnessSetup } from '@shared/harness/types'
+import { errorMessage } from '../errorMessage'
 import {
   addEntries,
   entryKey,
@@ -34,14 +35,6 @@ export interface Agent {
 interface SettingsRead {
   text: string | null
   problem: string | null
-}
-
-function errorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message
-  } else {
-    return String(error)
-  }
 }
 
 function isNotFound(error: unknown): boolean {
