@@ -8,6 +8,7 @@ import type { ShellStart } from './start'
 
 type DataListener = (event: PtyDataEvent) => void
 type ExitListener = (event: PtyExitEvent) => void
+type SubmitListener = (id: SessionId) => void
 
 interface Session {
   pty: IPty
@@ -24,11 +25,13 @@ interface Session {
 // second, and 5ms is well inside a frame, so an echoed keystroke still looks
 // immediate.
 const FLUSH_INTERVAL_MS = 5
+const CARRIAGE_RETURN = '\r'
 
 export class PtySessions {
   private readonly sessions = new Map<SessionId, Session>()
   private readonly dataListeners = new Set<DataListener>()
   private readonly exitListeners = new Set<ExitListener>()
+  private readonly submitListeners = new Set<SubmitListener>()
   private nextId = 1
 
   async create(size: PtySize, start: ShellStart): Promise<SessionId> {
@@ -80,6 +83,11 @@ export class PtySessions {
       return
     }
     session.pty.write(data)
+    if (data.includes(CARRIAGE_RETURN)) {
+      for (const listener of this.submitListeners) {
+        listener(id)
+      }
+    }
   }
 
   resize(id: SessionId, size: PtySize): void {
@@ -108,6 +116,11 @@ export class PtySessions {
 
   onExit(listener: ExitListener): void {
     this.exitListeners.add(listener)
+  }
+
+  /** Called when a write holds a carriage return: a submitted line, or pasted text with one in it. */
+  onSubmit(listener: SubmitListener): void {
+    this.submitListeners.add(listener)
   }
 
   /** The directory a session's shell was started in, or null once it is gone. */

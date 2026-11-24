@@ -5,6 +5,7 @@ const SESSION_SCRIPT = 'taco-shells-claude-session.sh'
 
 export const claudeSetup: HarnessSetup = {
   productName: 'Claude Code',
+  commands: ['claude'],
   configDirectoryVariable: 'CLAUDE_CONFIG_DIR',
   defaultConfigDirectory: '.claude',
   settingsFile: 'settings.json',

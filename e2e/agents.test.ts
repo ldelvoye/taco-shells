@@ -1,4 +1,13 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -7,7 +16,11 @@ import { type AgentMenuReading, type App, launchApp, pollFor } from './app'
 
 const MENU_POLL_TIMEOUT_MS = 8000
 const SETTLE_PAUSE_MS = 500
+// Longer than the app waits after a submitted line before it looks at the terminal's programs.
+const SEEN_CHECK_PAUSE_MS = 2500
 const EXPECTED_HOOK_COUNT = 10
+const FIRST_SESSION_ID = 'pty-1'
+const SLEEP_PROGRAM = '/bin/sleep'
 
 const STATUS_NOT_SET_UP = 'Not set up'
 const STATUS_SET_UP = 'Set up'
@@ -95,6 +108,32 @@ async function untilBanners(app: App, description: string, expected: string[]): 
     },
     MENU_POLL_TIMEOUT_MS
   )
+}
+
+async function runOrdinaryCommand(app: App, runDir: string): Promise<void> {
+  const ready = join(runDir, 'ready')
+  await app.runInPane(FIRST_SESSION_ID, `touch ${ready}`)
+  await pollFor(
+    'the shell to take commands',
+    async () => {
+      if (!existsSync(ready)) {
+        return null
+      }
+      return ready
+    },
+    MENU_POLL_TIMEOUT_MS
+  )
+}
+
+// Stands in for the agent's CLI: the app only looks at the program's name.
+async function runFakeClaude(app: App, binDir: string): Promise<void> {
+  const runDir = mkdtempSync(join(binDir, 'run-'))
+  await runOrdinaryCommand(app, runDir)
+
+  const fakePath = join(runDir, 'claude')
+  symlinkSync(SLEEP_PROGRAM, fakePath)
+  const command = `${fakePath} 30`
+  await app.runInPane(FIRST_SESSION_ID, command)
 }
 
 async function setUpFromMenu(app: App): Promise<void> {
@@ -207,7 +246,8 @@ describe('the Agents menu', () => {
       await app.emitInMain('did-become-active')
       const after = await untilMenu(app, STATUS_NOT_SET_UP, ACTION_SET_UP)
       expect(after.enabled).toBe(true)
-      await untilBanners(app, 'the offer', [OFFER_TEXT])
+      await app.pause(SETTLE_PAUSE_MS)
+      expect(await app.agentBanners()).toEqual([])
     } finally {
       await app.close()
       rmSync(configDir, { recursive: true, force: true })
@@ -215,12 +255,19 @@ describe('the Agents menu', () => {
     }
   })
 
-  it('offers once and sets up from the strip', async () => {
+  it('offers once the agent runs in a terminal, and sets up from the strip', async () => {
     const configDir = scratchDirectory('config')
     const claudeDir = scratchClaudeDirectory()
+    const binDir = scratchDirectory('bin')
 
     const app = await launchApp({ configDir, mainInspector: true, env: { CLAUDE_CONFIG_DIR: claudeDir } })
     try {
+      await untilMenu(app, STATUS_NOT_SET_UP, ACTION_SET_UP)
+      await runOrdinaryCommand(app, binDir)
+      await app.pause(SEEN_CHECK_PAUSE_MS)
+      expect(await app.agentBanners()).toEqual([])
+
+      await runFakeClaude(app, binDir)
       await untilBanners(app, 'the offer', [OFFER_TEXT])
       await app.clickBannerButton('Set up')
       await untilBanners(app, 'the done line', [DONE_TEXT])
@@ -232,18 +279,21 @@ describe('the Agents menu', () => {
       await app.close()
       rmSync(configDir, { recursive: true, force: true })
       rmSync(claudeDir, { recursive: true, force: true })
+      rmSync(binDir, { recursive: true, force: true })
     }
   })
 
   it('does not offer again after Not now', async () => {
     const configDir = scratchDirectory('config')
     const claudeDir = scratchClaudeDirectory()
+    const binDir = scratchDirectory('bin')
     const env = { CLAUDE_CONFIG_DIR: claudeDir }
 
     const app = await launchApp({ configDir, mainInspector: true, env })
     let relaunched: App | null = null
     let firstClosed = false
     try {
+      await runFakeClaude(app, binDir)
       await untilBanners(app, 'the offer', [OFFER_TEXT])
       await app.clickBannerButton('Not now')
       await untilBanners(app, 'no strip', [])
@@ -253,7 +303,8 @@ describe('the Agents menu', () => {
       relaunched = await launchApp({ configDir, mainInspector: true, env })
       const reading = await untilMenu(relaunched, STATUS_NOT_SET_UP, ACTION_SET_UP)
       expect(reading.enabled).toBe(true)
-      await relaunched.pause(SETTLE_PAUSE_MS)
+      await runFakeClaude(relaunched, binDir)
+      await relaunched.pause(SEEN_CHECK_PAUSE_MS)
       expect(await relaunched.agentBanners()).toEqual([])
     } finally {
       if (relaunched !== null) {
@@ -264,12 +315,14 @@ describe('the Agents menu', () => {
       }
       rmSync(configDir, { recursive: true, force: true })
       rmSync(claudeDir, { recursive: true, force: true })
+      rmSync(binDir, { recursive: true, force: true })
     }
   })
 
   it('stays quiet while turned off, and offers once turned back on', async () => {
     const configDir = scratchDirectory('config')
     const claudeDir = scratchClaudeDirectory()
+    const binDir = scratchDirectory('bin')
     const appSettingsPath = join(configDir, 'settings.json')
     writeFileSync(appSettingsPath, JSON.stringify({ manageAgentHooks: false }))
 
@@ -281,13 +334,15 @@ describe('the Agents menu', () => {
       expect(await app.agentBanners()).toEqual([])
 
       writeFileSync(appSettingsPath, JSON.stringify({ manageAgentHooks: true }))
-      await untilBanners(app, 'the offer', [OFFER_TEXT])
       const turnedOn = await untilMenu(app, STATUS_NOT_SET_UP, ACTION_SET_UP)
       expect(turnedOn.enabled).toBe(true)
+      await runFakeClaude(app, binDir)
+      await untilBanners(app, 'the offer', [OFFER_TEXT])
     } finally {
       await app.close()
       rmSync(configDir, { recursive: true, force: true })
       rmSync(claudeDir, { recursive: true, force: true })
+      rmSync(binDir, { recursive: true, force: true })
     }
   })
 
@@ -295,10 +350,12 @@ describe('the Agents menu', () => {
     const configDir = scratchDirectory('config')
     const claudeDir = scratchClaudeDirectory()
     const recordPath = join(configDir, 'agents.json')
+    const binDir = scratchDirectory('bin')
     mkdirSync(recordPath)
 
     const app = await launchApp({ configDir, mainInspector: true, env: { CLAUDE_CONFIG_DIR: claudeDir } })
     try {
+      await runFakeClaude(app, binDir)
       await untilBanners(app, 'the offer', [OFFER_TEXT])
       await app.clickBannerButton('Not now')
       await pollFor(
@@ -316,6 +373,7 @@ describe('the Agents menu', () => {
       await app.close()
       rmSync(configDir, { recursive: true, force: true })
       rmSync(claudeDir, { recursive: true, force: true })
+      rmSync(binDir, { recursive: true, force: true })
     }
   })
 
@@ -323,10 +381,12 @@ describe('the Agents menu', () => {
     const configDir = scratchDirectory('config')
     const claudeDir = scratchDirectory('claude')
     const settingsPath = join(claudeDir, 'settings.json')
+    const binDir = scratchDirectory('bin')
     writeFileSync(settingsPath, '{ not json')
 
     const app = await launchApp({ configDir, mainInspector: true, env: { CLAUDE_CONFIG_DIR: claudeDir } })
     try {
+      await runFakeClaude(app, binDir)
       await untilBanners(app, 'the offer', [OFFER_TEXT])
       await app.clickBannerButton('Set up')
       const problem = `${settingsPath} could not be read as JSON, so nothing was changed.`
@@ -336,6 +396,7 @@ describe('the Agents menu', () => {
       await app.close()
       rmSync(configDir, { recursive: true, force: true })
       rmSync(claudeDir, { recursive: true, force: true })
+      rmSync(binDir, { recursive: true, force: true })
     }
   })
 })

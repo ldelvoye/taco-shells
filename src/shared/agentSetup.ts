@@ -6,6 +6,8 @@ const STATUS_NOT_SET_UP = 'Not set up'
 const LABEL_SWITCH = 'Switch to Managed Setup'
 const LABEL_REMOVE = 'Remove Setup'
 const NOTE_BUILD_MAY_NOT_WRITE = 'Development builds leave your settings alone'
+// A CLI installed through npm shows in the process list as "node <path>/<name>".
+const SCRIPT_RUNNER = 'node'
 
 /** Who wired an agent's hooks in its settings file: nobody, the app, or the user by hand. */
 export type HookWiring = 'none' | 'managed' | 'byHand'
@@ -117,7 +119,8 @@ export function agentBannerOf(
   productName: string,
   state: AgentSetupState,
   canWrite: boolean,
-  notice: AgentNotice | null
+  notice: AgentNotice | null,
+  seen: boolean
 ): AgentBanner | null {
   if (notice !== null && notice.kind === 'problem') {
     return { harness, kind: 'problem', text: notice.text }
@@ -127,9 +130,36 @@ export function agentBannerOf(
     const text = doneText(productName)
     return { harness, kind: 'done', text }
   }
-  if (state === 'notSetUp' && canWrite) {
+  if (state === 'notSetUp' && canWrite && seen) {
     const text = offerText(productName)
     return { harness, kind: 'offer', text }
   }
   return null
+}
+
+function baseNameOf(word: string): string {
+  const slash = word.lastIndexOf('/')
+  return word.slice(slash + 1)
+}
+
+function runsCommand(commandLine: string, commands: readonly string[]): boolean {
+  const pieces = commandLine.split(/\s+/)
+  const words = pieces.filter((piece) => piece !== '')
+  if (words.length === 0) {
+    return false
+  }
+  const program = baseNameOf(words[0])
+  if (commands.includes(program)) {
+    return true
+  }
+  if (program !== SCRIPT_RUNNER || words.length < 2) {
+    return false
+  }
+  const script = baseNameOf(words[1])
+  return commands.includes(script)
+}
+
+/** Whether one of a terminal's foreground programs is the agent's CLI. */
+export function runsAgent(commandLines: readonly string[], commands: readonly string[]): boolean {
+  return commandLines.some((commandLine) => runsCommand(commandLine, commands))
 }

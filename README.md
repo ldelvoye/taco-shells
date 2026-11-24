@@ -24,7 +24,7 @@ Releases marked as pre-releases are points in the project's history rather than 
 
 ## Setting up Claude Code
 
-The session markers, restoring a conversation, forking one and jumping to the terminal that wants you all rely on Claude Code telling Taco Shells what its sessions are doing, through hooks in Claude Code's `settings.json`. The app adds them for you. When it finds Claude Code installed and not yet set up, a strip at the top of the window offers to do it: **Set up** writes the hook entries, and **Not now** closes the strip for good. The markers start with the next Claude Code session you open.
+The session markers, restoring a conversation, forking one and jumping to the terminal that wants you all rely on Claude Code telling Taco Shells what its sessions are doing, through hooks in Claude Code's `settings.json`. The app adds them for you. The first time you run Claude Code in a Taco Shells terminal without them, a strip at the top of the window offers to do it: **Set up** writes the hook entries, and **Not now** closes the strip for good. The markers start with the next Claude Code session you open.
 
 After that, setup lives in the **Agents** menu in the menu bar. **Claude Code** there shows whether it is set up, and holds one action:
 
