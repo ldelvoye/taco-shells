@@ -6,7 +6,8 @@ import type { AgentBanner } from '@shared/agentSetup'
 import { claude } from '@shared/harness/claude'
 import type { HarnessSetup } from '@shared/harness/types'
 import type { SessionId } from '@shared/ipc'
-import { agentPathsOf, type Agent } from './flow'
+import { agentPathsOf, setUp, type Agent } from './flow'
+import { readAgentRecord } from './record'
 import { AgentSetups, SUBMIT_CHECK_DELAY_MS, type AgentSetupsOptions } from './setups'
 
 const MISSING_HOME = '/nonexistent-home'
@@ -20,6 +21,7 @@ let agentDirectory = ''
 
 interface Sent {
   menuChanges: number
+  bannerPushes: number
   lastBanners: AgentBanner[]
 }
 
@@ -36,7 +38,7 @@ function agentWith(id: string): Agent {
 }
 
 function harness(agents: Agent[], commandLines: readonly string[]): Harnessed {
-  const sent: Sent = { menuChanges: 0, lastBanners: [] }
+  const sent: Sent = { menuChanges: 0, bannerPushes: 0, lastBanners: [] }
   const options: AgentSetupsOptions = {
     agents,
     isManaging: vi.fn(() => true),
@@ -48,6 +50,7 @@ function harness(agents: Agent[], commandLines: readonly string[]): Harnessed {
         sent.menuChanges += 1
       },
       onBannersChanged: (banners) => {
+        sent.bannerPushes += 1
         sent.lastBanners = banners
       }
     }
@@ -133,5 +136,80 @@ describe('agent setups', () => {
 
     const kinds = harnessed.sent.lastBanners.map((banner) => banner.kind)
     expect(kinds).toEqual(['problem'])
+
+    harnessed.setups.dismiss(claude.id)
+
+    expect(harnessed.sent.lastBanners).toEqual([])
+  })
+
+  it('keeps the outcome of an action as a notice until dismissed', () => {
+    const harnessed = harness([agentWith(claude.id)], [])
+    harnessed.setups.refresh()
+
+    harnessed.setups.act(claude.id, 'setUp')
+
+    const kinds = harnessed.sent.lastBanners.map((banner) => banner.kind)
+    expect(kinds).toEqual(['done'])
+
+    harnessed.setups.dismiss(claude.id)
+
+    expect(harnessed.sent.lastBanners).toEqual([])
+  })
+
+  it('pushes banners only when they changed since the last ones sent', () => {
+    const harnessed = harness([agentWith(claude.id)], [])
+
+    harnessed.setups.banners()
+    harnessed.setups.refresh()
+    harnessed.setups.refresh()
+
+    expect(harnessed.sent.bannerPushes).toBe(0)
+  })
+
+  it('replaces a pending check when the same terminal submits again', async () => {
+    vi.useFakeTimers()
+    const harnessed = harness([agentWith(claude.id)], [])
+    harnessed.setups.start()
+
+    harnessed.setups.noteSubmit(TERMINAL)
+    await vi.advanceTimersByTimeAsync(SUBMIT_CHECK_DELAY_MS / 2)
+    harnessed.setups.noteSubmit(TERMINAL)
+    await vi.advanceTimersByTimeAsync(SUBMIT_CHECK_DELAY_MS)
+
+    expect(harnessed.options.foregroundCommands).toHaveBeenCalledTimes(1)
+  })
+
+  it('cancels pending checks when stopped', async () => {
+    vi.useFakeTimers()
+    const harnessed = harness([agentWith(claude.id)], [])
+    harnessed.setups.start()
+
+    harnessed.setups.noteSubmit(TERMINAL)
+    harnessed.setups.stop()
+    await vi.advanceTimersByTimeAsync(SUBMIT_CHECK_DELAY_MS)
+
+    expect(harnessed.options.foregroundCommands).not.toHaveBeenCalled()
+  })
+
+  it('adds the entries a set-up agent is missing when it starts', () => {
+    const agent = agentWith(claude.id)
+    setUp(agent)
+    const settingsText = readFileSync(agent.paths.settingsPath, 'utf8')
+    const settings = JSON.parse(settingsText) as { hooks: Record<string, unknown> }
+    delete settings.hooks.StopFailure
+    const staleSettings = JSON.stringify(settings)
+    writeFileSync(agent.paths.settingsPath, staleSettings)
+    const record = readAgentRecord(appDirectory, claude.id)
+    const written = record.written.filter((key) => !key.startsWith('StopFailure:'))
+    const staleRecord = JSON.stringify({ [claude.id]: { declined: false, written } })
+    writeFileSync(join(appDirectory, RECORD_FILE), staleRecord)
+    const harnessed = harness([agent], [])
+
+    harnessed.setups.start()
+
+    const kept = readAgentRecord(appDirectory, claude.id)
+    expect(kept.written).toHaveLength(setup.entries.length)
+    const after = readFileSync(agent.paths.settingsPath, 'utf8')
+    expect(after).toContain('StopFailure')
   })
 })
