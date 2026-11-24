@@ -1,5 +1,6 @@
-import { app, Menu } from 'electron'
+import { app } from 'electron'
 import { paletteFor } from '@shared/theme'
+import { registerAgents } from './agents'
 import { applicationName } from './channel'
 import { ConfigStore } from './config'
 import { configDirectory } from './config/files'
@@ -8,7 +9,7 @@ import { registerIpc } from './ipc'
 import { PtySessions } from './pty/sessions'
 import { SnapshotStore } from './snapshot/store'
 import { registerUpdates } from './update'
-import { buildApplicationMenu } from './window/menu'
+import { ApplicationMenu } from './window/applicationMenu'
 import { createMainWindow, isBackgroundWindow } from './window/window'
 
 app.setName(applicationName)
@@ -18,6 +19,7 @@ let store: ConfigStore | undefined
 let snapshotStore: SnapshotStore | undefined
 let stopFocus: (() => void) | undefined
 let stopUpdates: (() => void) | undefined
+let stopAgents: (() => void) | undefined
 let flushed = false
 
 app.whenReady().then(() => {
@@ -27,22 +29,26 @@ app.whenReady().then(() => {
     app.dock?.hide()
   }
 
-  Menu.setApplicationMenu(buildApplicationMenu())
+  const applicationMenu = new ApplicationMenu()
+  applicationMenu.show()
 
   const directory = configDirectory()
-  store = new ConfigStore(directory)
-  const initialConfig = store.current()
+  const configStore = new ConfigStore(directory)
+  store = configStore
+  const initialConfig = configStore.current()
   const palette = paletteFor(initialConfig.appearance)
   const window = createMainWindow(palette)
   const snapshots = new SnapshotStore(directory, sessions)
   snapshotStore = snapshots
-  registerIpc(sessions, window, store, snapshots)
-  const registeredUpdates = registerUpdates(window, directory)
+  registerIpc(sessions, window, configStore, snapshots)
+  const registeredUpdates = registerUpdates(window, directory, applicationMenu)
   let checkForUpdate = (): void => undefined
   if (registeredUpdates !== null) {
     stopUpdates = registeredUpdates.stop
     checkForUpdate = registeredUpdates.checkNow
   }
+  const registeredAgents = registerAgents(directory, configStore, applicationMenu)
+  stopAgents = registeredAgents.stop
   stopFocus = registerFocus(sessions, window, directory, snapshots, checkForUpdate)
 
   // Closing the window is the start of a quit, and the snapshot has to stop
@@ -51,7 +57,7 @@ app.whenReady().then(() => {
     snapshots.freeze()
   })
 
-  store.onChange((config) => {
+  configStore.onChange((config) => {
     const nextPalette = paletteFor(config.appearance)
     window.setBackgroundColor(nextPalette.chrome.terminalBackground)
   })
@@ -68,6 +74,9 @@ function stopEverything(): void {
   }
   if (stopUpdates) {
     stopUpdates()
+  }
+  if (stopAgents) {
+    stopAgents()
   }
   if (snapshotStore) {
     snapshotStore.stop()

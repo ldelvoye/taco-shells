@@ -143,6 +143,8 @@ export function agentsOf(
   return agents
 }
 
+// A development build writes only where both directories were pointed elsewhere,
+// so developing the app can never rewrite the real settings of an installed agent.
 export function canWriteFor(setup: HarnessSetup, isStable: boolean, env: NodeJS.ProcessEnv): boolean {
   if (isStable) {
     return true
@@ -235,6 +237,8 @@ export function switchToManaged(agent: Agent): string | null {
   return saveSetUpRecord(agent)
 }
 
+// Adds the entries the record has never written, which a newer version introduced.
+// One it wrote before and no longer finds was deleted by the user, and stays deleted.
 export function keepCurrent(agent: Agent): string | null {
   const record = readAgentRecord(agent.paths.configDirectory, agent.id)
   const missing = agent.setup.entries.filter((entry) => {

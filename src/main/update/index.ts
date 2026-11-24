@@ -1,10 +1,10 @@
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
-import { app, type BrowserWindow, ipcMain, Menu, net } from 'electron'
+import { app, type BrowserWindow, ipcMain, net } from 'electron'
 import { CHANNEL } from '@shared/ipc'
 import { isVersion } from '@shared/version'
 import { isStable } from '../channel'
-import { buildApplicationMenu } from '../window/menu'
+import type { ApplicationMenu } from '../window/applicationMenu'
 import { helperArguments, installedBundlePath } from './apply'
 import { UpdateChecker, type UpdateEvents } from './checker'
 import { updatesDirectory } from './download'
@@ -55,7 +55,8 @@ function sendToWindow(window: BrowserWindow, channel: string, payload: string): 
 /** The update checks and the apply handler, or null when this build does not update. */
 export function registerUpdates(
   window: BrowserWindow,
-  configDirectory: string
+  configDirectory: string,
+  menu: ApplicationMenu
 ): RegisteredUpdates | null {
   let checker: UpdateChecker | null = null
 
@@ -83,8 +84,7 @@ export function registerUpdates(
   const events: UpdateEvents = {
     onReady: (version: string) => {
       sendToWindow(window, CHANNEL.updateReady, version)
-      const menu = buildApplicationMenu({ version, onApply: applyReadyUpdate })
-      Menu.setApplicationMenu(menu)
+      menu.setReadyUpdate({ version, onApply: applyReadyUpdate })
     },
     onProblem: (message: string) => {
       sendToWindow(window, CHANNEL.updateProblem, message)
