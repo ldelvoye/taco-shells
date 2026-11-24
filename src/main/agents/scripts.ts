@@ -1,16 +1,9 @@
 import { chmodSync, copyFileSync, mkdirSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { errorMessage } from '../errorMessage'
 
 const HOOKS_DIRECTORY_NAME = 'hooks'
 const SCRIPT_MODE = 0o755
-
-function errorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message
-  } else {
-    return String(error)
-  }
-}
 
 export function hooksDirectory(configDirectory: string): string {
   return join(configDirectory, HOOKS_DIRECTORY_NAME)

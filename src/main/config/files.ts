@@ -3,6 +3,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { ConfigFile } from '@shared/config'
 import { configDirectoryName } from '../channel'
+import { errorMessage } from '../errorMessage'
 
 const SETTINGS_FILE = 'settings.json'
 const KEYBINDINGS_FILE = 'keybindings.json'
@@ -12,14 +13,6 @@ const WATCH_DEBOUNCE_MS = 100
 export interface ConfigTexts {
   settings: string | null
   keybindings: string | null
-}
-
-function errorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message
-  } else {
-    return String(error)
-  }
 }
 
 function isFileExistsError(error: unknown): boolean {
