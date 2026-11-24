@@ -7,12 +7,15 @@ import {
   removeOtherVersions,
   removeVersion
 } from './download'
-import { parseRelease } from './feed'
+import { deadlineAfter } from './deadline'
+import { parseRelease, type ReleaseInfo } from './feed'
 
 export const FIRST_CHECK_DELAY_MS = 10_000
 export const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
 // Past the 60 seconds GitHub's shared cache can keep serving the previous release.
 const RECHECK_DELAY_MS = 75_000
+// A feed that never answers would hold the check open, and every later check waits on it.
+const FEED_TIMEOUT_MS = 30_000
 
 export interface UpdateEvents {
   onReady(version: string): void
@@ -130,11 +133,21 @@ export class UpdateChecker {
     }
   }
 
+  private async fetchRelease(): Promise<ReleaseInfo | null> {
+    const { feedUrl, fetchImpl } = this.options
+    const deadline = deadlineAfter(FEED_TIMEOUT_MS)
+    try {
+      const response = await fetchImpl(feedUrl, { cache: 'no-store', signal: deadline.signal })
+      const payload: unknown = await response.json()
+      return parseRelease(payload)
+    } finally {
+      deadline.clear()
+    }
+  }
+
   private async fetchAndDownload(): Promise<void> {
-    const { feedUrl, currentVersion, updatesDirectory, fetchImpl, events } = this.options
-    const response = await fetchImpl(feedUrl, { cache: 'no-store' })
-    const payload: unknown = await response.json()
-    const release = parseRelease(payload)
+    const { currentVersion, updatesDirectory, fetchImpl, events } = this.options
+    const release = await this.fetchRelease()
     if (release === null) {
       return
     }
