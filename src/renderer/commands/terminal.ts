@@ -1,3 +1,4 @@
+import type { CommandId } from '@shared/commands'
 import type { SessionId } from '@shared/ipc'
 import { sessionTerminal } from '../terminal/registry'
 import type { CommandRegistry } from './registry'
@@ -15,6 +16,15 @@ const ESC_F = '\x1bf'
 
 // A terminal's usual key for a newline that does not submit the line: option+enter.
 const ESC_CR = '\x1b\r'
+
+const LINE_EDITING_KEYS: ReadonlyArray<readonly [CommandId, string]> = [
+  ['terminal.killLine', CTRL_U],
+  ['terminal.lineStart', CTRL_A],
+  ['terminal.lineEnd', CTRL_E],
+  ['terminal.wordLeft', ESC_B],
+  ['terminal.wordRight', ESC_F],
+  ['terminal.insertNewline', ESC_CR]
+]
 
 export function registerTerminalCommands(registry: CommandRegistry, sessionId: SessionId): void {
   registry.register('terminal.copy', () => {
@@ -57,57 +67,14 @@ export function registerTerminalCommands(registry: CommandRegistry, sessionId: S
     term.clear()
   })
 
-  registry.register('terminal.killLine', () => {
-    const term = sessionTerminal(sessionId)
-    if (!term) {
-      return
-    }
+  for (const [commandId, keys] of LINE_EDITING_KEYS) {
+    registry.register(commandId, () => {
+      const term = sessionTerminal(sessionId)
+      if (!term) {
+        return
+      }
 
-    term.input(CTRL_U)
-  })
-
-  registry.register('terminal.lineStart', () => {
-    const term = sessionTerminal(sessionId)
-    if (!term) {
-      return
-    }
-
-    term.input(CTRL_A)
-  })
-
-  registry.register('terminal.lineEnd', () => {
-    const term = sessionTerminal(sessionId)
-    if (!term) {
-      return
-    }
-
-    term.input(CTRL_E)
-  })
-
-  registry.register('terminal.wordLeft', () => {
-    const term = sessionTerminal(sessionId)
-    if (!term) {
-      return
-    }
-
-    term.input(ESC_B)
-  })
-
-  registry.register('terminal.wordRight', () => {
-    const term = sessionTerminal(sessionId)
-    if (!term) {
-      return
-    }
-
-    term.input(ESC_F)
-  })
-
-  registry.register('terminal.insertNewline', () => {
-    const term = sessionTerminal(sessionId)
-    if (!term) {
-      return
-    }
-
-    term.input(ESC_CR)
-  })
+      term.input(keys)
+    })
+  }
 }
