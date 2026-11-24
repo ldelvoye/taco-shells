@@ -162,19 +162,22 @@ async function capture(sceneName: string, scene: Scene, directory: string): Prom
     acknowledge()
   })
 
-  await app.cdp('Page.startScreencast', {
-    format: 'jpeg',
-    quality: JPEG_QUALITY,
-    maxWidth: WIDTH * 2,
-    maxHeight: HEIGHT * 2,
-    everyNthFrame: 1
-  })
+  try {
+    await app.cdp('Page.startScreencast', {
+      format: 'jpeg',
+      quality: JPEG_QUALITY,
+      maxWidth: WIDTH * 2,
+      maxHeight: HEIGHT * 2,
+      everyNthFrame: 1
+    })
 
-  await scene.take(app)
+    await scene.take(app)
 
-  await app.cdp('Page.stopScreencast')
-  await app.close()
-  await rm(state, { recursive: true, force: true })
+    await app.cdp('Page.stopScreencast')
+  } finally {
+    await app.close()
+    await rm(state, { recursive: true, force: true })
+  }
 
   if (frames.length === 0) {
     throw new Error('the screencast produced no frames')
