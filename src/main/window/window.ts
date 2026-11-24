@@ -36,6 +36,18 @@ export function createMainWindow(palette: Palette): BrowserWindow {
     window.show()
   })
 
+  // The window only ever shows the app: a dropped file or a followed link would replace it and strand every terminal.
+  // Reloading the page it is already on stays allowed: the dev server does that after an edit.
+  window.webContents.on('will-navigate', (event, url) => {
+    const isReload = url === window.webContents.getURL()
+    if (!isReload) {
+      event.preventDefault()
+    }
+  })
+  window.webContents.setWindowOpenHandler(() => {
+    return { action: 'deny' }
+  })
+
   const devServerUrl = process.env.ELECTRON_RENDERER_URL
   if (devServerUrl) {
     void window.loadURL(devServerUrl)
