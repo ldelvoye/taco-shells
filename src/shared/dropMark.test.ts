@@ -87,10 +87,12 @@ describe('sameDrop', () => {
   it('compares drops by what they would do', () => {
     const into: Drop = { kind: 'into', group: 'a', slot: 1 }
     const sameInto: Drop = { kind: 'into', group: 'a', slot: 1 }
+    const otherSlot: Drop = { kind: 'into', group: 'a', slot: 2 }
 
     expect(sameDrop(between(2, null), between(2, 't'))).toBe(false)
     expect(sameDrop(between(2, 't'), between(2, 't'))).toBe(true)
     expect(sameDrop(into, sameInto)).toBe(true)
+    expect(sameDrop(into, otherSlot)).toBe(false)
     expect(sameDrop(between(1, null), into)).toBe(false)
     expect(sameDrop(null, null)).toBe(true)
     expect(sameDrop(null, into)).toBe(false)
