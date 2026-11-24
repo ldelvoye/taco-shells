@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest'
 
-import type { Keymap } from './keys'
-import { codeToKey, formatChord, parseChord, resolveKeymap } from './keys'
+import type { KeyStroke, Keymap } from './keys'
+import { codeToKey, commandForKeyStroke, formatChord, parseChord, resolveKeymap } from './keys'
+
+const BARE_STROKE: KeyStroke = {
+  code: '',
+  metaKey: false,
+  ctrlKey: false,
+  altKey: false,
+  shiftKey: false
+}
 
 describe('formatChord', () => {
   it('canonicalises differently-spelled chords to the same string', () => {
@@ -65,5 +73,19 @@ describe('resolveKeymap', () => {
     expect(resolution.bindings.get('cmd+c')).toBe('terminal.copy')
     expect(resolution.bindings.size).toBe(1)
     expect(resolution.problems).toHaveLength(2)
+  })
+})
+
+describe('commandForKeyStroke', () => {
+  it('resolves cmd+opt+digit by the physical key', () => {
+    const keymap: Keymap = { 'cmd+opt+1': 'terminal.colorRed', 'cmd+opt+6': 'terminal.colorPurple' }
+    const { bindings } = resolveKeymap(keymap)
+    const cmdOpt1: KeyStroke = { ...BARE_STROKE, code: 'Digit1', metaKey: true, altKey: true }
+    const cmdOpt6: KeyStroke = { ...BARE_STROKE, code: 'Digit6', metaKey: true, altKey: true }
+    const cmdOnly1: KeyStroke = { ...BARE_STROKE, code: 'Digit1', metaKey: true }
+
+    expect(commandForKeyStroke(bindings, cmdOpt1)).toBe('terminal.colorRed')
+    expect(commandForKeyStroke(bindings, cmdOpt6)).toBe('terminal.colorPurple')
+    expect(commandForKeyStroke(bindings, cmdOnly1)).toBeNull()
   })
 })

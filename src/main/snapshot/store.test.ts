@@ -122,10 +122,11 @@ describe('SnapshotStore Claude sessions', () => {
     expect(agentInFile()).toBeNull()
   })
 
-  it('ignores an end after freeze, and flushAtQuit still writes the entry', async () => {
+  it('ignores an end and a pty exit after freeze, and flushAtQuit still writes the entry', async () => {
     store.recordAgentStart(PANE_ID, SESSION_A)
     store.freeze()
     store.recordAgentEnd(PANE_ID, 'claude',SESSION_A.sessionId)
+    exitListener({ id: PANE_ID, exitCode: 0 })
     await store.flushAtQuit()
 
     const snapshot = readSnapshot(directory)
