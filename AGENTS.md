@@ -13,7 +13,7 @@ src/protocol/   every type that crosses between the window, the workspace and th
 src/rules/      pure functions over those types: drops, names, row summaries
 src/settings/   settings, themes, key bindings and commands
 src/agents/     what the app knows about each coding agent
-src/runtime/    the ptys: sessions, working directories, foreground programs
+src/runtime/    the ptys, in a process of their own: sessions, working directories, foreground programs
 src/workspace/  the arrangement and its reducer, opening and closing terminals, agent sessions, attention, and the save file
 src/app/        the Electron side: services, the window host, and the preload bridge
 src/window/     React: the sidebar, panes, and the terminal views
@@ -29,6 +29,8 @@ A package may import only what `walls/areas.ts` allows, and `npm test` fails on 
 **The arrangement of terminals is not the window's to change.** It lives in `src/workspace/` in the main process; the window sends a `WorkspaceRequest` for each thing the user does and draws the `DrawnState` it is sent. Keyboard focus is the one thing the window moves first: `src/window/workspace/link.ts` lays its own focus move over the workspace's state until the workspace has applied it.
 
 **The window never starts a shell.** It asks the workspace for a terminal, a split, a fork or a close; the workspace names the terminal, places it and tells the runtime to open it through the `Runtime` interface in `src/protocol/runtime.ts`. Restore runs in the main process at launch, before the window asks for anything.
+
+**The shells run in their own process.** `out/main/runtime.js` is started with `utilityProcess`; the main process talks to it through `Runtime` (`src/app/host/runtime/proxy.ts`), and the window's keystrokes and output go to it directly over a message port the preload asks for. If it dies, the terminals go and the window says why; nothing restarts.
 
 ## Commands
 
@@ -111,7 +113,7 @@ v0.2.2     cleanup, then promoted
 
 **"Which release is stable" is a GitHub flag, not a file.** A prerelease is excluded from Latest and from `/releases/latest`, so that endpoint is the stable download link and needs nothing maintaining it.
 
-**CI never packages a bundle.** `.github/workflows/main.yml` runs `npm ci`, `npm test`, `npm run e2e` — no electron-builder, so no Homebrew librsvg and no signing. That is what keeps a push cheap. The runner is macOS because the e2e suite launches a real Electron binary whose ptys run login shells, and `cwd.ts` shells out to `lsof`.
+**CI never packages a bundle.** `.github/workflows/main.yml` runs `npm ci`, `npm test`, `npm run e2e` — no electron-builder, so no Homebrew librsvg and no signing. That is what keeps a push cheap. The packaged app's runtime script path is checked by hand, since a path that works from `out/` can fail from inside `app.asar`: `npm run package`, then run `dist.noindex/mac-arm64/Taco Shells Dev.app/Contents/MacOS/Taco Shells Dev` with `TACO_SHELLS_CONFIG_DIR` set to an empty folder and see that a terminal opens. Today the script runs from inside `app.asar` with nothing unpacked but `node-pty`. The runner is macOS because the e2e suite launches a real Electron binary whose ptys run login shells, and `cwd.ts` shells out to `lsof`.
 
 ## Traps
 

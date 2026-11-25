@@ -29,7 +29,8 @@ function stateWith(activeGroup: number, focusCount: number): DrawnState {
     refocus: 2,
     focusCount,
     agents: {},
-    defaultAgentName: 'Claude'
+    defaultAgentName: 'Claude',
+    problem: null
   }
 }
 

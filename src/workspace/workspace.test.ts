@@ -412,6 +412,24 @@ describe('Workspace', () => {
     expect(emptied.count).toBe(1)
   })
 
+  it('when the runtime dies every terminal goes, the window is told why, and nothing closes or reopens', () => {
+    const { workspace, runtime, emptied } = opened(2)
+    const openedBefore = runtime.opened.length
+    const closedBefore = runtime.closed.length
+
+    workspace.runtimeDied('code 9')
+
+    const drawn = workspace.drawn()
+    expect(drawn.workspace?.groups.length).toBe(0)
+    expect(drawn.problem).toContain('code 9')
+    expect(emptied.count).toBe(0)
+    expect(runtime.closed.length).toBe(closedBefore)
+
+    const reply = workspace.request({ type: 'openTerminal', file: null })
+    expect(reply.ok).toBe(false)
+    expect(runtime.opened.length).toBe(openedBefore)
+  })
+
   it('hands the keyboard back when a hook asks for a terminal that is already active', () => {
     const { workspace, states } = opened(2)
     const before = workspace.drawn()

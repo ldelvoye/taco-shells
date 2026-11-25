@@ -14,6 +14,7 @@ export interface WorkspaceViewState {
   waiting: SessionId | null
   agents: Record<string, AgentLabel>
   defaultAgentName: string
+  problem: string | null
 }
 
 export interface WorkspaceView {
@@ -76,7 +77,8 @@ export function useWorkspace(): WorkspaceView {
     agentRows,
     waiting: drawn.waiting,
     agents: drawn.agents,
-    defaultAgentName: drawn.defaultAgentName
+    defaultAgentName: drawn.defaultAgentName,
+    problem: drawn.problem
   }
   return { state, operations }
 }

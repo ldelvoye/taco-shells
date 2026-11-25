@@ -110,9 +110,12 @@ export function App(): JSX.Element {
   const groups = shownWorkspace.groups
   const activeGroupIndex = shownWorkspace.activeGroup
 
-  let problems = config.problems
+  const problems = [...config.problems]
   if (focusProblem) {
-    problems = [...config.problems, focusProblem]
+    problems.push(focusProblem)
+  }
+  if (state.problem) {
+    problems.push(state.problem)
   }
 
   let sidebar = null

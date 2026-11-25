@@ -18,7 +18,14 @@ if (process.env.TACO_SHELLS_CHANNEL === 'stable') {
 export default defineConfig({
   main: {
     resolve: { tsconfigPaths: true },
-    build: { lib: { entry: resolve('src/app/host/index.ts') } },
+    build: {
+      lib: {
+        entry: {
+          index: resolve('src/app/host/index.ts'),
+          runtime: resolve('src/runtime/main.ts')
+        }
+      }
+    },
     define: { __CHANNEL__: JSON.stringify(channel) }
   },
   preload: {

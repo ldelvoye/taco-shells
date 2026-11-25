@@ -9,7 +9,54 @@ import {
   type SessionId,
   type TacoShellsApi
 } from '@protocol/ipc'
+import type { TerminalInput, TerminalOutput } from '@protocol/runtimeMessages'
 import type { DrawnState, WorkspaceRequest } from '@protocol/workspace'
+
+const dataListeners = new Set<(event: PtyDataEvent) => void>()
+const exitListeners = new Set<(event: PtyExitEvent) => void>()
+const queuedInput: TerminalInput[] = []
+let runtimePort: MessagePort | null = null
+
+function sendInput(input: TerminalInput): void {
+  if (runtimePort === null) {
+    queuedInput.push(input)
+    return
+  }
+  runtimePort.postMessage(input)
+}
+
+function listenOn(port: MessagePort): void {
+  port.onmessage = (message) => {
+    const output: TerminalOutput = message.data
+    if (output.type === 'data') {
+      for (const listener of dataListeners) {
+        listener(output.event)
+      }
+      return
+    }
+    for (const listener of exitListeners) {
+      listener(output.event)
+    }
+  }
+}
+
+function addListener<T>(listeners: Set<(event: T) => void>, listener: (event: T) => void): () => void {
+  listeners.add(listener)
+  return () => {
+    listeners.delete(listener)
+  }
+}
+
+ipcRenderer.on(CHANNEL.runtimePort, (event) => {
+  const port = event.ports[0]
+  runtimePort = port
+  listenOn(port)
+  for (const input of queuedInput) {
+    port.postMessage(input)
+  }
+  queuedInput.length = 0
+})
+ipcRenderer.send(CHANNEL.runtimeConnect)
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
   const forward = (_event: IpcRendererEvent, payload: T): void => {
@@ -23,11 +70,17 @@ function subscribe<T>(channel: string, listener: (payload: T) => void): () => vo
 
 const api: TacoShellsApi = {
   pty: {
-    write: (id: SessionId, data: string) => ipcRenderer.send(CHANNEL.ptyWrite, id, data),
-    resize: (id: SessionId, size: PtySize) => ipcRenderer.send(CHANNEL.ptyResize, id, size),
-    listening: () => ipcRenderer.send(CHANNEL.ptyListening),
-    onData: (listener: (event: PtyDataEvent) => void) => subscribe(CHANNEL.ptyData, listener),
-    onExit: (listener: (event: PtyExitEvent) => void) => subscribe(CHANNEL.ptyExit, listener)
+    write: (id: SessionId, data: string) => {
+      sendInput({ type: 'write', id, data })
+    },
+    resize: (id: SessionId, size: PtySize) => {
+      sendInput({ type: 'resize', id, size })
+    },
+    listening: () => {
+      sendInput({ type: 'listening' })
+    },
+    onData: (listener: (event: PtyDataEvent) => void) => addListener(dataListeners, listener),
+    onExit: (listener: (event: PtyExitEvent) => void) => addListener(exitListeners, listener)
   },
   clipboard: {
     read: () => ipcRenderer.invoke(CHANNEL.clipboardRead),
