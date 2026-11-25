@@ -184,16 +184,18 @@ describe('RuntimeServer', () => {
     send({ type: 'ask', ask: 7, query: { kind: 'directoryOf', id: 't2' } })
     send({ type: 'ask', ask: 3, query: { kind: 'directoryOf', id: 't1' } })
     await nextReports(4)
+    send({ type: 'ask', ask: 9, query: { kind: 'terminalForPids', pids: [1] } })
+    await nextReports(5)
 
     const answers = reports.filter((report) => report.type === 'answer')
-    expect(answers).toHaveLength(2)
+    expect(answers).toHaveLength(3)
     expect(answers).toContainEqual({ type: 'answer', ask: 7, value: homedir() })
     expect(answers).toContainEqual({ type: 'answer', ask: 3, value: tmpdir() })
+    expect(answers).toContainEqual({ type: 'answer', ask: 9, value: 't1' })
   })
 
   it('holds output until the window is listening, then sends it in order, the exit last', async () => {
     const { send, sessions, server, ptys, nextReports } = served()
-    const output = windowOf(server)
 
     send({ type: 'open', start: startOf('t1') })
     send({ type: 'open', start: startOf('t2') })
@@ -202,6 +204,7 @@ describe('RuntimeServer', () => {
     const firstData = nextData(sessions)
     ptys[0].fireData('a')
     await firstData
+    const output = windowOf(server)
     const secondData = nextData(sessions)
     ptys[1].fireData('b')
     await secondData
@@ -222,20 +225,39 @@ describe('RuntimeServer', () => {
     expect(output.outputs[3]).toEqual({ type: 'data', event: { id: 't2', data: 'c' } })
   })
 
-  it('sends output to the newest window connection only', async () => {
+  it('takes typing and a new size from the window', async () => {
+    const { send, server, ptys, nextReports } = served()
+    const page = windowOf(server)
+
+    send({ type: 'open', start: startOf('t1') })
+    await nextReports(1)
+    page.send({ type: 'write', id: 't1', data: 'ls' })
+    page.send({ type: 'resize', id: 't1', size: { cols: 100, rows: 30 } })
+
+    expect(ptys[0].written).toEqual(['ls'])
+    expect(ptys[0].resized).toEqual([[100, 30]])
+  })
+
+  it('a second window connection replaces the first, and starts by holding output again', async () => {
     const { send, sessions, server, ptys, nextReports } = served()
     const older = windowOf(server)
-    const newer = windowOf(server)
 
     send({ type: 'open', start: startOf('t1') })
     await nextReports(1)
     older.send({ type: 'listening' })
-    newer.send({ type: 'listening' })
+    const newer = windowOf(server)
 
     const data = nextData(sessions)
     ptys[0].fireData('x')
     await data
+    older.send({ type: 'listening' })
+    older.send({ type: 'write', id: 't1', data: 'stale' })
 
+    expect(older.outputs).toEqual([])
+    expect(newer.outputs).toEqual([])
+    expect(ptys[0].written).toEqual([])
+
+    newer.send({ type: 'listening' })
     expect(older.outputs).toEqual([])
     expect(newer.outputs).toEqual([{ type: 'data', event: { id: 't1', data: 'x' } }])
   })
