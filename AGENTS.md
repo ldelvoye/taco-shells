@@ -9,14 +9,22 @@ Nothing here is a style guide. It is the handful of mechanics that are not obvio
 Electron, TypeScript throughout, React for the window chrome only. The terminal itself is `@xterm/xterm` over `node-pty`; none of it is our own emulation.
 
 ```
-src/main/       the Electron main process: windows, ptys, config, the menu
-src/preload/    the one bridge, exposed on window.tacoShells
-src/renderer/   React: the sidebar, panes, and the terminal views
-src/shared/     types and pure logic both sides import
+src/protocol/   every type sent between the window and the backend, and the compiler check that they are plain data
+src/rules/      pure functions over those types: drops, names, row summaries
+src/settings/   settings, themes, key bindings and commands
+src/agents/     what the app knows about each coding agent
+src/runtime/    the ptys: sessions, working directories, foreground programs
+src/workspace/  the workspace reducer, attention, and the save file
+src/app/        the Electron side: services, the window host, and the preload bridge
+src/window/     React: the sidebar, panes, and the terminal views
+src/testing/    helpers for tests
+walls/          the import checker and the list of imports that cross a wall today
 hooks/          the scripts an agent's hooks run, shipped beside the app as files
 e2e/            drives the real app over the Chrome DevTools protocol
 scripts/        build, install and release commands
 ```
+
+A package may import only what `walls/areas.ts` allows, and `npm test` fails on anything else. Imports across packages use the package's alias; imports inside one are relative. The crossings that exist today are in `walls/holes.ts`, each with the milestone that closes it; that list only shrinks.
 
 ## Commands
 
@@ -53,15 +61,15 @@ Each config directory holds `settings.json`, `keybindings.json` and `focus-port`
 
 **The version says nothing about which is which.** `0.2.2` is the same number whether or not it has been promoted, so the channel comes from `TACO_SHELLS_CHANNEL`, read in `scripts/identity.cjs`. **Development is the default** and stable has to be asked for: `install-app`, `npm run dev` and a bare `electron-builder` all produce the dev app, and only `npm run promote` sets the variable. The safety is in the direction of the default — anything that forgets gives you a dev build, never a replacement for the app in daily use.
 
-**It is baked at build time, not read at startup.** `electron.vite.config.ts` defines `__CHANNEL__`, and `src/main/channel.ts` compares it once at module scope, so the bundler folds the comparison and drops the losing channel. The dev bundle holds only the dev name and directory, the stable bundle only the stable pair, and `e2e/bundle.test.ts` checks the dev half of that on every e2e run.
+**It is baked at build time, not read at startup.** `electron.vite.config.ts` defines `__CHANNEL__`, and `src/app/channel.ts` compares it once at module scope, so the bundler folds the comparison and drops the losing channel. The dev bundle holds only the dev name and directory, the stable bundle only the stable pair, and `e2e/bundle.test.ts` checks the dev half of that on every e2e run.
 
 **The bundle ids differ, and that matters more than the names.** Two bundles claiming one id leaves LaunchServices picking between them.
 
-`scripts/identity.cjs` is CommonJS because `electron-builder.js` loads as CommonJS and both it and the ESM scripts must read one set of identities. `src/main/channel.ts` states the names and config directories a second time for the running app, since a source compiled into the bundle cannot import the build's config. Those two are the only copies.
+`scripts/identity.cjs` is CommonJS because `electron-builder.js` loads as CommonJS and both it and the ESM scripts must read one set of identities. `src/app/channel.ts` states the names and config directories a second time for the running app, since a source compiled into the bundle cannot import the build's config. Those two are the only copies.
 
 ## Setting up an agent's hooks
 
-The app writes an agent's hook entries into the agent's own settings file, from the Agents menu and from a one-time offer in the window. The offer waits until the agent is seen running in a terminal: on a submitted line, `src/main/pty/foreground.ts` reads that terminal's foreground programs and matches them against the setup's `commands`. `src/shared/harness/claude/setup.ts` is the source of truth for the entries Claude Code needs; the README does not list them. The scripts in `hooks/` ship as real files (`extraResources` in `electron-builder.js`) and are copied into the config directory's `hooks/` on every launch, so each app runs its own copy.
+The app writes an agent's hook entries into the agent's own settings file, from the Agents menu and from a one-time offer in the window. The offer waits until the agent is seen running in a terminal: on a submitted line, `src/runtime/foreground.ts` reads that terminal's foreground programs and matches them against the setup's `commands`. `src/agents/claude/setup.ts` is the source of truth for the entries Claude Code needs; the README does not list them. The scripts in `hooks/` ship as real files (`extraResources` in `electron-builder.js`) and are copied into the config directory's `hooks/` on every launch, so each app runs its own copy.
 
 **Only the stable app writes to real settings.** A dev build shows the menu with its action greyed out, a line under it saying why, and never offers. It writes only when both `TACO_SHELLS_CONFIG_DIR` and `CLAUDE_CONFIG_DIR` are set, which is how the e2e suite drives the flow, and how to try it by hand without touching your own settings:
 
