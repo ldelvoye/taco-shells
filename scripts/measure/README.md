@@ -29,7 +29,7 @@ The command builds the app first, so it always measures the code in the working 
 
 ## Reading the numbers
 
-Memory rows list each process as Electron reports it: its resident memory in megabytes. `Browser` is the main process, `Tab` is the window, and `GPU` is the process that draws for it. Memory shared between processes is counted in each of them, so the total is more than the machine really spends. The window's JavaScript heap is what the page itself holds, read after a garbage collection.
+Memory rows list each process as Electron reports it: its resident memory in megabytes. `Browser` is the main process, `Tab` is the window, `GPU` is the process that draws for it, and `Terminal runtime` is the process the shells run in. Memory shared between processes is counted in each of them, so the total is more than the machine really spends. The window's JavaScript heap is what the page itself holds, read after a garbage collection.
 
 Typing delay runs from a key press to the first frame drawn after its echo arrived. The key goes in through Chromium's own input path, as a real one does, about ten times a second. A `cat` is running in the terminal being typed in, so the echo comes from the terminal driver and not from the shell.
 
@@ -97,5 +97,62 @@ The two runs differ most while printing: how fast `yes` gets its output through 
 | Backlog after printing stopped (ms) | 54.5 | 10.5 |
 | Switch, every entry in turn: median / 95th / worst (ms) | 6.2 / 7.2 / 8.1 | 5.8 / 7.5 / 8.0 |
 | Switch, between two entries: median / 95th / worst (ms) | 6.2 / 7.1 / 7.8 | 5.5 / 6.1 / 8.1 |
+| Graphics contexts lost | 8 | 8 |
+| Terminals on the slow renderer | 8 | 8 |
+
+### After the runtime moved to its own process
+
+Two runs on 2026-11-25, same machine and settings, with the shells in the app's terminal process and their output going straight from it to the window. Both runs printed at about 90 MB/s, so they compare with run 1 above.
+
+What they show:
+
+- **Typing, frames, switching and the main process's timer lag are unchanged.** A key's echo while four terminals print still takes about 100 ms at the median and 115 ms at the 95th percentile.
+- **There is a new process, `Terminal runtime`**, at about 70 MB idle and up to 180 MB while printing.
+- **The main process no longer carries terminal output.** While four terminals print it holds about 140 MB, where the build just before this one held 284 MB.
+- **The window's memory peaks higher while terminals print flat out.** Right after the printing stage it is at about 2,400 MB, against 1,900 MB on the build just before this one and 1,850 MB in run 1 above. By the end of the run it is back to about 2,020 MB. The likely cause, not confirmed: output that the window has not got to yet used to wait in the main process, and now waits in the window's own process. Nothing slows a shell down for the window yet.
+- The 8 lost graphics contexts are as before. That is for the step that stops the window holding every terminal.
+
+| Measure | Run 1 | Run 2 |
+| --- | --- | --- |
+| Memory, one terminal: Browser | 160 | 160 |
+| Memory, one terminal: GPU | 97 | 99 |
+| Memory, one terminal: Network Service | 48 | 48 |
+| Memory, one terminal: Terminal runtime | 67 | 67 |
+| Memory, one terminal: Tab | 140 | 140 |
+| Memory, one terminal: total | 512 | 514 |
+| Memory, one terminal: window's JavaScript heap | 11 | 11 |
+| Memory, 24 terminals, each shown once: Browser | 162 | 162 |
+| Memory, 24 terminals, each shown once: GPU | 115 | 116 |
+| Memory, 24 terminals, each shown once: Network Service | 48 | 48 |
+| Memory, 24 terminals, each shown once: Terminal runtime | 71 | 71 |
+| Memory, 24 terminals, each shown once: Tab | 190 | 189 |
+| Memory, 24 terminals, each shown once: total | 585 | 587 |
+| Memory, 24 terminals, each shown once: window's JavaScript heap | 11 | 11 |
+| Memory, 8 terminals with a full scrollback: Browser | 138 | 149 |
+| Memory, 8 terminals with a full scrollback: GPU | 87 | 101 |
+| Memory, 8 terminals with a full scrollback: Network Service | 41 | 42 |
+| Memory, 8 terminals with a full scrollback: Terminal runtime | 181 | 174 |
+| Memory, 8 terminals with a full scrollback: Tab | 2443 | 2322 |
+| Memory, 8 terminals with a full scrollback: total | 2890 | 2788 |
+| Memory, 8 terminals with a full scrollback: window's JavaScript heap | 11 | 11 |
+| Memory, at the end: Browser | 142 | 153 |
+| Memory, at the end: GPU | 98 | 107 |
+| Memory, at the end: Network Service | 41 | 42 |
+| Memory, at the end: Terminal runtime | 136 | 174 |
+| Memory, at the end: Tab | 2020 | 2023 |
+| Memory, at the end: total | 2437 | 2499 |
+| Memory, at the end: window's JavaScript heap | 11 | 11 |
+| Typing delay, nothing printing: median / 95th / worst (ms) | 10.1 / 10.8 / 11.0 | 10.0 / 11.0 / 11.1 |
+| Typing delay, while printing: median / 95th / worst (ms) | 100.8 / 115.4 / 141.2 | 101.5 / 115.6 / 117.2 |
+| Main process timer lag, nothing printing: median / 95th / worst (ms) | 0.7 / 0.8 / 2.2 | 0.7 / 0.8 / 3.2 |
+| Main process timer lag, while printing: median / 95th / worst (ms) | 0.7 / 0.8 / 4.8 | 0.7 / 0.8 / 3.1 |
+| Frame gap, nothing printing: median / 95th / worst (ms) | 4.2 / 4.4 / 4.8 | 4.2 / 4.4 / 4.7 |
+| Frame gap, while printing: median / 95th / worst (ms) | 41.7 / 54.2 / 66.7 | 41.7 / 54.2 / 62.5 |
+| Long tasks over 50 ms, nothing printing | 0 | 0 |
+| Long tasks over 50 ms, while printing | 0 | 0 |
+| Output reaching the window while printing (MB/s) | 90.4 | 93.6 |
+| Backlog after printing stopped (ms) | 58.8 | 112.3 |
+| Switch, every entry in turn: median / 95th / worst (ms) | 6.3 / 7.3 / 7.6 | 6.3 / 7.0 / 7.2 |
+| Switch, between two entries: median / 95th / worst (ms) | 6.3 / 6.8 / 7.4 | 6.3 / 7.0 / 14.3 |
 | Graphics contexts lost | 8 | 8 |
 | Terminals on the slow renderer | 8 | 8 |
