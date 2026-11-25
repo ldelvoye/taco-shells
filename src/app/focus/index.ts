@@ -12,14 +12,14 @@ export interface FocusEvents {
   onAttention(id: SessionId): void
   onAgentSignal(event: AgentSignalEvent): void
   onUnavailable(): void
-  onUpdateCheck(): void
 }
 
 export function startFocus(
   sessions: PtySessions,
   directory: string,
   snapshotStore: SnapshotStore,
-  events: FocusEvents
+  events: FocusEvents,
+  onUpdateCheck: () => void
 ): Service {
   const portFilePath = focusPortPath(directory)
 
@@ -50,9 +50,7 @@ export function startFocus(
         const event: AgentSignalEvent = { id, harness, sessionId, signal }
         events.onAgentSignal(event)
       },
-      onUpdateCheck: () => {
-        events.onUpdateCheck()
-      },
+      onUpdateCheck,
       onUnavailable: () => {
         events.onUnavailable()
       }

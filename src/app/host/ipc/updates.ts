@@ -15,6 +15,7 @@ export function bridgeUpdates(
       link.send(CHANNEL.updateReady, version)
       menu.setReadyUpdate({
         version,
+        // Runs on a menu click, long after start has returned and `updates` is set.
         onApply: () => {
           updates.applyReady()
         }

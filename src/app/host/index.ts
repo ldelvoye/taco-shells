@@ -10,10 +10,10 @@ import { configDirectory } from '../config/files'
 import { startFocus } from '../focus'
 import type { Service } from '../service'
 import { startUpdates, type UpdateHost } from '../update'
+import { registerIpc } from './ipc'
 import { bridgeAgents } from './ipc/agents'
 import { bridgeFocus } from './ipc/focus'
 import { registerHostApi } from './ipc/hostApi'
-import { registerIpc } from './ipc'
 import { bridgeUpdates } from './ipc/updates'
 import { nativeSystemTheme } from './systemTheme'
 import { ApplicationMenu } from './window/applicationMenu'
@@ -70,15 +70,11 @@ app.whenReady().then(() => {
     return startAgents(directory, configStore, sessions, agentsHost, events)
   })
 
-  const focus = bridgeFocus(
-    link,
-    () => {
+  const focus = bridgeFocus(link, (events) => {
+    return startFocus(sessions, directory, snapshots, events, () => {
       updates.checkNow()
-    },
-    (events) => {
-      return startFocus(sessions, directory, snapshots, events)
-    }
-  )
+    })
+  })
   services.push(configStore, focus, updates, agents, snapshots)
 
   whenTheWindowCloses(link, snapshots)
@@ -89,8 +85,7 @@ app.whenReady().then(() => {
   })
 })
 
-// The one place that decides what the window closing means. Today it ends the
-// app; keeping terminals alive with no window would change only this function.
+// The one place that decides what the window closing means: it ends the app.
 function whenTheWindowCloses(link: WindowLink, snapshots: SnapshotStore): void {
   // Closing the window is the start of a quit, and the snapshot has to stop
   // changing from that moment, before the ptys go down with the process.
