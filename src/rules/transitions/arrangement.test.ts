@@ -3,13 +3,9 @@ import { describe, expect, it } from 'vitest'
 import type { Group, TabGroup, Workspace } from '@protocol/arrangement'
 import { canSplitPane, emptyWorkspace, MIN_PANE_WIDTH } from '../arrangement'
 
+import { activatePane, focusNextGroup, focusNextPane, focusPreviousGroup, focusPreviousPane } from '../focus'
 import {
-  activatePane,
   closePane,
-  focusNextGroup,
-  focusNextPane,
-  focusPreviousGroup,
-  focusPreviousPane,
   forkPane,
   moveDivider,
   renamePane,

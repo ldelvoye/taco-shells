@@ -1,8 +1,8 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
+import { createWorkspaceStore, type WorkspaceStore } from '@workspace/store'
 import { activeSessionOf, type WorkspaceState } from '@workspace/workspaceState'
 import { focusSession } from '../terminal/registry'
 import { createWorkspaceOperations, type WorkspaceOperations } from './operations'
-import { createWorkspaceStore, type WorkspaceStore } from './store'
 
 export interface WorkspaceView {
   state: WorkspaceState

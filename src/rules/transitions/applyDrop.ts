@@ -8,8 +8,8 @@ import type {
 } from '@protocol/arrangement'
 import type { SessionId } from '@protocol/ipc'
 
-import { blockOf, groupHasRoom, locatePane } from '../arrangement'
-import { closePane, settled, spliced, withGroupAt } from './arrangement'
+import { blockOf, groupHasRoom, locatePane, spliced, withGroupAt } from '../arrangement'
+import { closePane, settled } from './arrangement'
 
 type BetweenDrop = Extract<Drop, { kind: 'between' }>
 

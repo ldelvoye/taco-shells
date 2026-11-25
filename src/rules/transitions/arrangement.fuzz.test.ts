@@ -7,15 +7,11 @@ import { MIN_PANE_WIDTH, emptyWorkspace, isHidden } from '../arrangement'
 import { dropFor } from '../drop'
 import type { DropPoint } from '../drop'
 import { applyDrop } from './applyDrop'
+import { activatePane, focusNextGroup, focusNextPane, focusPreviousGroup, focusPreviousPane } from '../focus'
 import {
-  activatePane,
   addGroup,
   addGroupTo,
   closePane,
-  focusNextGroup,
-  focusNextPane,
-  focusPreviousGroup,
-  focusPreviousPane,
   forkPane,
   moveDivider,
   renamePane,

@@ -4,7 +4,7 @@ import {
   reduceWorkspaceState,
   type WorkspaceEvent,
   type WorkspaceState
-} from '@workspace/workspaceState'
+} from './workspaceState'
 
 export interface WorkspaceStore {
   getState(): WorkspaceState
