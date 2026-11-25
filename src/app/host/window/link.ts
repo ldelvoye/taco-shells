@@ -33,7 +33,7 @@ export function linkTo(window: BrowserWindow): WindowLink {
       })
     },
     setBackgroundColor: (color: string) => {
-      // The store keeps running after the window closes, until the snapshot's last write is done.
+      // A config change can still arrive after the window closes, while the snapshot's last write runs.
       if (window.isDestroyed()) {
         return
       }

@@ -51,7 +51,7 @@ function resolveCurrentVersion(appVersion: string): string | null {
   return UNVERSIONED
 }
 
-/** The update checks and the apply handler. In a build that does not update, the check does nothing. */
+/** The update checks and applying a ready update. In a build that does not update, both do nothing. */
 export function startUpdates(configDirectory: string, host: UpdateHost, events: UpdateEvents): UpdateService {
   const feedUrl = resolveFeedUrl()
   const currentVersion = resolveCurrentVersion(host.appVersion)

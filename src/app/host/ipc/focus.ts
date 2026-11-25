@@ -4,11 +4,7 @@ import type { FocusEvents } from '../../focus'
 import type { Service } from '../../service'
 import type { WindowLink } from '../window/link'
 
-export function bridgeFocus(
-  link: WindowLink,
-  onUpdateCheck: () => void,
-  start: (events: FocusEvents) => Service
-): Service {
+export function bridgeFocus(link: WindowLink, start: (events: FocusEvents) => Service): Service {
   const events: FocusEvents = {
     onFocus: (id: SessionId) => {
       link.send(CHANNEL.focusSession, id)
@@ -21,8 +17,7 @@ export function bridgeFocus(
     },
     onUnavailable: () => {
       link.send(CHANNEL.focusUnavailable)
-    },
-    onUpdateCheck
+    }
   }
   const focus = start(events)
 
