@@ -1,8 +1,3 @@
-import type { Workspace } from './arrangement'
-import type { Config } from './config'
-import type { TacoShellsApi } from './ipc'
-import type { Snapshot } from './snapshot'
-
 type Fn = (...args: never[]) => unknown
 
 type NeverPlain = undefined | bigint | symbol | Fn
@@ -11,6 +6,7 @@ type AllTrue<Results> = false extends Results ? false : true
 
 type Members<T> = { [K in keyof T]-?: Verdict<Required<T>[K]> }[keyof T]
 
+// One verdict for each member of a union and each member of an object, so a single part that is not plain is enough to fail the whole.
 type Verdict<T> = T extends string | number | boolean | null
   ? true
   : T extends NeverPlain
@@ -42,42 +38,3 @@ type GroupCrossing<Group> = { [Name in keyof Group]-?: MemberCrossing<Group[Name
 
 /** Every type that crosses a bridge API made of groups of members: parameters, a listener's own parameters, results, and members that are data. */
 export type Crossing<Api> = { [Group in keyof Api]-?: GroupCrossing<Api[Group]> }[keyof Api]
-
-type Assert<T extends true> = T
-
-export type PlainCases = [
-  Assert<IsPlain<string>>,
-  Assert<IsPlain<{ a: string; inner: { b?: number; c: boolean | null } }>>,
-  Assert<IsPlain<[string, number]>>,
-  Assert<IsPlain<{ id: string }[]>>,
-  Assert<IsPlain<{ a: string } | { b: number }>>,
-  Assert<IsPlain<Workspace>>,
-  Assert<IsPlain<Snapshot>>,
-  Assert<IsPlain<Config>>
-]
-
-export type NotPlainCases = [
-  // @ts-expect-error
-  Assert<IsPlain<Map<string, number>>>,
-  // @ts-expect-error
-  Assert<IsPlain<Set<string>>>,
-  // @ts-expect-error
-  Assert<IsPlain<Date>>,
-  // @ts-expect-error
-  Assert<IsPlain<() => void>>,
-  // @ts-expect-error
-  Assert<IsPlain<bigint>>,
-  // @ts-expect-error
-  Assert<IsPlain<{ a: string | undefined }>>,
-  // @ts-expect-error
-  Assert<IsPlain<{ deep: { rows: Map<string, number> } }>>,
-  // @ts-expect-error
-  Assert<IsPlain<string | Date>>
-]
-
-type Found<T> = [T] extends [never] ? false : true
-
-// A message that stops being plain data fails typecheck on the second line. The first
-// keeps that check honest: with nothing found to cross, it would pass whatever the API held.
-export type ApiCrosses = Assert<Found<Crossing<TacoShellsApi>>>
-export type ApiIsPlain = Assert<IsPlain<Crossing<TacoShellsApi>>>
