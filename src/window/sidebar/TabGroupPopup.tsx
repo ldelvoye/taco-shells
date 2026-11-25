@@ -93,6 +93,8 @@ export function TabGroupPopup({
 }: TabGroupPopupProps): JSX.Element {
   const { popup, position } = usePopup(x, y, onClose)
   const field = useRef<HTMLInputElement>(null)
+  // The field holds its own text: a rename comes back from the workspace after
+  // the next key is already typed, and would put the caret and the text back.
   const [text, setText] = useState(name)
 
   function rename(next: string): void {

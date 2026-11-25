@@ -3,13 +3,10 @@ import type { Workspace } from '@protocol/arrangement'
 import type { SessionId } from '@protocol/ipc'
 import type { AgentRows } from '@protocol/rows'
 import type { AgentLabel } from '@protocol/workspace'
+import { activeSessionOf } from '@rules/arrangement'
 import { focusSession } from '../terminal/registry'
 import { createWorkspaceLink, type WorkspaceLink } from './link'
-import {
-  activeSessionOf,
-  createWorkspaceOperations,
-  type WorkspaceOperations
-} from './operations'
+import { createWorkspaceOperations, type WorkspaceOperations } from './operations'
 
 export interface WorkspaceViewState {
   workspace: Workspace | null
@@ -64,7 +61,8 @@ export function useWorkspace(): WorkspaceView {
     focusSession(activeSessionId)
   }, [activeSessionId])
 
-  // A sidebar action can take the keyboard off the active terminal without changing which one is active.
+  // The keyboard can have to go back to the active terminal without the active one changing:
+  // a sidebar action took it away, or the app or a hook asked for the terminal that already has it.
   useEffect(() => {
     if (refocus === 0) {
       return

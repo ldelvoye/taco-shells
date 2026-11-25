@@ -2,7 +2,6 @@ import type { Hole } from './check'
 
 /** The steps of the core rip out that close holes, by the number a hole's `closes` names. */
 export const CLOSING_MILESTONES: Record<number, string> = {
-  3: 'the workspace takes the arrangement: the window stops running the reducer',
   4: 'the workspace opens and closes terminals, through messages to the runtime',
   5: 'the runtime gets its own process'
 }

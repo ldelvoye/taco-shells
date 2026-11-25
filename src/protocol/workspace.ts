@@ -12,7 +12,7 @@ export type WorkspaceRequest =
   | { type: 'splitSpawned'; donor: SessionId; pane: SessionId }
   | { type: 'forkSpawned'; source: SessionId; pane: SessionId }
   | { type: 'titleChanged'; pane: SessionId; title: string }
-  | { type: 'focusReported'; pane: SessionId; move: number }
+  | { type: 'focusReported'; pane: SessionId; count: number }
   | { type: 'paneColored'; pane: SessionId; color: RowColor | null }
   | { type: 'activeColorToggled'; color: RowColor }
   | { type: 'dropped'; dragged: Dragged; drop: Drop }
@@ -45,9 +45,10 @@ export interface DrawnState {
   workspace: Workspace | null
   agentRows: Record<SessionId, AgentRow>
   waiting: SessionId | null
+  /** A counter that goes up each time the window should hand the keyboard back to the active terminal. */
   refocus: number
-  /** The latest of the window's focus moves the workspace has applied. */
-  focusMove: number
+  /** How many of the window's own focus moves the workspace has applied: the highest `count` it was sent. */
+  focusCount: number
   agents: Record<string, AgentLabel>
   defaultAgentName: string
 }
