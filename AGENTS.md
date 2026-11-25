@@ -29,11 +29,14 @@ npm run install-app  # build and install Taco Shells Dev
 npm run dist         # app and zip into dist.noindex/
 npm run promote      # mark a version stable (see below)
 npm run record:clip  # builds, then films a portfolio clip into dist.noindex/ (-- taco for the other scene)
+npm run measure      # builds, then opens many terminals in the real app and reports memory, delays and lost graphics contexts
 ```
 
 **`npm run e2e` builds first, on purpose.** Driving a stale `out/` passes while the change under test is not in it.
 
 **`npm test` never launches anything.** The e2e suite covers only what the unit tests structurally cannot: that a chord reaches a registered command, that the command reaches the screen, and what the built bundle contains. Do not restate the model there — it is slow and buys nothing.
+
+**`npm run measure` is run by hand, never by CI.** It shows a strip of a window at the right edge of the rightmost display for about a minute, uses the e2e suite's debug port so the two cannot run together, and its numbers and how to read them are in `scripts/measure/README.md`.
 
 ## Two apps, and which one a build becomes
 
