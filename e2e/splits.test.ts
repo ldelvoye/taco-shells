@@ -11,7 +11,7 @@ const FULL_GROUP_ROWS = 10
 const REFUSED_SPLIT_SETTLE_MS = 500
 
 // Covers what the unit tests cannot: a chord reaching its command, and the
-// command reaching the screen. Model decisions live in shared/model.test.ts.
+// command reaching the screen. Model decisions live in src/rules/transitions/arrangement.test.ts.
 
 function reportedDirectory(file: string): string | null {
   if (!existsSync(file)) {

@@ -10,7 +10,7 @@ import { ROW_HANDLE_OFFSET, rowBox } from './harness/mouse'
 const BRACKET_HANDLE_OFFSET = 13
 
 // Covers what the unit tests cannot: a real drag reaching the model, and a
-// moved terminal still working. The band rule lives in shared/drop.test.ts.
+// moved terminal still working. The band rule lives in src/rules/drop.test.ts.
 
 function reportedColumns(file: string): number {
   if (!existsSync(file)) {
