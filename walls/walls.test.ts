@@ -4,17 +4,23 @@ import { expect, test } from 'vitest'
 
 import { WALLS } from './areas'
 import { closed, unlisted, violationsIn } from './check'
-import { HOLES } from './holes'
+import { CLOSING_MILESTONES, HOLES } from './holes'
 import { sourceFiles } from './tree'
 
 const REPO_ROOT = resolve(import.meta.dirname, '..')
 
+const FILES = sourceFiles(REPO_ROOT)
+const FOUND = violationsIn(FILES, WALLS)
+
 test('no import crosses a wall, except the holes still open', () => {
-  const found = violationsIn(sourceFiles(REPO_ROOT), WALLS)
-  expect(unlisted(found, HOLES)).toEqual([])
+  expect(unlisted(FOUND, HOLES)).toEqual([])
 })
 
 test('every listed hole is still open', () => {
-  const found = violationsIn(sourceFiles(REPO_ROOT), WALLS)
-  expect(closed(found, HOLES)).toEqual([])
+  expect(closed(FOUND, HOLES)).toEqual([])
+})
+
+test('every hole names a milestone that closes it', () => {
+  const unnamed = HOLES.filter((hole) => !(hole.closes in CLOSING_MILESTONES))
+  expect(unnamed).toEqual([])
 })
