@@ -30,6 +30,9 @@ const ELECTRON_BINARY = resolve(
   'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron'
 )
 
+// How Chromium marks the one child that runs Node, which is the app's terminal process.
+const NODE_SERVICE = '--utility-sub-type=node.mojom.NodeService'
+
 const SHUTDOWN_TIMEOUT_MS = 3000
 
 const NO_CLAUDE_DIRECTORY = 'no-claude'
@@ -61,6 +64,12 @@ export interface LaunchOptions {
   mainInspector?: boolean
 }
 
+interface ListedProcess {
+  pid: string
+  parent: string
+  line: string
+}
+
 export interface App {
   page: Protocol
   drags: SidebarDrags
@@ -74,6 +83,7 @@ export interface App {
   runInPane(sessionId: string, command: string): Promise<void>
   pause(milliseconds: number): Promise<void>
   shellCount(): number
+  terminalProcessPid(): number
   rendererConsole(): string[]
   close(): Promise<void>
   quitGracefully(): Promise<void>
@@ -201,21 +211,42 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     return sleep(milliseconds)
   }
 
-  // The login shells this app has open. They are spawned as direct children of
-  // the Electron process, so one that outlives its pane shows up here.
-  function shellCount(): number {
+  function childProcesses(): ListedProcess[] {
     const listing = execFileSync('ps', ['-eo', 'pid,ppid,command'], { encoding: 'utf8' })
     const lines = listing.split('\n')
-
-    const ours = lines.filter((line) => {
-      if (!line.includes(LOGIN_SHELL)) {
-        return false
-      }
+    const processes = lines.map((line) => {
       const columns = line.trim().split(/\s+/)
-      return columns[1] === String(electron.pid)
+      return { pid: columns[0], parent: columns[1], line }
+    })
+    return processes
+  }
+
+  // The login shells this app has open. They are children of the app's terminal
+  // process, itself a child of the Electron process, so one that outlives its pane
+  // shows up here.
+  function shellCount(): number {
+    const processes = childProcesses()
+    const electronPid = String(electron.pid)
+    const children = processes.filter((candidate) => candidate.parent === electronPid)
+    const childPids = new Set(children.map((child) => child.pid))
+
+    const ours = processes.filter((candidate) => {
+      return candidate.line.includes(LOGIN_SHELL) && childPids.has(candidate.parent)
     })
 
     return ours.length
+  }
+
+  function terminalProcessPid(): number {
+    const processes = childProcesses()
+    const electronPid = String(electron.pid)
+    const terminalProcess = processes.find((candidate) => {
+      return candidate.parent === electronPid && candidate.line.includes(NODE_SERVICE)
+    })
+    if (terminalProcess === undefined) {
+      throw new Error('the app has no terminal process')
+    }
+    return Number(terminalProcess.pid)
   }
 
   // Chromium tags renderer console output INFO:CONSOLE whatever severity it was
@@ -284,6 +315,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     runInPane,
     pause,
     shellCount,
+    terminalProcessPid,
     rendererConsole,
     close,
     quitGracefully,
