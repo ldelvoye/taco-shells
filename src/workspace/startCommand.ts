@@ -1,7 +1,19 @@
 import { HARNESSES, harnessOf } from '@agents/registry'
 import type { Harness } from '@agents/types'
-import type { PtyCreateOptions, SessionId } from '@protocol/ipc'
-import type { AgentSession } from '@protocol/snapshot'
+import type { SessionId } from '@protocol/ipc'
+import type { AgentSession } from './snapshot/format'
+
+export interface ForkRequest {
+  from: SessionId
+  name: string
+}
+
+export interface PtyCreateOptions {
+  cwdFrom?: SessionId
+  cwd?: string
+  resume?: AgentSession
+  fork?: ForkRequest
+}
 
 export interface ShellStart {
   cwd: string | null

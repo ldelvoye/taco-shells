@@ -2,19 +2,31 @@ import { statSync, type Stats } from 'node:fs'
 import { homedir } from 'node:os'
 import { spawn, type IPty } from 'node-pty'
 import type { PtyDataEvent, PtyExitEvent, PtySize, SessionId } from '@protocol/ipc'
-import type { ShellStart } from '@workspace/startCommand'
+import type { Runtime, TerminalStart, TerminalStarted } from '@protocol/runtime'
 import { processCwd } from './cwd'
+import { foregroundCommands } from './foreground'
 import { shellArguments, shellEnvironment, shellPath } from './shell'
+
+export type SpawnedPty = Pick<IPty, 'pid' | 'write' | 'resize' | 'kill' | 'onData' | 'onExit'>
+export type SpawnPty = (...args: Parameters<typeof spawn>) => SpawnedPty
 
 type DataListener = (event: PtyDataEvent) => void
 type ExitListener = (event: PtyExitEvent) => void
+type StartedListener = (event: TerminalStarted) => void
 type SubmitListener = (id: SessionId) => void
 
 interface Session {
-  pty: IPty
+  pty: SpawnedPty
   pending: string[]
   flushTimer: ReturnType<typeof setTimeout> | null
-  cwd: string
+}
+
+// A terminal is on screen before its shell exists: finding the starting directory can take
+// up to a second. What is asked of it in that gap is kept and applied once the shell is there.
+interface Opening {
+  size: PtySize
+  closed: boolean
+  typed: string[]
 }
 
 // A pty in line-buffered mode emits roughly one chunk per line: `seq 1 200000`
@@ -27,32 +39,57 @@ interface Session {
 const FLUSH_INTERVAL_MS = 5
 const CARRIAGE_RETURN = '\r'
 
-export class PtySessions {
+export class PtySessions implements Runtime {
   private readonly sessions = new Map<SessionId, Session>()
+  private readonly opening = new Map<SessionId, Opening>()
   private readonly dataListeners = new Set<DataListener>()
   private readonly exitListeners = new Set<ExitListener>()
+  private readonly startedListeners = new Set<StartedListener>()
   private readonly submitListeners = new Set<SubmitListener>()
-  private nextId = 1
+  private readonly spawnPty: SpawnPty
 
-  async create(size: PtySize, start: ShellStart): Promise<SessionId> {
-    const id = `pty-${this.nextId}`
-    this.nextId += 1
+  constructor(spawnPty: SpawnPty = spawn) {
+    this.spawnPty = spawnPty
+  }
 
+  open(start: TerminalStart): void {
+    this.opening.set(start.id, { size: start.size, closed: false, typed: [] })
+    void this.spawnWhenReady(start)
+  }
+
+  private async spawnWhenReady(start: TerminalStart): Promise<void> {
+    const id = start.id
     const cwd = await this.resolveStartingDirectory(start)
 
-    const pty = spawn(shellPath(), shellArguments(), {
-      name: 'xterm-256color',
-      cols: size.cols,
-      rows: size.rows,
-      cwd,
-      env: shellEnvironment()
-    })
+    const opening = this.opening.get(id)
+    this.opening.delete(id)
+    if (opening === undefined || opening.closed) {
+      this.reportExit({ id, exitCode: 0 })
+      return
+    }
 
-    const session: Session = { pty, pending: [], flushTimer: null, cwd }
+    let pty: SpawnedPty
+    try {
+      pty = this.spawnPty(shellPath(), shellArguments(), {
+        name: 'xterm-256color',
+        cols: opening.size.cols,
+        rows: opening.size.rows,
+        cwd,
+        env: shellEnvironment()
+      })
+    } catch {
+      this.reportExit({ id, exitCode: 1 })
+      return
+    }
+
+    const session: Session = { pty, pending: [], flushTimer: null }
     this.sessions.set(id, session)
 
     if (start.command !== null) {
       pty.write(start.command)
+    }
+    for (const data of opening.typed) {
+      this.write(id, data)
     }
 
     pty.onData((data) => {
@@ -69,15 +106,21 @@ export class PtySessions {
       this.flush(id)
       this.clearFlushTimer(session)
       this.sessions.delete(id)
-      for (const listener of this.exitListeners) {
-        listener({ id, exitCode })
-      }
+      this.reportExit({ id, exitCode })
     })
 
-    return id
+    for (const listener of this.startedListeners) {
+      listener({ id, directory: cwd })
+    }
   }
 
   write(id: SessionId, data: string): void {
+    const opening = this.opening.get(id)
+    if (opening !== undefined) {
+      opening.typed.push(data)
+      return
+    }
+
     const session = this.sessions.get(id)
     if (!session) {
       return
@@ -91,6 +134,12 @@ export class PtySessions {
   }
 
   resize(id: SessionId, size: PtySize): void {
+    const opening = this.opening.get(id)
+    if (opening !== undefined) {
+      opening.size = size
+      return
+    }
+
     const session = this.sessions.get(id)
     if (!session) {
       return
@@ -103,7 +152,13 @@ export class PtySessions {
     }
   }
 
-  kill(id: SessionId): void {
+  close(id: SessionId): void {
+    const opening = this.opening.get(id)
+    if (opening !== undefined) {
+      opening.closed = true
+      return
+    }
+
     const session = this.sessions.get(id)
     if (!session) {
       return
@@ -128,50 +183,52 @@ export class PtySessions {
     this.submitListeners.add(listener)
   }
 
-  /** The directory a session's shell was started in, or null once it is gone. */
-  startingDirectory(id: SessionId): string | null {
+  onStarted(listener: StartedListener): void {
+    this.startedListeners.add(listener)
+  }
+
+  async directoryOf(id: SessionId): Promise<string | null> {
     const session = this.sessions.get(id)
     if (session === undefined) {
       return null
     }
-    return session.cwd
+    return processCwd(session.pty.pid)
   }
 
-  /** The process id of a session's shell, or null once it is gone. */
-  pidOf(id: SessionId): number | null {
+  async foregroundCommands(id: SessionId): Promise<string[]> {
     const session = this.sessions.get(id)
     if (session === undefined) {
-      return null
+      return []
     }
-    return session.pty.pid
+    return foregroundCommands(session.pty.pid)
   }
 
-  sessionForPids(pids: number[]): SessionId | null {
+  terminalForPids(pids: number[]): Promise<SessionId | null> {
+    let found: SessionId | null = null
     for (const [id, session] of this.sessions) {
       const pid = session.pty.pid
       if (pids.includes(pid)) {
-        return id
+        found = id
+        break
       }
     }
-    return null
+    return Promise.resolve(found)
   }
 
-  private async resolveStartingDirectory(start: ShellStart): Promise<string> {
+  private reportExit(event: PtyExitEvent): void {
+    for (const listener of this.exitListeners) {
+      listener(event)
+    }
+  }
+
+  private async resolveStartingDirectory(start: TerminalStart): Promise<string> {
     let candidate: string | null = null
-    if (start.cwd !== null) {
-      candidate = start.cwd
-    } else if (start.cwdFrom !== null) {
-      candidate = await this.directoryOf(start.cwdFrom)
+    if (start.directory !== null) {
+      candidate = start.directory
+    } else if (start.directoryOf !== null) {
+      candidate = await this.directoryOf(start.directoryOf)
     }
     return this.usableDirectory(candidate)
-  }
-
-  private async directoryOf(id: SessionId): Promise<string | null> {
-    const sourceSession = this.sessions.get(id)
-    if (sourceSession === undefined) {
-      return null
-    }
-    return processCwd(sourceSession.pty.pid)
   }
 
   private usableDirectory(candidate: string | null): string {

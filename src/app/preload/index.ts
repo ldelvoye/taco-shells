@@ -3,14 +3,12 @@ import type { AgentBanner } from '@protocol/agentSetup'
 import type { Config, ConfigFile } from '@protocol/config'
 import {
   CHANNEL,
-  type PtyCreateOptions,
   type PtyDataEvent,
   type PtyExitEvent,
   type PtySize,
   type SessionId,
   type TacoShellsApi
 } from '@protocol/ipc'
-import type { Snapshot } from '@protocol/snapshot'
 import type { DrawnState, WorkspaceRequest } from '@protocol/workspace'
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
@@ -25,10 +23,9 @@ function subscribe<T>(channel: string, listener: (payload: T) => void): () => vo
 
 const api: TacoShellsApi = {
   pty: {
-    create: (size: PtySize, options?: PtyCreateOptions) => ipcRenderer.invoke(CHANNEL.ptyCreate, size, options),
     write: (id: SessionId, data: string) => ipcRenderer.send(CHANNEL.ptyWrite, id, data),
     resize: (id: SessionId, size: PtySize) => ipcRenderer.send(CHANNEL.ptyResize, id, size),
-    kill: (id: SessionId) => ipcRenderer.send(CHANNEL.ptyKill, id),
+    listening: () => ipcRenderer.send(CHANNEL.ptyListening),
     onData: (listener: (event: PtyDataEvent) => void) => subscribe(CHANNEL.ptyData, listener),
     onExit: (listener: (event: PtyExitEvent) => void) => subscribe(CHANNEL.ptyExit, listener)
   },
@@ -52,9 +49,6 @@ const api: TacoShellsApi = {
   fullScreen: {
     initial: ipcRenderer.sendSync(CHANNEL.fullScreenGet) as boolean,
     onChange: (listener: (fullScreen: boolean) => void) => subscribe(CHANNEL.fullScreenChanged, listener)
-  },
-  snapshot: {
-    initial: ipcRenderer.sendSync(CHANNEL.snapshotGet) as Snapshot | null
   },
   workspace: {
     initial: ipcRenderer.sendSync(CHANNEL.workspaceGet) as DrawnState,

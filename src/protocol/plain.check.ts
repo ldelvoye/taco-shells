@@ -2,7 +2,7 @@ import type { Workspace } from './arrangement'
 import type { Config } from './config'
 import type { TacoShellsApi } from './ipc'
 import type { Crossing, IsPlain } from './plain'
-import type { Snapshot } from './snapshot'
+import type { TerminalStart, TerminalStarted } from './runtime'
 import type { DrawnState, RequestReply, WorkspaceRequest } from './workspace'
 
 type Assert<T extends true> = T
@@ -22,11 +22,12 @@ export type PlainCases = [
   Assert<IsPlain<{ id: string }[]>>,
   Assert<IsPlain<{ a: string } | { b: number }>>,
   Assert<IsPlain<Workspace>>,
-  Assert<IsPlain<Snapshot>>,
   Assert<IsPlain<Config>>,
   Assert<IsPlain<DrawnState>>,
   Assert<IsPlain<WorkspaceRequest>>,
-  Assert<IsPlain<RequestReply>>
+  Assert<IsPlain<RequestReply>>,
+  Assert<IsPlain<TerminalStart>>,
+  Assert<IsPlain<TerminalStarted>>
 ]
 
 export type NotPlainCases = [

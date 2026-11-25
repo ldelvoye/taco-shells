@@ -1,6 +1,6 @@
 import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { Snapshot } from '@protocol/snapshot'
+import type { Snapshot } from './format'
 import { parseSnapshot } from './format'
 
 const SNAPSHOT_FILE = 'workspace.json'

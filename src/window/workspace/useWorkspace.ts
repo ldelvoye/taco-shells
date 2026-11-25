@@ -51,10 +51,6 @@ export function useWorkspace(): WorkspaceView {
   }, [operations])
 
   useEffect(() => {
-    operations.start()
-  }, [operations])
-
-  useEffect(() => {
     if (!activeSessionId) {
       return
     }

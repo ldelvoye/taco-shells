@@ -8,7 +8,7 @@ import { claude } from '@agents/claude'
 import type { Harness } from '@agents/types'
 import type { SessionId } from '@protocol/ipc'
 import type { AgentSignal } from '@protocol/rows'
-import type { AgentSession } from '@protocol/snapshot'
+import type { AgentSession } from '@workspace/snapshot/format'
 import { makeTempDirectory, removeTempDirectories } from '@testing/tempDirectory'
 import { type FocusServerHandlers, startFocusServer } from './server'
 

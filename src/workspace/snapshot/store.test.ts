@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { Workspace } from '@protocol/arrangement'
-import type { AgentSession } from '@protocol/snapshot'
+import type { AgentSession } from './format'
 import { makeTempDirectory, removeTempDirectories } from '@testing/tempDirectory'
+import { AgentSessions } from '../agentSessions'
 import { readSnapshot } from './files'
 import { SnapshotStore } from './store'
 
@@ -38,7 +39,7 @@ const WORKSPACE: Workspace = {
 describe('SnapshotStore Claude sessions', () => {
   let directory: string
   let now: number
-  let exitListener: (event: { id: string; exitCode: number }) => void
+  let agentSessions: AgentSessions
   let store: SnapshotStore
 
   function agentInFile(): AgentSession | null {
@@ -55,13 +56,9 @@ describe('SnapshotStore Claude sessions', () => {
     directory = makeTempDirectory('taco-shells-store-test-')
     now = 0
     const clock = (): number => now
-    const sessions = {
-      pidOf: () => null,
-      onExit: (listener: typeof exitListener) => {
-        exitListener = listener
-      }
-    }
-    store = new SnapshotStore(directory, sessions, clock)
+    agentSessions = new AgentSessions(clock)
+    const directoryOf = (): Promise<string | null> => Promise.resolve(null)
+    store = new SnapshotStore(directory, agentSessions, directoryOf)
     store.workspaceChanged(WORKSPACE)
   })
 
@@ -79,53 +76,55 @@ describe('SnapshotStore Claude sessions', () => {
   })
 
   it('resumes the newest session when an older one died without an end', () => {
-    store.recordAgentStart(PANE_ID, SESSION_A)
-    store.recordAgentStart(PANE_ID, SESSION_B)
+    agentSessions.recordStart(PANE_ID, SESSION_A)
+    agentSessions.recordStart(PANE_ID, SESSION_B)
 
     expect(agentInFile()).toEqual(SESSION_B)
   })
 
   it('keeps the older session when the newer one ends', () => {
-    store.recordAgentStart(PANE_ID, SESSION_A)
-    store.recordAgentStart(PANE_ID, SESSION_B)
-    store.recordAgentEnd(PANE_ID, 'claude',SESSION_B.sessionId)
+    agentSessions.recordStart(PANE_ID, SESSION_A)
+    agentSessions.recordStart(PANE_ID, SESSION_B)
+    agentSessions.recordEnd(PANE_ID, 'claude',SESSION_B.sessionId)
 
     expect(agentInFile()).toEqual(SESSION_A)
   })
 
   it('follows /clear whichever of the end and the start arrives first', () => {
-    store.recordAgentStart(PANE_ID, SESSION_A)
-    store.recordAgentEnd(PANE_ID, 'claude',SESSION_A.sessionId)
-    store.recordAgentStart(PANE_ID, SESSION_C)
+    agentSessions.recordStart(PANE_ID, SESSION_A)
+    agentSessions.recordEnd(PANE_ID, 'claude',SESSION_A.sessionId)
+    agentSessions.recordStart(PANE_ID, SESSION_C)
     expect(agentInFile()).toEqual(SESSION_C)
 
-    store.recordAgentEnd(PANE_ID, 'claude',SESSION_C.sessionId)
-    store.recordAgentStart(PANE_ID, SESSION_A)
-    store.recordAgentStart(PANE_ID, SESSION_C)
-    store.recordAgentEnd(PANE_ID, 'claude',SESSION_A.sessionId)
+    agentSessions.recordEnd(PANE_ID, 'claude',SESSION_C.sessionId)
+    agentSessions.recordStart(PANE_ID, SESSION_A)
+    agentSessions.recordStart(PANE_ID, SESSION_C)
+    agentSessions.recordEnd(PANE_ID, 'claude',SESSION_A.sessionId)
     expect(agentInFile()).toEqual(SESSION_C)
   })
 
   it('keeps a seeded session once a start confirms it', () => {
-    store.seedAgent(PANE_ID, SESSION_A)
-    store.recordAgentStart(PANE_ID, SESSION_A)
+    agentSessions.seed(PANE_ID, SESSION_A)
+    agentSessions.recordStart(PANE_ID, SESSION_A)
     now = 120_000
 
     expect(agentInFile()).toEqual(SESSION_A)
   })
 
   it('drops a seeded session that is never confirmed', () => {
-    store.seedAgent(PANE_ID, SESSION_A)
+    agentSessions.seed(PANE_ID, SESSION_A)
     now = 60_001
 
     expect(agentInFile()).toBeNull()
   })
 
   it('ignores an end and a pty exit after freeze, and flushAtQuit still writes the entry', async () => {
-    store.recordAgentStart(PANE_ID, SESSION_A)
+    agentSessions.recordStart(PANE_ID, SESSION_A)
     store.freeze()
-    store.recordAgentEnd(PANE_ID, 'claude',SESSION_A.sessionId)
-    exitListener({ id: PANE_ID, exitCode: 0 })
+    agentSessions.freeze()
+    agentSessions.recordEnd(PANE_ID, 'claude',SESSION_A.sessionId)
+    agentSessions.forget(PANE_ID)
+    store.forget(PANE_ID)
     await store.flushAtQuit()
 
     const snapshot = readSnapshot(directory)
@@ -133,8 +132,9 @@ describe('SnapshotStore Claude sessions', () => {
   })
 
   it('clears a pane entry when its pty exits', () => {
-    store.recordAgentStart(PANE_ID, SESSION_A)
-    exitListener({ id: PANE_ID, exitCode: 0 })
+    agentSessions.recordStart(PANE_ID, SESSION_A)
+    agentSessions.forget(PANE_ID)
+    store.forget(PANE_ID)
     store.workspaceChanged(WORKSPACE)
 
     expect(agentInFile()).toBeNull()

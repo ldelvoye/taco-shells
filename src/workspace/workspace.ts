@@ -1,23 +1,44 @@
 import { DEFAULT_HARNESS, HARNESSES } from '@agents/registry'
 import type { Harness } from '@agents/types'
 import type { Group, GroupId, TabGroupId, Workspace as Arrangement } from '@protocol/arrangement'
-import type { AgentSignalEvent, SessionId } from '@protocol/ipc'
-import type { Snapshot } from '@protocol/snapshot'
+import type { ConfigFile } from '@protocol/config'
+import type { AgentSignalEvent, PtySize, SessionId } from '@protocol/ipc'
+import type { AgentSignal } from '@protocol/rows'
+import type { Runtime } from '@protocol/runtime'
 import type {
   AgentLabel,
   DrawnState,
   RequestReply,
   WorkspaceRequest
 } from '@protocol/workspace'
-import { canSplitPane, emptyWorkspace, locatePane } from '@rules/arrangement'
-import { workspaceFromSnapshot } from './snapshot/format'
+import { canSplitPane, emptyWorkspace } from '@rules/arrangement'
+import { forkNameFor } from '@rules/forkName'
+import type { AgentSessions } from './agentSessions'
+import {
+  workspaceFromSnapshot,
+  type AgentSession,
+  type Snapshot,
+  type SnapshotPane
+} from './snapshot/format'
+import { shellStartFor, type PtyCreateOptions, type ShellStart } from './startCommand'
 import { createWorkspaceStore, type WorkspaceStore } from './store'
 import type { WorkspaceEvent } from './workspaceState'
+
+const INITIAL_SIZE: PtySize = { cols: 80, rows: 24 }
+
+export interface WorkspaceOptions {
+  snapshot: Snapshot | null
+  runtime: Runtime
+  configPathOf(file: ConfigFile): string
+  agentSessions: AgentSessions
+}
 
 export interface WorkspaceEffects {
   onState(state: DrawnState): void
   onArrangement(arrangement: Arrangement): void
   onEmptied(): void
+  onStartedIn(id: SessionId, directory: string): void
+  onExited(id: SessionId): void
 }
 
 type Answer = Omit<RequestReply, 'revision'>
@@ -36,6 +57,22 @@ function groupForSession(id: GroupId, sessionId: SessionId): Group {
     panes: [{ id: sessionId, title: '', width: 1, color: null }],
     activePane: 0,
     tabGroup: null
+  }
+}
+
+// The shell resolves EDITOR, not us: on a GUI launch the app's own environment
+// does not have it, because it is set in the files an interactive shell reads.
+function editorCommand(path: string): string {
+  return `\${EDITOR:-vi} '${path}'\n`
+}
+
+function startOptionsOf(pane: SnapshotPane): PtyCreateOptions {
+  if (pane.agent !== null) {
+    return { resume: pane.agent }
+  } else if (typeof pane.cwd === 'string') {
+    return { cwd: pane.cwd }
+  } else {
+    return {}
   }
 }
 
@@ -64,20 +101,39 @@ function agentLabelsOf(harnesses: readonly Harness[]): Record<string, AgentLabel
 /** The owner of the arrangement: it applies what the window asks for and what the app reports, and publishes what to draw. */
 export class Workspace {
   private readonly store: WorkspaceStore = createWorkspaceStore()
-  private readonly snapshot: Snapshot | null
+  private readonly options: WorkspaceOptions
   private readonly effects: WorkspaceEffects
   private readonly agents: Record<string, AgentLabel>
-  private readonly exitedBeforePlaced = new Set<SessionId>()
   private revision = 0
   private focusCount = 0
   private publishedFocusCount = 0
+  private nextTerminalNumber = 1
   private nextGroupNumber = 1
   private nextTabGroupNumber = 1
 
-  constructor(snapshot: Snapshot | null, effects: WorkspaceEffects) {
-    this.snapshot = snapshot
+  constructor(options: WorkspaceOptions, effects: WorkspaceEffects) {
+    this.options = options
     this.effects = effects
     this.agents = agentLabelsOf(HARNESSES)
+  }
+
+  /** Restores the saved arrangement, or opens the first terminal. Called once, after the effects' receivers exist. */
+  start(): void {
+    this.options.runtime.onExit((event) => {
+      this.terminalExited(event.id)
+    })
+    this.options.runtime.onStarted((event) => {
+      this.effects.onStartedIn(event.id, event.directory)
+    })
+
+    const snapshot = this.options.snapshot
+    if (snapshot !== null) {
+      const restored = this.restore(snapshot)
+      if (restored) {
+        return
+      }
+    }
+    this.openFreshTerminal()
   }
 
   drawn(): DrawnState {
@@ -100,11 +156,20 @@ export class Workspace {
     return { ...answer, revision: this.revision }
   }
 
-  terminalExited(pane: SessionId): void {
-    if (!this.holds(pane)) {
-      this.exitedBeforePlaced.add(pane)
+  agentStarted(pane: SessionId, session: AgentSession, hasConversation: boolean): void {
+    this.options.agentSessions.recordStart(pane, session)
+    let signal: AgentSignal = 'start'
+    if (hasConversation) {
+      signal = 'resume'
     }
-    this.dispatch({ type: 'paneExited', pane })
+    const event: AgentSignalEvent = { id: pane, harness: session.harness, sessionId: session.sessionId, signal }
+    this.agentSignalled(event)
+  }
+
+  agentEnded(pane: SessionId, harness: string, sessionId: string): void {
+    this.options.agentSessions.recordEnd(pane, harness, sessionId)
+    const event: AgentSignalEvent = { id: pane, harness, sessionId, signal: 'end' }
+    this.agentSignalled(event)
   }
 
   agentSignalled(event: AgentSignalEvent): void {
@@ -125,32 +190,39 @@ export class Workspace {
 
   private answer(request: WorkspaceRequest): Answer {
     switch (request.type) {
-      case 'terminalOpened': {
-        const group = this.groupFor(request.pane)
-        this.place({ type: 'terminalOpened', group }, [request.pane])
+      case 'openTerminal': {
+        let command: string | null = null
+        if (request.file !== null) {
+          command = editorCommand(this.options.configPathOf(request.file))
+        }
+        const pane = this.nextTerminalId()
+        const group = this.groupFor(pane)
+        this.dispatch({ type: 'terminalOpened', group })
+        this.openTerminal(pane, { cwd: null, cwdFrom: null, command })
         return accepted(null)
       }
-      case 'terminalOpenedIn': {
-        const group = this.groupFor(request.pane)
-        this.place({ type: 'terminalOpenedIn', group, tabGroup: request.tabGroup }, [request.pane])
+      case 'openTerminalIn': {
+        const pane = this.nextTerminalId()
+        const group = this.groupFor(pane)
+        this.dispatch({ type: 'terminalOpenedIn', group, tabGroup: request.tabGroup })
+        this.openTerminal(pane, { cwd: null, cwdFrom: null, command: null })
         return accepted(null)
       }
-      case 'restored':
-        return this.restore(request.panes)
-      case 'splitSpawned': {
-        if (!this.canSplit(request.donor)) {
+      case 'splitTerminal': {
+        if (!this.canSplit(request.pane)) {
           return refused()
         }
-        this.place(request, [request.pane])
+        const pane = this.nextTerminalId()
+        const shell = this.shellStart({ cwdFrom: request.pane })
+        this.dispatch({ type: 'splitSpawned', donor: request.pane, pane })
+        this.openTerminal(pane, shell)
         return accepted(null)
       }
-      case 'forkSpawned': {
-        if (!this.canSplit(request.source)) {
-          return refused()
-        }
-        this.place(request, [request.pane])
+      case 'forkTerminal':
+        return this.fork(request.pane)
+      case 'closeTerminal':
+        this.options.runtime.close(request.pane)
         return accepted(null)
-      }
       case 'focusReported': {
         // Recorded even when the terminal was already active: the window keeps its own
         // focus move on screen until the published count reaches it.
@@ -197,12 +269,62 @@ export class Workspace {
     return groupForSession(id, sessionId)
   }
 
-  private holds(pane: SessionId): boolean {
+  private nextTerminalId(): SessionId {
+    const id = `pty-${this.nextTerminalNumber}`
+    this.nextTerminalNumber += 1
+    return id
+  }
+
+  private shellStart(options: PtyCreateOptions): ShellStart {
+    const agentSessions = this.options.agentSessions
+    return shellStartFor(options, (id) => agentSessions.sessionOf(id))
+  }
+
+  private openTerminal(id: SessionId, shell: ShellStart): void {
+    this.options.runtime.open({
+      id,
+      directory: shell.cwd,
+      directoryOf: shell.cwdFrom,
+      command: shell.command,
+      size: INITIAL_SIZE
+    })
+  }
+
+  private openFreshTerminal(): void {
+    const pane = this.nextTerminalId()
+    const group = this.groupFor(pane)
+    this.dispatch({ type: 'terminalOpened', group })
+    this.openTerminal(pane, { cwd: null, cwdFrom: null, command: null })
+  }
+
+  private terminalExited(pane: SessionId): void {
+    this.options.agentSessions.forget(pane)
+    this.effects.onExited(pane)
+    this.dispatch({ type: 'paneExited', pane })
+  }
+
+  private fork(source: SessionId): Answer {
     const arrangement = this.store.getState().workspace
     if (arrangement === null) {
-      return false
+      return refused()
     }
-    return locatePane(arrangement, pane) !== null
+    if (!canSplitPane(arrangement, source)) {
+      return refused()
+    }
+
+    const panes = arrangement.groups.flatMap((group) => group.panes)
+    const sourcePane = panes.find((pane) => pane.id === source)
+    if (sourcePane === undefined) {
+      return refused()
+    }
+    const titles = panes.map((pane) => pane.title)
+    const name = forkNameFor(sourcePane.title, titles)
+
+    const pane = this.nextTerminalId()
+    const shell = this.shellStart({ fork: { from: source, name } })
+    this.dispatch({ type: 'forkSpawned', source, pane })
+    this.openTerminal(pane, shell)
+    return accepted(null)
   }
 
   private canSplit(donor: SessionId): boolean {
@@ -229,38 +351,37 @@ export class Workspace {
     return accepted(id)
   }
 
-  private restore(panes: SessionId[]): Answer {
-    const snapshot = this.snapshot
-    if (snapshot === null) {
-      return refused()
-    }
+  private restore(snapshot: Snapshot): boolean {
+    const savedPanes = snapshot.groups.flatMap((group) => group.panes)
+    const paneIds = savedPanes.map(() => this.nextTerminalId())
 
     let restored: Arrangement = emptyWorkspace()
     try {
       const groupIds = snapshot.groups.map(() => this.nextGroupId())
       const tabGroupIds = snapshot.tabGroups.map(() => this.nextTabGroupId())
-      restored = workspaceFromSnapshot(snapshot, panes, groupIds, tabGroupIds)
+      restored = workspaceFromSnapshot(snapshot, paneIds, groupIds, tabGroupIds)
     } catch {
       restored = emptyWorkspace()
     }
 
     if (restored.groups.length === 0) {
-      return refused()
+      return false
     }
-    this.place({ type: 'workspaceRestored', workspace: restored }, panes)
-    return accepted(null)
+    this.dispatch({ type: 'workspaceRestored', workspace: restored })
+
+    savedPanes.forEach((savedPane, index) => {
+      this.openSavedTerminal(paneIds[index], savedPane)
+    })
+    return true
   }
 
-  // A shell can exit before the window has reported its terminal. That exit is applied
-  // again once the terminal is placed, so a row never outlives its shell.
-  private place(event: WorkspaceEvent, panes: SessionId[]): void {
-    this.dispatch(event)
-    for (const pane of panes) {
-      const alreadyExited = this.exitedBeforePlaced.delete(pane)
-      if (alreadyExited) {
-        this.dispatch({ type: 'paneExited', pane })
-      }
+  private openSavedTerminal(id: SessionId, saved: SnapshotPane): void {
+    const options = startOptionsOf(saved)
+    const shell = this.shellStart(options)
+    if (saved.agent !== null) {
+      this.options.agentSessions.seed(id, saved.agent)
     }
+    this.openTerminal(id, shell)
   }
 
   private dispatch(event: WorkspaceEvent): void {

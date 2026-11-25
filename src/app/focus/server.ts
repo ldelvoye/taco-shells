@@ -6,11 +6,11 @@ import { FOCUS_FIRST_PORT, FOCUS_LAST_PORT } from '@protocol/focusPorts'
 import type { SessionId } from '@protocol/ipc'
 import { isRecord } from '@protocol/isRecord'
 import type { AgentSignal } from '@protocol/rows'
-import type { AgentSession } from '@protocol/snapshot'
+import type { AgentSession } from '@workspace/snapshot/format'
 import { agentSessionFor } from '@workspace/snapshot/format'
 
 export interface FocusServerHandlers {
-  sessionForPids(pids: number[]): SessionId | null
+  sessionForPids(pids: number[]): SessionId | null | Promise<SessionId | null>
   onFocus(id: SessionId): void
   onAttention(id: SessionId): void
   onAgentStart(id: SessionId, session: AgentSession, hasConversation: boolean): void
@@ -266,7 +266,7 @@ async function handleRequest(
     }
   }
 
-  const paneId = handlers.sessionForPids(pids)
+  const paneId = await handlers.sessionForPids(pids)
   if (paneId === null) {
     respond(response, 404, 'not found')
     return

@@ -28,6 +28,8 @@ A package may import only what `walls/areas.ts` allows, and `npm test` fails on 
 
 **The arrangement of terminals is not the window's to change.** It lives in `src/workspace/` in the main process; the window sends a `WorkspaceRequest` for each thing the user does and draws the `DrawnState` it is sent. Keyboard focus is the one thing the window moves first: `src/window/workspace/link.ts` lays its own focus move over the workspace's state until the workspace has applied it.
 
+**The window never starts a shell.** It asks the workspace for a terminal, a split, a fork or a close; the workspace names the terminal, places it and tells the runtime to open it through the `Runtime` interface in `src/protocol/runtime.ts`. Restore runs in the main process at launch, before the window asks for anything.
+
 ## Commands
 
 ```sh

@@ -2,14 +2,11 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { Terminal, type ILinkHandler, type ITerminalOptions } from '@xterm/xterm'
-import type { PtyCreateOptions, SessionId } from '@protocol/ipc'
+import type { SessionId } from '@protocol/ipc'
 import type { Settings } from '@protocol/settings'
 import type { TerminalColors } from '@protocol/theme'
 import { DEFAULT_SETTINGS } from '@settings/settings'
 import { DARK_PALETTE } from '@settings/theme'
-
-const INITIAL_COLS = 80
-const INITIAL_ROWS = 24
 
 // OSC 8 hyperlinks, where the text shown can differ from the URL behind it.
 // Main decides which schemes may open, so xterm is told to pass them all.
@@ -42,9 +39,10 @@ let expectedFocus: SessionId | null = null
 // options live here rather than being passed in at each call site.
 let terminalOptions: ITerminalOptions = optionsFrom(DEFAULT_SETTINGS, DARK_PALETTE.terminal)
 
-// The shell starts printing the moment main spawns it, which can land before
-// createSession has registered a handle to write into. Without somewhere to put
-// that output it is simply dropped, and what goes missing is the first prompt.
+// A shell starts printing the moment main spawns it, which can land before the
+// window has drawn its terminal and made a handle to write into. Without
+// somewhere to put that output it is simply dropped, and what goes missing is
+// the first prompt.
 const pendingOutput = new Map<SessionId, string[]>()
 
 type TitleListener = (id: SessionId, title: string) => void
@@ -69,10 +67,17 @@ window.tacoShells.pty.onData((event) => {
   pendingOutput.set(event.id, [event.data])
 })
 
-export async function createSession(options?: PtyCreateOptions): Promise<SessionId> {
-  const size = { cols: INITIAL_COLS, rows: INITIAL_ROWS }
-  const id = await window.tacoShells.pty.create(size, options)
+window.tacoShells.pty.listening()
 
+function handleFor(id: SessionId): TerminalHandle {
+  const existing = handles.get(id)
+  if (existing) {
+    return existing
+  }
+  return createHandle(id)
+}
+
+function createHandle(id: SessionId): TerminalHandle {
   const term = new Terminal(terminalOptions)
 
   const fit = new FitAddon()
@@ -111,10 +116,11 @@ export async function createSession(options?: PtyCreateOptions): Promise<Session
     return false
   })
 
-  handles.set(id, { id, term, fit, element, opened: false, observer: null })
+  const handle: TerminalHandle = { id, term, fit, element, opened: false, observer: null }
+  handles.set(id, handle)
   drainPendingOutput(id, term)
 
-  return id
+  return handle
 }
 
 export function applyTerminalConfig(settings: Settings, colors: TerminalColors): void {
@@ -127,10 +133,7 @@ export function applyTerminalConfig(settings: Settings, colors: TerminalColors):
 }
 
 export function attachSession(id: SessionId, host: HTMLElement): void {
-  const handle = handles.get(id)
-  if (!handle) {
-    return
-  }
+  const handle = handleFor(id)
 
   // Attaching twice would strand the first ResizeObserver, still connected and
   // still fitting the terminal to a host it has left.
@@ -180,7 +183,6 @@ export function disposeSession(id: SessionId): void {
   detachSession(id)
   handle.term.dispose()
   handles.delete(id)
-  window.tacoShells.pty.kill(id)
 }
 
 export function focusSession(id: SessionId): void {

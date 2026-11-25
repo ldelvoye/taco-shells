@@ -1,12 +1,14 @@
 import { app, net, shell } from 'electron'
+import type { ConfigFile } from '@protocol/config'
 import { PtySessions } from '@runtime/sessions'
 import { paletteFor } from '@settings/theme'
+import { AgentSessions } from '@workspace/agentSessions'
 import { SnapshotStore } from '@workspace/snapshot/store'
 import { startAgents, type AgentsHost } from '../agents'
 import { hookScriptsSource } from '../agents/scripts'
 import { applicationName } from '../channel'
 import { ConfigStore } from '../config'
-import { configDirectory } from '../config/files'
+import { configDirectory, configFilePath } from '../config/files'
 import { startFocus } from '../focus'
 import type { Service } from '../service'
 import { startUpdates, type UpdateHost } from '../update'
@@ -24,6 +26,7 @@ import { createMainWindow, isBackgroundWindow } from './window/window'
 app.setName(applicationName)
 
 const sessions = new PtySessions()
+const agentSessions = new AgentSessions()
 const services: Service[] = []
 let snapshotStore: SnapshotStore | undefined
 let flushed = false
@@ -43,12 +46,20 @@ app.whenReady().then(() => {
   const initialConfig = configStore.current()
   const palette = paletteFor(initialConfig.appearance)
   const link = linkTo(createMainWindow(palette))
-  const snapshots = new SnapshotStore(directory, sessions)
+  const snapshots = new SnapshotStore(directory, agentSessions, (id) => sessions.directoryOf(id))
   snapshotStore = snapshots
   const restoreOnLaunch = initialConfig.settings.restoreOnLaunch
-  const workspaceBridge = bridgeWorkspace(link, snapshots, restoreOnLaunch)
+  const configPathOf = (file: ConfigFile): string => configFilePath(directory, file)
+  const workspaceBridge = bridgeWorkspace(
+    link,
+    snapshots,
+    agentSessions,
+    sessions,
+    configPathOf,
+    restoreOnLaunch
+  )
   const workspace = workspaceBridge.workspace
-  registerIpc(sessions, link, configStore, snapshots, workspace)
+  registerIpc(sessions, link, configStore)
   registerHostApi(link)
 
   const updateHost: UpdateHost = {
@@ -75,26 +86,34 @@ app.whenReady().then(() => {
   })
 
   const focus = bridgeFocus(link, workspace, (events) => {
-    return startFocus(sessions, directory, snapshots, events, () => {
+    return startFocus(sessions, directory, events, () => {
       updates.checkNow()
     })
   })
   services.push(configStore, workspaceBridge, focus, updates, agents, snapshots)
 
-  whenTheWindowCloses(link, snapshots)
+  whenTheWindowCloses(link, snapshots, agentSessions)
 
   configStore.onChange((config) => {
     const nextPalette = paletteFor(config.appearance)
     link.setBackgroundColor(nextPalette.chrome.terminalBackground)
   })
+
+  // Last, so everything that listens to a shell is in place before the first one starts.
+  workspace.start()
 })
 
 // The one place that decides what the window closing means: it ends the app.
-function whenTheWindowCloses(link: WindowLink, snapshots: SnapshotStore): void {
+function whenTheWindowCloses(
+  link: WindowLink,
+  snapshots: SnapshotStore,
+  sessionsOfAgents: AgentSessions
+): void {
   // Closing the window is the start of a quit, and the snapshot has to stop
   // changing from that moment, before the ptys go down with the process.
   link.onClosing(() => {
     snapshots.freeze()
+    sessionsOfAgents.freeze()
   })
 
   // A terminal manager with no windows has nothing left to manage, so closing the
@@ -127,6 +146,7 @@ app.on('before-quit', (event) => {
 
   event.preventDefault()
   snapshotStore.freeze()
+  agentSessions.freeze()
   void snapshotStore.flushAtQuit().finally(() => {
     stopEverything()
     app.quit()
