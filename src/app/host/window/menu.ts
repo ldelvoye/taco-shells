@@ -1,5 +1,5 @@
 import { app, Menu, type MenuItemConstructorOptions } from 'electron'
-import type { AgentMenu } from '../../agents/agentSetup'
+import type { AgentMenuEntry } from '../../agents/setups'
 
 const AGENTS_LABEL = 'Agents'
 const SHOW_SCRIPTS_LABEL = 'Show Hook Scripts in Finder'
@@ -7,13 +7,6 @@ const SHOW_SCRIPTS_LABEL = 'Show Hook Scripts in Finder'
 export interface ReadyUpdate {
   version: string
   onApply: () => void
-}
-
-export interface AgentMenuEntry {
-  name: string
-  menu: AgentMenu
-  onAction: () => void
-  onShowScripts: () => void
 }
 
 export interface ApplicationMenuState {

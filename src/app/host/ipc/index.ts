@@ -1,4 +1,4 @@
-import { type BrowserWindow, clipboard, ipcMain, shell } from 'electron'
+import { ipcMain } from 'electron'
 import type { Workspace } from '@protocol/arrangement'
 import type { ConfigFile } from '@protocol/config'
 import { CHANNEL, type PtyCreateOptions, type PtySize, type SessionId } from '@protocol/ipc'
@@ -7,12 +7,11 @@ import type { SnapshotStore } from '@workspace/snapshot/store'
 import { shellStartFor } from '@workspace/startCommand'
 import type { ConfigStore } from '../../config'
 import { configFilePath } from '../../config/files'
-import { isOpenableLink } from '../links'
-import { sendToWindow } from '../window/send'
+import type { WindowLink } from '../window/link'
 
 export function registerIpc(
   sessions: PtySessions,
-  window: BrowserWindow,
+  link: WindowLink,
   store: ConfigStore,
   snapshotStore: SnapshotStore
 ): void {
@@ -37,16 +36,6 @@ export function registerIpc(
   ipcMain.on(CHANNEL.ptyResize, (_event, id: SessionId, size: PtySize) => sessions.resize(id, size))
   ipcMain.on(CHANNEL.ptyKill, (_event, id: SessionId) => sessions.kill(id))
 
-  ipcMain.handle(CHANNEL.clipboardRead, () => clipboard.readText())
-  ipcMain.on(CHANNEL.clipboardWrite, (_event, text: string) => clipboard.writeText(text))
-
-  ipcMain.on(CHANNEL.linkOpen, (_event, url: string) => {
-    if (!isOpenableLink(url)) {
-      return
-    }
-    void shell.openExternal(url)
-  })
-
   // sendSync is answered by assigning returnValue, not by returning: a handler
   // that returns instead leaves the renderer waiting at startup.
   ipcMain.on(CHANNEL.configGet, (event) => {
@@ -55,9 +44,6 @@ export function registerIpc(
   ipcMain.on(CHANNEL.configPath, (event, which: ConfigFile) => {
     const directory = store.configDirectory()
     event.returnValue = configFilePath(directory, which)
-  })
-  ipcMain.on(CHANNEL.fullScreenGet, (event) => {
-    event.returnValue = window.isFullScreen()
   })
   ipcMain.on(CHANNEL.snapshotGet, (event) => {
     if (store.current().settings.restoreOnLaunch) {
@@ -70,22 +56,15 @@ export function registerIpc(
     snapshotStore.workspaceChanged(workspace)
   })
 
-  window.on('enter-full-screen', () => {
-    sendToWindow(window, CHANNEL.fullScreenChanged, true)
-  })
-  window.on('leave-full-screen', () => {
-    sendToWindow(window, CHANNEL.fullScreenChanged, false)
-  })
-
   sessions.onData((event) => {
-    sendToWindow(window, CHANNEL.ptyData, event)
+    link.send(CHANNEL.ptyData, event)
   })
 
   sessions.onExit((event) => {
-    sendToWindow(window, CHANNEL.ptyExit, event)
+    link.send(CHANNEL.ptyExit, event)
   })
 
   store.onChange((config) => {
-    sendToWindow(window, CHANNEL.configChanged, config)
+    link.send(CHANNEL.configChanged, config)
   })
 }

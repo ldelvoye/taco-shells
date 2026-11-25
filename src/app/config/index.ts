@@ -1,4 +1,3 @@
-import { nativeTheme } from 'electron'
 import type { Config } from '@protocol/config'
 import { DEFAULT_KEYBINDINGS_TEXT, DEFAULT_SETTINGS_TEXT } from './defaults'
 import { type ConfigTexts, readConfigTexts, seedConfigFiles, watchConfigDirectory } from './files'
@@ -6,17 +5,24 @@ import { resolveConfig } from './resolve'
 
 type ConfigListener = (config: Config) => void
 
+export interface SystemTheme {
+  prefersDark(): boolean
+  onChange(listener: () => void): () => void
+}
+
 export class ConfigStore {
   private readonly directory: string
+  private readonly systemTheme: SystemTheme
   private readonly seedingProblems: string[]
   private readonly listeners = new Set<ConfigListener>()
   private readonly stopWatching: () => void
-  private readonly onNativeThemeUpdate: () => void
+  private readonly stopWatchingTheme: () => void
   private config: Config
   private lastSerialized: string
 
-  constructor(directory: string) {
+  constructor(directory: string, systemTheme: SystemTheme) {
     this.directory = directory
+    this.systemTheme = systemTheme
     this.seedingProblems = seedConfigFiles(directory, DEFAULT_SETTINGS_TEXT, DEFAULT_KEYBINDINGS_TEXT)
     this.config = this.resolve()
     this.lastSerialized = JSON.stringify(this.config)
@@ -24,10 +30,9 @@ export class ConfigStore {
     this.stopWatching = watchConfigDirectory(directory, () => {
       this.refresh()
     })
-    this.onNativeThemeUpdate = () => {
+    this.stopWatchingTheme = systemTheme.onChange(() => {
       this.refresh()
-    }
-    nativeTheme.on('updated', this.onNativeThemeUpdate)
+    })
   }
 
   current(): Config {
@@ -45,7 +50,7 @@ export class ConfigStore {
 
   stop(): void {
     this.stopWatching()
-    nativeTheme.off('updated', this.onNativeThemeUpdate)
+    this.stopWatchingTheme()
   }
 
   // Resolution runs inside the directory watcher, where anything thrown would
@@ -67,7 +72,7 @@ export class ConfigStore {
       defaultKeybindingsText: DEFAULT_KEYBINDINGS_TEXT,
       userSettingsText: texts.settings,
       userKeybindingsText: texts.keybindings,
-      systemPrefersDark: nativeTheme.shouldUseDarkColors
+      systemPrefersDark: this.systemTheme.prefersDark()
     })
     const problems = [...this.seedingProblems, ...resolved.problems]
     return { ...resolved, problems }

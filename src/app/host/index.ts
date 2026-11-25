@@ -1,16 +1,23 @@
-import { app } from 'electron'
+import { app, net, shell } from 'electron'
 import { PtySessions } from '@runtime/sessions'
 import { paletteFor } from '@settings/theme'
 import { SnapshotStore } from '@workspace/snapshot/store'
-import { registerAgents } from '../agents'
+import { startAgents, type AgentsHost } from '../agents'
+import { hookScriptsSource } from '../agents/scripts'
 import { applicationName } from '../channel'
 import { ConfigStore } from '../config'
 import { configDirectory } from '../config/files'
-import { registerFocus } from '../focus'
+import { startFocus } from '../focus'
 import type { Service } from '../service'
-import { registerUpdates } from '../update'
+import { startUpdates, type UpdateHost } from '../update'
+import { bridgeAgents } from './ipc/agents'
+import { bridgeFocus } from './ipc/focus'
+import { registerHostApi } from './ipc/hostApi'
 import { registerIpc } from './ipc'
+import { bridgeUpdates } from './ipc/updates'
+import { nativeSystemTheme } from './systemTheme'
 import { ApplicationMenu } from './window/applicationMenu'
+import { linkTo, type WindowLink } from './window/link'
 import { createMainWindow, isBackgroundWindow } from './window/window'
 
 app.setName(applicationName)
@@ -31,35 +38,72 @@ app.whenReady().then(() => {
   applicationMenu.show()
 
   const directory = configDirectory()
-  const configStore = new ConfigStore(directory)
+  const configStore = new ConfigStore(directory, nativeSystemTheme())
   const initialConfig = configStore.current()
   const palette = paletteFor(initialConfig.appearance)
-  const window = createMainWindow(palette)
+  const link = linkTo(createMainWindow(palette))
   const snapshots = new SnapshotStore(directory, sessions)
   snapshotStore = snapshots
-  registerIpc(sessions, window, configStore, snapshots)
-  const updates = registerUpdates(window, directory, applicationMenu)
-  const agents = registerAgents(window, directory, configStore, applicationMenu, sessions)
-  const focus = registerFocus(sessions, window, directory, snapshots, () => {
-    updates.checkNow()
+  registerIpc(sessions, link, configStore, snapshots)
+  registerHostApi(link)
+
+  const updateHost: UpdateHost = {
+    appVersion: app.getVersion(),
+    executablePath: app.getPath('exe'),
+    resourcesPath: process.resourcesPath,
+    fetch: (input, init) => net.fetch(input, init),
+    quit: () => {
+      app.quit()
+    }
+  }
+  const updates = bridgeUpdates(link, applicationMenu, (events) => {
+    return startUpdates(directory, updateHost, events)
   })
+
+  const agentsHost: AgentsHost = {
+    hookScriptsSource: hookScriptsSource(app.isPackaged, process.resourcesPath, app.getAppPath()),
+    showFolder: (path) => {
+      void shell.openPath(path)
+    }
+  }
+  const agents = bridgeAgents(link, applicationMenu, (events) => {
+    return startAgents(directory, configStore, sessions, agentsHost, events)
+  })
+
+  const focus = bridgeFocus(
+    link,
+    () => {
+      updates.checkNow()
+    },
+    (events) => {
+      return startFocus(sessions, directory, snapshots, events)
+    }
+  )
   services.push(configStore, focus, updates, agents, snapshots)
 
+  whenTheWindowCloses(link, snapshots)
+
+  configStore.onChange((config) => {
+    const nextPalette = paletteFor(config.appearance)
+    link.setBackgroundColor(nextPalette.chrome.terminalBackground)
+  })
+})
+
+// The one place that decides what the window closing means. Today it ends the
+// app; keeping terminals alive with no window would change only this function.
+function whenTheWindowCloses(link: WindowLink, snapshots: SnapshotStore): void {
   // Closing the window is the start of a quit, and the snapshot has to stop
   // changing from that moment, before the ptys go down with the process.
-  window.on('close', () => {
+  link.onClosing(() => {
     snapshots.freeze()
   })
 
-  configStore.onChange((config) => {
-    // The store keeps running after the window closes, until the snapshot's last write is done.
-    if (window.isDestroyed()) {
-      return
-    }
-    const nextPalette = paletteFor(config.appearance)
-    window.setBackgroundColor(nextPalette.chrome.terminalBackground)
+  // A terminal manager with no windows has nothing left to manage, so closing the
+  // window quits rather than leaving the app resident the way macOS usually does.
+  app.on('window-all-closed', () => {
+    app.quit()
   })
-})
+}
 
 // The shells need no teardown: each one exits when its pty master closes with
 // the process.
@@ -88,10 +132,4 @@ app.on('before-quit', (event) => {
     stopEverything()
     app.quit()
   })
-})
-
-// A terminal manager with no windows has nothing left to manage, so closing the
-// window quits rather than leaving the app resident the way macOS usually does.
-app.on('window-all-closed', () => {
-  app.quit()
 })

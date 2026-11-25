@@ -1,5 +1,6 @@
 import { Menu } from 'electron'
-import { buildApplicationMenu, type AgentMenuEntry, type ReadyUpdate } from './menu'
+import type { AgentMenuEntry } from '../../agents/setups'
+import { buildApplicationMenu, type ReadyUpdate } from './menu'
 
 /** The one owner of the application menu, rebuilt whenever an update or an agent's state changes. */
 export class ApplicationMenu {

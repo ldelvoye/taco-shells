@@ -2,7 +2,6 @@ import type { Hole } from './check'
 
 /** The steps of the core rip out that close holes, by the number a hole's `closes` names. */
 export const CLOSING_MILESTONES: Record<number, string> = {
-  2: 'one place knows the window: the services stop importing electron and the host',
   3: 'the workspace takes the arrangement: the window stops running the reducer',
   4: 'the workspace opens and closes terminals, through messages to the runtime',
   5: 'the runtime gets its own process'
@@ -20,20 +19,6 @@ export const HOLES: Hole[] = [
 
   // The window reads the agent registry.
   { file: 'src/window/sidebar/Sidebar.tsx', imports: '@agents/registry', closes: 3 },
-
-  // App services import electron.
-  { file: 'src/app/agents/index.ts', imports: 'electron', closes: 2 },
-  { file: 'src/app/config/index.ts', imports: 'electron', closes: 2 },
-  { file: 'src/app/focus/index.ts', imports: 'electron', closes: 2 },
-  { file: 'src/app/update/index.ts', imports: 'electron', closes: 2 },
-
-  // App services import the window sender and the menus from the host.
-  { file: 'src/app/agents/index.ts', imports: '../host/window/applicationMenu', closes: 2 },
-  { file: 'src/app/agents/index.ts', imports: '../host/window/send', closes: 2 },
-  { file: 'src/app/agents/setups.ts', imports: '../host/window/menu', closes: 2 },
-  { file: 'src/app/focus/index.ts', imports: '../host/window/send', closes: 2 },
-  { file: 'src/app/update/index.ts', imports: '../host/window/applicationMenu', closes: 2 },
-  { file: 'src/app/update/index.ts', imports: '../host/window/send', closes: 2 },
 
   // App services import the runtime.
   { file: 'src/app/agents/index.ts', imports: '@runtime/foreground', closes: 4 },

@@ -10,7 +10,6 @@ import {
 } from './agentSetup'
 import type { AgentBanner } from '@protocol/agentSetup'
 import type { SessionId } from '@protocol/ipc'
-import type { AgentMenuEntry } from '../host/window/menu'
 import {
   decline,
   keepCurrent,
@@ -23,6 +22,13 @@ import {
 
 // Long enough for the shell to have started the command that was just submitted.
 export const SUBMIT_CHECK_DELAY_MS = 1000
+
+export interface AgentMenuEntry {
+  name: string
+  menu: AgentMenu
+  onAction: () => void
+  onShowScripts: () => void
+}
 
 export interface AgentSetupsEvents {
   onMenuChanged(entries: AgentMenuEntry[]): void

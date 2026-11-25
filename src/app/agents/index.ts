@@ -1,37 +1,39 @@
 import { homedir } from 'node:os'
-import { app, type BrowserWindow, ipcMain, shell } from 'electron'
 import { HARNESSES } from '@agents/registry'
-import { CHANNEL, type SessionId } from '@protocol/ipc'
+import type { AgentBanner } from '@protocol/agentSetup'
+import type { SessionId } from '@protocol/ipc'
 import { foregroundCommands } from '@runtime/foreground'
 import type { PtySessions } from '@runtime/sessions'
 import { isStable } from '../channel'
 import type { ConfigStore } from '../config'
-import type { ApplicationMenu } from '../host/window/applicationMenu'
-import { sendToWindow } from '../host/window/send'
 import type { Service } from '../service'
 import { agentsOf, canWriteFor, type Agent } from './flow'
-import { copyHookScripts, hookScriptsSource, hooksDirectory } from './scripts'
-import { AgentSetups } from './setups'
+import { copyHookScripts, hooksDirectory } from './scripts'
+import { AgentSetups, type AgentSetupsEvents } from './setups'
 
-function onAgent(channel: string, handle: (agentId: string) => void): void {
-  ipcMain.on(channel, (_event, id: unknown) => {
-    if (typeof id === 'string') {
-      handle(id)
-    }
-  })
+export interface AgentsHost {
+  hookScriptsSource: string
+  showFolder(path: string): void
+}
+
+export interface AgentsService extends Service {
+  banners(): AgentBanner[]
+  setUp(agentId: string): void
+  decline(agentId: string): void
+  dismiss(agentId: string): void
+  refresh(): void
 }
 
 /** The agents' hook scripts and menu entries, kept current while the app runs. */
-export function registerAgents(
-  window: BrowserWindow,
+export function startAgents(
   configDirectory: string,
   store: ConfigStore,
-  menu: ApplicationMenu,
-  sessions: PtySessions
-): Service {
-  const source = hookScriptsSource(app.isPackaged, process.resourcesPath, app.getAppPath())
+  sessions: PtySessions,
+  host: AgentsHost,
+  events: AgentSetupsEvents
+): AgentsService {
   const destination = hooksDirectory(configDirectory)
-  const copyProblems = copyHookScripts(source, destination)
+  const copyProblems = copyHookScripts(host.hookScriptsSource, destination)
   for (const problem of copyProblems) {
     console.error(problem)
   }
@@ -51,58 +53,36 @@ export function registerAgents(
       return foregroundCommands(pid)
     },
     showScripts: (agent: Agent) => {
-      void shell.openPath(agent.paths.hooksDirectory)
+      host.showFolder(agent.paths.hooksDirectory)
     },
-    events: {
-      onMenuChanged: (entries) => {
-        menu.setAgents(entries)
-      },
-      onBannersChanged: (banners) => {
-        sendToWindow(window, CHANNEL.agentsChanged, banners)
-      }
-    }
+    events
   })
-
-  // A sendSync left unanswered hangs the renderer at startup, so this answers
-  // even when no harness declares a setup.
-  ipcMain.on(CHANNEL.agentsGet, (event) => {
-    event.returnValue = setups.banners()
-  })
-
-  onAgent(CHANNEL.agentsSetUp, (agentId) => {
-    setups.act(agentId, 'setUp')
-  })
-
-  onAgent(CHANNEL.agentsDecline, (agentId) => {
-    setups.decline(agentId)
-  })
-
-  onAgent(CHANNEL.agentsDismiss, (agentId) => {
-    setups.dismiss(agentId)
-  })
-
-  const onActive = (): void => {
-    setups.refresh()
-  }
 
   sessions.onSubmit((id) => {
     setups.noteSubmit(id)
   })
 
   setups.start()
-  app.on('did-become-active', onActive)
   store.onChange(() => {
     setups.refresh()
   })
 
   return {
+    banners: () => setups.banners(),
+    setUp: (agentId: string) => {
+      setups.act(agentId, 'setUp')
+    },
+    decline: (agentId: string) => {
+      setups.decline(agentId)
+    },
+    dismiss: (agentId: string) => {
+      setups.dismiss(agentId)
+    },
+    refresh: () => {
+      setups.refresh()
+    },
     stop: () => {
       setups.stop()
-      app.off('did-become-active', onActive)
-      ipcMain.removeAllListeners(CHANNEL.agentsGet)
-      ipcMain.removeAllListeners(CHANNEL.agentsSetUp)
-      ipcMain.removeAllListeners(CHANNEL.agentsDecline)
-      ipcMain.removeAllListeners(CHANNEL.agentsDismiss)
     }
   }
 }
