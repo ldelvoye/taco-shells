@@ -1,4 +1,5 @@
 import type { Dragged, Drop, RowColor, TabGroupId, Workspace } from './arrangement'
+import type { ConfigFile } from './config'
 import type { SessionId } from './ipc'
 import type { AgentRow } from './rows'
 
@@ -6,11 +7,11 @@ export type FocusMove = 'nextPane' | 'previousPane' | 'nextGroup' | 'previousGro
 
 /** What the user asked for. The workspace applies it or drops it. */
 export type WorkspaceRequest =
-  | { type: 'terminalOpened'; pane: SessionId }
-  | { type: 'terminalOpenedIn'; pane: SessionId; tabGroup: TabGroupId | null }
-  | { type: 'restored'; panes: SessionId[] }
-  | { type: 'splitSpawned'; donor: SessionId; pane: SessionId }
-  | { type: 'forkSpawned'; source: SessionId; pane: SessionId }
+  | { type: 'openTerminal'; file: ConfigFile | null }
+  | { type: 'openTerminalIn'; tabGroup: TabGroupId | null }
+  | { type: 'splitTerminal'; pane: SessionId }
+  | { type: 'forkTerminal'; pane: SessionId }
+  | { type: 'closeTerminal'; pane: SessionId }
   | { type: 'titleChanged'; pane: SessionId; title: string }
   | { type: 'focusReported'; pane: SessionId; count: number }
   | { type: 'paneColored'; pane: SessionId; color: RowColor | null }
@@ -24,7 +25,7 @@ export type WorkspaceRequest =
   | { type: 'tabGroupToggled'; id: TabGroupId }
 
 /**
- * `ok` is false when a reported terminal could not be placed: the window still holds that shell and closes it.
+ * `ok` is false when the request was not applied: a split with no room, a fork of a terminal that cannot fork.
  * `revision` is the state that holds the request's effect, which the window waits for before acting on the reply.
  */
 export interface RequestReply {

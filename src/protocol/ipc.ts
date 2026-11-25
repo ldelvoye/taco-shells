@@ -1,22 +1,9 @@
 import type { AgentBanner } from './agentSetup'
 import type { Config, ConfigFile } from './config'
 import type { AgentSignal } from './rows'
-import type { AgentSession, Snapshot } from './snapshot'
 import type { DrawnState, RequestReply, WorkspaceRequest } from './workspace'
 
 export type SessionId = string
-
-export interface ForkRequest {
-  from: SessionId
-  name: string
-}
-
-export interface PtyCreateOptions {
-  cwdFrom?: SessionId
-  cwd?: string
-  resume?: AgentSession
-  fork?: ForkRequest
-}
 
 export interface PtySize {
   cols: number
@@ -41,10 +28,9 @@ export interface AgentSignalEvent {
 }
 
 export const CHANNEL = {
-  ptyCreate: 'pty:create',
   ptyWrite: 'pty:write',
   ptyResize: 'pty:resize',
-  ptyKill: 'pty:kill',
+  ptyListening: 'pty:listening',
   ptyData: 'pty:data',
   ptyExit: 'pty:exit',
   clipboardRead: 'clipboard:read',
@@ -56,7 +42,6 @@ export const CHANNEL = {
   focusUnavailable: 'focus:unavailable',
   fullScreenGet: 'full-screen:get',
   fullScreenChanged: 'full-screen:changed',
-  snapshotGet: 'snapshot:get',
   workspaceGet: 'workspace:get',
   workspaceRequest: 'workspace:request',
   workspaceState: 'workspace:state',
@@ -89,10 +74,9 @@ export interface HostApi {
 /** Everything the renderer may ask the main process to do, exposed on `window.tacoShells`. */
 export interface TacoShellsApi extends HostApi {
   pty: {
-    create(size: PtySize, options?: PtyCreateOptions): Promise<SessionId>
     write(id: SessionId, data: string): void
     resize(id: SessionId, size: PtySize): void
-    kill(id: SessionId): void
+    listening(): void
     onData(listener: (event: PtyDataEvent) => void): () => void
     onExit(listener: (event: PtyExitEvent) => void): () => void
   }
@@ -103,9 +87,6 @@ export interface TacoShellsApi extends HostApi {
   }
   focus: {
     onUnavailable(listener: () => void): () => void
-  }
-  snapshot: {
-    initial: Snapshot | null
   }
   workspace: {
     initial: DrawnState

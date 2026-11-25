@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { Group, Workspace } from '@protocol/arrangement'
-import type { AgentSession, Snapshot, SnapshotTabGroup } from '@protocol/snapshot'
+import type { AgentSession, Snapshot, SnapshotTabGroup } from './format'
 import { emptyWorkspace } from '@rules/arrangement'
 import {
   paneCount,

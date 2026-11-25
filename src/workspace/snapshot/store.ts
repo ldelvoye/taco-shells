@@ -1,47 +1,36 @@
 import type { Workspace } from '@protocol/arrangement'
 import type { SessionId } from '@protocol/ipc'
-import type { AgentSession, Snapshot } from '@protocol/snapshot'
-import { processCwd } from '@runtime/cwd'
-import type { PtySessions } from '@runtime/sessions'
+import type { AgentSessions } from '../agentSessions'
 import { readSnapshot, writeSnapshot } from './files'
-import { snapshotFrom } from './format'
+import { snapshotFrom, type Snapshot } from './format'
 
 export const SNAPSHOT_DEBOUNCE_MS = 250
 export const CWD_REFRESH_MS = 30_000
 export const QUIT_HOLD_MS = 1000
-export const PROVISIONAL_TTL_MS = 60_000
-
-interface AgentEntry {
-  session: AgentSession
-  provisionalSince: number | null
-}
-
-type SessionSource = Pick<PtySessions, 'pidOf' | 'onExit'>
 
 export class SnapshotStore {
   private readonly directory: string
-  private readonly sessions: SessionSource
-  private readonly now: () => number
+  private readonly agentSessions: AgentSessions
+  private readonly directoryOf: (id: SessionId) => Promise<string | null>
   private readonly initialSnapshot: Snapshot | null
   private readonly cwds = new Map<SessionId, string>()
-  private readonly agents = new Map<SessionId, AgentEntry[]>()
   private readonly refreshTimer: ReturnType<typeof setInterval>
   private debounceTimer: ReturnType<typeof setTimeout> | null = null
   private latestWorkspace: Workspace | null = null
   private frozen = false
 
-  constructor(directory: string, sessions: SessionSource, now: () => number = Date.now) {
+  constructor(
+    directory: string,
+    agentSessions: AgentSessions,
+    directoryOf: (id: SessionId) => Promise<string | null>
+  ) {
     this.directory = directory
-    this.sessions = sessions
-    this.now = now
+    this.agentSessions = agentSessions
+    this.directoryOf = directoryOf
     this.initialSnapshot = readSnapshot(directory)
 
-    sessions.onExit(({ id }) => {
-      if (this.frozen) {
-        return
-      }
-      this.cwds.delete(id)
-      this.agents.delete(id)
+    agentSessions.onChange(() => {
+      this.scheduleWrite()
     })
 
     this.refreshTimer = setInterval(() => {
@@ -67,47 +56,6 @@ export class SnapshotStore {
     this.scheduleWrite()
   }
 
-  /** An agent session that started in a pane; the newest one is what the pane resumes. */
-  recordAgentStart(id: SessionId, session: AgentSession): void {
-    if (this.frozen) {
-      return
-    }
-
-    const entries = this.entriesFor(id)
-    const existing = entries.find((entry) => {
-      return entry.session.harness === session.harness && entry.session.sessionId === session.sessionId
-    })
-    if (existing === undefined) {
-      entries.push({ session, provisionalSince: null })
-    } else {
-      existing.provisionalSince = null
-    }
-    this.scheduleWrite()
-  }
-
-  /** An agent session that ended in a pane, dropped from what the pane resumes. */
-  recordAgentEnd(id: SessionId, harness: string, sessionId: string): void {
-    if (this.frozen) {
-      return
-    }
-
-    const entries = this.agents.get(id)
-    if (entries === undefined) {
-      return
-    }
-
-    const remaining = entries.filter((entry) => {
-      const isEnded = entry.session.harness === harness && entry.session.sessionId === sessionId
-      return !isEnded
-    })
-    if (remaining.length === 0) {
-      this.agents.delete(id)
-    } else {
-      this.agents.set(id, remaining)
-    }
-    this.scheduleWrite()
-  }
-
   /** The directory a shell was started in, standing in until the next refresh reads the live one. */
   seedDirectory(id: SessionId, cwd: string): void {
     if (this.frozen) {
@@ -116,28 +64,11 @@ export class SnapshotStore {
     this.cwds.set(id, cwd)
   }
 
-  /** A restored session, provisional until its SessionStart confirms it or PROVISIONAL_TTL_MS passes. */
-  seedAgent(id: SessionId, session: AgentSession): void {
+  forget(id: SessionId): void {
     if (this.frozen) {
       return
     }
-
-    const entries = this.entriesFor(id)
-    entries.push({ session, provisionalSince: this.now() })
-  }
-
-  // A pane's newest session is the one it resumes or forks: an older entry whose
-  // agent died without a SessionEnd would otherwise pin the pane to a dead id for good.
-  agentSessionOf(id: SessionId): AgentSession | null {
-    const entries = this.agents.get(id)
-    if (entries === undefined) {
-      return null
-    }
-    if (entries.length === 0) {
-      return null
-    }
-    const newest = entries[entries.length - 1]
-    return newest.session
+    this.cwds.delete(id)
   }
 
   /** The quitting flag; after it only flushAtQuit changes the file. */
@@ -196,11 +127,11 @@ export class SnapshotStore {
       return
     }
 
-    this.dropExpiredAgents()
+    this.agentSessions.dropExpired()
     const snapshot = snapshotFrom(
       this.latestWorkspace,
       (id) => this.cwdOf(id),
-      (id) => this.agentSessionOf(id)
+      (id) => this.agentSessions.sessionOf(id)
     )
     writeSnapshot(this.directory, snapshot)
   }
@@ -211,32 +142,6 @@ export class SnapshotStore {
       return null
     }
     return cwd
-  }
-
-  private entriesFor(id: SessionId): AgentEntry[] {
-    let entries = this.agents.get(id)
-    if (entries === undefined) {
-      entries = []
-      this.agents.set(id, entries)
-    }
-    return entries
-  }
-
-  private dropExpiredAgents(): void {
-    const now = this.now()
-    for (const [id, entries] of this.agents) {
-      const live = entries.filter((entry) => {
-        if (entry.provisionalSince === null) {
-          return true
-        }
-        return now - entry.provisionalSince <= PROVISIONAL_TTL_MS
-      })
-      if (live.length === 0) {
-        this.agents.delete(id)
-      } else {
-        this.agents.set(id, live)
-      }
-    }
   }
 
   private paneIds(): SessionId[] {
@@ -259,11 +164,7 @@ export class SnapshotStore {
   }
 
   private async refreshDirectory(id: SessionId): Promise<void> {
-    const pid = this.sessions.pidOf(id)
-    if (pid === null) {
-      return
-    }
-    const directory = await processCwd(pid)
+    const directory = await this.directoryOf(id)
     if (directory === null) {
       return
     }

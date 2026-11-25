@@ -2,8 +2,7 @@ import { homedir } from 'node:os'
 import { HARNESSES } from '@agents/registry'
 import type { AgentBanner } from '@protocol/agentSetup'
 import type { SessionId } from '@protocol/ipc'
-import { foregroundCommands } from '@runtime/foreground'
-import type { PtySessions } from '@runtime/sessions'
+import type { Runtime } from '@protocol/runtime'
 import { isStable } from '../channel'
 import type { ConfigStore } from '../config'
 import type { Service } from '../service'
@@ -28,7 +27,7 @@ export interface AgentsService extends Service {
 export function startAgents(
   configDirectory: string,
   store: ConfigStore,
-  sessions: PtySessions,
+  runtime: Runtime,
   host: AgentsHost,
   events: AgentSetupsEvents
 ): AgentsService {
@@ -45,20 +44,14 @@ export function startAgents(
     agents,
     isManaging: () => store.current().settings.manageAgentHooks,
     canWrite: (agent: Agent) => canWriteFor(agent.setup, isStable, process.env),
-    foregroundCommands: async (id: SessionId) => {
-      const pid = sessions.pidOf(id)
-      if (pid === null) {
-        return []
-      }
-      return foregroundCommands(pid)
-    },
+    foregroundCommands: (id: SessionId) => runtime.foregroundCommands(id),
     showScripts: (agent: Agent) => {
       host.showFolder(agent.paths.hooksDirectory)
     },
     events
   })
 
-  sessions.onSubmit((id) => {
+  runtime.onSubmit((id) => {
     setups.noteSubmit(id)
   })
 

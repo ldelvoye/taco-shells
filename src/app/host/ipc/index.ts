@@ -1,41 +1,14 @@
 import { ipcMain } from 'electron'
 import type { ConfigFile } from '@protocol/config'
-import { CHANNEL, type PtyCreateOptions, type PtySize, type SessionId } from '@protocol/ipc'
+import { CHANNEL, type PtyDataEvent, type PtySize, type SessionId } from '@protocol/ipc'
 import type { PtySessions } from '@runtime/sessions'
-import type { SnapshotStore } from '@workspace/snapshot/store'
-import { shellStartFor } from '@workspace/startCommand'
-import type { Workspace } from '@workspace/workspace'
 import type { ConfigStore } from '../../config'
 import { configFilePath } from '../../config/files'
 import type { WindowLink } from '../window/link'
 
-export function registerIpc(
-  sessions: PtySessions,
-  link: WindowLink,
-  store: ConfigStore,
-  snapshotStore: SnapshotStore,
-  workspace: Workspace
-): void {
-  ipcMain.handle(
-    CHANNEL.ptyCreate,
-    async (_event, size: PtySize, options: PtyCreateOptions = {}) => {
-      const agentSessionOf = (id: SessionId) => snapshotStore.agentSessionOf(id)
-      const start = shellStartFor(options, agentSessionOf)
-      const id = await sessions.create(size, start)
-      const startingDirectory = sessions.startingDirectory(id)
-      if (startingDirectory !== null) {
-        snapshotStore.seedDirectory(id, startingDirectory)
-      }
-      // A fork is not seeded: its session id is unknown until its SessionStart hook reports.
-      if (options.resume !== undefined) {
-        snapshotStore.seedAgent(id, options.resume)
-      }
-      return id
-    }
-  )
+export function registerIpc(sessions: PtySessions, link: WindowLink, store: ConfigStore): void {
   ipcMain.on(CHANNEL.ptyWrite, (_event, id: SessionId, data: string) => sessions.write(id, data))
   ipcMain.on(CHANNEL.ptyResize, (_event, id: SessionId, size: PtySize) => sessions.resize(id, size))
-  ipcMain.on(CHANNEL.ptyKill, (_event, id: SessionId) => sessions.kill(id))
 
   // sendSync is answered by assigning returnValue, not by returning: a handler
   // that returns instead leaves the renderer waiting at startup.
@@ -46,20 +19,30 @@ export function registerIpc(
     const directory = store.configDirectory()
     event.returnValue = configFilePath(directory, which)
   })
-  ipcMain.on(CHANNEL.snapshotGet, (event) => {
-    if (store.current().settings.restoreOnLaunch) {
-      event.returnValue = snapshotStore.initial()
-    } else {
-      event.returnValue = null
+
+  // The shells start before the page has loaded, and a message to a page that is not listening yet is dropped: the first prompt would be lost.
+  let held: PtyDataEvent[] | null = []
+
+  ipcMain.on(CHANNEL.ptyListening, () => {
+    const backlog = held
+    held = null
+    if (backlog === null) {
+      return
+    }
+    for (const event of backlog) {
+      link.send(CHANNEL.ptyData, event)
     }
   })
 
   sessions.onData((event) => {
+    if (held !== null) {
+      held.push(event)
+      return
+    }
     link.send(CHANNEL.ptyData, event)
   })
 
   sessions.onExit((event) => {
-    workspace.terminalExited(event.id)
     link.send(CHANNEL.ptyExit, event)
   })
 
