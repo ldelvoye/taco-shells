@@ -20,7 +20,7 @@ function widthSum(snapshot: Snapshot, group: number): number {
 describe('parseSnapshot', () => {
   it('yields null for text that cannot be a snapshot', () => {
     expect(parseSnapshot('{not json')).toBeNull()
-    expect(parseSnapshot('[]')).toBeNull()
+    expect(parseSnapshot('null')).toBeNull()
     expect(parseSnapshot(JSON.stringify({ version: 2, groups: [], activeGroup: 0 }))).toBeNull()
     expect(parseSnapshot(JSON.stringify({ version: 1, groups: {}, activeGroup: 0 }))).toBeNull()
   })

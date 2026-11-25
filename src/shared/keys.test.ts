@@ -34,7 +34,7 @@ describe('parseChord', () => {
 })
 
 describe('codeToKey', () => {
-  it('returns null for modifier codes', () => {
+  it('returns null for a modifier code', () => {
     expect(codeToKey('MetaLeft')).toBeNull()
   })
 })
