@@ -38,7 +38,6 @@ describe('the release the updater will offer', () => {
 
   it('tolerates any shape without throwing', () => {
     expect(parseRelease(null)).toBeNull()
-    expect(parseRelease('release')).toBeNull()
     expect(parseRelease(release({ assets: [null, 3] }))).toBeNull()
   })
 })

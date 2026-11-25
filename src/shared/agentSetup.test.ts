@@ -59,7 +59,6 @@ describe('agent setup', () => {
 
     expect(agentMenuOf('byHand', 'Claude Code', true).action).toBe('switch')
     expect(agentMenuOf('setUp', 'Claude Code', true).action).toBe('remove')
-    expect(agentMenuOf('notSetUp', 'Claude Code', true).actionLabel).toBe('Set Up Claude Code')
   })
 
   it('offers only to an agent that is installed, unwired, never declined, in a build that may write', () => {

@@ -149,7 +149,7 @@ describe('the minimum pane width', () => {
 })
 
 describe('closePane width redistribution', () => {
-  it('redistributes the closed pane width proportionally across survivors', () => {
+  it("gives the closed pane's width back so the survivors still fill the group", () => {
     const group = makeGroupWithWidths('a', [0.5, 0.25, 0.25], 2)
     const workspace = makeWorkspace([group], 0)
 

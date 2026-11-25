@@ -156,7 +156,7 @@ describe('agent setups', () => {
     expect(harnessed.sent.lastBanners).toEqual([])
   })
 
-  it('pushes banners only when they changed since the last ones sent', () => {
+  it('does not push banners that have not changed', () => {
     const harnessed = harness([agentWith(claude.id)], [])
 
     harnessed.setups.banners()

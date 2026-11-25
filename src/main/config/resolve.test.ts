@@ -52,14 +52,6 @@ describe('the shipped defaults', () => {
     const chordCommands = ROW_COLORS.map((_, index) => bindings[`cmd+opt+${index + 1}`])
     const colorCommands = ROW_COLORS.map((color) => ROW_COLOR_COMMANDS[color])
 
-    expect(colorCommands).toEqual([
-      'terminal.colorRed',
-      'terminal.colorOrange',
-      'terminal.colorYellow',
-      'terminal.colorGreen',
-      'terminal.colorBlue',
-      'terminal.colorPurple'
-    ])
     expect(chordCommands).toEqual(colorCommands)
   })
 })

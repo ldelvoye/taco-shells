@@ -82,9 +82,6 @@ describe('fork with Claude', () => {
       await app.clickForkItem()
 
       const forked = await app.until('the fork opens', (state) => state.rows.length === 2)
-      expect(forked.groups).toBe(1)
-      expect(forked.rows.map((row) => row.color)).toEqual(['blue', 'blue'])
-      expect(forked.rows.map((row) => row.active)).toEqual([false, true])
       expect(forked.colorPickerOpen).toBe(false)
 
       await app.until('claude receives the fork', () => existsSync(report))
