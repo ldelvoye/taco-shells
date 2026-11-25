@@ -199,6 +199,8 @@ describe('Workspace', () => {
     const openedBefore = runtime.opened.length
     const refused = workspace.request({ type: 'splitTerminal', pane: 'pty-1' })
     expect(refused.ok).toBe(false)
+    const refusedFork = workspace.request({ type: 'forkTerminal', pane: 'pty-1' })
+    expect(refusedFork.ok).toBe(false)
     expect(runtime.opened.length).toBe(openedBefore)
 
     const unknown = workspace.request({ type: 'splitTerminal', pane: 'gone' })
@@ -239,16 +241,28 @@ describe('Workspace', () => {
   })
 
   it('closes through the runtime and drops the terminal when its exit arrives', () => {
-    const { workspace, runtime, emptied, exited } = opened(1)
+    const { workspace, runtime, agentSessions, emptied, exited } = opened(1)
+    const session: AgentSession = { harness: 'claude', sessionId: SESSION, cwd: '/work' }
+    workspace.agentStarted('pty-1', session, false)
 
     workspace.request({ type: 'closeTerminal', pane: 'pty-1' })
     expect(runtime.closed).toEqual(['pty-1'])
     expect(paneIdsOf(workspace)).toEqual([['pty-1']])
+    expect(agentSessions.sessionOf('pty-1')).toEqual(session)
 
     runtime.fireExit('pty-1')
     expect(paneIdsOf(workspace)).toEqual([])
     expect(exited).toEqual(['pty-1'])
+    expect(agentSessions.sessionOf('pty-1')).toBeNull()
     expect(emptied.count).toBe(1)
+  })
+
+  it('tells the save file where a shell started', () => {
+    const { runtime, startedIn } = opened(1)
+
+    runtime.fireStarted('pty-1', '/somewhere')
+
+    expect(startedIn).toEqual([{ id: 'pty-1', directory: '/somewhere' }])
   })
 
   it('restores the saved arrangement and opens every pane where it was saved', () => {
@@ -262,10 +276,14 @@ describe('Workspace', () => {
       activeGroup: 0,
       tabGroups: []
     }
-    const { workspace, runtime, agentSessions } = recordingWorkspace(snapshot)
+    const { workspace, runtime, agentSessions, startedIn } = recordingWorkspace(snapshot)
 
     workspace.start()
 
+    expect(startedIn).toEqual([
+      { id: 'pty-1', directory: '/work/a' },
+      { id: 'pty-2', directory: '/work/b' }
+    ])
     expect(paneIdsOf(workspace)).toEqual([['pty-1'], ['pty-2']])
     expect(groupIdsOf(workspace)).toEqual(['group-1', 'group-2'])
     expect(runtime.opened).toEqual([

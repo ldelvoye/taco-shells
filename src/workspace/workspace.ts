@@ -133,7 +133,7 @@ export class Workspace {
         return
       }
     }
-    this.openFreshTerminal()
+    this.openFreshTerminal(null)
   }
 
   drawn(): DrawnState {
@@ -193,12 +193,10 @@ export class Workspace {
       case 'openTerminal': {
         let command: string | null = null
         if (request.file !== null) {
-          command = editorCommand(this.options.configPathOf(request.file))
+          const path = this.options.configPathOf(request.file)
+          command = editorCommand(path)
         }
-        const pane = this.nextTerminalId()
-        const group = this.groupFor(pane)
-        this.dispatch({ type: 'terminalOpened', group })
-        this.openTerminal(pane, { cwd: null, cwdFrom: null, command })
+        this.openFreshTerminal(command)
         return accepted(null)
       }
       case 'openTerminalIn': {
@@ -290,11 +288,11 @@ export class Workspace {
     })
   }
 
-  private openFreshTerminal(): void {
+  private openFreshTerminal(command: string | null): void {
     const pane = this.nextTerminalId()
     const group = this.groupFor(pane)
     this.dispatch({ type: 'terminalOpened', group })
-    this.openTerminal(pane, { cwd: null, cwdFrom: null, command: null })
+    this.openTerminal(pane, { cwd: null, cwdFrom: null, command })
   }
 
   private terminalExited(pane: SessionId): void {
@@ -352,6 +350,7 @@ export class Workspace {
   }
 
   private restore(snapshot: Snapshot): boolean {
+    // Ids are handed out in group order, the order workspaceFromSnapshot takes them in.
     const savedPanes = snapshot.groups.flatMap((group) => group.panes)
     const paneIds = savedPanes.map(() => this.nextTerminalId())
 
@@ -367,21 +366,27 @@ export class Workspace {
     if (restored.groups.length === 0) {
       return false
     }
-    this.dispatch({ type: 'workspaceRestored', workspace: restored })
 
-    savedPanes.forEach((savedPane, index) => {
-      this.openSavedTerminal(paneIds[index], savedPane)
+    const shells = savedPanes.map((savedPane, index) => this.savedShell(paneIds[index], savedPane))
+    this.dispatch({ type: 'workspaceRestored', workspace: restored })
+    shells.forEach((shell, index) => {
+      this.openTerminal(paneIds[index], shell)
     })
     return true
   }
 
-  private openSavedTerminal(id: SessionId, saved: SnapshotPane): void {
+  // What a saved pane resumes and where it was are recorded before its shell exists:
+  // the first save after a restore can come before any shell has started.
+  private savedShell(id: SessionId, saved: SnapshotPane): ShellStart {
     const options = startOptionsOf(saved)
     const shell = this.shellStart(options)
     if (saved.agent !== null) {
       this.options.agentSessions.seed(id, saved.agent)
     }
-    this.openTerminal(id, shell)
+    if (shell.cwd !== null) {
+      this.effects.onStartedIn(id, shell.cwd)
+    }
+    return shell
   }
 
   private dispatch(event: WorkspaceEvent): void {

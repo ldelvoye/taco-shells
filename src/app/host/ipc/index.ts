@@ -20,7 +20,8 @@ export function registerIpc(sessions: PtySessions, link: WindowLink, store: Conf
     event.returnValue = configFilePath(directory, which)
   })
 
-  // The shells start before the page has loaded, and a message to a page that is not listening yet is dropped: the first prompt would be lost.
+  // The shells start before the page has loaded, and a message to a page that is
+  // not listening yet is dropped: the first prompt would be lost.
   let held: PtyDataEvent[] | null = []
 
   ipcMain.on(CHANNEL.ptyListening, () => {

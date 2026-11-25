@@ -59,7 +59,7 @@ function createFakeHandlers(): FakeHandlers {
     onUnavailable: () => {
       unavailable.push(true)
     },
-    sessionForPids: (pids: number[]) => {
+    sessionForPids: async (pids: number[]) => {
       for (const [id, pid] of sessionPids) {
         if (pids.includes(pid)) {
           return id

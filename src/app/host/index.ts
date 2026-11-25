@@ -92,7 +92,7 @@ app.whenReady().then(() => {
   })
   services.push(configStore, workspaceBridge, focus, updates, agents, snapshots)
 
-  whenTheWindowCloses(link, snapshots, agentSessions)
+  whenTheWindowCloses(link, snapshots)
 
   configStore.onChange((config) => {
     const nextPalette = paletteFor(config.appearance)
@@ -103,17 +103,18 @@ app.whenReady().then(() => {
   workspace.start()
 })
 
+// The save file is made from the snapshot store and the agent sessions, and both stop together.
+function freezeWhatIsSaved(snapshots: SnapshotStore): void {
+  snapshots.freeze()
+  agentSessions.freeze()
+}
+
 // The one place that decides what the window closing means: it ends the app.
-function whenTheWindowCloses(
-  link: WindowLink,
-  snapshots: SnapshotStore,
-  sessionsOfAgents: AgentSessions
-): void {
+function whenTheWindowCloses(link: WindowLink, snapshots: SnapshotStore): void {
   // Closing the window is the start of a quit, and the snapshot has to stop
   // changing from that moment, before the ptys go down with the process.
   link.onClosing(() => {
-    snapshots.freeze()
-    sessionsOfAgents.freeze()
+    freezeWhatIsSaved(snapshots)
   })
 
   // A terminal manager with no windows has nothing left to manage, so closing the
@@ -145,8 +146,7 @@ app.on('before-quit', (event) => {
   }
 
   event.preventDefault()
-  snapshotStore.freeze()
-  agentSessions.freeze()
+  freezeWhatIsSaved(snapshotStore)
   void snapshotStore.flushAtQuit().finally(() => {
     stopEverything()
     app.quit()

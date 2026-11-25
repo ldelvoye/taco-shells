@@ -9,12 +9,12 @@ Nothing here is a style guide. It is the handful of mechanics that are not obvio
 Electron, TypeScript throughout, React for the window chrome only. The terminal itself is `@xterm/xterm` over `node-pty`; none of it is our own emulation.
 
 ```
-src/protocol/   every type sent between the window and the backend, and the compiler check that they are plain data
+src/protocol/   every type that crosses between the window, the workspace and the runtime, and the compiler check that they are plain data
 src/rules/      pure functions over those types: drops, names, row summaries
 src/settings/   settings, themes, key bindings and commands
 src/agents/     what the app knows about each coding agent
 src/runtime/    the ptys: sessions, working directories, foreground programs
-src/workspace/  the workspace reducer, attention, and the save file
+src/workspace/  the arrangement and its reducer, opening and closing terminals, agent sessions, attention, and the save file
 src/app/        the Electron side: services, the window host, and the preload bridge
 src/window/     React: the sidebar, panes, and the terminal views
 src/testing/    helpers for tests

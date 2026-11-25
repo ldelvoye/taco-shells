@@ -65,8 +65,6 @@ export function createWorkspaceOperations(link: WorkspaceLink): WorkspaceOperati
     send({ type: 'openTerminal', file: 'keybindings' })
   }
 
-  // The new shell starts in the split terminal's directory, which the main
-  // process resolves from the pty it names here.
   function splitActive(): void {
     const workspace = link.getDrawn().workspace
     const activeSessionId = activeSessionOf(workspace)
