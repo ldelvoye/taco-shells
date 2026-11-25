@@ -1,0 +1,259 @@
+import { describe, expect, it } from 'vitest'
+
+import type { Group, TabGroup, Workspace } from '@protocol/arrangement'
+import { canSplitPane, emptyWorkspace, MIN_PANE_WIDTH } from '../arrangement'
+
+import {
+  activatePane,
+  closePane,
+  focusNextGroup,
+  focusNextPane,
+  focusPreviousGroup,
+  focusPreviousPane,
+  forkPane,
+  moveDivider,
+  renamePane,
+  setPaneColor,
+  splitPane,
+  toggleActivePaneColor
+} from './arrangement'
+
+function makeGroup(id: string, paneId: string): Group {
+  return {
+    id,
+    panes: [{ id: paneId, title: paneId, width: 1, color: null }],
+    activePane: 0,
+    tabGroup: null
+  }
+}
+
+function makeGroupWithWidths(id: string, widths: number[], activePane: number): Group {
+  const panes = widths.map((width, index) => {
+    return { id: `${id}-${index}`, title: '', width, color: null }
+  })
+  return { id, panes, activePane, tabGroup: null }
+}
+
+function makeWorkspace(groups: Group[], activeGroup: number, tabGroups: TabGroup[] = []): Workspace {
+  return { groups, activeGroup, tabGroups }
+}
+
+function threeGroups(): Group[] {
+  return [makeGroup('a', 'pane-a'), makeGroup('b', 'pane-b'), makeGroup('c', 'pane-c')]
+}
+
+describe('closePane', () => {
+  it('keeps the active group sensible after a close', () => {
+    const beforeActive = makeWorkspace(threeGroups(), 2)
+    const afterClosingBeforeActive = closePane(beforeActive, 'pane-a')
+    expect(afterClosingBeforeActive.groups.map((group) => group.id)).toEqual(['b', 'c'])
+    expect(afterClosingBeforeActive.activeGroup).toBe(1)
+
+    const activeMiddle = makeWorkspace(threeGroups(), 1)
+    const afterClosingActiveMiddle = closePane(activeMiddle, 'pane-b')
+    expect(afterClosingActiveMiddle.groups.map((group) => group.id)).toEqual(['a', 'c'])
+    expect(afterClosingActiveMiddle.activeGroup).toBe(1)
+
+    const activeBottom = makeWorkspace(threeGroups(), 2)
+    const afterClosingActiveBottom = closePane(activeBottom, 'pane-c')
+    expect(afterClosingActiveBottom.groups.map((group) => group.id)).toEqual(['a', 'b'])
+    expect(afterClosingActiveBottom.activeGroup).toBe(1)
+  })
+
+  it('leaves an empty workspace with activeGroup back at 0 when the only group is closed', () => {
+    const workspace = makeWorkspace([makeGroup('a', 'pane-a')], 0)
+
+    const result = closePane(workspace, 'pane-a')
+
+    expect(result.groups).toEqual([])
+    expect(result.activeGroup).toBe(0)
+  })
+})
+
+describe('splitPane', () => {
+  it('puts the new pane after its donor and levels the whole group', () => {
+    const group = makeGroupWithWidths('a', [0.5, 0.5], 1)
+    const workspace = makeWorkspace([group], 0)
+
+    const result = splitPane(workspace, 'a-0', 'new-pane')
+
+    const resultGroup = result.groups[0]
+    expect(resultGroup.panes.map((pane) => pane.id)).toEqual(['a-0', 'new-pane', 'a-1'])
+    expect(resultGroup.activePane).toBe(1)
+
+    // Every pane the same width, including the ones that were not split: the
+    // alternative halves the newest pane each time and fans the group out.
+    const widths = resultGroup.panes.map((pane) => pane.width)
+    expect(widths[0]).toBe(widths[1])
+    expect(widths[1]).toBe(widths[2])
+  })
+})
+
+describe('forkPane', () => {
+  it('puts the fork right of its source in any group, with its color, and focuses it', () => {
+    const colored: Group = {
+      id: 'g0',
+      panes: [
+        { id: 'a', title: '', width: 0.5, color: 'blue' },
+        { id: 'b', title: '', width: 0.5, color: null }
+      ],
+      activePane: 1,
+      tabGroup: null
+    }
+    const other = makeGroup('g1', 'c')
+    const workspace = makeWorkspace([colored, other], 1)
+
+    const forkOfColored = forkPane(workspace, 'a', 'f')
+
+    const forkedGroup = forkOfColored.groups[0]
+    expect(forkedGroup.panes.map((pane) => pane.id)).toEqual(['a', 'f', 'b'])
+    for (const pane of forkedGroup.panes) {
+      expect(pane.width).toBeCloseTo(1 / 3)
+    }
+    expect(forkedGroup.panes[1].color).toBe('blue')
+    expect(forkedGroup.activePane).toBe(1)
+    expect(forkOfColored.activeGroup).toBe(0)
+    expect(forkOfColored.groups[1]).toBe(other)
+
+    const forkOfPlain = forkPane(workspace, 'b', 'f')
+    expect(forkOfPlain.groups[0].panes[2].color).toBeNull()
+
+    expect(forkPane(workspace, 'missing', 'f')).toBe(workspace)
+
+    const fullGroup = makeGroupWithWidths('full', new Array(10).fill(0.1), 0)
+    const fullWorkspace = makeWorkspace([fullGroup], 0)
+    expect(forkPane(fullWorkspace, 'full-3', 'f')).toBe(fullWorkspace)
+  })
+})
+
+describe('the minimum pane width', () => {
+  it('holds across repeated splitting, which is what bounds a group', () => {
+    let workspace = makeWorkspace([makeGroup('a', 'pane-a')], 0)
+
+    let attempts = 0
+    while (canSplitPane(workspace, 'pane-a') && attempts < 100) {
+      workspace = splitPane(workspace, 'pane-a', `pane-${attempts}`)
+      attempts += 1
+    }
+
+    const panes = workspace.groups[0].panes
+    const narrowest = Math.min(...panes.map((pane) => pane.width))
+    expect(narrowest).toBeGreaterThanOrEqual(MIN_PANE_WIDTH)
+
+    // Widths summing to 1 with none below a tenth leaves room for ten panes and
+    // no more, so the group cannot grow without bound.
+    expect(panes).toHaveLength(10)
+    expect(splitPane(workspace, 'pane-a', 'one-too-many')).toBe(workspace)
+  })
+})
+
+describe('closePane width redistribution', () => {
+  it("gives the closed pane's width back so the survivors still fill the group", () => {
+    const group = makeGroupWithWidths('a', [0.5, 0.25, 0.25], 2)
+    const workspace = makeWorkspace([group], 0)
+
+    const result = closePane(workspace, 'a-0')
+
+    const resultGroup = result.groups[0]
+    expect(resultGroup.panes.map((pane) => pane.width)).toEqual([0.5, 0.5])
+    expect(resultGroup.activePane).toBe(1)
+  })
+})
+
+describe('focus wrapping', () => {
+  it('wraps activePane at both ends of the group', () => {
+    const lastActive = makeGroupWithWidths('a', [0.5, 0.25, 0.25], 2)
+    const next = focusNextPane(makeWorkspace([lastActive], 0))
+    expect(next.groups[0].activePane).toBe(0)
+
+    const firstActive = makeGroupWithWidths('a', [0.5, 0.25, 0.25], 0)
+    const previous = focusPreviousPane(makeWorkspace([firstActive], 0))
+    expect(previous.groups[0].activePane).toBe(2)
+  })
+})
+
+describe('group focus', () => {
+  it('wraps at both ends and leaves each group on the pane it was last using', () => {
+    const split = makeGroupWithWidths('b', [0.5, 0.5], 1)
+    const groups = [makeGroup('a', 'pane-a'), split, makeGroup('c', 'pane-c')]
+
+    const fromLast = focusNextGroup(makeWorkspace(groups, 2))
+    expect(fromLast.activeGroup).toBe(0)
+
+    const fromFirst = focusPreviousGroup(makeWorkspace(groups, 0))
+    expect(fromFirst.activeGroup).toBe(2)
+
+    const ontoTheSplit = focusNextGroup(makeWorkspace(groups, 0))
+    expect(ontoTheSplit.activeGroup).toBe(1)
+    expect(ontoTheSplit.groups[1].activePane).toBe(1)
+  })
+})
+
+describe('moveDivider', () => {
+  it('adjusts adjacent panes while preserving their combined width, and clamps at the floor', () => {
+    const group = makeGroupWithWidths('a', [0.25, 0.25, 0.5], 0)
+    const workspace = makeWorkspace([group], 0)
+
+    const moved = moveDivider(workspace, 0, 0, 0.375)
+    const movedPanes = moved.groups[0].panes
+    expect(movedPanes[0].width).toBe(0.375)
+    expect(movedPanes[1].width).toBe(0.125)
+    expect(movedPanes[2].width).toBe(0.5)
+
+    const clamped = moveDivider(workspace, 0, 0, 0.01)
+    expect(clamped.groups[0].panes[0].width).toBe(MIN_PANE_WIDTH)
+  })
+})
+
+describe('activatePane', () => {
+  it('reaches a pane in another group, and a pane beside it in the same one', () => {
+    const groups = [makeGroup('a', 'pane-a'), makeGroupWithWidths('b', [0.5, 0.5], 0)]
+    const workspace = makeWorkspace(groups, 0)
+
+    const acrossGroups = activatePane(workspace, 'b-1')
+    expect(acrossGroups.activeGroup).toBe(1)
+    expect(acrossGroups.groups[1].activePane).toBe(1)
+
+    const withinGroup = activatePane(acrossGroups, 'b-0')
+    expect(withinGroup.activeGroup).toBe(1)
+    expect(withinGroup.groups[1].activePane).toBe(0)
+  })
+})
+
+describe('toggleActivePaneColor', () => {
+  it('colors only the active pane, swaps a different color, and clears the same one', () => {
+    const start = makeWorkspace([makeGroupWithWidths('a', [0.5, 0.5], 1)], 0)
+    const colorsOf = (workspace: Workspace): Array<string | null> => {
+      return workspace.groups[0].panes.map((pane) => pane.color)
+    }
+
+    const blue = toggleActivePaneColor(start, 'blue')
+    expect(colorsOf(blue)).toEqual([null, 'blue'])
+
+    const red = toggleActivePaneColor(blue, 'red')
+    expect(colorsOf(red)).toEqual([null, 'red'])
+
+    const cleared = toggleActivePaneColor(red, 'red')
+    expect(colorsOf(cleared)).toEqual([null, null])
+  })
+})
+
+describe('unchanged operations', () => {
+  it('returns the same workspace reference when nothing changes', () => {
+    const workspace = makeWorkspace([makeGroup('a', 'pane-a'), makeGroup('b', 'pane-b')], 0)
+
+    expect(closePane(workspace, 'missing-session')).toBe(workspace)
+    expect(renamePane(workspace, 'missing-session', 'new title')).toBe(workspace)
+    expect(renamePane(workspace, 'pane-a', 'pane-a')).toBe(workspace)
+    expect(setPaneColor(workspace, 'pane-a', null)).toBe(workspace)
+
+    const empty = emptyWorkspace()
+    expect(splitPane(empty, 'pane-a', 'new-pane')).toBe(empty)
+    expect(activatePane(workspace, 'pane-a')).toBe(workspace)
+    expect(focusNextPane(workspace)).toBe(workspace)
+
+    const loneGroup = makeWorkspace([makeGroup('a', 'pane-a')], 0)
+    expect(focusNextGroup(loneGroup)).toBe(loneGroup)
+    expect(moveDivider(workspace, 0, 5, 0.5)).toBe(workspace)
+  })
+})

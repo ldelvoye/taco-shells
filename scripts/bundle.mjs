@@ -6,7 +6,7 @@ import { basename, join } from 'node:path'
 const OUTPUT_DIRECTORY = 'dist.noindex'
 const APP_DIRECTORY = join(OUTPUT_DIRECTORY, 'mac-arm64')
 const ARTIFACT_SUFFIXES = ['.zip', '.zip.blockmap']
-// Must match src/main/config/files.ts and src/main/focus/server.ts, or promote
+// Must match src/app/config/files.ts and src/app/focus/server.ts, or promote
 // cannot reach the running app.
 const PORT_FILE = 'focus-port'
 const UPDATE_CHECK_PATH = '/update/check'

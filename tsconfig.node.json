@@ -4,14 +4,28 @@
     "lib": ["ES2022"],
     "types": ["node"],
     "paths": {
-      "@shared/*": ["./src/shared/*"]
+      "@protocol/*": ["./src/protocol/*"],
+      "@rules/*": ["./src/rules/*"],
+      "@settings/*": ["./src/settings/*"],
+      "@agents/*": ["./src/agents/*"],
+      "@runtime/*": ["./src/runtime/*"],
+      "@workspace/*": ["./src/workspace/*"],
+      "@app/*": ["./src/app/*"],
+      "@window/*": ["./src/window/*"],
+      "@testing/*": ["./src/testing/*"]
     }
   },
   "include": [
-    "src/main/**/*.ts",
-    "src/preload/**/*.ts",
-    "src/shared/**/*.ts",
-    "src/shared/**/*.json",
+    "src/protocol/**/*.ts",
+    "src/rules/**/*.ts",
+    "src/settings/**/*.ts",
+    "src/agents/**/*.ts",
+    "src/runtime/**/*.ts",
+    "src/workspace/**/*.ts",
+    "src/app/**/*.ts",
+    "src/app/**/*.json",
+    "src/testing/**/*.ts",
+    "walls/**/*.ts",
     "e2e/**/*.ts",
     "electron.vite.config.ts",
     "vitest.config.mts",

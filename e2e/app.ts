@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 
-import { shellPath } from '../src/main/pty/shell.ts'
+import { shellPath } from '../src/runtime/shell.ts'
 import {
   DEBUG_PORT,
   evaluate,
