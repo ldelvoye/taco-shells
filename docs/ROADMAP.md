@@ -6,7 +6,3 @@
 # Distribution
 
 - Release page at `tacoshells.dev`: a page whose job is to get someone who has never heard of Taco Shells to a working install. It leads with what the app does and the install command from the README in a box with a copy button, and has no download button: a build downloaded in a browser reports as damaged. The page can serve `install.sh` at its own address or redirect to the copy on GitHub's `/releases/latest`. The domain is not bought yet; it was open on Namecheap on 2026-11-23. Still to decide: where the page's source lives and where it is hosted.
-
-# Tests
-
-- e2e harness in pieces. `e2e/app.ts` is a 1,000-line file around one 536-line function, and every helper is named three times. It splits along its seams: keys, the DevTools connection, reading the screen, mouse and drag input, and the app's lifecycle. Helpers only one test file uses move beside it, and `rightClickHeader`, `clickUngroupItem` and `dragHeader` have no caller and go. The refused-split test waits half a second after each of ten presses and needs one wait.
