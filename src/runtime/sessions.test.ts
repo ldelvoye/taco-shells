@@ -107,6 +107,19 @@ describe('PtySessions', () => {
     expect(submitted).toEqual(['pty-1'])
   })
 
+  it('starts a split of a terminal that is itself still opening where that terminal will start', async () => {
+    const { spawned, spawn } = fakeSpawn()
+    const sessions = new PtySessions(spawn)
+    const started = nextStarts(sessions, 2)
+    const directory = tmpdir()
+
+    sessions.open(startOf('pty-1', { directory }))
+    sessions.open(startOf('pty-2', { directoryOf: 'pty-1' }))
+    await started
+
+    expect(spawned.map((pty) => pty.cwd)).toEqual([directory, directory])
+  })
+
   it('spawns nothing for a terminal closed while it was opening, and reports its exit once', async () => {
     const { spawned, spawn } = fakeSpawn()
     const sessions = new PtySessions(spawn)

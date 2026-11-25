@@ -27,6 +27,7 @@ interface Opening {
   size: PtySize
   closed: boolean
   typed: string[]
+  directory: Promise<string>
 }
 
 // A pty in line-buffered mode emits roughly one chunk per line: `seq 1 200000`
@@ -53,13 +54,14 @@ export class PtySessions implements Runtime {
   }
 
   open(start: TerminalStart): void {
-    this.opening.set(start.id, { size: start.size, closed: false, typed: [] })
-    void this.spawnWhenReady(start)
+    const directory = this.resolveStartingDirectory(start)
+    this.opening.set(start.id, { size: start.size, closed: false, typed: [], directory })
+    void this.spawnWhenReady(start, directory)
   }
 
-  private async spawnWhenReady(start: TerminalStart): Promise<void> {
+  private async spawnWhenReady(start: TerminalStart, directory: Promise<string>): Promise<void> {
     const id = start.id
-    const cwd = await this.resolveStartingDirectory(start)
+    const cwd = await directory
 
     const opening = this.opening.get(id)
     this.opening.delete(id)
@@ -77,20 +79,14 @@ export class PtySessions implements Runtime {
         cwd,
         env: shellEnvironment()
       })
-    } catch {
+    } catch (failure) {
+      console.error(`the shell for ${id} could not start`, failure)
       this.reportExit({ id, exitCode: 1 })
       return
     }
 
     const session: Session = { pty, pending: [], flushTimer: null }
     this.sessions.set(id, session)
-
-    if (start.command !== null) {
-      pty.write(start.command)
-    }
-    for (const data of opening.typed) {
-      this.write(id, data)
-    }
 
     pty.onData((data) => {
       session.pending.push(data)
@@ -111,6 +107,19 @@ export class PtySessions implements Runtime {
 
     for (const listener of this.startedListeners) {
       listener({ id, directory: cwd })
+    }
+
+    // After the exit listener is on: a shell that has already gone throws on a write,
+    // and its exit then arrives the usual way.
+    try {
+      if (start.command !== null) {
+        pty.write(start.command)
+      }
+      for (const data of opening.typed) {
+        this.write(id, data)
+      }
+    } catch {
+      return
     }
   }
 
@@ -188,6 +197,12 @@ export class PtySessions implements Runtime {
   }
 
   async directoryOf(id: SessionId): Promise<string | null> {
+    // A terminal that is still opening is where it is about to start.
+    const opening = this.opening.get(id)
+    if (opening !== undefined) {
+      return opening.directory
+    }
+
     const session = this.sessions.get(id)
     if (session === undefined) {
       return null
