@@ -11,9 +11,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-import { KEY, launchApp } from './app'
+import { type App, launchApp } from './app'
+import { KEY } from './harness/keys'
+import { clickAt, hover } from './harness/mouse'
 
 const CLAUDE_SESSION_ID = '123e4567-e89b-12d3-a456-426614174000'
+
+async function clickForkItem(app: App): Promise<void> {
+  const centre = await hover(app.page, '.popup-item', 0)
+  await clickAt(app.page, centre, 'left')
+}
 
 async function postToFocusServer(port: string, route: string, payload: object): Promise<void> {
   const body = JSON.stringify(payload)
@@ -79,7 +86,7 @@ describe('fork with Claude', () => {
       await postToFocusServer(port, '/agent-session/state', { ...hook, event: 'UserPromptSubmit' })
       await app.rightClickRow(0)
       await app.until('the fork item is offered', (state) => state.forkItem === 'enabled')
-      await app.clickForkItem()
+      await clickForkItem(app)
 
       const forked = await app.until('the fork opens', (state) => state.rows.length === 2)
       expect(forked.colorPickerOpen).toBe(false)

@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 
-import { type App, KEY, launchApp } from '../e2e/app.ts'
+import { type App, launchApp } from '../e2e/app.ts'
+import { KEY } from '../e2e/harness/keys.ts'
 
 const runCommand = promisify(execFile)
 

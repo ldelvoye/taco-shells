@@ -3,7 +3,8 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-import { KEY, launchApp } from './app'
+import { launchApp } from './app'
+import { KEY } from './harness/keys'
 
 const SAVED_WORKSPACE = {
   version: 1,

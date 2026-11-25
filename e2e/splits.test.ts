@@ -3,7 +3,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { type App, KEY, launchApp } from './app'
+import { type App, launchApp } from './app'
+import { dispatchKey, KEY, type Key, type Modifiers } from './harness/keys'
+import { dragAcross } from './harness/mouse'
+
+const REFUSED_SPLIT_SETTLE_MS = 500
 
 // Covers what the unit tests cannot: a chord reaching its command, and the
 // command reaching the screen. Model decisions live in shared/model.test.ts.
@@ -15,6 +19,15 @@ function reportedDirectory(file: string): string | null {
 
   const reported = readFileSync(file, 'utf8')
   return reported.trim()
+}
+
+/** A keystroke the keyboard produced only because the key is still down. */
+async function pressAutoRepeat(app: App, key: Key, modifiers: Modifiers = {}): Promise<void> {
+  await dispatchKey(app.page, key, modifiers, true)
+}
+
+async function dragDivider(app: App, dividerIndex: number, byPixels: number): Promise<void> {
+  await dragAcross(app.page, '.pane-group:not(.is-inactive) .pane-divider', dividerIndex, byPixels)
 }
 
 let app: App
@@ -146,7 +159,7 @@ describe('the default keymap', () => {
     await app.until('the shell is reading', () => existsSync(ready))
 
     await app.press(KEY.left, { alt: true })
-    await app.pressAutoRepeat(KEY.left, { alt: true })
+    await pressAutoRepeat(app, KEY.left, { alt: true })
     await app.press(KEY.right, { alt: true })
     await app.runInPane('pty-1', '')
     await app.until('the line arrives', () => existsSync(received))
@@ -164,9 +177,11 @@ describe('a split', () => {
     let attempts = 0
     while (attempts < 10) {
       await app.press(KEY.backslash, { cmd: true })
-      await app.pause(500)
       attempts += 1
     }
+
+    await app.until('nine splits have landed', (state) => state.rows.length === 10)
+    await app.pause(REFUSED_SPLIT_SETTLE_MS)
 
     const screen = await app.screen()
     const narrowest = Math.min(...screen.panes.map((pane) => pane.pixels))
@@ -178,7 +193,7 @@ describe('a split', () => {
   })
 
   it('ignores the keystrokes a held key repeats on its own', async () => {
-    await app.pressAutoRepeat(KEY.backslash, { cmd: true })
+    await pressAutoRepeat(app, KEY.backslash, { cmd: true })
     await app.pause(1500)
 
     const unchanged = await app.screen()
@@ -218,7 +233,7 @@ describe('a split', () => {
     const split = await app.until('the group holds two panes', (state) => state.rows.length === 2)
     const startingWidth = split.panes[0].pixels
 
-    await app.dragDivider(0, -120)
+    await dragDivider(app, 0, -120)
 
     await app.until(
       'the left pane has narrowed',

@@ -4,6 +4,20 @@ import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 
 import { shellPath } from '../src/main/pty/shell.ts'
+import {
+  DEBUG_PORT,
+  evaluate,
+  evaluateInMain,
+  findDebuggerUrl,
+  INSPECT_PORT,
+  openProtocol,
+  type Protocol,
+  type ProtocolParams
+} from './harness/connection.ts'
+import { type Key, type Modifiers, press } from './harness/keys.ts'
+import { clickColorDot, rightClickRow, SidebarDrags } from './harness/mouse.ts'
+import { POLL_INTERVAL_MS, sleep } from './harness/poll.ts'
+import { readScreen, type Screen, until } from './harness/screen.ts'
 
 // Asked of the app rather than assumed, because the shell it opens is whichever
 // one the machine gives its user. A hardcoded `zsh -l` counts nothing on a
@@ -16,65 +30,13 @@ const ELECTRON_BINARY = resolve(
   'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron'
 )
 
-const DEBUG_PORT = 9422
-const INSPECT_PORT = 9423
-const LAUNCH_TIMEOUT_MS = 20000
-const SETTLE_TIMEOUT_MS = 15000
 const SHUTDOWN_TIMEOUT_MS = 3000
-const POLL_INTERVAL_MS = 100
-const DRAG_START_TIMEOUT_MS = 3000
-const DRAG_STEPS = 8
-// Pixels in from a row's left edge: over its label, and on the bracket's stem (--bracket-stem in app.css).
-const ROW_HANDLE_OFFSET = 60
-const BRACKET_HANDLE_OFFSET = 13
 
 const NO_CLAUDE_DIRECTORY = 'no-claude'
-
-const AGENT_MENU_BODY = `return JSON.stringify({
-      status: items[0].label,
-      statusKind: items[0].type,
-      actionLabel: items[1].label,
-      enabled: items[1].enabled,
-      note: items[1].sublabel
-    })`
-const AGENT_CLICK_BODY = `items[1].click()
-    return ''`
 
 // xterm warns when a render task overruns its idle deadline, which a slow CI
 // runner does on its own; it says nothing about the app.
 const XTERM_DEADLINE_WARNING = 'task queue exceeded allotted deadline'
-
-// Chromium's modifier bitmask for Input.dispatchKeyEvent.
-const MODIFIER_ALT = 1
-const MODIFIER_META = 4
-const MODIFIER_SHIFT = 8
-
-export interface Key {
-  code: string
-  text: string
-  virtualKeyCode: number
-}
-
-export const KEY = {
-  b: { code: 'KeyB', text: 'b', virtualKeyCode: 66 },
-  t: { code: 'KeyT', text: 't', virtualKeyCode: 84 },
-  w: { code: 'KeyW', text: 'w', virtualKeyCode: 87 },
-  backslash: { code: 'Backslash', text: '\\', virtualKeyCode: 220 },
-  bracketLeft: { code: 'BracketLeft', text: '[', virtualKeyCode: 219 },
-  bracketRight: { code: 'BracketRight', text: ']', virtualKeyCode: 221 },
-  left: { code: 'ArrowLeft', text: '', virtualKeyCode: 37 },
-  right: { code: 'ArrowRight', text: '', virtualKeyCode: 39 },
-  comma: { code: 'Comma', text: ',', virtualKeyCode: 188 },
-  enter: { code: 'Enter', text: 'Enter', virtualKeyCode: 13 },
-  escape: { code: 'Escape', text: '', virtualKeyCode: 27 },
-  digit5: { code: 'Digit5', text: '5', virtualKeyCode: 53 }
-} satisfies Record<string, Key>
-
-export interface Modifiers {
-  cmd?: boolean
-  alt?: boolean
-  shift?: boolean
-}
 
 /** A content size for a window shown on screen, without focus, on the display with the highest scale factor. */
 export interface WindowPlacement {
@@ -91,137 +53,23 @@ export interface LaunchOptions {
   mainInspector?: boolean
 }
 
-export interface AgentMenuReading {
-  status: string
-  statusKind: string
-  actionLabel: string
-  enabled: boolean
-  note: string
-}
-
-/** A sidebar row: every pane of every group has one, in sidebar order. */
-export interface Row {
-  label: string
-  connector: string
-  active: boolean
-  color: string | null
-  grouped: boolean
-}
-
-/** A tab group's header: every tab group has one, in sidebar order. */
-export interface Header {
-  name: string
-  collapsed: boolean
-  count: number | null
-  state: string | null
-  active: boolean
-}
-
-interface Point {
-  x: number
-  y: number
-}
-
-interface RowBox {
-  left: number
-  top: number
-  height: number
-}
-
-/** A pane of the group currently on screen, left to right. */
-export interface VisiblePane {
-  width: number
-  pixels: number
-}
-
-export interface Screen {
-  rows: Row[]
-  headers: Header[]
-  panes: VisiblePane[]
-  groups: number
-  dividers: number
-  sidebarVisible: boolean
-  sidebarWidth: number
-  windowWidth: number
-  labelsTruncated: boolean
-  colorPickerOpen: boolean
-  forkItem: 'absent' | 'enabled' | 'disabled'
-  terminalFocused: boolean
-  nameFieldFocused: boolean
-}
-
-export type ProtocolParams = Record<string, unknown>
-
 export interface App {
+  page: Protocol
+  drags: SidebarDrags
   cdp(method: string, params?: ProtocolParams): Promise<ProtocolParams>
-  onCdpEvent(method: string, listener: (params: ProtocolParams) => void): void
+  onCdpEvent: Protocol['onEvent']
   screen(): Promise<Screen>
-  press(key: Key, modifiers?: Modifiers): Promise<void>
-  pressAutoRepeat(key: Key, modifiers?: Modifiers): Promise<void>
-  dragDivider(dividerIndex: number, byPixels: number): Promise<void>
-  dragSidebarDivider(byPixels: number): Promise<void>
-  doubleClickSidebarDivider(): Promise<void>
-  clickVisiblePane(): Promise<void>
-  rightClickRow(rowIndex: number): Promise<void>
-  clickNewGroupItem(): Promise<void>
-  clickHeader(headerIndex: number): Promise<void>
-  rightClickHeader(headerIndex: number): Promise<void>
-  clickUngroupItem(): Promise<void>
-  clickRow(rowIndex: number): Promise<void>
-  clickNewTerminalButton(): Promise<void>
-  clickNewInHeader(headerIndex: number): Promise<void>
-  clickCloseOnRow(rowIndex: number): Promise<void>
-  typeText(text: string): Promise<void>
-  dragRowToHeader(fromRow: number, headerIndex: number, fraction: number): Promise<void>
-  dragHeader(fromHeader: number, toRow: number, fraction: number): Promise<void>
-  dragRow(fromRow: number, toRow: number, fraction: number): Promise<void>
-  dragBracket(fromRow: number, toRow: number, fraction: number): Promise<void>
-  hoverRow(rowIndex: number): Promise<void>
-  hoverColorDot(color: string): Promise<void>
-  clickColorDot(color: string): Promise<void>
-  clickForkItem(): Promise<void>
-  runInPane(sessionId: string, command: string): Promise<void>
   until(description: string, holds: (screen: Screen) => boolean): Promise<Screen>
+  press(key: Key, modifiers?: Modifiers): Promise<void>
+  rightClickRow(rowIndex: number): Promise<void>
+  clickColorDot(color: string): Promise<void>
+  runInPane(sessionId: string, command: string): Promise<void>
   pause(milliseconds: number): Promise<void>
   shellCount(): number
   rendererConsole(): string[]
-  chromeBackground(): Promise<string>
-  configProblems(): Promise<string[]>
-  agentBanners(): Promise<string[]>
-  clickBannerButton(label: string): Promise<void>
-  agentMenu(): Promise<AgentMenuReading>
-  clickAgentAction(): Promise<void>
-  emitInMain(event: string): Promise<void>
   close(): Promise<void>
   quitGracefully(): Promise<void>
   waitForExit(): Promise<void>
-}
-
-interface DebugTarget {
-  type: string
-  webSocketDebuggerUrl: string
-}
-
-interface Protocol {
-  send(method: string, params: ProtocolParams): Promise<ProtocolParams>
-  onEvent(method: string, listener: (params: ProtocolParams) => void): void
-  close(): void
-  onClose(listener: () => void): void
-}
-
-interface PendingReply {
-  answer: (result: ProtocolParams) => void
-  fail: (reason: Error) => void
-}
-
-class PageClosedError extends Error {
-  constructor() {
-    super('the page closed before it answered')
-  }
-}
-
-function sleep(milliseconds: number): Promise<void> {
-  return new Promise((done) => setTimeout(done, milliseconds))
 }
 
 function whenExited(child: ChildProcess): Promise<void> {
@@ -232,135 +80,6 @@ function whenExited(child: ChildProcess): Promise<void> {
   return new Promise((exited) => {
     child.once('exit', () => exited())
   })
-}
-
-function modifierMask(modifiers: Modifiers): number {
-  let mask = 0
-  if (modifiers.cmd) {
-    mask += MODIFIER_META
-  }
-  if (modifiers.alt) {
-    mask += MODIFIER_ALT
-  }
-  if (modifiers.shift) {
-    mask += MODIFIER_SHIFT
-  }
-  return mask
-}
-
-/**
- * Retries `attempt` until it answers with something other than null, or the
- * timeout runs out. Polling rather than sleeping a guessed interval is what keeps
- * these tests from being a pile of timeouts.
- */
-export async function pollFor<T>(
-  description: string,
-  attempt: () => Promise<T | null>,
-  timeoutMs: number
-): Promise<T> {
-  const deadline = Date.now() + timeoutMs
-
-  while (Date.now() < deadline) {
-    const found = await attempt()
-    if (found !== null) {
-      return found
-    }
-    await sleep(POLL_INTERVAL_MS)
-  }
-
-  throw new Error(`timed out waiting for ${description}`)
-}
-
-async function findDebuggerUrl(port: number, targetType: string): Promise<string> {
-  return pollFor(
-    `the app to expose a debuggable ${targetType}`,
-    async () => {
-      try {
-        const response = await fetch(`http://127.0.0.1:${port}/json/list`)
-        const targets = (await response.json()) as DebugTarget[]
-        const target = targets.find((candidate) => candidate.type === targetType)
-        if (!target) {
-          return null
-        }
-        return target.webSocketDebuggerUrl
-      } catch {
-        // The devtools endpoint is not listening yet.
-        return null
-      }
-    },
-    LAUNCH_TIMEOUT_MS
-  )
-}
-
-async function openProtocol(url: string): Promise<Protocol> {
-  const socket = new WebSocket(url)
-  await new Promise((opened) => socket.addEventListener('open', opened))
-
-  let nextMessageId = 1
-  let closed = false
-  const awaitingReply = new Map<number, PendingReply>()
-  const eventListeners = new Map<string, ((params: ProtocolParams) => void)[]>()
-
-  // A page that has gone never answers, and a request left waiting on it would hang its test.
-  socket.addEventListener('close', () => {
-    closed = true
-    for (const pending of awaitingReply.values()) {
-      const reason = new PageClosedError()
-      pending.fail(reason)
-    }
-    awaitingReply.clear()
-  })
-
-  socket.addEventListener('message', (event) => {
-    const message = JSON.parse(String(event.data))
-    if (message.id === undefined) {
-      const listeners = eventListeners.get(message.method)
-      if (!listeners) {
-        return
-      }
-      for (const listener of listeners) {
-        listener(message.params)
-      }
-      return
-    }
-    const pending = awaitingReply.get(message.id)
-    if (!pending) {
-      return
-    }
-    awaitingReply.delete(message.id)
-    pending.answer(message.result)
-  })
-
-  function send(method: string, params: ProtocolParams): Promise<ProtocolParams> {
-    if (closed) {
-      const reason = new PageClosedError()
-      return Promise.reject(reason)
-    }
-
-    const id = nextMessageId
-    nextMessageId += 1
-    socket.send(JSON.stringify({ id, method, params }))
-    return new Promise((answer, fail) => awaitingReply.set(id, { answer, fail }))
-  }
-
-  function onEvent(method: string, listener: (params: ProtocolParams) => void): void {
-    const listeners = eventListeners.get(method)
-    if (listeners) {
-      listeners.push(listener)
-      return
-    }
-    eventListeners.set(method, [listener])
-  }
-
-  function close(): void {
-    socket.close()
-  }
-
-  function onClose(listener: () => void): void {
-    socket.addEventListener('close', listener)
-  }
-
-  return { send, onEvent, close, onClose }
 }
 
 // Runs in the main process, which is the only side that can size and show the
@@ -385,141 +104,10 @@ function placementScript(placement: WindowPlacement): string {
   })()`
 }
 
-async function evaluateInMain(expression: string): Promise<string> {
-  const url = await findDebuggerUrl(INSPECT_PORT, 'node')
-  const main = await openProtocol(url)
-  const outcome = await main.send('Runtime.evaluate', { expression, returnByValue: true })
-  main.close()
-  if (outcome.exceptionDetails) {
-    throw new Error(`evaluating in the main process failed: ${JSON.stringify(outcome.exceptionDetails)}`)
-  }
-  const result = outcome.result as { value?: unknown }
-  if (typeof result.value === 'string') {
-    return result.value
-  }
-  return ''
-}
-
 async function placeWindow(placement: WindowPlacement): Promise<void> {
   const script = placementScript(placement)
   await evaluateInMain(script)
 }
-
-function agentItemsScript(body: string): string {
-  return `(() => {
-    const { Menu } = process.mainModule.require('electron')
-    const agents = Menu.getApplicationMenu().items.find((item) => item.label === 'Agents')
-    if (!agents) {
-      throw new Error('the application menu has no Agents menu')
-    }
-    const firstAgent = agents.submenu.items[0]
-    const items = firstAgent.submenu.items
-    ${body}
-  })()`
-}
-
-async function agentMenu(): Promise<AgentMenuReading> {
-  const script = agentItemsScript(AGENT_MENU_BODY)
-  const reading = await evaluateInMain(script)
-  return JSON.parse(reading) as AgentMenuReading
-}
-
-async function clickAgentAction(): Promise<void> {
-  const script = agentItemsScript(AGENT_CLICK_BODY)
-  await evaluateInMain(script)
-}
-
-async function emitInMain(event: string): Promise<void> {
-  const name = JSON.stringify(event)
-  await evaluateInMain(`(() => {
-    process.mainModule.require('electron').app.emit(${name})
-    return ''
-  })()`)
-}
-
-// The sidebar's rows and the on-screen group's panes are two separate lists:
-// rows cover every group, panes only the one not hidden.
-const SCREEN_SCRIPT = `JSON.stringify({
-  rows: [...document.querySelectorAll('.terminal-row')].map((row) => {
-    const connector = row.querySelector('.row-connector')
-    let piece = ''
-    if (connector) {
-      piece = connector.className.replace('row-connector ', '')
-    }
-    const stripe = row.querySelector('.row-color')
-    let color = null
-    if (stripe) {
-      color = stripe.dataset.color
-    }
-    return {
-      label: row.querySelector('.row-label').textContent,
-      connector: piece,
-      active: row.classList.contains('is-active'),
-      color,
-      grouped: row.closest('.tab-group') !== null
-    }
-  }),
-  headers: [...document.querySelectorAll('.tab-group-header')].map((header) => {
-    const count = header.querySelector('.tab-group-count')
-    let countValue = null
-    if (count) {
-      countValue = Number(count.textContent)
-    }
-    const marker = header.querySelector('.row-state')
-    let state = null
-    if (marker && marker.dataset.state) {
-      state = marker.dataset.state
-    }
-    return {
-      name: header.querySelector('.tab-group-name').textContent,
-      collapsed: header.parentElement.classList.contains('is-collapsed'),
-      count: countValue,
-      state,
-      active: header.classList.contains('is-active')
-    }
-  }),
-  panes: [...document.querySelectorAll('.pane-group:not(.is-inactive) .terminal-view')].map((view) => ({
-    width: Number(view.style.flexGrow),
-    pixels: Math.round(view.getBoundingClientRect().width)
-  })),
-  groups: document.querySelectorAll('.pane-group').length,
-  dividers: document.querySelectorAll('.pane-group:not(.is-inactive) .pane-divider').length,
-  sidebarVisible: document.querySelector('.sidebar') !== null,
-  sidebarWidth: (() => {
-    const sidebar = document.querySelector('.sidebar')
-    if (!sidebar) {
-      return 0
-    }
-    return Math.round(sidebar.getBoundingClientRect().width)
-  })(),
-  windowWidth: window.innerWidth,
-  // A range rather than the usual scrollWidth against clientWidth: both of those
-  // are rounded, so they read equal while the label is a fraction over and still
-  // showing an ellipsis.
-  labelsTruncated: (() => {
-    const labels = [...document.querySelectorAll('.row-label')]
-    return labels.some((label) => {
-      const range = document.createRange()
-      range.selectNodeContents(label)
-      const textWidth = range.getBoundingClientRect().width
-      const availableWidth = label.getBoundingClientRect().width
-      return textWidth > availableWidth
-    })
-  })(),
-  colorPickerOpen: document.querySelector('.popup') !== null,
-  forkItem: (() => {
-    const item = document.querySelector('.popup-item')
-    if (!item) {
-      return 'absent'
-    }
-    if (item.disabled) {
-      return 'disabled'
-    }
-    return 'enabled'
-  })(),
-  terminalFocused: document.querySelector('.xterm-helper-textarea:focus') !== null,
-  nameFieldFocused: document.querySelector('.tab-group-name-field:focus') !== null
-})`
 
 export async function launchApp(options: LaunchOptions = {}): Promise<App> {
   const env: NodeJS.ProcessEnv = {
@@ -580,331 +168,18 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
   }
   const send = page.send
 
-  let interceptedDrag: ProtocolParams | null = null
-  page.onEvent('Input.dragIntercepted', (params) => {
-    interceptedDrag = params.data as ProtocolParams
-  })
+  const drags = new SidebarDrags(page)
 
   async function cdp(method: string, params: ProtocolParams = {}): Promise<ProtocolParams> {
     return send(method, params)
   }
 
-  async function evaluate(expression: string): Promise<string> {
-    const outcome = await send('Runtime.evaluate', {
-      expression,
-      awaitPromise: true,
-      returnByValue: true
-    })
-    if (outcome.exceptionDetails) {
-      throw new Error(`evaluating in the app failed: ${JSON.stringify(outcome.exceptionDetails)}`)
-    }
-
-    const result = outcome.result as { value: string }
-    return result.value
-  }
-
-  async function screen(): Promise<Screen> {
-    const raw = await evaluate(SCREEN_SCRIPT)
-    return JSON.parse(raw) as Screen
-  }
-
-  async function until(description: string, holds: (screen: Screen) => boolean): Promise<Screen> {
-    const deadline = Date.now() + SETTLE_TIMEOUT_MS
-    let latest = await screen()
-
-    while (Date.now() < deadline) {
-      if (holds(latest)) {
-        return latest
-      }
-      await sleep(POLL_INTERVAL_MS)
-      latest = await screen()
-    }
-
-    throw new Error(`timed out waiting until ${description}; last saw ${JSON.stringify(latest)}`)
-  }
-
-  // Chromium's own input pipeline rather than a synthetic KeyboardEvent, so a
-  // key travels the path a real one does, xterm's textarea included.
-  async function dispatchKey(key: Key, modifiers: Modifiers, held: boolean): Promise<void> {
-    const stroke = {
-      modifiers: modifierMask(modifiers),
-      code: key.code,
-      key: key.text,
-      windowsVirtualKeyCode: key.virtualKeyCode,
-      nativeVirtualKeyCode: key.virtualKeyCode,
-      autoRepeat: held
-    }
-
-    // A key that closes the window takes the page with it, and the rest of the stroke has nowhere to go.
-    try {
-      await send('Input.dispatchKeyEvent', { ...stroke, type: 'rawKeyDown' })
-      await send('Input.dispatchKeyEvent', { ...stroke, type: 'keyUp' })
-    } catch (error) {
-      if (error instanceof PageClosedError) {
-        return
-      }
-      throw error
-    }
-  }
-
-  async function press(key: Key, modifiers: Modifiers = {}): Promise<void> {
-    await dispatchKey(key, modifiers, false)
-  }
-
-  /** A keystroke the keyboard produced only because the key is still down. */
-  async function pressAutoRepeat(key: Key, modifiers: Modifiers = {}): Promise<void> {
-    await dispatchKey(key, modifiers, true)
-  }
-
-  async function centreOf(selector: string, index: number): Promise<{ x: number; y: number }> {
-    const centreScript = `JSON.stringify((() => {
-      const handles = document.querySelectorAll('${selector}')
-      const box = handles[${index}].getBoundingClientRect()
-      return { x: Math.round(box.left + box.width / 2), y: Math.round(box.top + box.height / 2) }
-    })())`
-    const measured = await evaluate(centreScript)
-    return JSON.parse(measured) as { x: number; y: number }
-  }
-
-  async function dragAcross(selector: string, index: number, byPixels: number): Promise<void> {
-    const centre = await centreOf(selector, index)
-
-    const held = { button: 'left', buttons: 1, clickCount: 1 }
-    const destinationX = centre.x + byPixels
-
-    await send('Input.dispatchMouseEvent', {
-      type: 'mousePressed',
-      x: centre.x,
-      y: centre.y,
-      ...held
-    })
-    await send('Input.dispatchMouseEvent', {
-      type: 'mouseMoved',
-      x: destinationX,
-      y: centre.y,
-      ...held
-    })
-    await send('Input.dispatchMouseEvent', {
-      type: 'mouseReleased',
-      x: destinationX,
-      y: centre.y,
-      ...held
-    })
-  }
-
-  async function dragDivider(dividerIndex: number, byPixels: number): Promise<void> {
-    await dragAcross('.pane-group:not(.is-inactive) .pane-divider', dividerIndex, byPixels)
-  }
-
-  async function dragSidebarDivider(byPixels: number): Promise<void> {
-    await dragAcross('.sidebar-divider', 0, byPixels)
-  }
-
-  async function doubleClickSidebarDivider(): Promise<void> {
-    const centre = await centreOf('.sidebar-divider', 0)
-    const clicked = { button: 'left', buttons: 1, clickCount: 2 }
-
-    await send('Input.dispatchMouseEvent', {
-      type: 'mousePressed',
-      x: centre.x,
-      y: centre.y,
-      ...clicked
-    })
-    await send('Input.dispatchMouseEvent', {
-      type: 'mouseReleased',
-      x: centre.x,
-      y: centre.y,
-      ...clicked
-    })
-  }
-
-  async function clickAt(centre: Point, button: 'left' | 'right'): Promise<void> {
-    let buttons = 1
-    if (button === 'right') {
-      buttons = 2
-    }
-    const clicked = { x: centre.x, y: centre.y, button, buttons, clickCount: 1 }
-
-    await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...clicked })
-    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...clicked })
-  }
-
-  async function clickVisiblePane(): Promise<void> {
-    const centre = await centreOf('.pane-group:not(.is-inactive) .terminal-view', 0)
-    await clickAt(centre, 'left')
-  }
-
-  async function rightClickRow(rowIndex: number): Promise<void> {
-    const centre = await centreOf('.terminal-row', rowIndex)
-    await clickAt(centre, 'right')
-  }
-
-  async function hover(selector: string, index: number): Promise<Point> {
-    const centre = await centreOf(selector, index)
-    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: centre.x, y: centre.y })
-    return centre
-  }
-
-  async function hoverRow(rowIndex: number): Promise<void> {
-    await hover('.terminal-row', rowIndex)
-  }
-
-  async function hoverColorDot(color: string): Promise<void> {
-    await hover(`.color-dot[data-color=${color}]`, 0)
-  }
-
-  async function clickColorDot(color: string): Promise<void> {
-    const centre = await hover(`.color-dot[data-color=${color}]`, 0)
-    await clickAt(centre, 'left')
-  }
-
-  async function clickForkItem(): Promise<void> {
-    const centre = await hover('.popup-item', 0)
-    await clickAt(centre, 'left')
-  }
-
-  async function boxOf(selector: string, index: number): Promise<RowBox> {
-    const boxScript = `JSON.stringify((() => {
-      const elements = document.querySelectorAll('${selector}')
-      const box = elements[${index}].getBoundingClientRect()
-      return { left: box.left, top: box.top, height: box.height }
-    })())`
-    const measured = await evaluate(boxScript)
-    return JSON.parse(measured) as RowBox
-  }
-
-  async function rowBox(rowIndex: number): Promise<RowBox> {
-    return boxOf('.terminal-row', rowIndex)
-  }
-
-  async function clickNewGroupItem(): Promise<void> {
-    const centre = await hover('.row-new-group-item', 0)
-    await clickAt(centre, 'left')
-  }
-
-  async function clickHeader(headerIndex: number): Promise<void> {
-    const centre = await centreOf('.tab-group-header', headerIndex)
-    await clickAt(centre, 'left')
-  }
-
-  async function rightClickHeader(headerIndex: number): Promise<void> {
-    const centre = await centreOf('.tab-group-header', headerIndex)
-    await clickAt(centre, 'right')
-  }
-
-  async function clickUngroupItem(): Promise<void> {
-    const centre = await hover('.tab-group-ungroup', 0)
-    await clickAt(centre, 'left')
-  }
-
-  async function clickRow(rowIndex: number): Promise<void> {
-    const centre = await centreOf('.terminal-row', rowIndex)
-    await clickAt(centre, 'left')
-  }
-
-  // The button has no box until its row or header is hovered, and there is one per row or header.
-  async function clickButtonWithin(selector: string, index: number, button: string): Promise<void> {
-    await hover(selector, index)
-    const centre = await hover(button, index)
-    await clickAt(centre, 'left')
-  }
-
-  async function clickNewTerminalButton(): Promise<void> {
-    const centre = await centreOf('.sidebar-new', 0)
-    await clickAt(centre, 'left')
-  }
-
-  async function clickNewInHeader(headerIndex: number): Promise<void> {
-    await clickButtonWithin('.tab-group-header', headerIndex, '.tab-group-new')
-  }
-
-  async function clickCloseOnRow(rowIndex: number): Promise<void> {
-    await clickButtonWithin('.terminal-row', rowIndex, '.row-close')
-  }
-
-  async function typeText(text: string): Promise<void> {
-    await send('Input.insertText', { text })
-  }
-
-  async function dragSidebar(source: Point, target: Point): Promise<void> {
-    interceptedDrag = null
-    const held = { button: 'left', buttons: 1, clickCount: 1 }
-
-    await send('Input.setInterceptDrags', { enabled: true })
-    await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...source, ...held })
-
-    let step = 1
-    while (step <= DRAG_STEPS) {
-      const progress = step / DRAG_STEPS
-      const x = source.x + (target.x - source.x) * progress
-      const y = source.y + (target.y - source.y) * progress
-      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, ...held })
-      step += 1
-    }
-
-    const data = await pollFor(
-      'the drag to start',
-      async () => interceptedDrag,
-      DRAG_START_TIMEOUT_MS
-    )
-
-    await send('Input.dispatchDragEvent', { type: 'dragEnter', ...target, data })
-    await send('Input.dispatchDragEvent', { type: 'dragOver', ...target, data })
-    await send('Input.dispatchDragEvent', { type: 'drop', ...target, data })
-    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...target, ...held })
-    await send('Input.setInterceptDrags', { enabled: false })
-  }
-
-  async function dragFromRow(
-    handleOffset: number,
-    fromRow: number,
-    toRow: number,
-    fraction: number
-  ): Promise<void> {
-    const from = await rowBox(fromRow)
-    const to = await rowBox(toRow)
-    const source = { x: from.left + handleOffset, y: from.top + from.height / 2 }
-    const target = { x: to.left + ROW_HANDLE_OFFSET, y: to.top + fraction * to.height }
-    await dragSidebar(source, target)
-  }
-
-  async function dragRow(fromRow: number, toRow: number, fraction: number): Promise<void> {
-    await dragFromRow(ROW_HANDLE_OFFSET, fromRow, toRow, fraction)
-  }
-
-  async function dragBracket(fromRow: number, toRow: number, fraction: number): Promise<void> {
-    await dragFromRow(BRACKET_HANDLE_OFFSET, fromRow, toRow, fraction)
-  }
-
-  async function dragRowToHeader(
-    fromRow: number,
-    headerIndex: number,
-    fraction: number
-  ): Promise<void> {
-    const from = await rowBox(fromRow)
-    const to = await boxOf('.tab-group-header', headerIndex)
-    const source = { x: from.left + ROW_HANDLE_OFFSET, y: from.top + from.height / 2 }
-    const target = { x: to.left + ROW_HANDLE_OFFSET, y: to.top + fraction * to.height }
-    await dragSidebar(source, target)
-  }
-
-  async function dragHeader(fromHeader: number, toRow: number, fraction: number): Promise<void> {
-    const from = await boxOf('.tab-group-header', fromHeader)
-    const to = await rowBox(toRow)
-    const source = { x: from.left + ROW_HANDLE_OFFSET, y: from.top + from.height / 2 }
-    const target = { x: to.left + ROW_HANDLE_OFFSET, y: to.top + fraction * to.height }
-    await dragSidebar(source, target)
-  }
-
   async function runInPane(sessionId: string, command: string): Promise<void> {
     const keystrokes = JSON.stringify(`${command}\r`)
     const target = JSON.stringify(sessionId)
-    await evaluate(`window.tacoShells.pty.write(${target}, ${keystrokes})`)
+    await evaluate(page, `window.tacoShells.pty.write(${target}, ${keystrokes})`)
   }
 
-  // Chromium tags renderer console output INFO:CONSOLE whatever severity it was
-  // logged at, while its own subsystems name a source file instead. Matching the
-  // tag keeps this to the app's own output, and the app only logs on failure.
   function pause(milliseconds: number): Promise<void> {
     return sleep(milliseconds)
   }
@@ -926,48 +201,13 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     return ours.length
   }
 
+  // Chromium tags renderer console output INFO:CONSOLE whatever severity it was
+  // logged at, while its own subsystems name a source file instead. Matching the
+  // tag keeps this to the app's own output, and the app only logs on failure.
   function rendererConsole(): string[] {
     const lines = output.join('').split('\n')
     const consoleLines = lines.filter((line) => line.includes(':INFO:CONSOLE'))
     return consoleLines.filter((line) => !line.includes(XTERM_DEADLINE_WARNING))
-  }
-
-  async function chromeBackground(): Promise<string> {
-    return evaluate(
-      "getComputedStyle(document.documentElement).getPropertyValue('--chrome-background').trim()"
-    )
-  }
-
-  async function configProblems(): Promise<string[]> {
-    const raw = await evaluate(
-      "JSON.stringify([...document.querySelectorAll('.banner-line')].map((el) => el.textContent))"
-    )
-    return JSON.parse(raw) as string[]
-  }
-
-  async function agentBanners(): Promise<string[]> {
-    const raw = await evaluate(
-      "JSON.stringify([...document.querySelectorAll('.is-agent .banner-line')].map((el) => el.textContent))"
-    )
-    return JSON.parse(raw) as string[]
-  }
-
-  async function clickBannerButton(label: string): Promise<void> {
-    const wanted = JSON.stringify(label)
-    const clicked = await evaluate(`(() => {
-      const buttons = [...document.querySelectorAll('.is-agent button')]
-      const button = buttons.find(
-        (el) => el.textContent === ${wanted} || el.getAttribute('aria-label') === ${wanted}
-      )
-      if (!button) {
-        return 'missing'
-      }
-      button.click()
-      return 'clicked'
-    })()`)
-    if (clicked !== 'clicked') {
-      throw new Error(`no banner button labelled ${label}`)
-    }
   }
 
   function discardOwnedConfigDir(): void {
@@ -1007,7 +247,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
       page.onClose(() => closed())
     })
     try {
-      await Promise.race([evaluate('window.close()'), socketClosed])
+      await Promise.race([evaluate(page, 'window.close()'), socketClosed])
     } catch {
       return waitForExit()
     }
@@ -1015,45 +255,19 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
   }
 
   const app: App = {
+    page,
+    drags,
     cdp,
     onCdpEvent: page.onEvent,
-    screen,
-    press,
-    pressAutoRepeat,
-    dragDivider,
-    dragSidebarDivider,
-    doubleClickSidebarDivider,
-    clickVisiblePane,
-    rightClickRow,
-    clickNewGroupItem,
-    clickHeader,
-    rightClickHeader,
-    clickUngroupItem,
-    clickRow,
-    clickNewTerminalButton,
-    clickNewInHeader,
-    clickCloseOnRow,
-    typeText,
-    dragRowToHeader,
-    dragHeader,
-    dragRow,
-    dragBracket,
-    hoverRow,
-    hoverColorDot,
-    clickColorDot,
-    clickForkItem,
+    screen: () => readScreen(page),
+    until: (description, holds) => until(page, description, holds),
+    press: (key, modifiers) => press(page, key, modifiers),
+    rightClickRow: (rowIndex) => rightClickRow(page, rowIndex),
+    clickColorDot: (color) => clickColorDot(page, color),
     runInPane,
-    until,
     pause,
     shellCount,
     rendererConsole,
-    chromeBackground,
-    configProblems,
-    agentBanners,
-    clickBannerButton,
-    agentMenu,
-    clickAgentAction,
-    emitInMain,
     close,
     quitGracefully,
     waitForExit
@@ -1068,7 +282,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
     if (options.window) {
       await placeWindow(options.window)
     }
-    await until(waitDescription, (state) => state.rows.length === expectedRows)
+    await until(page, waitDescription, (state) => state.rows.length === expectedRows)
   } catch (failure) {
     await close().catch(() => undefined)
     throw failure

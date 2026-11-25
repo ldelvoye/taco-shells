@@ -12,7 +12,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-import { type AgentMenuReading, type App, launchApp, pollFor } from './app'
+import { type App, launchApp } from './app'
+import { evaluate, evaluateInMain } from './harness/connection'
+import { pollFor } from './harness/poll'
 
 const MENU_POLL_TIMEOUT_MS = 8000
 const SETTLE_PAUSE_MS = 500
@@ -38,12 +40,30 @@ const USER_SETTINGS = {
   }
 }
 
+const AGENT_MENU_BODY = `return JSON.stringify({
+      status: items[0].label,
+      statusKind: items[0].type,
+      actionLabel: items[1].label,
+      enabled: items[1].enabled,
+      note: items[1].sublabel
+    })`
+const AGENT_CLICK_BODY = `items[1].click()
+    return ''`
+
 interface HookCommandGroup {
   hooks: { command: string }[]
 }
 
 interface ClaudeSettings {
   hooks: Record<string, HookCommandGroup[]>
+}
+
+interface AgentMenuReading {
+  status: string
+  statusKind: string
+  actionLabel: string
+  enabled: boolean
+  note: string
 }
 
 function scratchDirectory(name: string): string {
@@ -79,11 +99,72 @@ function firstPreToolUseCommand(claudeDir: string): string {
   return firstGroup.hooks[0].command
 }
 
-async function untilMenu(app: App, status: string, actionLabel: string): Promise<AgentMenuReading> {
+function agentItemsScript(body: string): string {
+  return `(() => {
+    const { Menu } = process.mainModule.require('electron')
+    const agents = Menu.getApplicationMenu().items.find((item) => item.label === 'Agents')
+    if (!agents) {
+      throw new Error('the application menu has no Agents menu')
+    }
+    const firstAgent = agents.submenu.items[0]
+    const items = firstAgent.submenu.items
+    ${body}
+  })()`
+}
+
+async function agentMenu(): Promise<AgentMenuReading> {
+  const script = agentItemsScript(AGENT_MENU_BODY)
+  const reading = await evaluateInMain(script)
+  return JSON.parse(reading) as AgentMenuReading
+}
+
+async function clickAgentAction(): Promise<void> {
+  const script = agentItemsScript(AGENT_CLICK_BODY)
+  await evaluateInMain(script)
+}
+
+async function emitInMain(event: string): Promise<void> {
+  const name = JSON.stringify(event)
+  await evaluateInMain(`(() => {
+    process.mainModule.require('electron').app.emit(${name})
+    return ''
+  })()`)
+}
+
+async function agentBanners(app: App): Promise<string[]> {
+  const raw = await evaluate(
+    app.page,
+    "JSON.stringify([...document.querySelectorAll('.is-agent .banner-line')].map((el) => el.textContent))"
+  )
+  return JSON.parse(raw) as string[]
+}
+
+async function clickBannerButton(app: App, label: string): Promise<void> {
+  const wanted = JSON.stringify(label)
+  const clicked = await evaluate(
+    app.page,
+    `(() => {
+      const buttons = [...document.querySelectorAll('.is-agent button')]
+      const button = buttons.find(
+        (el) => el.textContent === ${wanted} || el.getAttribute('aria-label') === ${wanted}
+      )
+      if (!button) {
+        return 'missing'
+      }
+      button.click()
+      return 'clicked'
+    })()`
+  )
+  if (clicked !== 'clicked') {
+    throw new Error(`no banner button labelled ${label}`)
+  }
+}
+
+async function untilMenu(status: string, actionLabel: string): Promise<AgentMenuReading> {
   return pollFor(
     `the Agents menu to read ${status} with ${actionLabel}`,
     async () => {
-      const reading = await app.agentMenu()
+      const reading = await agentMenu()
       if (reading.status !== status || reading.actionLabel !== actionLabel) {
         return null
       }
@@ -97,7 +178,7 @@ async function untilBanners(app: App, description: string, expected: string[]): 
   await pollFor(
     `the strip to show ${description}`,
     async () => {
-      const texts = await app.agentBanners()
+      const texts = await agentBanners(app)
       if (texts.length !== expected.length) {
         return null
       }
@@ -136,11 +217,11 @@ async function runFakeClaude(app: App, binDir: string): Promise<void> {
   await app.runInPane(FIRST_SESSION_ID, command)
 }
 
-async function setUpFromMenu(app: App): Promise<void> {
-  const before = await untilMenu(app, STATUS_NOT_SET_UP, ACTION_SET_UP)
+async function setUpFromMenu(): Promise<void> {
+  const before = await untilMenu(STATUS_NOT_SET_UP, ACTION_SET_UP)
   expect(before.enabled).toBe(true)
-  await app.clickAgentAction()
-  await untilMenu(app, STATUS_SET_UP, ACTION_REMOVE)
+  await clickAgentAction()
+  await untilMenu(STATUS_SET_UP, ACTION_REMOVE)
 }
 
 describe('the Agents menu', () => {
@@ -150,7 +231,7 @@ describe('the Agents menu', () => {
 
     const app = await launchApp({ configDir, mainInspector: true, env: { CLAUDE_CONFIG_DIR: claudeDir } })
     try {
-      await setUpFromMenu(app)
+      await setUpFromMenu()
 
       const commands = managedCommands(claudeDir, configDir)
       expect(commands).toHaveLength(EXPECTED_HOOK_COUNT)
@@ -175,10 +256,10 @@ describe('the Agents menu', () => {
     let relaunched: App | null = null
     let firstClosed = false
     try {
-      await setUpFromMenu(app)
+      await setUpFromMenu()
       await untilBanners(app, 'the done line', [DONE_TEXT])
-      await app.clickAgentAction()
-      await untilMenu(app, STATUS_NOT_SET_UP, ACTION_SET_UP)
+      await clickAgentAction()
+      await untilMenu(STATUS_NOT_SET_UP, ACTION_SET_UP)
       await untilBanners(app, 'no strip', [])
 
       expect(managedCommands(claudeDir, configDir)).toHaveLength(0)
@@ -188,7 +269,7 @@ describe('the Agents menu', () => {
       await app.close()
       firstClosed = true
       relaunched = await launchApp({ configDir, mainInspector: true, env })
-      const reading = await untilMenu(relaunched, STATUS_NOT_SET_UP, ACTION_SET_UP)
+      const reading = await untilMenu(STATUS_NOT_SET_UP, ACTION_SET_UP)
       expect(reading.enabled).toBe(true)
       expect(readSettingsText(claudeDir)).toBe(textBeforeRelaunch)
     } finally {
@@ -216,12 +297,12 @@ describe('the Agents menu', () => {
       env: { HOME: home, CLAUDE_CONFIG_DIR: '' }
     })
     try {
-      const reading = await untilMenu(app, STATUS_NOT_SET_UP, ACTION_SET_UP)
+      const reading = await untilMenu(STATUS_NOT_SET_UP, ACTION_SET_UP)
       expect(reading.statusKind).toBe('header')
       expect(reading.enabled).toBe(false)
       expect(reading.note).toContain('Development builds')
 
-      await app.clickAgentAction()
+      await clickAgentAction()
       await app.pause(SETTLE_PAUSE_MS)
       expect(readFileSync(settingsPath, 'utf8')).toBe('{}')
     } finally {
@@ -238,16 +319,16 @@ describe('the Agents menu', () => {
 
     const app = await launchApp({ configDir, mainInspector: true, env: { CLAUDE_CONFIG_DIR: claudeDir } })
     try {
-      const before = await untilMenu(app, STATUS_NOT_INSTALLED, ACTION_SET_UP)
+      const before = await untilMenu(STATUS_NOT_INSTALLED, ACTION_SET_UP)
       expect(before.enabled).toBe(false)
-      expect(await app.agentBanners()).toEqual([])
+      expect(await agentBanners(app)).toEqual([])
 
       mkdirSync(claudeDir)
-      await app.emitInMain('did-become-active')
-      const after = await untilMenu(app, STATUS_NOT_SET_UP, ACTION_SET_UP)
+      await emitInMain('did-become-active')
+      const after = await untilMenu(STATUS_NOT_SET_UP, ACTION_SET_UP)
       expect(after.enabled).toBe(true)
       await app.pause(SETTLE_PAUSE_MS)
-      expect(await app.agentBanners()).toEqual([])
+      expect(await agentBanners(app)).toEqual([])
     } finally {
       await app.close()
       rmSync(configDir, { recursive: true, force: true })
@@ -262,18 +343,18 @@ describe('the Agents menu', () => {
 
     const app = await launchApp({ configDir, mainInspector: true, env: { CLAUDE_CONFIG_DIR: claudeDir } })
     try {
-      await untilMenu(app, STATUS_NOT_SET_UP, ACTION_SET_UP)
+      await untilMenu(STATUS_NOT_SET_UP, ACTION_SET_UP)
       await runOrdinaryCommand(app, binDir)
       await app.pause(SEEN_CHECK_PAUSE_MS)
-      expect(await app.agentBanners()).toEqual([])
+      expect(await agentBanners(app)).toEqual([])
 
       await runFakeClaude(app, binDir)
       await untilBanners(app, 'the offer', [OFFER_TEXT])
-      await app.clickBannerButton('Set up')
+      await clickBannerButton(app, 'Set up')
       await untilBanners(app, 'the done line', [DONE_TEXT])
       expect(managedCommands(claudeDir, configDir)).toHaveLength(EXPECTED_HOOK_COUNT)
 
-      await app.clickBannerButton('Dismiss')
+      await clickBannerButton(app, 'Dismiss')
       await untilBanners(app, 'no strip', [])
     } finally {
       await app.close()
@@ -295,17 +376,17 @@ describe('the Agents menu', () => {
     try {
       await runFakeClaude(app, binDir)
       await untilBanners(app, 'the offer', [OFFER_TEXT])
-      await app.clickBannerButton('Not now')
+      await clickBannerButton(app, 'Not now')
       await untilBanners(app, 'no strip', [])
 
       await app.close()
       firstClosed = true
       relaunched = await launchApp({ configDir, mainInspector: true, env })
-      const reading = await untilMenu(relaunched, STATUS_NOT_SET_UP, ACTION_SET_UP)
+      const reading = await untilMenu(STATUS_NOT_SET_UP, ACTION_SET_UP)
       expect(reading.enabled).toBe(true)
       await runFakeClaude(relaunched, binDir)
       await relaunched.pause(SEEN_CHECK_PAUSE_MS)
-      expect(await relaunched.agentBanners()).toEqual([])
+      expect(await agentBanners(relaunched)).toEqual([])
     } finally {
       if (relaunched !== null) {
         await relaunched.close()
@@ -328,13 +409,13 @@ describe('the Agents menu', () => {
 
     const app = await launchApp({ configDir, mainInspector: true, env: { CLAUDE_CONFIG_DIR: claudeDir } })
     try {
-      const reading = await untilMenu(app, STATUS_OFF, ACTION_SET_UP)
+      const reading = await untilMenu(STATUS_OFF, ACTION_SET_UP)
       expect(reading.enabled).toBe(false)
       await app.pause(SETTLE_PAUSE_MS)
-      expect(await app.agentBanners()).toEqual([])
+      expect(await agentBanners(app)).toEqual([])
 
       writeFileSync(appSettingsPath, JSON.stringify({ manageAgentHooks: true }))
-      const turnedOn = await untilMenu(app, STATUS_NOT_SET_UP, ACTION_SET_UP)
+      const turnedOn = await untilMenu(STATUS_NOT_SET_UP, ACTION_SET_UP)
       expect(turnedOn.enabled).toBe(true)
       await runFakeClaude(app, binDir)
       await untilBanners(app, 'the offer', [OFFER_TEXT])
@@ -357,11 +438,11 @@ describe('the Agents menu', () => {
     try {
       await runFakeClaude(app, binDir)
       await untilBanners(app, 'the offer', [OFFER_TEXT])
-      await app.clickBannerButton('Not now')
+      await clickBannerButton(app, 'Not now')
       await pollFor(
         'the strip to say the decline was not recorded',
         async () => {
-          const texts = await app.agentBanners()
+          const texts = await agentBanners(app)
           if (texts.length !== 1 || !texts[0].startsWith(`${recordPath} could not be written`)) {
             return null
           }
@@ -388,7 +469,7 @@ describe('the Agents menu', () => {
     try {
       await runFakeClaude(app, binDir)
       await untilBanners(app, 'the offer', [OFFER_TEXT])
-      await app.clickBannerButton('Set up')
+      await clickBannerButton(app, 'Set up')
       const problem = `${settingsPath} could not be read as JSON, so nothing was changed.`
       await untilBanners(app, 'the problem', [problem])
       expect(readFileSync(settingsPath, 'utf8')).toBe('{ not json')
