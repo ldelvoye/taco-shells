@@ -5,14 +5,23 @@
     "types": ["vite/client"],
     "jsx": "react-jsx",
     "paths": {
-      "@shared/*": ["./src/shared/*"]
+      "@protocol/*": ["./src/protocol/*"],
+      "@rules/*": ["./src/rules/*"],
+      "@settings/*": ["./src/settings/*"],
+      "@agents/*": ["./src/agents/*"],
+      "@runtime/*": ["./src/runtime/*"],
+      "@workspace/*": ["./src/workspace/*"],
+      "@app/*": ["./src/app/*"],
+      "@window/*": ["./src/window/*"],
+      "@testing/*": ["./src/testing/*"]
     }
   },
   "include": [
-    "src/renderer/**/*.ts",
-    "src/renderer/**/*.tsx",
-    "src/shared/**/*.ts",
-    "src/shared/**/*.json",
-    "src/preload/api.d.ts"
+    "src/window/**/*.ts",
+    "src/window/**/*.tsx",
+    "src/protocol/**/*.ts",
+    "src/rules/**/*.ts",
+    "src/settings/**/*.ts",
+    "src/agents/**/*.ts"
   ]
 }

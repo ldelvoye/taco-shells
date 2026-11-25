@@ -3,7 +3,7 @@ import { writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { makeTempDirectory, removeTempDirectories } from '../src/main/testing/tempDirectory.ts'
+import { makeTempDirectory, removeTempDirectories } from '../src/testing/tempDirectory.ts'
 
 const SCRIPTS = dirname(fileURLToPath(import.meta.url))
 
