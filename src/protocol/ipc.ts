@@ -28,11 +28,8 @@ export interface AgentSignalEvent {
 }
 
 export const CHANNEL = {
-  ptyWrite: 'pty:write',
-  ptyResize: 'pty:resize',
-  ptyListening: 'pty:listening',
-  ptyData: 'pty:data',
-  ptyExit: 'pty:exit',
+  runtimeConnect: 'runtime:connect',
+  runtimePort: 'runtime:port',
   clipboardRead: 'clipboard:read',
   clipboardWrite: 'clipboard:write',
   linkOpen: 'link:open',

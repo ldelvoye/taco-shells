@@ -1,6 +1,5 @@
 import { app, net, shell } from 'electron'
 import type { ConfigFile } from '@protocol/config'
-import { PtySessions } from '@runtime/sessions'
 import { paletteFor } from '@settings/theme'
 import { AgentSessions } from '@workspace/agentSessions'
 import { SnapshotStore } from '@workspace/snapshot/store'
@@ -18,6 +17,7 @@ import { bridgeFocus } from './ipc/focus'
 import { registerHostApi } from './ipc/hostApi'
 import { bridgeUpdates } from './ipc/updates'
 import { bridgeWorkspace } from './ipc/workspace'
+import { startRuntimeProcess } from './runtime/process'
 import { nativeSystemTheme } from './systemTheme'
 import { ApplicationMenu } from './window/applicationMenu'
 import { linkTo, type WindowLink } from './window/link'
@@ -25,7 +25,6 @@ import { createMainWindow, isBackgroundWindow } from './window/window'
 
 app.setName(applicationName)
 
-const sessions = new PtySessions()
 const agentSessions = new AgentSessions()
 const services: Service[] = []
 let snapshotStore: SnapshotStore | undefined
@@ -41,12 +40,14 @@ app.whenReady().then(() => {
   const applicationMenu = new ApplicationMenu()
   applicationMenu.show()
 
+  const runtimeProcess = startRuntimeProcess()
+  const runtime = runtimeProcess.runtime
   const directory = configDirectory()
   const configStore = new ConfigStore(directory, nativeSystemTheme())
   const initialConfig = configStore.current()
   const palette = paletteFor(initialConfig.appearance)
   const link = linkTo(createMainWindow(palette))
-  const snapshots = new SnapshotStore(directory, agentSessions, (id) => sessions.directoryOf(id))
+  const snapshots = new SnapshotStore(directory, agentSessions, (id) => runtime.directoryOf(id))
   snapshotStore = snapshots
   const restoreOnLaunch = initialConfig.settings.restoreOnLaunch
   const configPathOf = (file: ConfigFile): string => configFilePath(directory, file)
@@ -54,12 +55,18 @@ app.whenReady().then(() => {
     link,
     snapshots,
     agentSessions,
-    sessions,
+    runtime,
     configPathOf,
     restoreOnLaunch
   )
   const workspace = workspaceBridge.workspace
-  registerIpc(sessions, link, configStore)
+  // The save stops first, so it still holds the terminals as they were:
+  // quitting and reopening then brings them back.
+  runtimeProcess.onDied((reason) => {
+    freezeWhatIsSaved(snapshots)
+    workspace.runtimeDied(reason)
+  })
+  registerIpc(runtimeProcess, link, configStore)
   registerHostApi(link)
 
   const updateHost: UpdateHost = {
@@ -82,15 +89,15 @@ app.whenReady().then(() => {
     }
   }
   const agents = bridgeAgents(link, applicationMenu, (events) => {
-    return startAgents(directory, configStore, sessions, agentsHost, events)
+    return startAgents(directory, configStore, runtime, agentsHost, events)
   })
 
   const focus = bridgeFocus(link, workspace, (events) => {
-    return startFocus(sessions, directory, events, () => {
+    return startFocus(runtime,directory, events, () => {
       updates.checkNow()
     })
   })
-  services.push(configStore, workspaceBridge, focus, updates, agents, snapshots)
+  services.push(configStore, workspaceBridge, focus, updates, agents, snapshots, runtimeProcess)
 
   whenTheWindowCloses(link, snapshots)
 
@@ -125,7 +132,7 @@ function whenTheWindowCloses(link: WindowLink, snapshots: SnapshotStore): void {
 }
 
 // The shells need no teardown: each one exits when its pty master closes with
-// the process.
+// the runtime process, which stops last of the services.
 function stopEverything(): void {
   for (const service of services) {
     service.stop()

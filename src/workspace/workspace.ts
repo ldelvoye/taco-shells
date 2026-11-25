@@ -26,6 +26,13 @@ import type { WorkspaceEvent } from './workspaceState'
 
 const INITIAL_SIZE: PtySize = { cols: 80, rows: 24 }
 
+const OPENING_REQUESTS: WorkspaceRequest['type'][] = [
+  'openTerminal',
+  'openTerminalIn',
+  'splitTerminal',
+  'forkTerminal'
+]
+
 export interface WorkspaceOptions {
   snapshot: Snapshot | null
   runtime: Runtime
@@ -49,6 +56,10 @@ function accepted(tabGroup: TabGroupId | null): Answer {
 
 function refused(): Answer {
   return { ok: false, tabGroup: null }
+}
+
+function runtimeProblemFor(reason: string): string {
+  return `The terminals stopped because their background process exited (${reason}). Quit and reopen Taco Shells to start again.`
 }
 
 function groupForSession(id: GroupId, sessionId: SessionId): Group {
@@ -110,6 +121,8 @@ export class Workspace {
   private nextTerminalNumber = 1
   private nextGroupNumber = 1
   private nextTabGroupNumber = 1
+  private problem: string | null = null
+  private runtimeGone = false
 
   constructor(options: WorkspaceOptions, effects: WorkspaceEffects) {
     this.options = options
@@ -147,8 +160,27 @@ export class Workspace {
       refocus: state.refocus,
       focusCount: this.focusCount,
       agents: this.agents,
-      defaultAgentName: DEFAULT_HARNESS.name
+      defaultAgentName: DEFAULT_HARNESS.name,
+      problem: this.problem
     }
+  }
+
+  runtimeDied(reason: string): void {
+    this.runtimeGone = true
+    this.problem = runtimeProblemFor(reason)
+
+    const arrangement = this.store.getState().workspace
+    let held: SessionId[] = []
+    if (arrangement !== null) {
+      const panes = arrangement.groups.flatMap((group) => group.panes)
+      held = panes.map((pane) => pane.id)
+    }
+    for (const pane of held) {
+      this.terminalExited(pane)
+    }
+
+    this.revision += 1
+    this.effects.onState(this.drawn())
   }
 
   request(request: WorkspaceRequest): RequestReply {
@@ -189,6 +221,9 @@ export class Workspace {
   }
 
   private answer(request: WorkspaceRequest): Answer {
+    if (this.runtimeGone && OPENING_REQUESTS.includes(request.type)) {
+      return refused()
+    }
     switch (request.type) {
       case 'openTerminal': {
         let command: string | null = null
@@ -412,7 +447,7 @@ export class Workspace {
     const groupsBefore = groupCountOf(before.workspace)
     const groupsAfter = groupCountOf(after.workspace)
     const lastOneWent = groupsBefore !== null && groupsBefore > 0 && groupsAfter === 0
-    if (lastOneWent) {
+    if (lastOneWent && !this.runtimeGone) {
       this.effects.onEmptied()
     }
   }

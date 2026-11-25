@@ -52,4 +52,5 @@ export interface DrawnState {
   focusCount: number
   agents: Record<string, AgentLabel>
   defaultAgentName: string
+  problem: string | null
 }
