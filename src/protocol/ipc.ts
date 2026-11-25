@@ -73,8 +73,23 @@ export const CHANNEL = {
   agentsDismiss: 'agents:dismiss'
 } as const
 
+/** What the window asks of the Electron code itself: nothing here reaches a terminal or the workspace. */
+export interface HostApi {
+  clipboard: {
+    read(): Promise<string>
+    write(text: string): void
+  }
+  link: {
+    open(url: string): void
+  }
+  fullScreen: {
+    initial: boolean
+    onChange(listener: (fullScreen: boolean) => void): () => void
+  }
+}
+
 /** Everything the renderer may ask the main process to do, exposed on `window.tacoShells`. */
-export interface TacoShellsApi {
+export interface TacoShellsApi extends HostApi {
   pty: {
     create(size: PtySize, options?: PtyCreateOptions): Promise<SessionId>
     write(id: SessionId, data: string): void
@@ -82,13 +97,6 @@ export interface TacoShellsApi {
     kill(id: SessionId): void
     onData(listener: (event: PtyDataEvent) => void): () => void
     onExit(listener: (event: PtyExitEvent) => void): () => void
-  }
-  clipboard: {
-    read(): Promise<string>
-    write(text: string): void
-  }
-  link: {
-    open(url: string): void
   }
   config: {
     initial: Config
@@ -101,10 +109,6 @@ export interface TacoShellsApi {
     onAgentSignal(listener: (event: AgentSignalEvent) => void): () => void
     onActivated(listener: () => void): () => void
     onUnavailable(listener: () => void): () => void
-  }
-  fullScreen: {
-    initial: boolean
-    onChange(listener: (fullScreen: boolean) => void): () => void
   }
   snapshot: {
     initial: Snapshot | null

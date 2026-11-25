@@ -1,10 +1,6 @@
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
-import { app, type BrowserWindow, ipcMain, net } from 'electron'
-import { CHANNEL } from '@protocol/ipc'
 import { isStable } from '../channel'
-import type { ApplicationMenu } from '../host/window/applicationMenu'
-import { sendToWindow } from '../host/window/send'
 import type { Service } from '../service'
 import { helperArguments, installedBundlePath } from './apply'
 import { UpdateChecker, type UpdateEvents } from './checker'
@@ -17,8 +13,18 @@ const HELPER_NAME = 'update-helper.sh'
 const NOT_IN_APPLICATIONS = 'Taco Shells can only update itself from /Applications.'
 const UNVERSIONED = '0.0.0'
 
+export interface UpdateHost {
+  appVersion: string
+  executablePath: string
+  resourcesPath: string
+  fetch(input: string | Request, init?: RequestInit): Promise<Response>
+  quit(): void
+}
+
 export interface UpdateService extends Service {
   checkNow(): void
+  readyVersion(): string | null
+  applyReady(): void
 }
 
 // The stable build always follows GitHub. The feed override is a test seam for
@@ -35,10 +41,9 @@ function resolveFeedUrl(): string | null {
   return override
 }
 
-function resolveCurrentVersion(): string | null {
-  const version = app.getVersion()
-  if (isVersion(version)) {
-    return version
+function resolveCurrentVersion(appVersion: string): string | null {
+  if (isVersion(appVersion)) {
+    return appVersion
   }
   if (isStable) {
     return null
@@ -47,46 +52,15 @@ function resolveCurrentVersion(): string | null {
 }
 
 /** The update checks and the apply handler. In a build that does not update, the check does nothing. */
-export function registerUpdates(
-  window: BrowserWindow,
-  configDirectory: string,
-  menu: ApplicationMenu
-): UpdateService {
-  let checker: UpdateChecker | null = null
-
-  // A sendSync left unanswered hangs the renderer at startup, so this answers
-  // whether or not a checker exists.
-  ipcMain.on(CHANNEL.updateGet, (event) => {
-    if (checker === null) {
-      event.returnValue = null
-      return
-    }
-    const ready = checker.readyApp()
-    if (ready === null) {
-      event.returnValue = null
-    } else {
-      event.returnValue = ready.version
-    }
-  })
-
+export function startUpdates(configDirectory: string, host: UpdateHost, events: UpdateEvents): UpdateService {
   const feedUrl = resolveFeedUrl()
-  const currentVersion = resolveCurrentVersion()
+  const currentVersion = resolveCurrentVersion(host.appVersion)
   if (feedUrl === null || currentVersion === null) {
     return {
-      stop: () => {
-        ipcMain.removeAllListeners(CHANNEL.updateGet)
-      },
-      checkNow: () => undefined
-    }
-  }
-
-  const events: UpdateEvents = {
-    onReady: (version: string) => {
-      sendToWindow(window, CHANNEL.updateReady, version)
-      menu.setReadyUpdate({ version, onApply: applyReadyUpdate })
-    },
-    onProblem: (message: string) => {
-      sendToWindow(window, CHANNEL.updateProblem, message)
+      stop: () => undefined,
+      checkNow: () => undefined,
+      readyVersion: () => null,
+      applyReady: () => undefined
     }
   }
 
@@ -96,45 +70,46 @@ export function registerUpdates(
     updatesDirectory: updatesDirectory(configDirectory),
     fetchImpl: (input, init) => {
       if (input instanceof URL) {
-        return net.fetch(input.href, init)
+        return host.fetch(input.href, init)
       }
-      return net.fetch(input, init)
+      return host.fetch(input, init)
     },
     events
   })
-  checker = started
-
-  function applyReadyUpdate(): void {
-    const ready = started.readyApp()
-    if (ready === null) {
-      return
-    }
-
-    const installed = installedBundlePath(app.getPath('exe'))
-    if (installed === null) {
-      events.onProblem(NOT_IN_APPLICATIONS)
-      return
-    }
-
-    const helperPath = join(process.resourcesPath, HELPER_NAME)
-    const helperArgs = helperArguments(process.pid, installed, ready.path)
-    const child = spawn('/bin/sh', [helperPath, ...helperArgs], { detached: true, stdio: 'ignore' })
-    child.unref()
-    app.quit()
-  }
-
-  ipcMain.on(CHANNEL.updateApply, applyReadyUpdate)
 
   started.start()
 
   return {
     stop: () => {
       started.stop()
-      ipcMain.removeAllListeners(CHANNEL.updateApply)
-      ipcMain.removeAllListeners(CHANNEL.updateGet)
     },
     checkNow: () => {
       started.checkNow()
+    },
+    readyVersion: () => {
+      const ready = started.readyApp()
+      if (ready === null) {
+        return null
+      }
+      return ready.version
+    },
+    applyReady: () => {
+      const ready = started.readyApp()
+      if (ready === null) {
+        return
+      }
+
+      const installed = installedBundlePath(host.executablePath)
+      if (installed === null) {
+        events.onProblem(NOT_IN_APPLICATIONS)
+        return
+      }
+
+      const helperPath = join(host.resourcesPath, HELPER_NAME)
+      const helperArgs = helperArguments(process.pid, installed, ready.path)
+      const child = spawn('/bin/sh', [helperPath, ...helperArgs], { detached: true, stdio: 'ignore' })
+      child.unref()
+      host.quit()
     }
   }
 }
