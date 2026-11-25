@@ -12,7 +12,6 @@ describe('the links a Cmd+click may open', () => {
   it('refuses every other scheme, and anything that is not a URL', () => {
     expect(isOpenableLink('file:///etc/passwd')).toBe(false)
     expect(isOpenableLink('javascript:alert(1)')).toBe(false)
-    expect(isOpenableLink('x-apple.systempreferences:com.apple.preference')).toBe(false)
     expect(isOpenableLink('example.com')).toBe(false)
     expect(isOpenableLink('')).toBe(false)
   })

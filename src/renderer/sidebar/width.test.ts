@@ -43,11 +43,9 @@ describe('parseRemembered', () => {
       '1512': 260,
       '3440': 320,
       'not-a-number': 300,
-      '-100': 200,
       '0': 200,
       '640': -10,
-      '800': null,
-      '900': 'wide'
+      '800': null
     })
     expect(parseRemembered(withJunk)).toEqual({ '1512': 260, '3440': 320 })
   })

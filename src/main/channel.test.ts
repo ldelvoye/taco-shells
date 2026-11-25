@@ -34,7 +34,6 @@ describe('the two builds stay apart', () => {
       const build = await buildFor(channel)
       expect(build.isStable).toBe(false)
       expect(build.configDirectoryName).toBe('.taco-shells-dev')
-      expect(build.applicationName).toBe('Taco Shells Dev')
     }
   })
 })

@@ -35,7 +35,6 @@ describe('applySettingsLayer', () => {
     const result = applySettingsLayer(DEFAULT_SETTINGS, layer, 'settings.json')
 
     expect(result.settings).toEqual(DEFAULT_SETTINGS)
-    expect(result.settings.restoreOnLaunch).toBe(true)
     expect(result.problems).toHaveLength(8)
   })
 

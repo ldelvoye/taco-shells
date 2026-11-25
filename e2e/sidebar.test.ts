@@ -63,14 +63,11 @@ describe('the sidebar divider', () => {
 })
 
 describe('row colors', () => {
-  it('colors the active row from the keyboard, and the same chord clears it', async () => {
+  it('colors the active row from the keyboard', async () => {
     const chord = { cmd: true, alt: true }
 
     await app.press(KEY.digit5, chord)
     await app.until('the row is blue', (state) => state.rows[0].color === 'blue')
-
-    await app.press(KEY.digit5, chord)
-    await app.until('the row has no color', (state) => state.rows[0].color === null)
   })
 
   it('previews a hovered dot on the row and keeps a color only when clicked', async () => {

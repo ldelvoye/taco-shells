@@ -197,9 +197,9 @@ describe('the agent setup flow', () => {
 
   it('remembers a decline without touching the entries it wrote', () => {
     const agent = agentFor(agentDirectory)
-    mkdirSync(agentDirectory, { recursive: true })
     writeFileSync(agent.paths.settingsPath, '{}')
     setUp(agent)
+    const settingsAfterSetUp = readFileSync(agent.paths.settingsPath, 'utf8')
 
     expect(decline(agent)).toBeNull()
 
@@ -207,6 +207,8 @@ describe('the agent setup flow', () => {
     expect(record.declined).toBe(true)
     expect(record.written).toHaveLength(ENTRY_COUNT)
     expect(readState(agent, true)).toBe('setUp')
+    const settingsAfterDecline = readFileSync(agent.paths.settingsPath, 'utf8')
+    expect(settingsAfterDecline).toBe(settingsAfterSetUp)
   })
 
   it('may write in a development build only with both directories overridden', () => {

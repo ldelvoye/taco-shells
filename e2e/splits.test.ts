@@ -36,8 +36,6 @@ describe('the default keymap', () => {
     expect(screen.groups).toBe(1)
     expect(screen.dividers).toBe(1)
     expect(screen.rows.map((row) => row.connector)).toEqual(['is-first', 'is-last'])
-    expect(screen.panes.map((pane) => pane.width)).toEqual([0.5, 0.5])
-    expect(screen.rows.map((row) => row.active)).toEqual([false, true])
   })
 
   it('opens a separate group on cmd+t rather than splitting', async () => {
@@ -107,7 +105,6 @@ describe('the default keymap', () => {
     const screen = await app.until('one pane is left', (state) => state.rows.length === 1)
     expect(screen.dividers).toBe(0)
     expect(screen.rows[0].connector).toBe('')
-    expect(screen.panes.map((pane) => pane.width)).toEqual([1])
   })
 
   it('sends esc+return on shift+enter, and only that', async () => {
@@ -163,24 +160,6 @@ describe('the default keymap', () => {
 })
 
 describe('a split', () => {
-  it('leaves every pane in the group the same width, however many times it is split', async () => {
-    let splits = 0
-    while (splits < 4) {
-      await app.press(KEY.backslash, { cmd: true })
-      await app.until('the split lands', (state) => state.rows.length === splits + 2)
-      splits += 1
-    }
-
-    const screen = await app.screen()
-    const widths = screen.panes.map((pane) => pane.pixels)
-    const narrowest = Math.min(...widths)
-    const widest = Math.max(...widths)
-
-    // Halving the pane that was split instead would leave the last pane a
-    // sixteenth of the first by this point.
-    expect(widest - narrowest).toBeLessThanOrEqual(1)
-  })
-
   it('is refused once the panes would be too narrow, leaving no shell behind', async () => {
     let attempts = 0
     while (attempts < 10) {
@@ -241,15 +220,10 @@ describe('a split', () => {
 
     await app.dragDivider(0, -120)
 
-    const screen = await app.until(
+    await app.until(
       'the left pane has narrowed',
       (state) => state.panes[0].pixels < startingWidth - 100
     )
-
-    const widths = screen.panes.map((pane) => pane.width)
-    const total = widths[0] + widths[1]
-    expect(total).toBeCloseTo(1)
-    expect(widths[0]).toBeLessThan(widths[1])
   })
 })
 

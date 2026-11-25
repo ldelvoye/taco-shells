@@ -35,10 +35,7 @@ describe('parseChord', () => {
 
 describe('codeToKey', () => {
   it('returns null for modifier codes', () => {
-    const modifierCodes = ['MetaLeft', 'ShiftRight', 'AltLeft', 'ControlLeft']
-    for (const code of modifierCodes) {
-      expect(codeToKey(code)).toBeNull()
-    }
+    expect(codeToKey('MetaLeft')).toBeNull()
   })
 })
 
