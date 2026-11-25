@@ -11,7 +11,8 @@ export interface RuntimeServer {
 
 export function serveRuntime(sessions: PtySessions, post: (report: RuntimeReport) => void): RuntimeServer {
   // The shells start before the page has loaded, and a message to a page that is
-  // not listening yet is dropped: the first prompt would be lost.
+  // not listening yet is dropped: the first prompt would be lost. So output is
+  // kept here until the window says it is listening; null means it is.
   let held: TerminalOutput[] | null = []
   let current: Connection | null = null
 
@@ -77,20 +78,22 @@ export function serveRuntime(sessions: PtySessions, post: (report: RuntimeReport
     },
     connectWindow(connection: Connection): (input: TerminalInput) => void {
       current = connection
+      // A page that has just loaded is not listening yet either.
       if (held === null) {
         held = []
       }
 
       return (input) => {
+        // A replaced connection belongs to a page that is gone.
+        if (current !== connection) {
+          return
+        }
         if (input.type === 'write') {
           sessions.write(input.id, input.data)
           return
         }
         if (input.type === 'resize') {
           sessions.resize(input.id, input.size)
-          return
-        }
-        if (current !== connection) {
           return
         }
         const backlog = held
