@@ -1,7 +1,6 @@
 import { spawn } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:net'
-import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
@@ -10,6 +9,7 @@ import type { Harness } from '@shared/harness/types'
 import type { SessionId } from '@shared/ipc'
 import type { AgentSignal } from '@shared/rowState'
 import type { AgentSession } from '@shared/snapshot'
+import { makeTempDirectory, removeTempDirectories } from '../testing/tempDirectory'
 import { type FocusServerHandlers, startFocusServer } from './server'
 
 const SESSION_SCRIPT = join(import.meta.dirname, '..', '..', '..', 'hooks', 'taco-shells-claude-session.sh')
@@ -100,9 +100,11 @@ function post(port: number, path: string, body: unknown): Promise<Response> {
 }
 
 function freshPortFilePath(): string {
-  const directory = mkdtempSync(join(tmpdir(), 'taco-shells-focus-test-'))
+  const directory = makeTempDirectory('taco-shells-focus-test-')
   return join(directory, 'focus-port')
 }
+
+afterEach(removeTempDirectories)
 
 // Not spawnSync: the server it posts to runs in this process and has to stay free to answer.
 function runSessionScript(configDirectory: string, hookInput: unknown): Promise<void> {
