@@ -38,10 +38,18 @@ const NO_CLAUDE_DIRECTORY = 'no-claude'
 // runner does on its own; it says nothing about the app.
 const XTERM_DEADLINE_WARNING = 'task queue exceeded allotted deadline'
 
+// A parked window keeps this much on screen: it still draws every frame, without covering what the user is doing.
+const PARKED_STRIP_PX = 48
+
+const SHARPER_DISPLAY = 'candidate.scaleFactor > display.scaleFactor'
+const DISPLAY_FURTHER_RIGHT =
+  'candidate.bounds.x + candidate.bounds.width > display.bounds.x + display.bounds.width'
+
 /** A content size for a window shown on screen, without focus, on the display with the highest scale factor. */
 export interface WindowPlacement {
   width: number
   height: number
+  parked?: boolean
 }
 
 /** What a launch may override: the config directory, anything the shells inherit, whether the window is shown, and the main-process inspector. */
@@ -84,23 +92,32 @@ function whenExited(child: ChildProcess): Promise<void> {
 
 // Runs in the main process, which is the only side that can size and show the
 // window. The sharpest display wins so a capture of the window is at full
-// device resolution. The inspector's global scope has no require of its own.
+// device resolution; a parked window goes to the rightmost display instead,
+// where no other display is beside it to land on. The inspector's global scope
+// has no require of its own.
 function placementScript(placement: WindowPlacement): string {
+  let better = SHARPER_DISPLAY
+  let left = `Math.round(area.x + (area.width - ${placement.width}) / 2)`
+  if (placement.parked) {
+    better = DISPLAY_FURTHER_RIGHT
+    left = `area.x + area.width - ${PARKED_STRIP_PX}`
+  }
   return `(() => {
     const { BrowserWindow, screen } = process.mainModule.require('electron')
     const window = BrowserWindow.getAllWindows()[0]
     let display = screen.getPrimaryDisplay()
     for (const candidate of screen.getAllDisplays()) {
-      if (candidate.scaleFactor > display.scaleFactor) {
+      if (${better}) {
         display = candidate
       }
     }
     const area = display.workArea
-    const x = Math.round(area.x + (area.width - ${placement.width}) / 2)
+    const x = ${left}
     const y = Math.round(area.y + (area.height - ${placement.height}) / 2)
-    window.setPosition(x, y)
     window.setContentSize(${placement.width}, ${placement.height})
+    window.setPosition(x, y)
     window.showInactive()
+    window.setPosition(x, y)
   })()`
 }
 
