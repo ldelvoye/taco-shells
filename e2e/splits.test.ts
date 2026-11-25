@@ -7,6 +7,7 @@ import { type App, launchApp } from './app'
 import { dispatchKey, KEY, type Key, type Modifiers } from './harness/keys'
 import { dragAcross } from './harness/mouse'
 
+const FULL_GROUP_ROWS = 10
 const REFUSED_SPLIT_SETTLE_MS = 500
 
 // Covers what the unit tests cannot: a chord reaching its command, and the
@@ -174,13 +175,15 @@ describe('the default keymap', () => {
 
 describe('a split', () => {
   it('is refused once the panes would be too narrow, leaving no shell behind', async () => {
-    let attempts = 0
-    while (attempts < 10) {
+    let rows = 1
+    while (rows < FULL_GROUP_ROWS) {
       await app.press(KEY.backslash, { cmd: true })
-      attempts += 1
+      rows += 1
+      const expectedRows = rows
+      await app.until('the split lands', (state) => state.rows.length === expectedRows)
     }
 
-    await app.until('nine splits have landed', (state) => state.rows.length === 10)
+    await app.press(KEY.backslash, { cmd: true })
     await app.pause(REFUSED_SPLIT_SETTLE_MS)
 
     const screen = await app.screen()
