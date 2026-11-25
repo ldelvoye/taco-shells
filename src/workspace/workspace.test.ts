@@ -413,20 +413,24 @@ describe('Workspace', () => {
   })
 
   it('when the runtime dies every terminal goes, the window is told why, and nothing closes or reopens', () => {
-    const { workspace, runtime, emptied } = opened(2)
+    const { workspace, runtime, states, emptied } = opened(2)
     const openedBefore = runtime.opened.length
     const closedBefore = runtime.closed.length
+    const revisionBefore = workspace.drawn().revision
 
     workspace.runtimeDied('code 9')
 
-    const drawn = workspace.drawn()
-    expect(drawn.workspace?.groups.length).toBe(0)
-    expect(drawn.problem).toContain('code 9')
+    const told = states[states.length - 1]
+    expect(told.workspace?.groups.length).toBe(0)
+    expect(told.problem).toContain('code 9')
+    expect(told.revision).toBeGreaterThan(revisionBefore)
     expect(emptied.count).toBe(0)
     expect(runtime.closed.length).toBe(closedBefore)
 
     const reply = workspace.request({ type: 'openTerminal', file: null })
+    const replyInGroup = workspace.request({ type: 'openTerminalIn', tabGroup: null })
     expect(reply.ok).toBe(false)
+    expect(replyInGroup.ok).toBe(false)
     expect(runtime.opened.length).toBe(openedBefore)
   })
 
