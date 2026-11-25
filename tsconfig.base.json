@@ -16,6 +16,15 @@
     "noImplicitOverride": true,
     "exactOptionalPropertyTypes": true,
     "noEmit": true,
-    "composite": true
+    "composite": true,
+    "paths": {
+      "@protocol/*": ["./src/protocol/*"],
+      "@rules/*": ["./src/rules/*"],
+      "@settings/*": ["./src/settings/*"],
+      "@agents/*": ["./src/agents/*"],
+      "@runtime/*": ["./src/runtime/*"],
+      "@workspace/*": ["./src/workspace/*"],
+      "@testing/*": ["./src/testing/*"]
+    }
   }
 }
