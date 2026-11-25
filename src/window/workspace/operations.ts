@@ -11,7 +11,8 @@ import type { Snapshot, SnapshotPane } from '@protocol/snapshot'
 import { canSplitPane, emptyWorkspace } from '@rules/arrangement'
 import { forkNameFor } from '@rules/forkName'
 import { workspaceFromSnapshot } from '@workspace/snapshot/format'
-import { activeSessionOf, type FocusMove, type WorkspaceEvent } from '@workspace/workspaceState'
+import type { FocusMove } from '@protocol/workspace'
+import { activeSessionOf, type WorkspaceEvent } from '@workspace/workspaceState'
 import {
   createSession,
   disposeSession,
@@ -19,7 +20,7 @@ import {
   onSessionFocus,
   onSessionTitle
 } from '../terminal/registry'
-import type { WorkspaceStore } from './store'
+import type { WorkspaceStore } from '@workspace/store'
 
 let nextGroupNumber = 1
 

@@ -11,8 +11,9 @@ export const CLOSING_MILESTONES: Record<number, string> = {
 export const HOLES: Hole[] = [
   // The window runs the workspace reducer, its state and events.
   { file: 'src/window/workspace/operations.ts', imports: '@workspace/workspaceState', closes: 3 },
-  { file: 'src/window/workspace/store.ts', imports: '@workspace/workspaceState', closes: 3 },
+  { file: 'src/window/workspace/operations.ts', imports: '@workspace/store', closes: 3 },
   { file: 'src/window/workspace/useWorkspace.ts', imports: '@workspace/workspaceState', closes: 3 },
+  { file: 'src/window/workspace/useWorkspace.ts', imports: '@workspace/store', closes: 3 },
 
   // Restore runs in the window.
   { file: 'src/window/workspace/operations.ts', imports: '@workspace/snapshot/format', closes: 4 },

@@ -10,17 +10,20 @@ import type {
 } from '@protocol/arrangement'
 import type { AgentSignalEvent, SessionId } from '@protocol/ipc'
 import type { AgentRows } from '@protocol/rows'
+import type { FocusMove } from '@protocol/workspace'
 import { activePane, emptyWorkspace } from '@rules/arrangement'
-import { applyDrop } from '@rules/transitions/applyDrop'
 import {
   activatePane,
-  addGroup,
-  addGroupTo,
-  closePane,
   focusNextGroup,
   focusNextPane,
   focusPreviousGroup,
-  focusPreviousPane,
+  focusPreviousPane
+} from '@rules/focus'
+import { applyDrop } from '@rules/transitions/applyDrop'
+import {
+  addGroup,
+  addGroupTo,
+  closePane,
   forkPane,
   moveDivider,
   renamePane,
@@ -49,8 +52,6 @@ export interface WorkspaceState {
   refocus: number
 }
 
-export type FocusMove = 'nextPane' | 'previousPane' | 'nextGroup' | 'previousGroup'
-
 export type WorkspaceEvent =
   | { type: 'terminalOpened'; group: Group }
   | { type: 'terminalOpenedIn'; group: Group; tabGroup: TabGroupId | null }
@@ -73,6 +74,7 @@ export type WorkspaceEvent =
   | { type: 'agentSignalled'; signal: AgentSignalEvent }
   | { type: 'attentionRequested'; pane: SessionId }
   | { type: 'appActivated' }
+  | { type: 'focusRequested'; pane: SessionId }
 
 export function initialWorkspaceState(): WorkspaceState {
   return {
@@ -236,7 +238,13 @@ function appActivated(state: WorkspaceState): WorkspaceState {
   if (waiting === null) {
     return state
   }
-  return workspaceEdit(state, (workspace) => activatePane(workspace, waiting))
+  const activated = workspaceEdit(state, (workspace) => activatePane(workspace, waiting))
+  return { ...activated, refocus: activated.refocus + 1 }
+}
+
+function focusRequested(state: WorkspaceState, pane: SessionId): WorkspaceState {
+  const activated = workspaceEdit(state, (workspace) => activatePane(workspace, pane))
+  return { ...activated, refocus: activated.refocus + 1 }
 }
 
 function eventApplied(state: WorkspaceState, event: WorkspaceEvent): WorkspaceState {
@@ -293,6 +301,8 @@ function eventApplied(state: WorkspaceState, event: WorkspaceEvent): WorkspaceSt
       return attentionRequested(state, event.pane)
     case 'appActivated':
       return appActivated(state)
+    case 'focusRequested':
+      return focusRequested(state, event.pane)
   }
 }
 

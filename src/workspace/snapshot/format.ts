@@ -20,8 +20,7 @@ import type {
   SnapshotPane,
   SnapshotTabGroup
 } from '@protocol/snapshot'
-import { emptyWorkspace, MIN_PANE_WIDTH } from '@rules/arrangement'
-import { openedAt } from '@rules/transitions/arrangement'
+import { emptyWorkspace, MIN_PANE_WIDTH, openedAt } from '@rules/arrangement'
 
 // The model's width floor caps a group at ten panes; a hand-edited file may not exceed it.
 const MAX_PANES_PER_GROUP = Math.floor(1 / MIN_PANE_WIDTH)

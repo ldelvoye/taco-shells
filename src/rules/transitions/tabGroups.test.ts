@@ -2,16 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import type { Group, TabGroup, Workspace } from '@protocol/arrangement'
 
-import {
-  activatePane,
-  addGroup,
-  addGroupTo,
-  closePane,
-  focusNextGroup,
-  focusPreviousGroup,
-  settled,
-  splitPane
-} from './arrangement'
+import { activatePane, focusNextGroup, focusPreviousGroup } from '../focus'
+import { addGroup, addGroupTo, closePane, settled, splitPane } from './arrangement'
 import {
   createTabGroup,
   recolorTabGroup,

@@ -7,26 +7,11 @@ import {
   blockOf,
   groupHasRoom,
   isHidden,
-  locatePane
+  locatePane,
+  openedAt,
+  spliced,
+  withGroupAt
 } from '../arrangement'
-
-/** The workspace with the group at this index replaced. */
-export function withGroupAt(workspace: Workspace, index: number, group: Group): Workspace {
-  const groups = spliced(workspace.groups, index, 1, [group])
-  return { ...workspace, groups }
-}
-
-/** A copy of the list with removeCount items at index replaced by inserted. */
-export function spliced<T>(
-  items: readonly T[],
-  index: number,
-  removeCount: number,
-  inserted: readonly T[]
-): T[] {
-  const before = items.slice(0, index)
-  const after = items.slice(index + removeCount)
-  return [...before, ...inserted, ...after]
-}
 
 function withoutEmptyTabGroups(workspace: Workspace): Workspace {
   const usedIds = new Set(workspace.groups.map((group) => group.tabGroup))
@@ -69,23 +54,6 @@ function withFocusShowing(workspace: Workspace): Workspace {
 export function settled(workspace: Workspace): Workspace {
   const pruned = withoutEmptyTabGroups(workspace)
   return withFocusShowing(pruned)
-}
-
-/** The workspace with the tab group of the entry at this index opened, if it was collapsed. */
-export function openedAt(workspace: Workspace, groupIndex: number): Workspace {
-  if (!isHidden(workspace, groupIndex)) {
-    return workspace
-  }
-
-  const tabGroupId = workspace.groups[groupIndex].tabGroup
-  const tabGroups = workspace.tabGroups.map((tabGroup) => {
-    if (tabGroup.id === tabGroupId) {
-      return { ...tabGroup, collapsed: false }
-    }
-    return tabGroup
-  })
-
-  return { ...workspace, tabGroups }
 }
 
 /** The workspace with a new active entry: last in the active entry's tab group, or last in the list when it has none. */
@@ -271,92 +239,6 @@ export function forkPane(workspace: Workspace, source: SessionId, id: SessionId)
   }
 
   return setPaneColor(split, id, sourcePane.color)
-}
-
-export function activatePane(workspace: Workspace, id: SessionId): Workspace {
-  const location = locatePane(workspace, id)
-  if (location === null) {
-    return workspace
-  }
-
-  const { groupIndex, paneIndex } = location
-  const group = workspace.groups[groupIndex]
-  const alreadyActive = groupIndex === workspace.activeGroup && paneIndex === group.activePane
-  if (alreadyActive) {
-    return workspace
-  }
-
-  const updatedGroup: Group = { ...group, activePane: paneIndex }
-  const replaced = withGroupAt(workspace, groupIndex, updatedGroup)
-
-  const activated: Workspace = { ...replaced, activeGroup: groupIndex }
-  return openedAt(activated, groupIndex)
-}
-
-function focusPaneByDelta(workspace: Workspace, delta: number): Workspace {
-  if (workspace.groups.length === 0) {
-    return workspace
-  }
-
-  const group = workspace.groups[workspace.activeGroup]
-  if (group.panes.length < 2) {
-    return workspace
-  }
-
-  const paneCount = group.panes.length
-  let nextIndex = group.activePane + delta
-  if (nextIndex < 0) {
-    nextIndex = paneCount - 1
-  }
-  if (nextIndex >= paneCount) {
-    nextIndex = 0
-  }
-
-  const updatedGroup: Group = { ...group, activePane: nextIndex }
-  return withGroupAt(workspace, workspace.activeGroup, updatedGroup)
-}
-
-export function focusNextPane(workspace: Workspace): Workspace {
-  return focusPaneByDelta(workspace, 1)
-}
-
-export function focusPreviousPane(workspace: Workspace): Workspace {
-  return focusPaneByDelta(workspace, -1)
-}
-
-function nextShowingGroup(workspace: Workspace, delta: number): number | null {
-  const groupCount = workspace.groups.length
-  for (let step = 1; step < groupCount; step += 1) {
-    const stepped = workspace.activeGroup + delta * step
-    const wrapped = ((stepped % groupCount) + groupCount) % groupCount
-    if (!isHidden(workspace, wrapped)) {
-      return wrapped
-    }
-  }
-  return null
-}
-
-// Each group keeps its own activePane, so arriving back at a split group puts
-// you on the pane you were last using in it.
-function focusGroupByDelta(workspace: Workspace, delta: number): Workspace {
-  if (workspace.groups.length < 2) {
-    return workspace
-  }
-
-  const nextIndex = nextShowingGroup(workspace, delta)
-  if (nextIndex === null) {
-    return workspace
-  }
-
-  return { ...workspace, activeGroup: nextIndex }
-}
-
-export function focusNextGroup(workspace: Workspace): Workspace {
-  return focusGroupByDelta(workspace, 1)
-}
-
-export function focusPreviousGroup(workspace: Workspace): Workspace {
-  return focusGroupByDelta(workspace, -1)
 }
 
 export function moveDivider(

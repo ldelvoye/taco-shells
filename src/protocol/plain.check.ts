@@ -3,6 +3,7 @@ import type { Config } from './config'
 import type { TacoShellsApi } from './ipc'
 import type { Crossing, IsPlain } from './plain'
 import type { Snapshot } from './snapshot'
+import type { DrawnState, RequestReply, WorkspaceRequest } from './workspace'
 
 type Assert<T extends true> = T
 
@@ -22,7 +23,10 @@ export type PlainCases = [
   Assert<IsPlain<{ a: string } | { b: number }>>,
   Assert<IsPlain<Workspace>>,
   Assert<IsPlain<Snapshot>>,
-  Assert<IsPlain<Config>>
+  Assert<IsPlain<Config>>,
+  Assert<IsPlain<DrawnState>>,
+  Assert<IsPlain<WorkspaceRequest>>,
+  Assert<IsPlain<RequestReply>>
 ]
 
 export type NotPlainCases = [

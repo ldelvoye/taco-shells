@@ -94,3 +94,38 @@ export function activePane(workspace: Workspace): Pane | null {
   const group = workspace.groups[workspace.activeGroup]
   return paneOf(group)
 }
+
+/** A copy of the list with removeCount items at index replaced by inserted. */
+export function spliced<T>(
+  items: readonly T[],
+  index: number,
+  removeCount: number,
+  inserted: readonly T[]
+): T[] {
+  const before = items.slice(0, index)
+  const after = items.slice(index + removeCount)
+  return [...before, ...inserted, ...after]
+}
+
+/** The workspace with the group at this index replaced. */
+export function withGroupAt(workspace: Workspace, index: number, group: Group): Workspace {
+  const groups = spliced(workspace.groups, index, 1, [group])
+  return { ...workspace, groups }
+}
+
+/** The workspace with the tab group of the entry at this index opened, if it was collapsed. */
+export function openedAt(workspace: Workspace, groupIndex: number): Workspace {
+  if (!isHidden(workspace, groupIndex)) {
+    return workspace
+  }
+
+  const tabGroupId = workspace.groups[groupIndex].tabGroup
+  const tabGroups = workspace.tabGroups.map((tabGroup) => {
+    if (tabGroup.id === tabGroupId) {
+      return { ...tabGroup, collapsed: false }
+    }
+    return tabGroup
+  })
+
+  return { ...workspace, tabGroups }
+}
