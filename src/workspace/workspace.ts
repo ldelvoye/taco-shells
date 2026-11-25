@@ -170,12 +170,13 @@ export class Workspace {
     this.problem = runtimeProblemFor(reason)
 
     const arrangement = this.store.getState().workspace
-    let held: SessionId[] = []
+    let open: SessionId[] = []
     if (arrangement !== null) {
       const panes = arrangement.groups.flatMap((group) => group.panes)
-      held = panes.map((pane) => pane.id)
+      open = panes.map((pane) => pane.id)
     }
-    for (const pane of held) {
+    // No shell is left to report its own exit, so each terminal goes the way an exited one does.
+    for (const pane of open) {
       this.terminalExited(pane)
     }
 
@@ -447,6 +448,7 @@ export class Workspace {
     const groupsBefore = groupCountOf(before.workspace)
     const groupsAfter = groupCountOf(after.workspace)
     const lastOneWent = groupsBefore !== null && groupsBefore > 0 && groupsAfter === 0
+    // Emptying ends the app, and after the runtime died the window has to stay to say so.
     if (lastOneWent && !this.runtimeGone) {
       this.effects.onEmptied()
     }

@@ -113,7 +113,9 @@ v0.2.2     cleanup, then promoted
 
 **"Which release is stable" is a GitHub flag, not a file.** A prerelease is excluded from Latest and from `/releases/latest`, so that endpoint is the stable download link and needs nothing maintaining it.
 
-**CI never packages a bundle.** `.github/workflows/main.yml` runs `npm ci`, `npm test`, `npm run e2e` — no electron-builder, so no Homebrew librsvg and no signing. That is what keeps a push cheap. The packaged app's runtime script path is checked by hand, since a path that works from `out/` can fail from inside `app.asar`: `npm run package`, then run `dist.noindex/mac-arm64/Taco Shells Dev.app/Contents/MacOS/Taco Shells Dev` with `TACO_SHELLS_CONFIG_DIR` set to an empty folder and see that a terminal opens. Today the script runs from inside `app.asar` with nothing unpacked but `node-pty`. The runner is macOS because the e2e suite launches a real Electron binary whose ptys run login shells, and `cwd.ts` shells out to `lsof`.
+**CI never packages a bundle.** `.github/workflows/main.yml` runs `npm ci`, `npm test`, `npm run e2e`: no electron-builder, so no Homebrew librsvg and no signing. That is what keeps a push cheap. The runner is macOS because the e2e suite launches a real Electron binary whose ptys run login shells, and `cwd.ts` shells out to `lsof`.
+
+**So the packaged app's runtime script path is checked by hand**, since a path that works from `out/` can fail from inside `app.asar`: `npm run package`, then run `dist.noindex/mac-arm64/Taco Shells Dev.app/Contents/MacOS/Taco Shells Dev` with `TACO_SHELLS_CONFIG_DIR` set to an empty folder and see that a terminal opens. The script runs from inside `app.asar`, with nothing unpacked but `node-pty`.
 
 ## Traps
 

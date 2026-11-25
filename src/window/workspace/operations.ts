@@ -173,7 +173,7 @@ export function createWorkspaceOperations(link: WorkspaceLink): WorkspaceOperati
   }
 
   function listen(): () => void {
-    // A pane leaves the workspace when its pty exits and at no other time, so
+    // A pane leaves the workspace when its pty exits or the runtime process dies, so
     // typing `exit` and closing the terminal from the app take one path. The main
     // process takes the pane out on that exit; the window only lets go of its terminal.
     const stopExit = window.tacoShells.pty.onExit((event) => {

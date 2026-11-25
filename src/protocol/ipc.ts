@@ -68,7 +68,7 @@ export interface HostApi {
   }
 }
 
-/** Everything the renderer may ask the main process to do, exposed on `window.tacoShells`. */
+/** Everything the window may ask of the app, exposed on `window.tacoShells`. */
 export interface TacoShellsApi extends HostApi {
   pty: {
     write(id: SessionId, data: string): void

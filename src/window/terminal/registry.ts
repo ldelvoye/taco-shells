@@ -39,7 +39,7 @@ let expectedFocus: SessionId | null = null
 // options live here rather than being passed in at each call site.
 let terminalOptions: ITerminalOptions = optionsFrom(DEFAULT_SETTINGS, DARK_PALETTE.terminal)
 
-// A shell starts printing the moment main spawns it, which can land before the
+// A shell starts printing the moment it is spawned, which can land before the
 // window has drawn its terminal and made a handle to write into. Without
 // somewhere to put that output it is simply dropped, and what goes missing is
 // the first prompt.

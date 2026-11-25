@@ -60,7 +60,7 @@ app.whenReady().then(() => {
     restoreOnLaunch
   )
   const workspace = workspaceBridge.workspace
-  // The save stops first, so it still holds the terminals as they were:
+  // What is saved is frozen first, so it still holds the terminals as they were:
   // quitting and reopening then brings them back.
   runtimeProcess.onDied((reason) => {
     freezeWhatIsSaved(snapshots)
@@ -93,10 +93,11 @@ app.whenReady().then(() => {
   })
 
   const focus = bridgeFocus(link, workspace, (events) => {
-    return startFocus(runtime,directory, events, () => {
+    return startFocus(runtime, directory,events, () => {
       updates.checkNow()
     })
   })
+  // In the order they stop, the runtime process last.
   services.push(configStore, workspaceBridge, focus, updates, agents, snapshots, runtimeProcess)
 
   whenTheWindowCloses(link, snapshots)
@@ -119,7 +120,7 @@ function freezeWhatIsSaved(snapshots: SnapshotStore): void {
 // The one place that decides what the window closing means: it ends the app.
 function whenTheWindowCloses(link: WindowLink, snapshots: SnapshotStore): void {
   // Closing the window is the start of a quit, and the snapshot has to stop
-  // changing from that moment, before the ptys go down with the process.
+  // changing from that moment, before the runtime process is stopped.
   link.onClosing(() => {
     freezeWhatIsSaved(snapshots)
   })
