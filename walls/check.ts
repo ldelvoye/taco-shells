@@ -10,6 +10,8 @@ const SPECIFIER_PATTERNS = [
   /\brequire\s*\(\s*(['"])([^'"\n]*)\1/g
 ]
 const NON_LITERAL_IMPORT = /\bimport\s*\(\s*[^'"\s)]/g
+// What importsOf reports for an import() whose argument is not a string, which no table can judge.
+const NOT_A_LITERAL = ''
 
 export interface Area {
   name: string
@@ -21,6 +23,7 @@ export interface Area {
 export interface Hole {
   file: string
   imports: string
+  /** The number of the milestone that removes this import. */
   closes: number
 }
 
@@ -58,7 +61,8 @@ export function importsOf(source: string): { imports: string; line: number }[] {
   for (const pattern of SPECIFIER_PATTERNS) {
     for (const match of source.matchAll(pattern)) {
       const specifier = match[2]
-      const index = match.index + match[0].length - 1 - specifier.length
+      const closingQuote = match.index + match[0].length - 1
+      const index = closingQuote - specifier.length
       const line = lineAt(source, index)
       found.push({ imports: specifier, line, index })
     }
@@ -66,7 +70,7 @@ export function importsOf(source: string): { imports: string; line: number }[] {
 
   for (const match of source.matchAll(NON_LITERAL_IMPORT)) {
     const line = lineAt(source, match.index)
-    found.push({ imports: '', line, index: match.index })
+    found.push({ imports: NOT_A_LITERAL, line, index: match.index })
   }
 
   found.sort((a, b) => a.index - b.index)
@@ -104,7 +108,7 @@ function aliasTarget(specifier: string, aliases: Record<string, string>): string
   for (const [alias, folder] of Object.entries(aliases)) {
     if (specifier.startsWith(alias)) {
       const rest = specifier.slice(alias.length)
-      return `${folder}${rest}`
+      return posix.normalize(`${folder}${rest}`)
     }
   }
   return undefined
@@ -117,6 +121,7 @@ function topFolder(path: string, root: string): string {
 }
 
 function resolveRelative(file: string, specifier: string): string {
+  // Vite reads a query such as `?raw` off the end of a path.
   const parts = specifier.split('?')
   const bare = parts[0]
   const folder = posix.dirname(file)
@@ -172,7 +177,7 @@ function moduleReason(specifier: string, area: Area, isTest: boolean, config: Wa
 }
 
 function reasonFor(file: string, specifier: string, area: Area, config: WallConfig): string | undefined {
-  if (specifier === '') {
+  if (specifier === NOT_A_LITERAL) {
     return 'dynamic import is not a string literal'
   }
 

@@ -1,6 +1,7 @@
 import type { WallConfig } from './check'
 
 // What each part of the app may import. A line added here widens a wall for good: prefer a hole in holes.ts, which has to name the milestone that closes it.
+// An area is a package's folder or a part of one, and a file belongs to the area with the longest folder that holds it. app and window have no alias: nothing outside them may import them.
 export const WALLS: WallConfig = {
   root: 'src/',
   aliases: {
@@ -10,8 +11,6 @@ export const WALLS: WallConfig = {
     '@agents/': 'src/agents/',
     '@runtime/': 'src/runtime/',
     '@workspace/': 'src/workspace/',
-    '@app/': 'src/app/',
-    '@window/': 'src/window/',
     '@testing/': 'src/testing/'
   },
   areas: [

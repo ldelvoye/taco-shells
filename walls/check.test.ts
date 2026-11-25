@@ -139,6 +139,21 @@ describe('violationsIn', () => {
     expect(reported('src/app/host/index.ts', '../agents')).toEqual([])
   })
 
+  it('a file belongs to the longest folder that holds it, whatever order the areas are listed in', () => {
+    const innerFirst: WallConfig = { ...WALLS, areas: [...WALLS.areas].reverse() }
+    for (const config of [WALLS, innerFirst]) {
+      expect(reported('src/window/a.ts', '@rules/transitions/applyDrop', config)).toEqual([
+        '@rules/transitions/applyDrop'
+      ])
+      expect(reported('src/app/host/index.ts', 'electron', config)).toEqual([])
+    }
+  })
+
+  it('an alias cannot be walked out of with ..', () => {
+    const sideways = '@protocol/../app/service'
+    expect(reported('src/window/a.ts', sideways)).toEqual([sideways])
+  })
+
   it('a folder imported for its index file counts as that folder', () => {
     expect(reported('src/app/service.ts', './host')).toEqual(['./host'])
     expect(reported('src/rules/drop.ts', './transitions')).toEqual([])
@@ -161,8 +176,9 @@ describe('violationsIn', () => {
 
 describe('holes', () => {
   it('an unlisted crossing and a closed hole are both caught', () => {
+    const sameFileTwice = "import { x } from '@workspace/x'\nimport { y } from '@workspace/y'"
     const files = new Map([
-      ['src/rules/a.ts', "import { x } from '@workspace/x'"],
+      ['src/rules/a.ts', sameFileTwice],
       ['src/workspace/b.ts', "import { app } from 'electron'"]
     ])
     const violations = violationsIn(files, WALLS)
@@ -171,9 +187,9 @@ describe('holes', () => {
       { file: 'src/gone.ts', imports: 'electron', closes: 4 }
     ]
 
-    const [, secondViolation] = violations
+    const [, otherImportOfListedFile, otherFile] = violations
     const [, staleHole] = holes
-    expect(unlisted(violations, holes)).toEqual([secondViolation])
+    expect(unlisted(violations, holes)).toEqual([otherImportOfListedFile, otherFile])
     expect(closed(violations, holes)).toEqual([staleHole])
   })
 })
