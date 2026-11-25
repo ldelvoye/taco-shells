@@ -1,14 +1,9 @@
-import type { Dragged, Drop, RowColor, TabGroupId, Workspace } from '@protocol/arrangement'
+import type { Dragged, Drop, RowColor, TabGroupId } from '@protocol/arrangement'
 import type { PtyCreateOptions, SessionId } from '@protocol/ipc'
 import type { Snapshot, SnapshotPane } from '@protocol/snapshot'
 import type { FocusMove, WorkspaceRequest } from '@protocol/workspace'
-import { activePane, canSplitPane } from '@rules/arrangement'
-import {
-  focusNextGroup,
-  focusNextPane,
-  focusPreviousGroup,
-  focusPreviousPane
-} from '@rules/focus'
+import { activeSessionOf, canSplitPane } from '@rules/arrangement'
+import { focusAfter } from '@rules/focus'
 import { forkNameFor } from '@rules/forkName'
 import {
   createSession,
@@ -45,19 +40,6 @@ export interface WorkspaceOperations {
   listen(): () => void
 }
 
-export function activeSessionOf(workspace: Workspace | null): SessionId | null {
-  if (workspace === null) {
-    return null
-  }
-
-  const pane = activePane(workspace)
-  if (pane === null) {
-    return null
-  }
-
-  return pane.id
-}
-
 function startOptionsOf(pane: SnapshotPane): PtyCreateOptions {
   if (pane.agent !== null) {
     return { resume: pane.agent }
@@ -74,20 +56,28 @@ function editorCommand(path: string): string {
   return `\${EDITOR:-vi} '${path}'\n`
 }
 
-function workspaceAfterFocus(workspace: Workspace, move: FocusMove): Workspace {
-  switch (move) {
-    case 'nextPane':
-      return focusNextPane(workspace)
-    case 'previousPane':
-      return focusPreviousPane(workspace)
-    case 'nextGroup':
-      return focusNextGroup(workspace)
-    case 'previousGroup':
-      return focusPreviousGroup(workspace)
-  }
-}
-
 export function createWorkspaceOperations(link: WorkspaceLink): WorkspaceOperations {
+  // Nothing waits on these, so a request that fails is reported here or nowhere.
+  function send(request: WorkspaceRequest): void {
+    link.request(request).catch((failure: unknown) => {
+      console.error('a workspace request failed', failure)
+    })
+  }
+
+  // A shell the workspace did not place has no row to close it from.
+  async function placeOrClose(sessionId: SessionId, request: WorkspaceRequest): Promise<void> {
+    let placed = false
+    try {
+      const reply = await link.request(request)
+      placed = reply.ok
+    } catch {
+      placed = false
+    }
+    if (!placed) {
+      disposeSession(sessionId)
+    }
+  }
+
   function activeSession(): SessionId | null {
     const workspace = link.getDrawn().workspace
     return activeSessionOf(workspace)
@@ -99,7 +89,7 @@ export function createWorkspaceOperations(link: WorkspaceLink): WorkspaceOperati
   ): void {
     void createSession().then((sessionId) => {
       const request = openedRequest(sessionId)
-      void link.request(request)
+      send(request)
       if (command !== null) {
         window.tacoShells.pty.write(sessionId, command)
       }
@@ -142,11 +132,7 @@ export function createWorkspaceOperations(link: WorkspaceLink): WorkspaceOperati
   ): void {
     void createSession(options).then((sessionId) => {
       const request = spawnedRequest(sessionId)
-      void link.request(request).then((reply) => {
-        if (!reply.ok) {
-          disposeSession(sessionId)
-        }
-      })
+      void placeOrClose(sessionId, request)
     })
   }
 
@@ -193,8 +179,8 @@ export function createWorkspaceOperations(link: WorkspaceLink): WorkspaceOperati
     })
   }
 
-  // Panes are created in group order and workspaceFromSnapshot hands the ids
-  // back out in that same order, so the two loops have to walk the same list.
+  // Panes are created in group order and sent in that order: the workspace hands
+  // the ids back out by walking the snapshot's groups the same way.
   async function restore(snapshot: Snapshot): Promise<void> {
     const sessionIds: SessionId[] = []
     let placed = false
@@ -255,7 +241,7 @@ export function createWorkspaceOperations(link: WorkspaceLink): WorkspaceOperati
       return
     }
 
-    const moved = workspaceAfterFocus(workspace, move)
+    const moved = focusAfter(workspace, move)
     const target = activeSessionOf(moved)
     if (target === null) {
       return
@@ -264,19 +250,19 @@ export function createWorkspaceOperations(link: WorkspaceLink): WorkspaceOperati
   }
 
   function colorPane(pane: SessionId, color: RowColor | null): void {
-    void link.request({ type: 'paneColored', pane, color })
+    send({ type: 'paneColored', pane, color })
   }
 
   function toggleActiveColor(color: RowColor): void {
-    void link.request({ type: 'activeColorToggled', color })
+    send({ type: 'activeColorToggled', color })
   }
 
   function drop(dragged: Dragged, target: Drop): void {
-    void link.request({ type: 'dropped', dragged, drop: target })
+    send({ type: 'dropped', dragged, drop: target })
   }
 
   function resizeGroup(groupIndex: number, dividerIndex: number, leftWidth: number): void {
-    void link.request({ type: 'dividerMoved', groupIndex, dividerIndex, leftWidth })
+    send({ type: 'dividerMoved', groupIndex, dividerIndex, leftWidth })
   }
 
   async function newTabGroup(pane: SessionId): Promise<TabGroupId | null> {
@@ -285,19 +271,19 @@ export function createWorkspaceOperations(link: WorkspaceLink): WorkspaceOperati
   }
 
   function renameTabGroup(id: TabGroupId, name: string): void {
-    void link.request({ type: 'tabGroupRenamed', id, name })
+    send({ type: 'tabGroupRenamed', id, name })
   }
 
   function recolorTabGroup(id: TabGroupId, color: RowColor): void {
-    void link.request({ type: 'tabGroupRecolored', id, color })
+    send({ type: 'tabGroupRecolored', id, color })
   }
 
   function ungroupTabGroup(id: TabGroupId): void {
-    void link.request({ type: 'tabGroupUngrouped', id })
+    send({ type: 'tabGroupUngrouped', id })
   }
 
   function toggleTabGroup(id: TabGroupId): void {
-    void link.request({ type: 'tabGroupToggled', id })
+    send({ type: 'tabGroupToggled', id })
   }
 
   function refocusActive(): void {
@@ -310,19 +296,20 @@ export function createWorkspaceOperations(link: WorkspaceLink): WorkspaceOperati
 
   function listen(): () => void {
     // A pane leaves the workspace when its pty exits and at no other time, so
-    // typing `exit` and closing the terminal from the app take one path.
+    // typing `exit` and closing the terminal from the app take one path. The main
+    // process takes the pane out on that exit; the window only lets go of its terminal.
     const stopExit = window.tacoShells.pty.onExit((event) => {
       disposeSession(event.id)
     })
 
     const stopTitle = onSessionTitle((sessionId, title) => {
-      void link.request({ type: 'titleChanged', pane: sessionId, title })
+      send({ type: 'titleChanged', pane: sessionId, title })
     })
 
-    // Clicking straight into a pane has to move the workspace's idea of the active
-    // pane with it, or cmd+w would close a terminal the user is not typing in. The focus
-    // effect in useWorkspace refocuses on that change, but activatePane returns the
-    // workspace untouched once the pane is already active, so this cannot loop.
+    // Clicking straight into a pane has to move the active pane with it, or cmd+w
+    // would close a terminal the user is not typing in. The focus effect in
+    // useWorkspace refocuses on that change, but link.focus ignores a pane that is
+    // already active, so this cannot loop.
     const stopFocus = onSessionFocus((sessionId) => {
       link.focus(sessionId)
     })

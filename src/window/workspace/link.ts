@@ -1,11 +1,12 @@
 import type { SessionId, TacoShellsApi } from '@protocol/ipc'
 import type { DrawnState, RequestReply, WorkspaceRequest } from '@protocol/workspace'
-import { activePane, locatePane } from '@rules/arrangement'
+import { activeSessionOf, locatePane } from '@rules/arrangement'
 import { activatePane } from '@rules/focus'
 
+/** A focus move the window has made and the workspace has not yet applied: the terminal, and which of the window's moves it was. */
 export interface Ahead {
   pane: SessionId
-  move: number
+  count: number
 }
 
 interface Waiter {
@@ -29,7 +30,8 @@ export function drawnWith(
     return { drawn: state, ahead: null }
   }
 
-  if (state.focusMove >= ahead.move) {
+  // The workspace has caught up, so whichever terminal it says is active is the truth again.
+  if (state.focusCount >= ahead.count) {
     return { drawn: state, ahead: null }
   }
 
@@ -48,21 +50,11 @@ export function drawnWith(
   return { drawn, ahead }
 }
 
-function isActive(state: DrawnState, pane: SessionId): boolean {
-  if (state.workspace === null) {
-    return false
-  }
-  const active = activePane(state.workspace)
-  if (active === null) {
-    return false
-  }
-  return active.id === pane
-}
-
 export function createWorkspaceLink(api: TacoShellsApi['workspace']): WorkspaceLink {
   let latest = api.initial
   let ahead: Ahead | null = null
-  let moves = 0
+  // Counting on from the workspace's count keeps a reloaded window's moves ahead of the ones it made before.
+  let moves = latest.focusCount
   let drawn = latest
   let waiters: Waiter[] = []
   const listeners = new Set<() => void>()
@@ -118,15 +110,26 @@ export function createWorkspaceLink(api: TacoShellsApi['workspace']): WorkspaceL
       return reply
     },
 
+    // Only a window can hold the keyboard, and a key typed straight after a focus move must
+    // land in the new terminal. So the move is drawn here at once and reported afterwards.
     focus(pane) {
-      if (isActive(drawn, pane)) {
+      const active = activeSessionOf(drawn.workspace)
+      if (active === pane) {
         return
       }
 
       moves += 1
-      ahead = { pane, move: moves }
+      const count = moves
+      ahead = { pane, count }
       redraw()
-      void api.request({ type: 'focusReported', pane, move: moves }).catch(() => undefined)
+
+      api.request({ type: 'focusReported', pane, count }).catch(() => {
+        // The workspace never heard of this move, so nothing will ever answer it.
+        if (ahead !== null && ahead.count === count) {
+          ahead = null
+          redraw()
+        }
+      })
     }
   }
 }

@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
 import type { Group, Workspace } from '@protocol/arrangement'
-import type { DrawnState } from '@protocol/workspace'
+import type { TacoShellsApi } from '@protocol/ipc'
+import type { DrawnState, RequestReply, WorkspaceRequest } from '@protocol/workspace'
 import { activePane } from '@rules/arrangement'
-import { drawnWith } from './link'
+import { createWorkspaceLink, drawnWith } from './link'
 
 function entryHolding(pane: string): Group {
   return {
@@ -14,7 +15,7 @@ function entryHolding(pane: string): Group {
   }
 }
 
-function stateWith(activeGroup: number, focusMove: number): DrawnState {
+function stateWith(activeGroup: number, focusCount: number): DrawnState {
   const workspace: Workspace = {
     groups: [entryHolding('a'), entryHolding('b')],
     activeGroup,
@@ -26,7 +27,7 @@ function stateWith(activeGroup: number, focusMove: number): DrawnState {
     agentRows: {},
     waiting: 'a',
     refocus: 2,
-    focusMove,
+    focusCount,
     agents: {},
     defaultAgentName: 'Claude'
   }
@@ -37,6 +38,59 @@ function activeIdOf(state: DrawnState): string | undefined {
     return undefined
   }
   return activePane(state.workspace)?.id
+}
+
+interface Pending {
+  answer: (reply: RequestReply) => void
+  fail: (reason: Error) => void
+}
+
+interface FakeWorkspace {
+  api: TacoShellsApi['workspace']
+  sent: WorkspaceRequest[]
+  push(state: DrawnState): void
+  answer(index: number, reply: RequestReply): void
+  fail(index: number): void
+}
+
+function fakeWorkspace(initial: DrawnState): FakeWorkspace {
+  const sent: WorkspaceRequest[] = []
+  const pending: Pending[] = []
+  let listener: (state: DrawnState) => void = () => undefined
+
+  const api: TacoShellsApi['workspace'] = {
+    initial,
+    request: (request) => {
+      sent.push(request)
+      return new Promise((answer, fail) => {
+        pending.push({ answer, fail })
+      })
+    },
+    onState: (onState) => {
+      listener = onState
+      return () => undefined
+    }
+  }
+
+  return {
+    api,
+    sent,
+    push: (state) => {
+      listener(state)
+    },
+    answer: (index, reply) => {
+      pending[index].answer(reply)
+    },
+    fail: (index) => {
+      pending[index].fail(new Error('the request did not arrive'))
+    }
+  }
+}
+
+function settled(): Promise<void> {
+  return new Promise((resume) => {
+    setTimeout(resume, 0)
+  })
 }
 
 describe('drawnWith', () => {
@@ -51,7 +105,7 @@ describe('drawnWith', () => {
 
   it("keeps the window's focus move over a state that answers an older one", () => {
     const state = stateWith(0, 1)
-    const ahead = { pane: 'b', move: 2 }
+    const ahead = { pane: 'b', count: 2 }
 
     const result = drawnWith(state, ahead)
 
@@ -61,7 +115,7 @@ describe('drawnWith', () => {
   })
 
   it('follows the workspace once it has applied the move', () => {
-    const ahead = { pane: 'b', move: 2 }
+    const ahead = { pane: 'b', count: 2 }
 
     const applied = stateWith(1, 2)
     const appliedResult = drawnWith(applied, ahead)
@@ -77,9 +131,74 @@ describe('drawnWith', () => {
   it('drops a move to a terminal that has gone', () => {
     const state = stateWith(0, 1)
 
-    const result = drawnWith(state, { pane: 'gone', move: 2 })
+    const result = drawnWith(state, { pane: 'gone', count: 2 })
 
     expect(result.drawn).toBe(state)
     expect(result.ahead).toBeNull()
+  })
+})
+
+describe('createWorkspaceLink', () => {
+  it('resolves a request only once the window holds the state with its effect', async () => {
+    const workspace = fakeWorkspace(stateWith(0, 0))
+    const link = createWorkspaceLink(workspace.api)
+    const resolved: number[] = []
+
+    void link.request({ type: 'tabGroupCreated', pane: 'a' }).then((reply) => {
+      resolved.push(reply.revision)
+    })
+    workspace.answer(0, { ok: true, tabGroup: 'tab-group-1', revision: 6 })
+    await settled()
+    expect(resolved).toEqual([])
+
+    workspace.push({ ...stateWith(0, 0), revision: 6 })
+    await settled()
+    expect(resolved).toEqual([6])
+
+    void link.request({ type: 'tabGroupCreated', pane: 'a' }).then((reply) => {
+      resolved.push(reply.revision)
+    })
+    workspace.answer(1, { ok: true, tabGroup: null, revision: 6 })
+    await settled()
+    expect(resolved).toEqual([6, 6])
+  })
+
+  it('ignores a state it already holds or has passed', () => {
+    const initial = stateWith(0, 0)
+    const workspace = fakeWorkspace(initial)
+    const link = createWorkspaceLink(workspace.api)
+    let redraws = 0
+    link.subscribe(() => {
+      redraws += 1
+    })
+
+    workspace.push({ ...stateWith(1, 0), revision: initial.revision })
+    workspace.push({ ...stateWith(1, 0), revision: initial.revision - 1 })
+
+    expect(redraws).toBe(0)
+    expect(link.getDrawn()).toBe(initial)
+  })
+
+  it('draws a focus move at once, reports it with the next count, and asks nothing for the active terminal', () => {
+    const workspace = fakeWorkspace(stateWith(0, 7))
+    const link = createWorkspaceLink(workspace.api)
+
+    link.focus('a')
+    expect(workspace.sent).toEqual([])
+
+    link.focus('b')
+    expect(activeIdOf(link.getDrawn())).toBe('b')
+    expect(workspace.sent).toEqual([{ type: 'focusReported', pane: 'b', count: 8 }])
+  })
+
+  it('lets go of a focus move the workspace never heard of', async () => {
+    const workspace = fakeWorkspace(stateWith(0, 0))
+    const link = createWorkspaceLink(workspace.api)
+
+    link.focus('b')
+    workspace.fail(0)
+    await settled()
+
+    expect(activeIdOf(link.getDrawn())).toBe('a')
   })
 })

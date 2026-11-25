@@ -102,6 +102,8 @@ describe('Workspace', () => {
 
     const refused = workspace.request({ type: 'splitSpawned', donor: 'gone', pane: 'p2' })
     expect(refused.ok).toBe(false)
+    const refusedFork = workspace.request({ type: 'forkSpawned', source: 'gone', pane: 'p2' })
+    expect(refusedFork.ok).toBe(false)
     expect(states.length).toBe(statesBefore)
 
     const placed = workspace.request({ type: 'splitSpawned', donor: 'p1', pane: 'p2' })
@@ -113,19 +115,20 @@ describe('Workspace', () => {
     const { workspace, states } = opened('p1', 'p2')
     expect(activePaneIdOf(workspace)).toBe('p2')
 
-    workspace.request({ type: 'focusReported', pane: 'p1', move: 3 })
+    workspace.request({ type: 'focusReported', pane: 'p1', count: 3 })
     expect(activePaneIdOf(workspace)).toBe('p1')
-    expect(states[states.length - 1].focusMove).toBe(3)
+    expect(states[states.length - 1].focusCount).toBe(3)
 
     const statesBefore = states.length
     const arrangementBefore = workspace.drawn().workspace
-    workspace.request({ type: 'focusReported', pane: 'p1', move: 4 })
+    workspace.request({ type: 'focusReported', pane: 'p1', count: 4 })
     expect(states.length).toBe(statesBefore + 1)
-    expect(states[states.length - 1].focusMove).toBe(4)
+    expect(states[states.length - 1].focusCount).toBe(4)
     expect(workspace.drawn().workspace).toBe(arrangementBefore)
 
-    workspace.request({ type: 'focusReported', pane: 'p1', move: 2 })
-    expect(workspace.drawn().focusMove).toBe(4)
+    workspace.request({ type: 'focusReported', pane: 'p1', count: 2 })
+    expect(workspace.drawn().focusCount).toBe(4)
+    expect(states.length).toBe(statesBefore + 1)
   })
 
   it('creates a tab group and answers with its id', () => {
@@ -196,6 +199,27 @@ describe('Workspace', () => {
     const statesBefore = states.length
     workspace.appActivated()
     expect(states.length).toBe(statesBefore)
+
+    workspace.attentionRequested('p1')
+    workspace.appActivated()
+    expect(activePaneIdOf(workspace)).toBe('p1')
+    expect(workspace.drawn().refocus).toBe(after.refocus + 1)
+  })
+
+  it('takes a terminal out again when its shell exited before the window reported it', () => {
+    const { workspace, emptied } = opened('p1')
+
+    workspace.terminalExited('p2')
+    const reply = workspace.request({ type: 'terminalOpened', pane: 'p2' })
+    expect(reply.ok).toBe(true)
+    expect(paneIdsOf(workspace)).toEqual([['p1']])
+    expect(emptied.count).toBe(0)
+
+    const alone = recordingWorkspace()
+    alone.workspace.terminalExited('p1')
+    alone.workspace.request({ type: 'terminalOpened', pane: 'p1' })
+    expect(paneIdsOf(alone.workspace)).toEqual([])
+    expect(alone.emptied.count).toBe(1)
   })
 
   it('reports the arrangement to save only when it changed', () => {

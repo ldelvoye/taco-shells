@@ -11,14 +11,8 @@ import type {
 import type { AgentSignalEvent, SessionId } from '@protocol/ipc'
 import type { AgentRows } from '@protocol/rows'
 import type { FocusMove } from '@protocol/workspace'
-import { activePane, emptyWorkspace } from '@rules/arrangement'
-import {
-  activatePane,
-  focusNextGroup,
-  focusNextPane,
-  focusPreviousGroup,
-  focusPreviousPane
-} from '@rules/focus'
+import { activeSessionOf, emptyWorkspace } from '@rules/arrangement'
+import { activatePane, focusAfter } from '@rules/focus'
 import { applyDrop } from '@rules/transitions/applyDrop'
 import {
   addGroup,
@@ -48,7 +42,7 @@ export interface WorkspaceState {
   agentRows: AgentRows
   waiting: SessionId | null
   rawTitles: ReadonlyMap<SessionId, string>
-  // Bumped when a drop or a collapse has to hand the keyboard back to the active terminal.
+  // Bumped whenever the keyboard has to go back to the active terminal: a drop, a collapse, an app activation, a hook asking for a terminal.
   refocus: number
 }
 
@@ -86,18 +80,6 @@ export function initialWorkspaceState(): WorkspaceState {
   }
 }
 
-export function activeSessionOf(workspace: Workspace | null): SessionId | null {
-  if (!workspace) {
-    return null
-  }
-
-  const pane = activePane(workspace)
-  if (!pane) {
-    return null
-  }
-
-  return pane.id
-}
 
 function onScreenPanesOf(workspace: Workspace | null): SessionId[] {
   if (!workspace) {
@@ -139,19 +121,6 @@ function refocusingEdit(
     return edited
   }
   return { ...edited, refocus: edited.refocus + 1 }
-}
-
-function workspaceAfterFocus(workspace: Workspace, move: FocusMove): Workspace {
-  switch (move) {
-    case 'nextPane':
-      return focusNextPane(workspace)
-    case 'previousPane':
-      return focusPreviousPane(workspace)
-    case 'nextGroup':
-      return focusNextGroup(workspace)
-    case 'previousGroup':
-      return focusPreviousGroup(workspace)
-  }
 }
 
 function withRawTitle(state: WorkspaceState, pane: SessionId, title: string): WorkspaceState {
@@ -272,7 +241,7 @@ function eventApplied(state: WorkspaceState, event: WorkspaceEvent): WorkspaceSt
     case 'titleChanged':
       return titleChanged(state, event.pane, event.title)
     case 'focusMoved':
-      return workspaceEdit(state, (workspace) => workspaceAfterFocus(workspace, event.move))
+      return workspaceEdit(state, (workspace) => focusAfter(workspace, event.move))
     case 'paneColored':
       return workspaceEdit(state, (workspace) => setPaneColor(workspace, event.pane, event.color))
     case 'activeColorToggled':

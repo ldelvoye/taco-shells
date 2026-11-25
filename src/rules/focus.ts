@@ -1,5 +1,6 @@
 import type { Group, Workspace } from '@protocol/arrangement'
 import type { SessionId } from '@protocol/ipc'
+import type { FocusMove } from '@protocol/workspace'
 
 import { isHidden, locatePane, openedAt, withGroupAt } from './arrangement'
 
@@ -87,4 +88,18 @@ export function focusNextGroup(workspace: Workspace): Workspace {
 
 export function focusPreviousGroup(workspace: Workspace): Workspace {
   return focusGroupByDelta(workspace, -1)
+}
+
+/** The arrangement after one focus move; the same object when the move goes nowhere. */
+export function focusAfter(workspace: Workspace, move: FocusMove): Workspace {
+  switch (move) {
+    case 'nextPane':
+      return focusNextPane(workspace)
+    case 'previousPane':
+      return focusPreviousPane(workspace)
+    case 'nextGroup':
+      return focusNextGroup(workspace)
+    case 'previousGroup':
+      return focusPreviousGroup(workspace)
+  }
 }

@@ -9,7 +9,7 @@ import type {
   RequestReply,
   WorkspaceRequest
 } from '@protocol/workspace'
-import { canSplitPane, emptyWorkspace } from '@rules/arrangement'
+import { canSplitPane, emptyWorkspace, locatePane } from '@rules/arrangement'
 import { workspaceFromSnapshot } from './snapshot/format'
 import { createWorkspaceStore, type WorkspaceStore } from './store'
 import type { WorkspaceEvent } from './workspaceState'
@@ -45,18 +45,11 @@ function entryHolding(arrangement: Arrangement, pane: SessionId): Group | undefi
   })
 }
 
-function hasGroups(arrangement: Arrangement | null): boolean {
+function groupCountOf(arrangement: Arrangement | null): number | null {
   if (arrangement === null) {
-    return false
+    return null
   }
-  return arrangement.groups.length > 0
-}
-
-function hasNoGroups(arrangement: Arrangement | null): boolean {
-  if (arrangement === null) {
-    return false
-  }
-  return arrangement.groups.length === 0
+  return arrangement.groups.length
 }
 
 function agentLabelsOf(harnesses: readonly Harness[]): Record<string, AgentLabel> {
@@ -68,13 +61,16 @@ function agentLabelsOf(harnesses: readonly Harness[]): Record<string, AgentLabel
   return labels
 }
 
+/** The owner of the arrangement: it applies what the window asks for and what the app reports, and publishes what to draw. */
 export class Workspace {
   private readonly store: WorkspaceStore = createWorkspaceStore()
   private readonly snapshot: Snapshot | null
   private readonly effects: WorkspaceEffects
   private readonly agents: Record<string, AgentLabel>
+  private readonly exitedBeforePlaced = new Set<SessionId>()
   private revision = 0
-  private focusMove = 0
+  private focusCount = 0
+  private publishedFocusCount = 0
   private nextGroupNumber = 1
   private nextTabGroupNumber = 1
 
@@ -93,7 +89,7 @@ export class Workspace {
       agentRows,
       waiting: state.waiting,
       refocus: state.refocus,
-      focusMove: this.focusMove,
+      focusCount: this.focusCount,
       agents: this.agents,
       defaultAgentName: DEFAULT_HARNESS.name
     }
@@ -104,16 +100,39 @@ export class Workspace {
     return { ...answer, revision: this.revision }
   }
 
+  terminalExited(pane: SessionId): void {
+    if (!this.holds(pane)) {
+      this.exitedBeforePlaced.add(pane)
+    }
+    this.dispatch({ type: 'paneExited', pane })
+  }
+
+  agentSignalled(event: AgentSignalEvent): void {
+    this.dispatch({ type: 'agentSignalled', signal: event })
+  }
+
+  attentionRequested(pane: SessionId): void {
+    this.dispatch({ type: 'attentionRequested', pane })
+  }
+
+  focusRequested(pane: SessionId): void {
+    this.dispatch({ type: 'focusRequested', pane })
+  }
+
+  appActivated(): void {
+    this.dispatch({ type: 'appActivated' })
+  }
+
   private answer(request: WorkspaceRequest): Answer {
     switch (request.type) {
       case 'terminalOpened': {
         const group = this.groupFor(request.pane)
-        this.dispatch({ type: 'terminalOpened', group }, false)
+        this.place({ type: 'terminalOpened', group }, [request.pane])
         return accepted(null)
       }
       case 'terminalOpenedIn': {
         const group = this.groupFor(request.pane)
-        this.dispatch({ type: 'terminalOpenedIn', group, tabGroup: request.tabGroup }, false)
+        this.place({ type: 'terminalOpenedIn', group, tabGroup: request.tabGroup }, [request.pane])
         return accepted(null)
       }
       case 'restored':
@@ -122,31 +141,28 @@ export class Workspace {
         if (!this.canSplit(request.donor)) {
           return refused()
         }
-        this.dispatch(request, false)
+        this.place(request, [request.pane])
         return accepted(null)
       }
       case 'forkSpawned': {
         if (!this.canSplit(request.source)) {
           return refused()
         }
-        this.dispatch(request, false)
+        this.place(request, [request.pane])
         return accepted(null)
       }
       case 'focusReported': {
-        let advanced = false
-        if (request.move > this.focusMove) {
-          this.focusMove = request.move
-          advanced = true
+        // Recorded even when the terminal was already active: the window keeps its own
+        // focus move on screen until the published count reaches it.
+        if (request.count > this.focusCount) {
+          this.focusCount = request.count
         }
-        this.dispatch({ type: 'paneActivated', pane: request.pane }, advanced)
+        this.dispatch({ type: 'paneActivated', pane: request.pane })
         return accepted(null)
       }
       case 'dropped': {
         const newGroup = this.nextGroupId()
-        this.dispatch(
-          { type: 'dropped', dragged: request.dragged, drop: request.drop, newGroup },
-          false
-        )
+        this.dispatch({ type: 'dropped', dragged: request.dragged, drop: request.drop, newGroup })
         return accepted(null)
       }
       case 'tabGroupCreated':
@@ -159,29 +175,9 @@ export class Workspace {
       case 'tabGroupRecolored':
       case 'tabGroupUngrouped':
       case 'tabGroupToggled':
-        this.dispatch(request, false)
+        this.dispatch(request)
         return accepted(null)
     }
-  }
-
-  terminalExited(pane: SessionId): void {
-    this.dispatch({ type: 'paneExited', pane }, false)
-  }
-
-  agentSignalled(event: AgentSignalEvent): void {
-    this.dispatch({ type: 'agentSignalled', signal: event }, false)
-  }
-
-  attentionRequested(pane: SessionId): void {
-    this.dispatch({ type: 'attentionRequested', pane }, false)
-  }
-
-  focusRequested(pane: SessionId): void {
-    this.dispatch({ type: 'focusRequested', pane }, false)
-  }
-
-  appActivated(): void {
-    this.dispatch({ type: 'appActivated' }, false)
   }
 
   private nextGroupId(): GroupId {
@@ -199,6 +195,14 @@ export class Workspace {
   private groupFor(sessionId: SessionId): Group {
     const id = this.nextGroupId()
     return groupForSession(id, sessionId)
+  }
+
+  private holds(pane: SessionId): boolean {
+    const arrangement = this.store.getState().workspace
+    if (arrangement === null) {
+      return false
+    }
+    return locatePane(arrangement, pane) !== null
   }
 
   private canSplit(donor: SessionId): boolean {
@@ -221,7 +225,7 @@ export class Workspace {
     }
 
     const id = this.nextTabGroupId()
-    this.dispatch({ type: 'tabGroupCreated', entry: holder.id, id }, false)
+    this.dispatch({ type: 'tabGroupCreated', entry: holder.id, id })
     return accepted(id)
   }
 
@@ -243,11 +247,23 @@ export class Workspace {
     if (restored.groups.length === 0) {
       return refused()
     }
-    this.dispatch({ type: 'workspaceRestored', workspace: restored }, false)
+    this.place({ type: 'workspaceRestored', workspace: restored }, panes)
     return accepted(null)
   }
 
-  private dispatch(event: WorkspaceEvent, focusAdvanced: boolean): void {
+  // A shell can exit before the window has reported its terminal. That exit is applied
+  // again once the terminal is placed, so a row never outlives its shell.
+  private place(event: WorkspaceEvent, panes: SessionId[]): void {
+    this.dispatch(event)
+    for (const pane of panes) {
+      const alreadyExited = this.exitedBeforePlaced.delete(pane)
+      if (alreadyExited) {
+        this.dispatch({ type: 'paneExited', pane })
+      }
+    }
+  }
+
+  private dispatch(event: WorkspaceEvent): void {
     const before = this.store.getState()
     const drawnBefore = this.store.getDrawnState()
 
@@ -255,8 +271,10 @@ export class Workspace {
 
     const after = this.store.getState()
     const drawnChanged = this.store.getDrawnState() !== drawnBefore
-    if (drawnChanged || focusAdvanced) {
+    const focusCounted = this.focusCount !== this.publishedFocusCount
+    if (drawnChanged || focusCounted) {
       this.revision += 1
+      this.publishedFocusCount = this.focusCount
       this.effects.onState(this.drawn())
     }
 
@@ -265,9 +283,10 @@ export class Workspace {
       this.effects.onArrangement(arrangement)
     }
 
-    const wasOccupied = hasGroups(before.workspace)
-    const isEmpty = hasNoGroups(after.workspace)
-    if (wasOccupied && isEmpty) {
+    const groupsBefore = groupCountOf(before.workspace)
+    const groupsAfter = groupCountOf(after.workspace)
+    const lastOneWent = groupsBefore !== null && groupsBefore > 0 && groupsAfter === 0
+    if (lastOneWent) {
       this.effects.onEmptied()
     }
   }

@@ -95,6 +95,20 @@ export function activePane(workspace: Workspace): Pane | null {
   return paneOf(group)
 }
 
+/** The id of the terminal that has the keyboard, or null before there is one. */
+export function activeSessionOf(workspace: Workspace | null): SessionId | null {
+  if (workspace === null) {
+    return null
+  }
+
+  const pane = activePane(workspace)
+  if (pane === null) {
+    return null
+  }
+
+  return pane.id
+}
+
 /** A copy of the list with removeCount items at index replaced by inserted. */
 export function spliced<T>(
   items: readonly T[],
