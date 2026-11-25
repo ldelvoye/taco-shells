@@ -3,7 +3,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-import { KEY, type App, type Key, type Screen, launchApp, pollFor } from './app'
+import { type App, launchApp } from './app'
+import { evaluate } from './harness/connection'
+import { KEY, type Key } from './harness/keys'
+import { pollFor } from './harness/poll'
+import { type Screen } from './harness/screen'
 
 const KEY_D: Key = { code: 'KeyD', text: 'd', virtualKeyCode: 68 }
 
@@ -14,6 +18,21 @@ const DARK_CHROME_BACKGROUND = '#252526'
 
 function scratchConfigDirectory(): string {
   return mkdtempSync(join(tmpdir(), 'taco-shells-config-e2e-'))
+}
+
+async function chromeBackground(app: App): Promise<string> {
+  return evaluate(
+    app.page,
+    "getComputedStyle(document.documentElement).getPropertyValue('--chrome-background').trim()"
+  )
+}
+
+async function configProblems(app: App): Promise<string[]> {
+  const raw = await evaluate(
+    app.page,
+    "JSON.stringify([...document.querySelectorAll('.banner-line')].map((el) => el.textContent))"
+  )
+  return JSON.parse(raw) as string[]
 }
 
 async function pressUntilSplit(app: App): Promise<Screen> {
@@ -35,7 +54,7 @@ async function untilChromeBackground(app: App, expected: string): Promise<void> 
   await pollFor(
     `the chrome background to become ${expected}`,
     async () => {
-      const background = await app.chromeBackground()
+      const background = await chromeBackground(app)
       if (background !== expected) {
         return null
       }
@@ -126,7 +145,7 @@ describe('settings.json', () => {
       const screen = await app.screen()
       expect(screen.rows).toHaveLength(1)
 
-      const problems = await app.configProblems()
+      const problems = await configProblems(app)
       const namesSettingsFile = problems.some((problem) => problem.includes('settings.json'))
       expect(namesSettingsFile).toBe(true)
     } finally {
@@ -142,10 +161,10 @@ describe('settings.json', () => {
 
     const app = await launchApp({ configDir })
     try {
-      const background = await app.chromeBackground()
+      const background = await chromeBackground(app)
       expect(background).toBe(LIGHT_CHROME_BACKGROUND)
 
-      const problems = await app.configProblems()
+      const problems = await configProblems(app)
       const namesFontSize = problems.some((problem) => problem.includes('fontSize'))
       expect(namesFontSize).toBe(true)
 

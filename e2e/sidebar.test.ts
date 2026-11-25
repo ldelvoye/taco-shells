@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { type App, KEY, launchApp } from './app'
+import { type App, launchApp } from './app'
+import { KEY } from './harness/keys'
+import { centreOf, clickAt, dragAcross, hover } from './harness/mouse'
 
 let app: App
 
@@ -12,6 +14,41 @@ const LONG_TITLES = [
   '~/code/taco-shells/src/renderer/sidebar'
 ]
 
+async function dragSidebarDivider(app: App, byPixels: number): Promise<void> {
+  await dragAcross(app.page, '.sidebar-divider', 0, byPixels)
+}
+
+async function doubleClickSidebarDivider(app: App): Promise<void> {
+  const centre = await centreOf(app.page, '.sidebar-divider', 0)
+  const clicked = { button: 'left', buttons: 1, clickCount: 2 }
+
+  await app.page.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed',
+    x: centre.x,
+    y: centre.y,
+    ...clicked
+  })
+  await app.page.send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased',
+    x: centre.x,
+    y: centre.y,
+    ...clicked
+  })
+}
+
+async function clickVisiblePane(app: App): Promise<void> {
+  const centre = await centreOf(app.page, '.pane-group:not(.is-inactive) .terminal-view', 0)
+  await clickAt(app.page, centre, 'left')
+}
+
+async function hoverRow(app: App, rowIndex: number): Promise<void> {
+  await hover(app.page, '.terminal-row', rowIndex)
+}
+
+async function hoverColorDot(app: App, color: string): Promise<void> {
+  await hover(app.page, `.color-dot[data-color=${color}]`, 0)
+}
+
 beforeEach(async () => {
   app = await launchApp()
 })
@@ -22,13 +59,13 @@ afterEach(async () => {
 
 describe('the sidebar divider', () => {
   it('widens the sidebar by the dragged amount and stops at half the window width', async () => {
-    await app.dragSidebarDivider(-2000)
+    await dragSidebarDivider(app, -2000)
     const collapsed = await app.until(
       'the sidebar settles at its floor',
       (state) => state.sidebarWidth <= 145
     )
 
-    await app.dragSidebarDivider(80)
+    await dragSidebarDivider(app, 80)
     const widened = await app.until(
       'the sidebar has widened',
       (state) => state.sidebarWidth > collapsed.sidebarWidth + 70
@@ -36,7 +73,7 @@ describe('the sidebar divider', () => {
     expect(widened.sidebarWidth - collapsed.sidebarWidth).toBeGreaterThanOrEqual(76)
     expect(widened.sidebarWidth - collapsed.sidebarWidth).toBeLessThanOrEqual(84)
 
-    await app.dragSidebarDivider(5000)
+    await dragSidebarDivider(app, 5000)
     const maxed = await app.until(
       'the sidebar has stopped growing',
       (state) => state.sidebarWidth > widened.sidebarWidth
@@ -48,7 +85,7 @@ describe('the sidebar divider', () => {
   })
 
   it.each(LONG_TITLES)('fits the sidebar to the row label "%s"', async (title) => {
-    await app.dragSidebarDivider(-2000)
+    await dragSidebarDivider(app, -2000)
     await app.until('the sidebar settles at its floor', (state) => state.sidebarWidth <= 145)
 
     await app.runInPane('pty-1', `printf '\\033]0;${title}\\007'; sleep 60`)
@@ -57,7 +94,7 @@ describe('the sidebar divider', () => {
       (state) => state.rows[0].label === title && state.labelsTruncated
     )
 
-    await app.doubleClickSidebarDivider()
+    await doubleClickSidebarDivider(app)
     await app.until('the label is no longer truncated', (state) => !state.labelsTruncated)
   })
 })
@@ -74,7 +111,7 @@ describe('row colors', () => {
     await app.rightClickRow(0)
     await app.until('the picker is open', (state) => state.colorPickerOpen)
 
-    await app.hoverColorDot('green')
+    await hoverColorDot(app, 'green')
     await app.until('the row previews green', (state) => state.rows[0].color === 'green')
 
     await app.press(KEY.escape)
@@ -91,9 +128,9 @@ describe('row colors', () => {
 
     await app.rightClickRow(0)
     await app.until('the picker is open again', (state) => state.colorPickerOpen)
-    await app.hoverColorDot('none')
+    await hoverColorDot(app, 'none')
     await app.until('the row previews no color', (state) => state.rows[0].color === null)
-    await app.hoverRow(0)
+    await hoverRow(app, 0)
     await app.until('the saved color is back', (state) => state.rows[0].color === 'red')
     await app.clickColorDot('none')
     const removed = await app.until('the picker closes', (state) => !state.colorPickerOpen)
@@ -106,7 +143,7 @@ describe('row colors', () => {
 
     await app.rightClickRow(0)
     await app.until('the picker is open', (state) => state.colorPickerOpen)
-    await app.hoverColorDot('green')
+    await hoverColorDot(app, 'green')
     const previewing = await app.until(
       'the first row previews green',
       (state) => state.rows[0].color === 'green'
@@ -114,7 +151,7 @@ describe('row colors', () => {
     expect(previewing.rows[1].color).toBeNull()
     expect(previewing.rows[1].active).toBe(true)
 
-    await app.clickVisiblePane()
+    await clickVisiblePane(app)
     const dismissed = await app.until('the picker closes', (state) => !state.colorPickerOpen)
     expect(dismissed.rows[0].color).toBeNull()
   })
