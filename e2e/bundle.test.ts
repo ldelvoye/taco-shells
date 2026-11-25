@@ -4,6 +4,10 @@ import { describe, expect, it } from 'vitest'
 
 // `npm run e2e` builds first, without TACO_SHELLS_CHANNEL, so out/ is a dev build.
 const MAIN_BUNDLE = resolve(import.meta.dirname, '../out/main/index.js')
+const RUNTIME_BUNDLE = resolve(import.meta.dirname, '../out/main/runtime.js')
+
+const NODE_PTY_REQUIRE = /require\(["']node-pty["']\)/
+const ELECTRON_REQUIRE = /require\(["']electron["']\)/
 
 // Quoted, because `.taco-shells` is a prefix of `.taco-shells-dev` and the stable
 // name appears inside the dev name and inside user-facing messages.
@@ -18,5 +22,14 @@ describe('the dev build cannot reach the stable config', () => {
     expect(bundle).toMatch(DEVELOPMENT_DIRECTORY_LITERAL)
     expect(bundle).not.toMatch(STABLE_DIRECTORY_LITERAL)
     expect(bundle).not.toMatch(STABLE_NAME_LITERAL)
+  })
+})
+
+describe('the terminal process stands alone', () => {
+  it('its bundle loads nothing from Electron', () => {
+    const bundle = readFileSync(RUNTIME_BUNDLE, 'utf8')
+
+    expect(bundle).toMatch(NODE_PTY_REQUIRE)
+    expect(bundle).not.toMatch(ELECTRON_REQUIRE)
   })
 })
