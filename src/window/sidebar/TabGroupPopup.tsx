@@ -1,4 +1,4 @@
-import { type JSX, type KeyboardEvent, useEffect, useRef } from 'react'
+import { type JSX, type KeyboardEvent, useEffect, useRef, useState } from 'react'
 import { ROW_COLORS, type RowColor } from '@protocol/arrangement'
 import { rowColorVariable } from './rowColor'
 import { usePopup } from './usePopup'
@@ -93,6 +93,12 @@ export function TabGroupPopup({
 }: TabGroupPopupProps): JSX.Element {
   const { popup, position } = usePopup(x, y, onClose)
   const field = useRef<HTMLInputElement>(null)
+  const [text, setText] = useState(name)
+
+  function rename(next: string): void {
+    setText(next)
+    onRename(next)
+  }
 
   useEffect(() => {
     const element = field.current
@@ -135,9 +141,9 @@ export function TabGroupPopup({
         className="tab-group-name-field"
         type="text"
         aria-label="Group name"
-        value={name}
+        value={text}
         onChange={(event) => {
-          onRename(event.target.value)
+          rename(event.target.value)
         }}
         onKeyDown={(event) => {
           if (event.key === 'Enter') {
@@ -145,7 +151,7 @@ export function TabGroupPopup({
             onClose()
             return
           }
-          handleClipboardKey(event, onRename)
+          handleClipboardKey(event, rename)
         }}
       />
       <div className="popup-dots">{dots}</div>

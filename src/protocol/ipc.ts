@@ -1,8 +1,8 @@
 import type { AgentBanner } from './agentSetup'
 import type { Config, ConfigFile } from './config'
-import type { Workspace } from './arrangement'
 import type { AgentSignal } from './rows'
 import type { AgentSession, Snapshot } from './snapshot'
+import type { DrawnState, RequestReply, WorkspaceRequest } from './workspace'
 
 export type SessionId = string
 
@@ -53,15 +53,13 @@ export const CHANNEL = {
   configGet: 'config:get',
   configChanged: 'config:changed',
   configPath: 'config:path',
-  focusSession: 'focus:session',
-  attentionSession: 'attention:session',
-  agentSignal: 'agent:signal',
-  appActivated: 'app:activated',
   focusUnavailable: 'focus:unavailable',
   fullScreenGet: 'full-screen:get',
   fullScreenChanged: 'full-screen:changed',
   snapshotGet: 'snapshot:get',
-  snapshotWorkspace: 'snapshot:workspace',
+  workspaceGet: 'workspace:get',
+  workspaceRequest: 'workspace:request',
+  workspaceState: 'workspace:state',
   updateGet: 'update:get',
   updateReady: 'update:ready',
   updateProblem: 'update:problem',
@@ -104,15 +102,15 @@ export interface TacoShellsApi extends HostApi {
     pathOf(which: ConfigFile): string
   }
   focus: {
-    onFocusSession(listener: (id: SessionId) => void): () => void
-    onAttention(listener: (id: SessionId) => void): () => void
-    onAgentSignal(listener: (event: AgentSignalEvent) => void): () => void
-    onActivated(listener: () => void): () => void
     onUnavailable(listener: () => void): () => void
   }
   snapshot: {
     initial: Snapshot | null
-    workspaceChanged(workspace: Workspace): void
+  }
+  workspace: {
+    initial: DrawnState
+    request(request: WorkspaceRequest): Promise<RequestReply>
+    onState(listener: (state: DrawnState) => void): () => void
   }
   update: {
     initial: string | null

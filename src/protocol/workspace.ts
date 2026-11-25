@@ -23,10 +23,20 @@ export type WorkspaceRequest =
   | { type: 'tabGroupUngrouped'; id: TabGroupId }
   | { type: 'tabGroupToggled'; id: TabGroupId }
 
-/** `ok` is false when a reported terminal could not be placed: the window still holds that shell and closes it. */
+/**
+ * `ok` is false when a reported terminal could not be placed: the window still holds that shell and closes it.
+ * `revision` is the state that holds the request's effect, which the window waits for before acting on the reply.
+ */
 export interface RequestReply {
   ok: boolean
   tabGroup: TabGroupId | null
+  revision: number
+}
+
+/** What the window needs to know about one agent: its name in a menu, and whether its sessions can be forked. */
+export interface AgentLabel {
+  name: string
+  forks: boolean
 }
 
 /** Everything the window draws. */
@@ -38,4 +48,6 @@ export interface DrawnState {
   refocus: number
   /** The latest of the window's focus moves the workspace has applied. */
   focusMove: number
+  agents: Record<string, AgentLabel>
+  defaultAgentName: string
 }

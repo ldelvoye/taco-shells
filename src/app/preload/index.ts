@@ -1,10 +1,8 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type { AgentBanner } from '@protocol/agentSetup'
-import type { Workspace } from '@protocol/arrangement'
 import type { Config, ConfigFile } from '@protocol/config'
 import {
   CHANNEL,
-  type AgentSignalEvent,
   type PtyCreateOptions,
   type PtyDataEvent,
   type PtyExitEvent,
@@ -13,6 +11,7 @@ import {
   type TacoShellsApi
 } from '@protocol/ipc'
 import type { Snapshot } from '@protocol/snapshot'
+import type { DrawnState, WorkspaceRequest } from '@protocol/workspace'
 
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
   const forward = (_event: IpcRendererEvent, payload: T): void => {
@@ -48,10 +47,6 @@ const api: TacoShellsApi = {
     pathOf: (which: ConfigFile) => ipcRenderer.sendSync(CHANNEL.configPath, which) as string
   },
   focus: {
-    onFocusSession: (listener: (id: SessionId) => void) => subscribe(CHANNEL.focusSession, listener),
-    onAttention: (listener: (id: SessionId) => void) => subscribe(CHANNEL.attentionSession, listener),
-    onAgentSignal: (listener: (event: AgentSignalEvent) => void) => subscribe(CHANNEL.agentSignal, listener),
-    onActivated: (listener: () => void) => subscribe(CHANNEL.appActivated, () => listener()),
     onUnavailable: (listener: () => void) => subscribe(CHANNEL.focusUnavailable, () => listener())
   },
   fullScreen: {
@@ -59,8 +54,12 @@ const api: TacoShellsApi = {
     onChange: (listener: (fullScreen: boolean) => void) => subscribe(CHANNEL.fullScreenChanged, listener)
   },
   snapshot: {
-    initial: ipcRenderer.sendSync(CHANNEL.snapshotGet) as Snapshot | null,
-    workspaceChanged: (workspace: Workspace) => ipcRenderer.send(CHANNEL.snapshotWorkspace, workspace)
+    initial: ipcRenderer.sendSync(CHANNEL.snapshotGet) as Snapshot | null
+  },
+  workspace: {
+    initial: ipcRenderer.sendSync(CHANNEL.workspaceGet) as DrawnState,
+    request: (request: WorkspaceRequest) => ipcRenderer.invoke(CHANNEL.workspaceRequest, request),
+    onState: (listener: (state: DrawnState) => void) => subscribe(CHANNEL.workspaceState, listener)
   },
   update: {
     initial: ipcRenderer.sendSync(CHANNEL.updateGet) as string | null,

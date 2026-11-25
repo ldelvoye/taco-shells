@@ -8,7 +8,7 @@ export interface SidebarActions {
   drop(dragged: Dragged, drop: Drop): void
   colorPane(pane: SessionId, color: RowColor | null): void
   fork(source: SessionId): void
-  newTabGroup(pane: SessionId): TabGroupId | null
+  newTabGroup(pane: SessionId): Promise<TabGroupId | null>
   renameTabGroup(id: TabGroupId, name: string): void
   recolorTabGroup(id: TabGroupId, color: RowColor): void
   ungroupTabGroup(id: TabGroupId): void
