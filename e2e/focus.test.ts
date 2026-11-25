@@ -12,8 +12,8 @@ const TYPED_KEY = { key: 'x', code: 'KeyX', text: 'x', windowsVirtualKeyCode: 88
 const ANSWER_DELAY_MS = 400
 
 // Holds back every state the workspace sends the window, as a busy main process
-// would. Input is left alone: blocking the main process itself would hold the
-// test's own key presses back too, and nothing would be learned.
+// would. Only those sends are delayed: blocking the main process itself would
+// hold the test's own key presses back too, and nothing would be learned.
 const DELAY_WORKSPACE_ANSWERS = `(() => {
   const { BrowserWindow } = process.mainModule.require('electron')
   const contents = BrowserWindow.getAllWindows()[0].webContents

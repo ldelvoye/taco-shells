@@ -7,6 +7,7 @@ const MAIN_BUNDLE = resolve(import.meta.dirname, '../out/main/index.js')
 const RUNTIME_BUNDLE = resolve(import.meta.dirname, '../out/main/runtime.js')
 
 const NODE_PTY_REQUIRE = /require\(["']node-pty["']\)/
+// The terminal process has no `electron` module to load: requiring it there fails at startup.
 const ELECTRON_REQUIRE = /require\(["']electron["']\)/
 
 // Quoted, because `.taco-shells` is a prefix of `.taco-shells-dev` and the stable
