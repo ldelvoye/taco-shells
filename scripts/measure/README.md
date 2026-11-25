@@ -102,15 +102,32 @@ The two runs differ most while printing: how fast `yes` gets its output through 
 
 ### After the runtime moved to its own process
 
-Two runs on 2026-11-25, same machine and settings, with the shells in the app's terminal process and their output going straight from it to the window. Both runs printed at about 90 MB/s, so they compare with run 1 above.
+Two runs on 2026-11-25, same machine and settings, at the commit that added `src/runtime/main.ts`: the shells are in the app's terminal process and their output goes straight from it to the window. Both runs printed at about 90 MB/s, so of the two runs before the core rip out they compare with the first, which printed at 93.5 MB/s. One more run was made the same day on `main` at `dd677be`, the last commit with the shells in the main process; its numbers are in the small table below.
 
 What they show:
 
-- **Typing, frames, switching and the main process's timer lag are unchanged.** A key's echo while four terminals print still takes about 100 ms at the median and 115 ms at the 95th percentile.
-- **There is a new process, `Terminal runtime`**, at about 70 MB idle and up to 180 MB while printing.
-- **The main process no longer carries terminal output.** While four terminals print it holds about 140 MB, where the build just before this one held 284 MB.
-- **The window's memory peaks higher while terminals print flat out.** Right after the printing stage it is at about 2,400 MB, against 1,900 MB on the build just before this one and 1,850 MB in run 1 above. By the end of the run it is back to about 2,020 MB. The likely cause, not confirmed: output that the window has not got to yet used to wait in the main process, and now waits in the window's own process. Nothing slows a shell down for the window yet.
-- The 8 lost graphics contexts are as before. That is for the step that stops the window holding every terminal.
+- **Typing, frame gaps and switching are within a few milliseconds of before.** A key's echo while four terminals print takes about 100 ms at the median and 115 ms at the 95th percentile. The main process's timer lag stays under 5 ms.
+- **There is a new process, `Terminal runtime`**, at about 70 MB with 24 idle terminals and about 180 MB after the scrollback fill.
+- **The main process is smaller after the scrollback fill**: 138 and 149 MB, against 284 MB on `dd677be`. Terminal output no longer passes through it.
+- **The window is larger after the scrollback fill, and all processes together are too.** The window is at 2,443 and 2,322 MB against 1,901 MB on `dd677be`, and the total is about 2,800 MB against 2,346 MB. At the end of the run the window is still about 120 MB above `dd677be`. Why is not established. One guess: output the window has not got to yet used to wait in the main process and now waits in the window's.
+- **8 of the 24 terminals lose their graphics context**, as before.
+
+| Measure, on `dd677be` | One run |
+| --- | --- |
+| Memory, 8 terminals with a full scrollback: Browser | 284 |
+| Memory, 8 terminals with a full scrollback: Tab | 1901 |
+| Memory, 8 terminals with a full scrollback: total | 2346 |
+| Memory, at the end: Browser | 206 |
+| Memory, at the end: Tab | 1901 |
+| Memory, at the end: total | 2271 |
+| Typing delay, nothing printing: median / 95th / worst (ms) | 7.8 / 10.8 / 10.9 |
+| Typing delay, while printing: median / 95th / worst (ms) | 96.2 / 106.4 / 110.1 |
+| Main process timer lag, while printing: median / 95th / worst (ms) | 0.0 / 0.0 / 3.6 |
+| Output reaching the window while printing (MB/s) | 106.5 |
+| Backlog after printing stopped (ms) | 69.4 |
+| Switch, every entry in turn: median / 95th / worst (ms) | 6.3 / 7.1 / 7.7 |
+
+The two runs at the new commit:
 
 | Measure | Run 1 | Run 2 |
 | --- | --- | --- |
