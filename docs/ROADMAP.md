@@ -1,6 +1,7 @@
 # Features
 
 - Settings tab: `cmd+,` opens a tab with a control for every setting (theme, font and size, cursor, scrollback, restore on launch) instead of opening `settings.json` in `$EDITOR` in a new terminal. The file stays the source of truth: a change in the tab is written back to it and applies live, the same as a hand edit, so the write has to keep the comments and formatting the user put in the file. Keybindings can follow as a second section once settings work.
+- Terminals on a remote dev machine: look into what it would take for a row to hold a session running on a cloud dev machine instead of this Mac, with the same agent state as a local row, and for that session to keep running while the laptop sleeps or the app is quit. This is an investigation before it is a build: find out what such a machine's own CLI already offers for starting, listing and attaching to sessions, and whether the app should drive that CLI or only show what it reports.
 - Which agent a terminal is running, at a glance. Once a second agent is supported and people run two side by side, a row should show whether it holds Claude Code, Codex or another agent, for instance an icon per agent beside the session marker. Grouping terminals by agent automatically could build on the same thing. Waits for a second harness: Claude Code is the only one today, so there is nothing to tell apart.
 
 # Distribution
