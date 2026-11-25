@@ -1,16 +1,16 @@
-import { mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { makeTempDirectory, removeTempDirectories } from '../testing/tempDirectory'
 import { readConfigTexts, seedConfigFiles } from './files'
 
-function temporaryDirectory(): string {
-  return mkdtempSync(join(tmpdir(), 'taco-shells-config-'))
-}
+const PREFIX = 'taco-shells-config-'
+
+afterEach(removeTempDirectories)
 
 describe('seedConfigFiles', () => {
   it('writes both files exactly as shipped, comments and all', () => {
-    const directory = temporaryDirectory()
+    const directory = makeTempDirectory(PREFIX)
     const settingsText = '{\n  // keep me\n  "fontSize": 12\n}'
     const problems = seedConfigFiles(directory, settingsText, '{}')
 
@@ -19,7 +19,7 @@ describe('seedConfigFiles', () => {
   })
 
   it('never overwrites a file the user has already written', () => {
-    const directory = temporaryDirectory()
+    const directory = makeTempDirectory(PREFIX)
     writeFileSync(join(directory, 'settings.json'), '{ "fontSize": 20 }')
     seedConfigFiles(directory, '{ "fontSize": 12 }', '{}')
 
@@ -27,7 +27,7 @@ describe('seedConfigFiles', () => {
   })
 
   it('reports a file it left alone but cannot read', () => {
-    const directory = temporaryDirectory()
+    const directory = makeTempDirectory(PREFIX)
     symlinkSync(join(directory, 'nowhere.json'), join(directory, 'settings.json'))
 
     const problems = seedConfigFiles(directory, '{ "fontSize": 12 }', '{}')
@@ -36,7 +36,8 @@ describe('seedConfigFiles', () => {
   })
 
   it('reports a directory it cannot create instead of throwing', () => {
-    const blocker = join(temporaryDirectory(), 'not-a-directory')
+    const parent = makeTempDirectory(PREFIX)
+    const blocker = join(parent, 'not-a-directory')
     writeFileSync(blocker, '')
     const problems = seedConfigFiles(join(blocker, 'taco-shells'), '{}', '{}')
 
@@ -47,7 +48,7 @@ describe('seedConfigFiles', () => {
 
 describe('readConfigTexts', () => {
   it('reads a file that is there and reports null for one that is not', () => {
-    const directory = temporaryDirectory()
+    const directory = makeTempDirectory(PREFIX)
     writeFileSync(join(directory, 'settings.json'), '{ "fontSize": 20 }')
     const texts = readConfigTexts(directory)
 

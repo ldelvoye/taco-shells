@@ -1,10 +1,8 @@
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { Workspace } from '@shared/model'
 import type { AgentSession } from '@shared/snapshot'
+import { makeTempDirectory, removeTempDirectories } from '../testing/tempDirectory'
 import { readSnapshot } from './files'
 import { SnapshotStore } from './store'
 
@@ -54,7 +52,7 @@ describe('SnapshotStore Claude sessions', () => {
 
   beforeEach(() => {
     vi.useFakeTimers()
-    directory = mkdtempSync(join(tmpdir(), 'taco-shells-store-test-'))
+    directory = makeTempDirectory('taco-shells-store-test-')
     now = 0
     const clock = (): number => now
     const sessions = {
@@ -70,6 +68,7 @@ describe('SnapshotStore Claude sessions', () => {
   afterEach(() => {
     store.stop()
     vi.useRealTimers()
+    removeTempDirectories()
   })
 
   it('writes a seeded directory before the first refresh has run', () => {

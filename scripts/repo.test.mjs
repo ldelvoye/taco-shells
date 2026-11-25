@@ -1,9 +1,9 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { makeTempDirectory, removeTempDirectories } from '../src/main/testing/tempDirectory.ts'
 
 const SCRIPTS = dirname(fileURLToPath(import.meta.url))
 
@@ -43,13 +43,15 @@ function bumpAndNotes() {
 
 describe('choosing a version from real commits', () => {
   beforeAll(() => {
-    repository = mkdtempSync(join(tmpdir(), 'taco-shells-repo-'))
+    repository = makeTempDirectory('taco-shells-repo-')
     git('init', '--initial-branch', 'main')
     git('config', 'user.email', 'test@example.com')
     git('config', 'user.name', 'Test')
     commit('feat: the first thing')
     git('tag', 'v0.1.0')
   })
+
+  afterAll(removeTempDirectories)
 
   // The bump reads commit bodies and the notes read subjects, and they are two
   // different git invocations. Wiring the notes into the bump would silently

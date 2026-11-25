@@ -1,14 +1,16 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { HARNESSES } from '@shared/harness/registry'
+import { makeTempDirectory, removeTempDirectories } from '../testing/tempDirectory'
 import { copyHookScripts, hookScriptsSource } from './scripts'
 
 const REPO_ROOT = join(import.meta.dirname, '..', '..', '..')
 
+afterEach(removeTempDirectories)
+
 function makeSource(): string {
-  const root = mkdtempSync(join(tmpdir(), 'taco-shells-scripts-'))
+  const root = makeTempDirectory('taco-shells-scripts-')
   const source = join(root, 'source')
   mkdirSync(source)
   writeFileSync(join(source, 'one.sh'), 'echo one\n', { mode: 0o644 })
@@ -21,7 +23,7 @@ function destinationFor(source: string): string {
 }
 
 describe('the hook entries harnesses declare', () => {
-  it('name scripts the repo ships, once per event', () => {
+  it('name scripts the repo ships, with no entry listed twice', () => {
     const shipped = hookScriptsSource(false, '', REPO_ROOT)
 
     for (const harness of HARNESSES) {
