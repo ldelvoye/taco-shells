@@ -121,6 +121,8 @@ export function App(): JSX.Element {
       <Sidebar
         workspace={shownWorkspace}
         agentRows={agentRows}
+        agents={state.agents}
+        defaultAgentName={state.defaultAgentName}
         actions={operations}
         width={sidebarWidth.width}
         fullScreen={fullScreen}

@@ -1,7 +1,14 @@
+import { DEFAULT_HARNESS, HARNESSES } from '@agents/registry'
+import type { Harness } from '@agents/types'
 import type { Group, GroupId, TabGroupId, Workspace as Arrangement } from '@protocol/arrangement'
 import type { AgentSignalEvent, SessionId } from '@protocol/ipc'
 import type { Snapshot } from '@protocol/snapshot'
-import type { DrawnState, RequestReply, WorkspaceRequest } from '@protocol/workspace'
+import type {
+  AgentLabel,
+  DrawnState,
+  RequestReply,
+  WorkspaceRequest
+} from '@protocol/workspace'
 import { canSplitPane, emptyWorkspace } from '@rules/arrangement'
 import { workspaceFromSnapshot } from './snapshot/format'
 import { createWorkspaceStore, type WorkspaceStore } from './store'
@@ -13,11 +20,13 @@ export interface WorkspaceEffects {
   onEmptied(): void
 }
 
-function accepted(tabGroup: TabGroupId | null): RequestReply {
+type Answer = Omit<RequestReply, 'revision'>
+
+function accepted(tabGroup: TabGroupId | null): Answer {
   return { ok: true, tabGroup }
 }
 
-function refused(): RequestReply {
+function refused(): Answer {
   return { ok: false, tabGroup: null }
 }
 
@@ -50,10 +59,20 @@ function hasNoGroups(arrangement: Arrangement | null): boolean {
   return arrangement.groups.length === 0
 }
 
+function agentLabelsOf(harnesses: readonly Harness[]): Record<string, AgentLabel> {
+  const labels: Record<string, AgentLabel> = {}
+  for (const harness of harnesses) {
+    const forks = harness.forkCommand !== undefined
+    labels[harness.id] = { name: harness.name, forks }
+  }
+  return labels
+}
+
 export class Workspace {
   private readonly store: WorkspaceStore = createWorkspaceStore()
   private readonly snapshot: Snapshot | null
   private readonly effects: WorkspaceEffects
+  private readonly agents: Record<string, AgentLabel>
   private revision = 0
   private focusMove = 0
   private nextGroupNumber = 1
@@ -62,6 +81,7 @@ export class Workspace {
   constructor(snapshot: Snapshot | null, effects: WorkspaceEffects) {
     this.snapshot = snapshot
     this.effects = effects
+    this.agents = agentLabelsOf(HARNESSES)
   }
 
   drawn(): DrawnState {
@@ -73,11 +93,18 @@ export class Workspace {
       agentRows,
       waiting: state.waiting,
       refocus: state.refocus,
-      focusMove: this.focusMove
+      focusMove: this.focusMove,
+      agents: this.agents,
+      defaultAgentName: DEFAULT_HARNESS.name
     }
   }
 
   request(request: WorkspaceRequest): RequestReply {
+    const answer = this.answer(request)
+    return { ...answer, revision: this.revision }
+  }
+
+  private answer(request: WorkspaceRequest): Answer {
     switch (request.type) {
       case 'terminalOpened': {
         const group = this.groupFor(request.pane)
@@ -182,7 +209,7 @@ export class Workspace {
     return canSplitPane(arrangement, donor)
   }
 
-  private createTabGroup(pane: SessionId): RequestReply {
+  private createTabGroup(pane: SessionId): Answer {
     const arrangement = this.store.getState().workspace
     if (arrangement === null) {
       return accepted(null)
@@ -198,7 +225,7 @@ export class Workspace {
     return accepted(id)
   }
 
-  private restore(panes: SessionId[]): RequestReply {
+  private restore(panes: SessionId[]): Answer {
     const snapshot = this.snapshot
     if (snapshot === null) {
       return refused()

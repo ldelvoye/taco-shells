@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { DEFAULT_HARNESS, harnessOf } from '@agents/registry'
 import type { Workspace as Arrangement } from '@protocol/arrangement'
 import type { Snapshot, SnapshotGroup } from '@protocol/snapshot'
 import type { DrawnState } from '@protocol/workspace'
@@ -89,8 +90,8 @@ describe('Workspace', () => {
     const first = workspace.request({ type: 'terminalOpened', pane: 'p1' })
     const second = workspace.request({ type: 'terminalOpened', pane: 'p2' })
 
-    expect(first).toEqual({ ok: true, tabGroup: null })
-    expect(second).toEqual({ ok: true, tabGroup: null })
+    expect(first).toEqual({ ok: true, tabGroup: null, revision: 1 })
+    expect(second).toEqual({ ok: true, tabGroup: null, revision: 2 })
     expect(groupIdsOf(workspace)).toEqual(['group-1', 'group-2'])
     expect(states.map((state) => state.revision)).toEqual([1, 2])
   })
@@ -206,5 +207,15 @@ describe('Workspace', () => {
 
     workspace.agentSignalled({ id: 'p1', harness: 'claude', sessionId: SESSION, signal: 'start' })
     expect(arrangements.length).toBe(savesBefore + 1)
+  })
+
+  it("tells the window each agent's menu name and whether it forks", () => {
+    const { workspace } = opened('p1')
+    const claude = harnessOf('claude')
+
+    const drawn = workspace.drawn()
+    expect(claude).not.toBeNull()
+    expect(drawn.agents.claude).toEqual({ name: claude?.name, forks: true })
+    expect(drawn.defaultAgentName).toBe(DEFAULT_HARNESS.name)
   })
 })

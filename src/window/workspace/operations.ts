@@ -1,18 +1,15 @@
-import type {
-  Dragged,
-  Drop,
-  Group,
-  RowColor,
-  TabGroupId,
-  Workspace
-} from '@protocol/arrangement'
+import type { Dragged, Drop, RowColor, TabGroupId, Workspace } from '@protocol/arrangement'
 import type { PtyCreateOptions, SessionId } from '@protocol/ipc'
 import type { Snapshot, SnapshotPane } from '@protocol/snapshot'
-import { canSplitPane, emptyWorkspace } from '@rules/arrangement'
+import type { FocusMove, WorkspaceRequest } from '@protocol/workspace'
+import { activePane, canSplitPane } from '@rules/arrangement'
+import {
+  focusNextGroup,
+  focusNextPane,
+  focusPreviousGroup,
+  focusPreviousPane
+} from '@rules/focus'
 import { forkNameFor } from '@rules/forkName'
-import { workspaceFromSnapshot } from '@workspace/snapshot/format'
-import type { FocusMove } from '@protocol/workspace'
-import { activeSessionOf, type WorkspaceEvent } from '@workspace/workspaceState'
 import {
   createSession,
   disposeSession,
@@ -20,11 +17,7 @@ import {
   onSessionFocus,
   onSessionTitle
 } from '../terminal/registry'
-import type { WorkspaceStore } from '@workspace/store'
-
-let nextGroupNumber = 1
-
-let nextTabGroupNumber = 1
+import type { WorkspaceLink } from './link'
 
 export interface WorkspaceOperations {
   start(): void
@@ -42,7 +35,7 @@ export interface WorkspaceOperations {
   toggleActiveColor(color: RowColor): void
   drop(dragged: Dragged, drop: Drop): void
   resizeGroup(groupIndex: number, dividerIndex: number, leftWidth: number): void
-  newTabGroup(pane: SessionId): TabGroupId | null
+  newTabGroup(pane: SessionId): Promise<TabGroupId | null>
   renameTabGroup(id: TabGroupId, name: string): void
   recolorTabGroup(id: TabGroupId, color: RowColor): void
   ungroupTabGroup(id: TabGroupId): void
@@ -52,32 +45,17 @@ export interface WorkspaceOperations {
   listen(): () => void
 }
 
-function nextGroupId(): string {
-  const id = `group-${nextGroupNumber}`
-  nextGroupNumber += 1
-  return id
-}
-
-function nextTabGroupId(): string {
-  const id = `tab-group-${nextTabGroupNumber}`
-  nextTabGroupNumber += 1
-  return id
-}
-
-function groupForSession(sessionId: SessionId): Group {
-  const id = nextGroupId()
-  return {
-    id,
-    panes: [{ id: sessionId, title: '', width: 1, color: null }],
-    activePane: 0,
-    tabGroup: null
+export function activeSessionOf(workspace: Workspace | null): SessionId | null {
+  if (workspace === null) {
+    return null
   }
-}
 
-function entryHolding(workspace: Workspace, pane: SessionId): Group | undefined {
-  return workspace.groups.find((group) => {
-    return group.panes.some((candidate) => candidate.id === pane)
-  })
+  const pane = activePane(workspace)
+  if (pane === null) {
+    return null
+  }
+
+  return pane.id
 }
 
 function startOptionsOf(pane: SnapshotPane): PtyCreateOptions {
@@ -96,20 +74,32 @@ function editorCommand(path: string): string {
   return `\${EDITOR:-vi} '${path}'\n`
 }
 
-export function createWorkspaceOperations(store: WorkspaceStore): WorkspaceOperations {
+function workspaceAfterFocus(workspace: Workspace, move: FocusMove): Workspace {
+  switch (move) {
+    case 'nextPane':
+      return focusNextPane(workspace)
+    case 'previousPane':
+      return focusPreviousPane(workspace)
+    case 'nextGroup':
+      return focusNextGroup(workspace)
+    case 'previousGroup':
+      return focusPreviousGroup(workspace)
+  }
+}
+
+export function createWorkspaceOperations(link: WorkspaceLink): WorkspaceOperations {
   function activeSession(): SessionId | null {
-    const workspace = store.getState().workspace
+    const workspace = link.getDrawn().workspace
     return activeSessionOf(workspace)
   }
 
   function openTerminalPlaced(
-    openedEvent: (group: Group) => WorkspaceEvent,
+    openedRequest: (pane: SessionId) => WorkspaceRequest,
     command: string | null
   ): void {
     void createSession().then((sessionId) => {
-      const group = groupForSession(sessionId)
-      const event = openedEvent(group)
-      store.dispatch(event)
+      const request = openedRequest(sessionId)
+      void link.request(request)
       if (command !== null) {
         window.tacoShells.pty.write(sessionId, command)
       }
@@ -117,8 +107,8 @@ export function createWorkspaceOperations(store: WorkspaceStore): WorkspaceOpera
   }
 
   function openTerminalRunning(command: string | null): void {
-    openTerminalPlaced((group) => {
-      return { type: 'terminalOpened', group }
+    openTerminalPlaced((pane) => {
+      return { type: 'terminalOpened', pane }
     }, command)
   }
 
@@ -127,8 +117,8 @@ export function createWorkspaceOperations(store: WorkspaceStore): WorkspaceOpera
   }
 
   function openTerminalIn(tabGroup: TabGroupId | null): void {
-    openTerminalPlaced((group) => {
-      return { type: 'terminalOpenedIn', group, tabGroup }
+    openTerminalPlaced((pane) => {
+      return { type: 'terminalOpenedIn', pane, tabGroup }
     }, null)
   }
 
@@ -147,26 +137,23 @@ export function createWorkspaceOperations(store: WorkspaceStore): WorkspaceOpera
   // The donor can close, or its group fill, while the shell is spawning: a shell
   // with no pane to show it would keep running unseen.
   function splitOnceSpawned(
-    donor: SessionId,
     options: PtyCreateOptions,
-    spawnedEvent: (pane: SessionId) => WorkspaceEvent
+    spawnedRequest: (pane: SessionId) => WorkspaceRequest
   ): void {
     void createSession(options).then((sessionId) => {
-      const latest = store.getState().workspace
-      const stillSplittable = latest !== null && canSplitPane(latest, donor)
-      if (!stillSplittable) {
-        disposeSession(sessionId)
-        return
-      }
-      const event = spawnedEvent(sessionId)
-      store.dispatch(event)
+      const request = spawnedRequest(sessionId)
+      void link.request(request).then((reply) => {
+        if (!reply.ok) {
+          disposeSession(sessionId)
+        }
+      })
     })
   }
 
   // The new shell starts in the split terminal's directory, which the main
   // process resolves from the pty it names here.
   function splitActive(): void {
-    const workspace = store.getState().workspace
+    const workspace = link.getDrawn().workspace
     const activeSessionId = activeSessionOf(workspace)
     if (!activeSessionId) {
       return
@@ -178,14 +165,14 @@ export function createWorkspaceOperations(store: WorkspaceStore): WorkspaceOpera
       return
     }
 
-    splitOnceSpawned(activeSessionId, { cwdFrom: activeSessionId }, (pane) => {
+    splitOnceSpawned({ cwdFrom: activeSessionId }, (pane) => {
       return { type: 'splitSpawned', donor: activeSessionId, pane }
     })
   }
 
   // The main process finds the agent session to fork from the pane named here.
   function fork(source: SessionId): void {
-    const workspace = store.getState().workspace
+    const workspace = link.getDrawn().workspace
     if (!workspace) {
       return
     }
@@ -201,7 +188,7 @@ export function createWorkspaceOperations(store: WorkspaceStore): WorkspaceOpera
     const titles = panes.map((pane) => pane.title)
     const name = forkNameFor(sourcePane.title, titles)
 
-    splitOnceSpawned(source, { fork: { from: source, name } }, (pane) => {
+    splitOnceSpawned({ fork: { from: source, name } }, (pane) => {
       return { type: 'forkSpawned', source, pane }
     })
   }
@@ -210,7 +197,7 @@ export function createWorkspaceOperations(store: WorkspaceStore): WorkspaceOpera
   // back out in that same order, so the two loops have to walk the same list.
   async function restore(snapshot: Snapshot): Promise<void> {
     const sessionIds: SessionId[] = []
-    let restored: Workspace = emptyWorkspace()
+    let placed = false
     try {
       for (const group of snapshot.groups) {
         for (const pane of group.panes) {
@@ -219,21 +206,18 @@ export function createWorkspaceOperations(store: WorkspaceStore): WorkspaceOpera
           sessionIds.push(sessionId)
         }
       }
-      const groupIds = snapshot.groups.map(() => nextGroupId())
-      const tabGroupIds = snapshot.tabGroups.map(() => nextTabGroupId())
-      restored = workspaceFromSnapshot(snapshot, sessionIds, groupIds, tabGroupIds)
+      const reply = await link.request({ type: 'restored', panes: sessionIds })
+      placed = reply.ok
     } catch {
-      restored = emptyWorkspace()
+      placed = false
     }
 
-    if (restored.groups.length === 0) {
+    if (!placed) {
       for (const sessionId of sessionIds) {
         disposeSession(sessionId)
       }
       openTerminal()
-      return
     }
-    store.dispatch({ type: 'workspaceRestored', workspace: restored })
   }
 
   function start(): void {
@@ -261,61 +245,59 @@ export function createWorkspaceOperations(store: WorkspaceStore): WorkspaceOpera
   // of the pane that is already active changes no state and so would fire no
   // effect, while the click itself has already taken focus off the terminal.
   function select(pane: SessionId): void {
-    store.dispatch({ type: 'paneActivated', pane })
+    link.focus(pane)
     focusSession(pane)
   }
 
   function moveFocus(move: FocusMove): void {
-    store.dispatch({ type: 'focusMoved', move })
+    const workspace = link.getDrawn().workspace
+    if (workspace === null) {
+      return
+    }
+
+    const moved = workspaceAfterFocus(workspace, move)
+    const target = activeSessionOf(moved)
+    if (target === null) {
+      return
+    }
+    link.focus(target)
   }
 
   function colorPane(pane: SessionId, color: RowColor | null): void {
-    store.dispatch({ type: 'paneColored', pane, color })
+    void link.request({ type: 'paneColored', pane, color })
   }
 
   function toggleActiveColor(color: RowColor): void {
-    store.dispatch({ type: 'activeColorToggled', color })
+    void link.request({ type: 'activeColorToggled', color })
   }
 
   function drop(dragged: Dragged, target: Drop): void {
-    const newGroup = nextGroupId()
-    store.dispatch({ type: 'dropped', dragged, drop: target, newGroup })
+    void link.request({ type: 'dropped', dragged, drop: target })
   }
 
   function resizeGroup(groupIndex: number, dividerIndex: number, leftWidth: number): void {
-    store.dispatch({ type: 'dividerMoved', groupIndex, dividerIndex, leftWidth })
+    void link.request({ type: 'dividerMoved', groupIndex, dividerIndex, leftWidth })
   }
 
-  function newTabGroup(pane: SessionId): TabGroupId | null {
-    const current = store.getState().workspace
-    if (current === null) {
-      return null
-    }
-
-    const holder = entryHolding(current, pane)
-    if (holder === undefined) {
-      return null
-    }
-
-    const id = nextTabGroupId()
-    store.dispatch({ type: 'tabGroupCreated', entry: holder.id, id })
-    return id
+  async function newTabGroup(pane: SessionId): Promise<TabGroupId | null> {
+    const reply = await link.request({ type: 'tabGroupCreated', pane })
+    return reply.tabGroup
   }
 
   function renameTabGroup(id: TabGroupId, name: string): void {
-    store.dispatch({ type: 'tabGroupRenamed', id, name })
+    void link.request({ type: 'tabGroupRenamed', id, name })
   }
 
   function recolorTabGroup(id: TabGroupId, color: RowColor): void {
-    store.dispatch({ type: 'tabGroupRecolored', id, color })
+    void link.request({ type: 'tabGroupRecolored', id, color })
   }
 
   function ungroupTabGroup(id: TabGroupId): void {
-    store.dispatch({ type: 'tabGroupUngrouped', id })
+    void link.request({ type: 'tabGroupUngrouped', id })
   }
 
   function toggleTabGroup(id: TabGroupId): void {
-    store.dispatch({ type: 'tabGroupToggled', id })
+    void link.request({ type: 'tabGroupToggled', id })
   }
 
   function refocusActive(): void {
@@ -331,11 +313,10 @@ export function createWorkspaceOperations(store: WorkspaceStore): WorkspaceOpera
     // typing `exit` and closing the terminal from the app take one path.
     const stopExit = window.tacoShells.pty.onExit((event) => {
       disposeSession(event.id)
-      store.dispatch({ type: 'paneExited', pane: event.id })
     })
 
     const stopTitle = onSessionTitle((sessionId, title) => {
-      store.dispatch({ type: 'titleChanged', pane: sessionId, title })
+      void link.request({ type: 'titleChanged', pane: sessionId, title })
     })
 
     // Clicking straight into a pane has to move the workspace's idea of the active
@@ -343,39 +324,13 @@ export function createWorkspaceOperations(store: WorkspaceStore): WorkspaceOpera
     // effect in useWorkspace refocuses on that change, but activatePane returns the
     // workspace untouched once the pane is already active, so this cannot loop.
     const stopFocus = onSessionFocus((sessionId) => {
-      store.dispatch({ type: 'paneActivated', pane: sessionId })
-    })
-
-    const stopSignal = window.tacoShells.focus.onAgentSignal((event) => {
-      store.dispatch({ type: 'agentSignalled', signal: event })
-    })
-
-    const stopAttention = window.tacoShells.focus.onAttention((id) => {
-      store.dispatch({ type: 'attentionRequested', pane: id })
-    })
-
-    const stopActivated = window.tacoShells.focus.onActivated(() => {
-      const waiting = store.getState().waiting
-      if (waiting === null) {
-        return
-      }
-      store.dispatch({ type: 'appActivated' })
-      focusSession(waiting)
-    })
-
-    const stopFocusRequest = window.tacoShells.focus.onFocusSession((id) => {
-      store.dispatch({ type: 'paneActivated', pane: id })
-      focusSession(id)
+      link.focus(sessionId)
     })
 
     return () => {
       stopExit()
       stopTitle()
       stopFocus()
-      stopSignal()
-      stopAttention()
-      stopActivated()
-      stopFocusRequest()
     }
   }
 

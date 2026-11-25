@@ -1,32 +1,53 @@
-import { useEffect, useState, useSyncExternalStore } from 'react'
-import { createWorkspaceStore, type WorkspaceStore } from '@workspace/store'
-import { activeSessionOf, type WorkspaceState } from '@workspace/workspaceState'
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import type { Workspace } from '@protocol/arrangement'
+import type { SessionId } from '@protocol/ipc'
+import type { AgentRows } from '@protocol/rows'
+import type { AgentLabel } from '@protocol/workspace'
 import { focusSession } from '../terminal/registry'
-import { createWorkspaceOperations, type WorkspaceOperations } from './operations'
+import { createWorkspaceLink, type WorkspaceLink } from './link'
+import {
+  activeSessionOf,
+  createWorkspaceOperations,
+  type WorkspaceOperations
+} from './operations'
+
+export interface WorkspaceViewState {
+  workspace: Workspace | null
+  agentRows: AgentRows
+  waiting: SessionId | null
+  agents: Record<string, AgentLabel>
+  defaultAgentName: string
+}
 
 export interface WorkspaceView {
-  state: WorkspaceState
+  state: WorkspaceViewState
   operations: WorkspaceOperations
 }
 
 interface WorkspaceParts {
-  store: WorkspaceStore
+  link: WorkspaceLink
   operations: WorkspaceOperations
 }
 
 function createWorkspaceParts(): WorkspaceParts {
-  const store = createWorkspaceStore()
-  const operations = createWorkspaceOperations(store)
-  return { store, operations }
+  const link = createWorkspaceLink(window.tacoShells.workspace)
+  const operations = createWorkspaceOperations(link)
+  return { link, operations }
 }
 
 export function useWorkspace(): WorkspaceView {
   const [parts] = useState(createWorkspaceParts)
-  const { store, operations } = parts
-  const state = useSyncExternalStore(store.subscribe, store.getDrawnState)
-  const workspace = state.workspace
+  const { link, operations } = parts
+  const drawn = useSyncExternalStore(link.subscribe, link.getDrawn)
+  const workspace = drawn.workspace
   const activeSessionId = activeSessionOf(workspace)
-  const refocus = state.refocus
+  const refocus = drawn.refocus
+
+  const rows = drawn.agentRows
+  const agentRows = useMemo(() => {
+    const entries = Object.entries(rows)
+    return new Map(entries)
+  }, [rows])
 
   useEffect(() => {
     return operations.listen()
@@ -35,25 +56,6 @@ export function useWorkspace(): WorkspaceView {
   useEffect(() => {
     operations.start()
   }, [operations])
-
-  useEffect(() => {
-    if (!workspace) {
-      return
-    }
-    window.tacoShells.snapshot.workspaceChanged(workspace)
-  }, [workspace])
-
-  // The terminals are the window's only contents, so losing the last of them is
-  // the same gesture as closing the window.
-  useEffect(() => {
-    if (!workspace) {
-      return
-    }
-    if (workspace.groups.length > 0) {
-      return
-    }
-    window.close()
-  }, [workspace])
 
   useEffect(() => {
     if (!activeSessionId) {
@@ -67,13 +69,20 @@ export function useWorkspace(): WorkspaceView {
     if (refocus === 0) {
       return
     }
-    const latest = store.getState().workspace
+    const latest = link.getDrawn().workspace
     const active = activeSessionOf(latest)
     if (!active) {
       return
     }
     focusSession(active)
-  }, [store, refocus])
+  }, [link, refocus])
 
+  const state: WorkspaceViewState = {
+    workspace,
+    agentRows,
+    waiting: drawn.waiting,
+    agents: drawn.agents,
+    defaultAgentName: drawn.defaultAgentName
+  }
   return { state, operations }
 }

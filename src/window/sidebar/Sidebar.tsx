@@ -7,7 +7,6 @@ import {
   useEffect,
   useState
 } from 'react'
-import { DEFAULT_HARNESS, harnessOf } from '@agents/registry'
 import type {
   Group,
   Pane,
@@ -18,6 +17,7 @@ import type {
 } from '@protocol/arrangement'
 import type { SessionId } from '@protocol/ipc'
 import type { AgentRows } from '@protocol/rows'
+import type { AgentLabel } from '@protocol/workspace'
 import { blockOf, groupHasRoom } from '@rules/arrangement'
 import type { DropPoint } from '@rules/drop'
 import { RowPopup } from './RowPopup'
@@ -52,6 +52,8 @@ interface OpenTabGroupPopup {
 interface SidebarProps {
   workspace: Workspace
   agentRows: AgentRows
+  agents: Record<string, AgentLabel>
+  defaultAgentName: string
   actions: SidebarActions
   width: number
   fullScreen: boolean
@@ -60,7 +62,12 @@ interface SidebarProps {
 
 // A row forks when its agent can fork, its session has a conversation to copy and its
 // group has room for the fork.
-function canForkRow(pane: Pane, groups: Group[], rowStates: AgentRows): boolean {
+function canForkRow(
+  pane: Pane,
+  groups: Group[],
+  rowStates: AgentRows,
+  agents: Record<string, AgentLabel>
+): boolean {
   const row = rowStates.get(pane.id)
   if (row === undefined) {
     return false
@@ -68,8 +75,8 @@ function canForkRow(pane: Pane, groups: Group[], rowStates: AgentRows): boolean 
   if (!row.hasConversation) {
     return false
   }
-  const harness = harnessOf(row.harness)
-  if (harness === null || harness.forkCommand === undefined) {
+  const label: AgentLabel | undefined = agents[row.harness]
+  if (label === undefined || !label.forks) {
     return false
   }
 
@@ -80,21 +87,28 @@ function canForkRow(pane: Pane, groups: Group[], rowStates: AgentRows): boolean 
   return groupHasRoom(group)
 }
 
-function harnessNameOf(pane: Pane, rowStates: AgentRows): string {
+function harnessNameOf(
+  pane: Pane,
+  rowStates: AgentRows,
+  agents: Record<string, AgentLabel>,
+  defaultName: string
+): string {
   const row = rowStates.get(pane.id)
   if (row === undefined) {
-    return DEFAULT_HARNESS.name
+    return defaultName
   }
-  const harness = harnessOf(row.harness)
-  if (harness === null) {
-    return DEFAULT_HARNESS.name
+  const label: AgentLabel | undefined = agents[row.harness]
+  if (label === undefined) {
+    return defaultName
   }
-  return harness.name
+  return label.name
 }
 
 export function Sidebar({
   workspace,
   agentRows,
+  agents,
+  defaultAgentName,
   actions,
   width,
   fullScreen,
@@ -221,8 +235,8 @@ export function Sidebar({
     const panes = groups.flatMap((group) => group.panes)
     const pickedPane = panes.find((pane) => pane.id === rowPopup.paneId)
     if (pickedPane !== undefined) {
-      const canFork = canForkRow(pickedPane, groups, agentRows)
-      const forkName = harnessNameOf(pickedPane, agentRows)
+      const canFork = canForkRow(pickedPane, groups, agentRows, agents)
+      const forkName = harnessNameOf(pickedPane, agentRows, agents, defaultAgentName)
       rowPopupElement = (
         <RowPopup
           x={rowPopup.x}
@@ -245,12 +259,15 @@ export function Sidebar({
             closeRowPopup()
           }}
           onNewGroup={() => {
-            const tabGroup = actions.newTabGroup(pickedPane.id)
+            const created = actions.newTabGroup(pickedPane.id)
+            const { x, y } = rowPopup
             closeRowPopup()
-            if (tabGroup === null) {
-              return
-            }
-            setTabGroupPopup({ tabGroup, x: rowPopup.x, y: rowPopup.y })
+            void created.then((tabGroup) => {
+              if (tabGroup === null) {
+                return
+              }
+              setTabGroupPopup({ tabGroup, x, y })
+            })
           }}
           onClose={closeRowPopup}
         />

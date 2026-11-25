@@ -8,6 +8,7 @@ export interface WindowLink {
   onFullScreenChanged(listener: (fullScreen: boolean) => void): void
   onClosing(listener: () => void): void
   setBackgroundColor(color: string): void
+  close(): void
 }
 
 export function linkTo(window: BrowserWindow): WindowLink {
@@ -38,6 +39,12 @@ export function linkTo(window: BrowserWindow): WindowLink {
         return
       }
       window.setBackgroundColor(color)
+    },
+    close: () => {
+      if (window.isDestroyed()) {
+        return
+      }
+      window.close()
     }
   }
 }

@@ -15,6 +15,7 @@ import { bridgeAgents } from './ipc/agents'
 import { bridgeFocus } from './ipc/focus'
 import { registerHostApi } from './ipc/hostApi'
 import { bridgeUpdates } from './ipc/updates'
+import { bridgeWorkspace } from './ipc/workspace'
 import { nativeSystemTheme } from './systemTheme'
 import { ApplicationMenu } from './window/applicationMenu'
 import { linkTo, type WindowLink } from './window/link'
@@ -44,7 +45,10 @@ app.whenReady().then(() => {
   const link = linkTo(createMainWindow(palette))
   const snapshots = new SnapshotStore(directory, sessions)
   snapshotStore = snapshots
-  registerIpc(sessions, link, configStore, snapshots)
+  const restoreOnLaunch = initialConfig.settings.restoreOnLaunch
+  const workspaceBridge = bridgeWorkspace(link, snapshots, restoreOnLaunch)
+  const workspace = workspaceBridge.workspace
+  registerIpc(sessions, link, configStore, snapshots, workspace)
   registerHostApi(link)
 
   const updateHost: UpdateHost = {
@@ -70,12 +74,12 @@ app.whenReady().then(() => {
     return startAgents(directory, configStore, sessions, agentsHost, events)
   })
 
-  const focus = bridgeFocus(link, (events) => {
+  const focus = bridgeFocus(link, workspace, (events) => {
     return startFocus(sessions, directory, snapshots, events, () => {
       updates.checkNow()
     })
   })
-  services.push(configStore, focus, updates, agents, snapshots)
+  services.push(configStore, workspaceBridge, focus, updates, agents, snapshots)
 
   whenTheWindowCloses(link, snapshots)
 

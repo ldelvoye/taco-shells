@@ -1,10 +1,10 @@
 import { ipcMain } from 'electron'
-import type { Workspace } from '@protocol/arrangement'
 import type { ConfigFile } from '@protocol/config'
 import { CHANNEL, type PtyCreateOptions, type PtySize, type SessionId } from '@protocol/ipc'
 import type { PtySessions } from '@runtime/sessions'
 import type { SnapshotStore } from '@workspace/snapshot/store'
 import { shellStartFor } from '@workspace/startCommand'
+import type { Workspace } from '@workspace/workspace'
 import type { ConfigStore } from '../../config'
 import { configFilePath } from '../../config/files'
 import type { WindowLink } from '../window/link'
@@ -13,7 +13,8 @@ export function registerIpc(
   sessions: PtySessions,
   link: WindowLink,
   store: ConfigStore,
-  snapshotStore: SnapshotStore
+  snapshotStore: SnapshotStore,
+  workspace: Workspace
 ): void {
   ipcMain.handle(
     CHANNEL.ptyCreate,
@@ -52,15 +53,13 @@ export function registerIpc(
       event.returnValue = null
     }
   })
-  ipcMain.on(CHANNEL.snapshotWorkspace, (_event, workspace: Workspace) => {
-    snapshotStore.workspaceChanged(workspace)
-  })
 
   sessions.onData((event) => {
     link.send(CHANNEL.ptyData, event)
   })
 
   sessions.onExit((event) => {
+    workspace.terminalExited(event.id)
     link.send(CHANNEL.ptyExit, event)
   })
 
