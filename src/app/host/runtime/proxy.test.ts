@@ -79,13 +79,16 @@ describe('RuntimeProxy', () => {
 
     const first = proxy.directoryOf('t1')
     const second = proxy.directoryOf('t2')
-    const [firstAsk, secondAsk] = askNumbers(posted)
+    const running = proxy.foregroundCommands('t1')
+    const [firstAsk, secondAsk, runningAsk] = askNumbers(posted)
+    feed(proxy, { type: 'answer', ask: runningAsk, value: ['vim', 'git'] })
     feed(proxy, { type: 'answer', ask: secondAsk, value: '/two' })
     feed(proxy, { type: 'answer', ask: firstAsk, value: '/one' })
 
-    expect(posted.map((command) => command.type)).toEqual(['ask', 'ask'])
+    expect(posted.map((command) => command.type)).toEqual(['ask', 'ask', 'ask'])
     expect(await first).toBe('/one')
     expect(await second).toBe('/two')
+    expect(await running).toEqual(['vim', 'git'])
   })
 
   it('answers with nothing once disconnected', async () => {
