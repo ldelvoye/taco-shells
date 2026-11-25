@@ -3,6 +3,13 @@ import type { Config } from './config'
 import type { TacoShellsApi } from './ipc'
 import type { Crossing, IsPlain } from './plain'
 import type { TerminalStart, TerminalStarted } from './runtime'
+import type {
+  RuntimeCommand,
+  RuntimeQuery,
+  RuntimeReport,
+  TerminalInput,
+  TerminalOutput
+} from './runtimeMessages'
 import type { DrawnState, RequestReply, WorkspaceRequest } from './workspace'
 
 type Assert<T extends true> = T
@@ -27,7 +34,12 @@ export type PlainCases = [
   Assert<IsPlain<WorkspaceRequest>>,
   Assert<IsPlain<RequestReply>>,
   Assert<IsPlain<TerminalStart>>,
-  Assert<IsPlain<TerminalStarted>>
+  Assert<IsPlain<TerminalStarted>>,
+  Assert<IsPlain<RuntimeQuery>>,
+  Assert<IsPlain<RuntimeCommand>>,
+  Assert<IsPlain<RuntimeReport>>,
+  Assert<IsPlain<TerminalInput>>,
+  Assert<IsPlain<TerminalOutput>>
 ]
 
 export type NotPlainCases = [
