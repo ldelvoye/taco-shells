@@ -10,6 +10,7 @@ Three pieces of work, done in this order, each one building on the one before. T
 
 - Terminals on a remote dev machine: look into what it would take for a row to hold a session running on a cloud dev machine instead of this Mac, with the same agent state as a local row, and for that session to keep running while the laptop sleeps or the app is quit. This is an investigation before it is a build: find out what such a machine's own CLI already offers for starting, listing and attaching to sessions, and whether the app should drive that CLI or only show what it reports.
 - Which agent a terminal is running, at a glance. Once a second agent is supported and people run two side by side, a row should show whether it holds Claude Code, Codex or another agent, for instance an icon per agent beside the session marker. Grouping terminals by agent automatically could build on the same thing. Waits for a second harness: Claude Code is the only one today, so there is nothing to tell apart.
+- What agents can do with the agent activity panel: a spike, once the redesign of the window (the look and settings work above) is built. The redesign puts a panel beside each terminal that logs what its agent was asked, did and changed, and gives the agent a place to share things with you, such as a diagram, a note or a plan. That needs a channel from the agent to the window, and the channel may let agents do things they could not do before. Find out what comes naturally from it on the backend before choosing anything to build.
 
 # Distribution
 
