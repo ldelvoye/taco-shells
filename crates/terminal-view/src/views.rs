@@ -304,8 +304,6 @@ mod tests {
                 selection: grey,
                 ansi: [grey; 16],
             },
-            cursor_shape: taco_ghostty::render::CursorShape::Block,
-            cursor_blink: false,
         };
         Views::new(config, CELL)
     }

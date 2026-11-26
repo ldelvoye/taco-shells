@@ -1,7 +1,7 @@
 //! One terminal's view: a silent copy of the runtime's terminal, fed in the order the terminal channel sends.
 
 use taco_ghostty::input::{CellPoint, KeyEncoder, KeyPress, MouseEncoder, MouseInput, Scroll};
-use taco_ghostty::render::{CursorShape, Dirty, RenderState, Row};
+use taco_ghostty::render::{Dirty, RenderState, Row};
 use taco_ghostty::{Error, Step, Terminal};
 use taco_protocol::{Rgb, TerminalColors, TerminalEvent};
 
@@ -13,9 +13,6 @@ use crate::links::url_at;
 pub struct ViewConfig {
     pub scrollback: u32,
     pub colors: TerminalColors,
-    /// The cursor until a program chooses its own.
-    pub cursor_shape: CursorShape,
-    pub cursor_blink: bool,
 }
 
 /// What an event did to the view.
@@ -328,8 +325,7 @@ impl View {
 fn configure_terminal(terminal: &mut Terminal, config: &ViewConfig) -> Result<(), Error> {
     let scrollback = config.scrollback as usize;
     terminal.set_scrollback(scrollback)?;
-    terminal.set_colors(&config.colors)?;
-    terminal.set_cursor_defaults(config.cursor_shape, config.cursor_blink)
+    terminal.set_colors(&config.colors)
 }
 
 #[cfg(test)]
@@ -356,8 +352,6 @@ mod tests {
                 selection: GREY,
                 ansi: [GREY; 16],
             },
-            cursor_shape: CursorShape::Block,
-            cursor_blink: false,
         }
     }
 
