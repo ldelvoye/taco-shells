@@ -1294,7 +1294,7 @@ fn typed_field_for(
 ) -> Entity<TextField> {
     let text = published_text(setting, settings);
     let look = look.clone();
-    let field = cx.new(|cx| TextField::new(&text, look, cx));
+    let field = cx.new(|cx| TextField::new(&text, look, cx).with_shell_focus());
     let heard = cx.subscribe(&field, move |view, _, event: &TextFieldEvent, cx| {
         view.field_said(setting, event, cx);
     });

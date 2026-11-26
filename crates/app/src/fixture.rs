@@ -119,6 +119,8 @@ pub enum Fixture {
     Broken,
     /// The quiet one with plain shells named by their short path.
     Paths,
+    /// The quiet one with some switches on and some off.
+    Switches,
 }
 
 struct FixtureRow {
@@ -143,6 +145,7 @@ impl Fixture {
             "empty" => Some(Self::Empty),
             "broken" => Some(Self::Broken),
             "paths" => Some(Self::Paths),
+            "switches" => Some(Self::Switches),
             _ => None,
         }
     }
@@ -154,6 +157,7 @@ impl Fixture {
             Self::Empty => empty(),
             Self::Broken => broken(),
             Self::Paths => paths(),
+            Self::Switches => switches(),
         }
     }
 
@@ -259,6 +263,12 @@ fn mixed() -> Shown {
 fn quiet() -> Shown {
     let mut shown = mixed();
     shown.notices = Notices::default();
+    shown
+}
+
+fn switches() -> Shown {
+    let mut shown = quiet();
+    shown.settings.restore_on_launch = false;
     shown
 }
 
