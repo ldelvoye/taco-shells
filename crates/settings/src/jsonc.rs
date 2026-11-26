@@ -232,6 +232,11 @@ mod tests {
 
         let nulled = set_top_level(Some("{ \"cmd+k\": \"x\" }"), "cmd+k", &Value::Null, "k");
         assert_eq!(nulled, Ok("{ \"cmd+k\": null }".to_string()));
+
+        let only_comments = "// mine, kept\n";
+        let commented = set_top_level(Some(only_comments), "fontSize", &json!(14), "settings.json");
+        let kept_and_added = "// mine, kept\n{\n  \"fontSize\": 14\n}\n".to_string();
+        assert_eq!(commented, Ok(kept_and_added));
     }
 
     #[test]
