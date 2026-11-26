@@ -11,6 +11,7 @@ use taco_protocol::{
 use taco_rules::{DropMark, DropPoint, drop_for, drop_mark_for, selected_terminal};
 
 use crate::banners::{Banner, banner_cards, banner_strips};
+use crate::drive::mark;
 use crate::link::{Ahead, WindowOutput, WindowReceiver, WorkspacePort, drawn_with, next_move};
 use crate::look::{FONT_FAMILY, Look, TEXT_SIZE};
 use crate::panels::{docked, open_on, title_plus};
@@ -20,6 +21,7 @@ use crate::terminal_list::{ListDrag, ListInput, terminal_list};
 use crate::title_bar::title_bar;
 use crate::trial::{BannerLayout, PlusPlace, Trial};
 
+const MIDDLE_MARK: &str = "middle";
 const PLACEHOLDER_FONT: &str = "Menlo";
 const PLACEHOLDER_TEXT_SIZE: f32 = 12.;
 
@@ -254,6 +256,7 @@ impl WindowView {
             .overflow_hidden()
             .bg(look.terminal_background)
             .child(self.placeholder());
+        terminal = mark(terminal, MIDDLE_MARK);
         let mut middle = div().flex().flex_col().flex_1().min_h_0();
         if banners.is_empty() {
             return middle.child(terminal);

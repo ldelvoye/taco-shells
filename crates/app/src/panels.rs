@@ -2,6 +2,7 @@ use gpui::{AnyElement, Div, FontWeight, IntoElement, ParentElement, Styled, div,
 use taco_protocol::{Edge, Panel, PanelPlace, Panels};
 
 use crate::assets::{CLOSE_ICON, PLUS_ICON};
+use crate::drive::mark;
 use crate::look::{Look, PANEL_TITLE_HEIGHT};
 
 const TITLE_ICON_SIZE: f32 = 14.;
@@ -10,6 +11,14 @@ pub fn name_of(panel: Panel) -> &'static str {
     match panel {
         Panel::Terminals => "Terminals",
         Panel::AgentActivity => "Agent Activity",
+    }
+}
+
+/// The panel's name in the driver's bounds: `terminals` or `agent_activity`.
+pub fn driver_name_of(panel: Panel) -> &'static str {
+    match panel {
+        Panel::Terminals => "terminals",
+        Panel::AgentActivity => "agent_activity",
     }
 }
 
@@ -33,7 +42,9 @@ pub fn docked(
 ) -> Div {
     let title = panel_title(panel, title_extra, look);
     let body = div().flex_1().min_h_0().overflow_hidden().child(contents);
-    let frame = div()
+    let driver_name = driver_name_of(panel);
+    let framed = div()
+        .relative()
         .flex()
         .flex_col()
         .flex_none()
@@ -42,6 +53,7 @@ pub fn docked(
         .border_color(look.hairline)
         .child(title)
         .child(body);
+    let frame = mark(framed, format!("panel:{driver_name}"));
     let size = px(place.size);
     match place.edge {
         Edge::Left => frame.w(size).border_r_1(),
@@ -60,7 +72,8 @@ fn panel_title(panel: Panel, extra: Option<AnyElement>, look: &Look) -> Div {
         controls = controls.child(element);
     }
     controls = controls.child(close);
-    div()
+    let title = div()
+        .relative()
         .flex()
         .flex_none()
         .items_center()
@@ -73,7 +86,9 @@ fn panel_title(panel: Panel, extra: Option<AnyElement>, look: &Look) -> Div {
         .text_size(px(12.))
         .font_weight(FontWeight::SEMIBOLD)
         .child(name_of(panel))
-        .child(controls)
+        .child(controls);
+    let driver_name = driver_name_of(panel);
+    mark(title, format!("panel:{driver_name}:title"))
 }
 
 /// The new-terminal button for the trial that puts it in the Terminals title.
