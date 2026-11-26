@@ -576,6 +576,22 @@ mod tests {
         let started = next_event(&receiver);
         assert_eq!(started, hook(vec![1], expected));
 
+        let fresh_start = format!(
+            r#"{{"pids":[1],"harness":"claude","sessionId":"{SESSION}","cwd":"/tmp/new"}}"#
+        );
+        post(port, "POST", AGENT_START_ROUTE, fresh_start.as_bytes());
+        let fresh = HookCall::AgentStart {
+            harness: claude(),
+            session_id: SESSION.to_string(),
+            cwd: "/tmp/new".to_string(),
+            has_conversation: false,
+        };
+        let started_fresh = next_event(&receiver);
+        assert_eq!(started_fresh, hook(vec![1], fresh));
+
+        let no_cwd =
+            format!(r#"{{"pids":[1],"harness":"claude","sessionId":"{SESSION}","cwd":""}}"#);
+        expect_dropped(port, &receiver, AGENT_START_ROUTE, &no_cwd);
         let bad_session = r#"{"pids":[1],"harness":"claude","sessionId":"nope","cwd":"/tmp"}"#;
         expect_dropped(port, &receiver, AGENT_START_ROUTE, bad_session);
         let unknown_harness =
@@ -602,8 +618,10 @@ mod tests {
 
         assert_eq!(post(port, "GET", ATTENTION_ROUTE, b""), 404);
         assert_eq!(post(port, "POST", "/nope", b"{}"), 404);
-        let oversized = vec![b' '; 65 * 1024];
-        assert_eq!(post(port, "POST", ATTENTION_ROUTE, &oversized), 413);
+        let at_cap = vec![b' '; 64 * 1024];
+        assert_eq!(post(port, "POST", ATTENTION_ROUTE, &at_cap), 200);
+        let over_cap = vec![b' '; 64 * 1024 + 1];
+        assert_eq!(post(port, "POST", ATTENTION_ROUTE, &over_cap), 413);
 
         let payload = format!(
             r#"{{ "session_id": "{SESSION}", "hook_event_name": "PreToolUse", "tool_input": {{"a": [1, 2.50]}} }}"#
