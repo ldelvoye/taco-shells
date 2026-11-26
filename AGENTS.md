@@ -83,11 +83,14 @@ cargo xtask run      # build both programs and start the app from target/
 cargo xtask bundle   # the .app into target/bundle.noindex/; --release, --stable, --zip
 cargo xtask install  # release build of Taco Shells Dev, into /Applications
 cargo xtask smoke    # the tests that drive the real app, against a development bundle
+cargo xtask rehearse-update --until-ready  # the Electron Dev build taking the Rust app as an update, on a throwaway config
 ```
 
 **`cargo xtask` is the Rust app's build scripts**, a program in `xtask/` run through the alias in `.cargo/config.toml`. It uses no Node. A bundle holds `taco-shells` and `taco-shells-runtime` side by side in `Contents/MacOS/`, with the icon, `hooks/` and `update-helper.sh` in `Contents/Resources/`. Its `CFBundleShortVersionString` is always a plain `X.Y.Z`, because the updater reads it: the tag the build is on, or the last tag before it. `CFBundleVersion` holds what `git describe` says. `--stable` sets `TACO_SHELLS_CHANNEL=stable` for the build, which `services` reads at compile time. `install` refuses while the app runs, and moves the copy it replaces to the Trash.
 
 **Taco Shells Dev is the Rust app once `cargo xtask install` has run.** `npm run install-app` would put the Electron build back over it, and both use `~/.taco-shells-dev`.
+
+**`cargo xtask rehearse-update` proves the first stable Rust release can arrive through the Electron app's updater**, on the dev identity. It copies an Electron Dev build to `/Applications/Taco Shells Rehearsal.app` (the updater works only under `/Applications`), points it at a local feed serving a Rust Dev bundle as version 999.0.0, and runs it on a throwaway config under `target/rehearsal.noindex/`. With `--until-ready` it stops once the update is downloaded and unpacked, and needs no one at the keyboard; that is the only mode for now. Clicking through to the Rust app waits for a config directory compiled into the dev build, because the update script reopens the app with `open`, which passes it no environment. The copy shares the Dev app's bundle id, so it is removed at the end of every run and must not be left in `/Applications`: LaunchServices would pick between the two.
 
 **CI checks the Rust app on every pull request that touches it** (`.github/workflows/rust.yml`): `cargo fmt --check`, `clippy` with every warning an error, and `cargo test`, which fails if the run takes over 20 s once compiled. Nothing in `cargo test` opens a window, starts the app or sleeps on a timer. The toolchain is pinned in `rust-toolchain.toml`, and the profiles in the root `Cargo.toml`.
 
