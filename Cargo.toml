@@ -20,3 +20,10 @@ taco-terminal-view = { path = "crates/terminal-view" }
 taco-app = { path = "crates/app" }
 
 serde = { version = "1", features = ["derive"] }
+
+# Debug info is most of a gpui build's size and link time; line tables keep backtraces readable.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

@@ -73,6 +73,16 @@ npm run measure      # builds, then opens many terminals in the real app and rep
 
 **`npm test` never launches anything.** The e2e suite covers only what the unit tests structurally cannot: that a chord reaches a registered command, that the command reaches the screen, and what the built bundle contains. Do not restate the model there — it is slow and buys nothing.
 
+For the Rust app, from the repo root:
+
+```sh
+cargo test           # every crate; under about 10 s once compiled
+cargo fmt --all      # CI fails on anything rustfmt would change
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+**CI checks the Rust app on every pull request that touches it** (`.github/workflows/rust.yml`): `cargo fmt --check`, `clippy` with every warning an error, and `cargo test`, which fails if the run takes over 20 s once compiled. Nothing in `cargo test` opens a window, starts the app or sleeps on a timer. The toolchain is pinned in `rust-toolchain.toml`, and the profiles in the root `Cargo.toml`.
+
 **`npm run measure` is run by hand, never by CI.** It shows a strip of a window at the right edge of the rightmost display for about a minute, uses the e2e suite's debug port so the two cannot run together, and its numbers and how to read them are in `scripts/measure/README.md`.
 
 ## Two apps, and which one a build becomes
@@ -127,6 +137,8 @@ v0.2.2     cleanup, then promoted
 ```
 
 **The version comes from the commits.** `bumpFor` in `scripts/version.mjs` reads the messages since the last tag: a `feat:` is a minor, anything else a patch, a `!` or `BREAKING CHANGE` a major — **except below 1.0.0, where it moves the minor instead**, because reaching 1.0.0 should be a decision rather than something a `feat!:` does on your behalf. `version.test.mjs` pins all of it.
+
+**The Rust app has no versions of its own yet.** Until it replaces this one, a commit that touches only the Rust app (`crates/`, `xtask/`, `smoke/`, the Cargo files, `rust-toolchain.toml`, `rust.yml`) picks no version and is left out of the notes: `main.yml` skips a push of only those, and `OUTSIDE_THE_RUST_APP` in `scripts/repo.mjs` leaves them out of the log. When it does replace this one, it carries on the same line of tags, because `install.sh` and this app's updater both read it.
 
 **Tags are the source of truth. `package.json`'s version is not** — it sits at `0.0.0` and is read only as a floor before the first tag exists. This was chosen over a `chore(release):` commit per merge so main's history stays the commits someone actually wrote. The cost is that `electron-builder.js` overrides `bundleShortVersion`, `bundleVersion` and `artifactName`, which would otherwise all come from package.json.
 

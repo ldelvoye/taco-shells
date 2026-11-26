@@ -23,3 +23,20 @@ updates:
         update-types:
           - minor
           - patch
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore
+    # A week's wait, so a release that turns out to be compromised is pulled before it reaches us.
+    cooldown:
+      default-days: 7
+    groups:
+      minor-and-patch:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
