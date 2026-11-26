@@ -141,6 +141,7 @@ fn build_zip(work: &Path) -> Result<PathBuf, String> {
         channel: Channel::Development,
         zip: false,
         icon: false,
+        drive: false,
     };
     let bundled = bundle::create(&options)?;
     let zip = work.join(zip_name());

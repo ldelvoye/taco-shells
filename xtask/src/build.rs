@@ -9,6 +9,7 @@ pub const APP_EXECUTABLE: &str = "taco-shells";
 pub const RUNTIME_EXECUTABLE: &str = "taco-shells-runtime";
 const APP_PACKAGE: &str = "taco-app";
 const RUNTIME_PACKAGE: &str = "taco-runtime";
+const DRIVE_FEATURE: &str = "taco-app/drive";
 
 #[derive(Clone, Copy)]
 pub enum Profile {
@@ -31,12 +32,15 @@ pub enum Channel {
     Stable,
 }
 
-pub fn binaries(profile: Profile, channel: Channel) -> Result<PathBuf, String> {
+pub fn binaries(profile: Profile, channel: Channel, drive: bool) -> Result<PathBuf, String> {
+    if drive && matches!(channel, Channel::Stable) {
+        return Err("the test driver is never built into the stable app".to_string());
+    }
     let repo_root = repo::root()?;
     let target = repo::target_dir()?;
     let program = repo::cargo_program();
 
-    let mut cargo = cargo_command(program, profile, channel, &target);
+    let mut cargo = cargo_command(program, profile, channel, drive, &target);
     cargo.current_dir(&repo_root);
     repo::run(&mut cargo)?;
 
@@ -47,10 +51,14 @@ fn cargo_command(
     program: OsString,
     profile: Profile,
     channel: Channel,
+    drive: bool,
     target_dir: &Path,
 ) -> Command {
     let mut cargo = Command::new(program);
     cargo.args(["build", "-p", APP_PACKAGE, "-p", RUNTIME_PACKAGE]);
+    if drive {
+        cargo.args(["--features", DRIVE_FEATURE]);
+    }
     cargo.arg("--target-dir");
     cargo.arg(target_dir);
     match profile {
@@ -93,12 +101,14 @@ mod tests {
             OsString::from("cargo"),
             Profile::Debug,
             Channel::Development,
+            false,
             target,
         );
         let stable = cargo_command(
             OsString::from("cargo"),
             Profile::Debug,
             Channel::Stable,
+            false,
             target,
         );
 

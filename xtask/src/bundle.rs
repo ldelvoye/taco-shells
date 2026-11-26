@@ -14,6 +14,7 @@ pub struct Options {
     pub channel: Channel,
     pub zip: bool,
     pub icon: bool,
+    pub drive: bool,
 }
 
 pub struct Bundled {
@@ -37,7 +38,7 @@ pub fn create(options: &Options) -> Result<Bundled, String> {
         Channel::Development => &DEVELOPMENT,
     };
 
-    let binaries = build::binaries(options.profile, options.channel)?;
+    let binaries = build::binaries(options.profile, options.channel, options.drive)?;
 
     let target = repo::target_dir()?;
     // Spotlight skips a folder ending in .noindex, so the build is not listed as a second copy of the app.

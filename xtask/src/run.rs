@@ -3,7 +3,7 @@ use std::process::{self, Command};
 use crate::build::{self, APP_EXECUTABLE, Channel, Profile};
 
 pub fn run(arguments: &[String]) -> Result<(), String> {
-    let binaries = build::binaries(Profile::Debug, Channel::Development)?;
+    let binaries = build::binaries(Profile::Debug, Channel::Development, false)?;
     let app = binaries.join(APP_EXECUTABLE);
 
     let mut command = Command::new(&app);
