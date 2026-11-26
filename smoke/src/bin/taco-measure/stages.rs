@@ -200,11 +200,17 @@ fn open_terminals(driver: &mut Driver, wanted: usize) -> Result<(), String> {
     }
 }
 
+// Ends once the terminal's view answers: only eight are kept, and one brought back attaches after its snapshot
+// arrives, so text typed before that would be lost.
 fn select(driver: &mut Driver, target: usize) -> Result<(), String> {
     loop {
         let current = rows(driver)?;
         if current.selected == target {
-            return Ok(());
+            let terminal = current.terminals[target].clone();
+            return wait_for("the terminal's view", STEP_DEADLINE, NO_PAUSE, || {
+                let screen = driver.screen_text(&terminal)?;
+                Ok(screen.is_some())
+            });
         }
         let key = if target > current.selected {
             NEXT_ROW
@@ -218,6 +224,15 @@ fn select(driver: &mut Driver, target: usize) -> Result<(), String> {
             Ok(after.selected != from)
         })?;
     }
+}
+
+fn processes_running(command_line: &str) -> Result<usize, String> {
+    let output = Command::new("pgrep")
+        .args(["-f", command_line])
+        .output()
+        .map_err(|error| format!("could not run pgrep: {error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout.lines().count())
 }
 
 fn newest(driver: &mut Driver) -> Result<(usize, TerminalId), String> {
@@ -285,6 +300,13 @@ fn type_while_printing(driver: &mut Driver, flags: &Flags) -> Result<Vec<f64>, S
     let (newest_index, terminal) = newest(driver)?;
     select(driver, newest_index)?;
     thread::sleep(FLOOD_WARMUP);
+    let printing = processes_running(&format!("yes {filler}"))?;
+    if printing < flags.flooding {
+        return Err(format!(
+            "{printing} of the {} printing terminals are running yes",
+            flags.flooding
+        ));
+    }
 
     let window = Duration::from_secs(flags.flood_seconds);
     let end = Instant::now() + window;
