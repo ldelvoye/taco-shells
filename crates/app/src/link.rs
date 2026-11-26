@@ -1,11 +1,48 @@
-//! The window's side of its contract with the workspace: requests out, published states in.
+//! The window's side of its contracts: requests out to the workspace, and everything sent back to the window's thread.
 
-use taco_protocol::{DrawnState, TerminalId, WorkspaceRequest};
+use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
+use taco_protocol::{
+    ActivityEvent, ActivityRequest, DrawnState, RequestReply, TerminalId, WorkspaceRequest,
+};
 use taco_rules::{locate_row, select_row};
+use taco_services::AgentSetupView;
+use taco_settings::Config;
+
+pub type WindowSender = UnboundedSender<WindowOutput>;
+pub type WindowReceiver = UnboundedReceiver<WindowOutput>;
 
 /// Where the window sends what the user did. The workspace answers by publishing a new state.
 pub trait WorkspacePort {
-    fn send(&self, request: WorkspaceRequest);
+    /// `token`, when given, comes back in `WindowOutput::Replied`, after the state that holds the request's effect.
+    fn send(&self, request: WorkspaceRequest, token: Option<u64>);
+    fn activity(&self, request: ActivityRequest);
+}
+
+/// What the services send the window.
+pub enum ServicesOutput {
+    Config(Config),
+    Setups(AgentSetupView),
+    UpdateReady {
+        version: String,
+    },
+    UpdateProblem(String),
+    /// A problem the window shows as a banner, such as every focus port being taken.
+    Problem(String),
+    /// The downloaded update is waiting for this app to quit, which goes the way `cmd+q` does.
+    QuitForUpdate,
+}
+
+/// Everything sent to the window's thread, in the order it is applied.
+pub enum WindowOutput {
+    State(DrawnState),
+    Replied {
+        token: u64,
+        reply: RequestReply,
+    },
+    Activity(ActivityEvent),
+    /// The last terminal has gone, which ends the app.
+    Emptied,
+    Services(ServicesOutput),
 }
 
 /// A focus move the window made that the workspace has not applied yet.

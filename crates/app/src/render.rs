@@ -53,9 +53,9 @@ pub fn render_png(
     let window = cx.open_window(image_size, |_, cx| {
         let shown = fixture.shown();
         let look = Look::new(appearance);
-        let (port, published) = StandIn::start(shown.drawn.clone());
+        let (port, outputs) = StandIn::start(shown.drawn.clone());
         let lights = TrafficLights::StandIns;
-        cx.new(|cx| WindowView::new(shown, look, trial, lights, port, published, cx))
+        cx.new(|cx| WindowView::new(shown, look, trial, lights, port, outputs, cx))
     })?;
     let any_window = window.into();
     draw(&mut cx, any_window)?;

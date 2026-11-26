@@ -3,29 +3,31 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
-use taco_protocol::{Arrangement, DrawnState, TerminalId, WorkspaceRequest};
+use futures::channel::mpsc::unbounded;
+use taco_protocol::{
+    ActivityRequest, Arrangement, DrawnState, RequestReply, TerminalId, WorkspaceRequest,
+};
 use taco_rules::{add_row_to, apply_drop, close_row, select_row, toggle_tab_group};
 
-use crate::link::WorkspacePort;
+use crate::link::{WindowOutput, WindowReceiver, WindowSender, WorkspacePort};
 
 pub struct StandIn {
     state: RefCell<DrawnState>,
-    publisher: UnboundedSender<DrawnState>,
+    window: WindowSender,
     opened: Cell<u64>,
 }
 
 impl StandIn {
-    /// The port the window sends to, and the states it is published back.
-    pub fn start(state: DrawnState) -> (Rc<dyn WorkspacePort>, UnboundedReceiver<DrawnState>) {
-        let (publisher, published) = unbounded();
+    /// The port the window sends to, and what it is sent back.
+    pub fn start(state: DrawnState) -> (Rc<dyn WorkspacePort>, WindowReceiver) {
+        let (window, outputs) = unbounded();
         let stand_in = Self {
             state: RefCell::new(state),
-            publisher,
+            window,
             opened: Cell::new(0),
         };
         let port: Rc<dyn WorkspacePort> = Rc::new(stand_in);
-        (port, published)
+        (port, outputs)
     }
 
     fn new_terminal(&self) -> TerminalId {
@@ -33,10 +35,8 @@ impl StandIn {
         self.opened.set(number);
         TerminalId(format!("opened-{number}"))
     }
-}
 
-impl WorkspacePort for StandIn {
-    fn send(&self, request: WorkspaceRequest) {
+    fn apply(&self, request: WorkspaceRequest) -> bool {
         let mut state = self.state.borrow_mut();
         let changed = match request {
             WorkspaceRequest::FocusReported { terminal, count } => {
@@ -68,14 +68,36 @@ impl WorkspacePort for StandIn {
             // The stand-in answers only what the list sends.
             _ => false,
         };
-        if !changed {
-            return;
+        if changed {
+            state.revision += 1;
+            let snapshot = state.clone();
+            self.publish(WindowOutput::State(snapshot));
         }
-        state.revision += 1;
-        let snapshot = state.clone();
-        // A send fails only once the window is gone, when there is nothing left to draw.
-        let _ = self.publisher.unbounded_send(snapshot);
+        changed
     }
+
+    // A send fails only once the window is gone, when there is nothing left to draw.
+    fn publish(&self, output: WindowOutput) {
+        let _ = self.window.unbounded_send(output);
+    }
+}
+
+impl WorkspacePort for StandIn {
+    fn send(&self, request: WorkspaceRequest, token: Option<u64>) {
+        let ok = self.apply(request);
+        let Some(token) = token else {
+            return;
+        };
+        let revision = self.state.borrow().revision;
+        let reply = RequestReply {
+            ok,
+            tab_group: None,
+            revision,
+        };
+        self.publish(WindowOutput::Replied { token, reply });
+    }
+
+    fn activity(&self, _request: ActivityRequest) {}
 }
 
 fn rearrange(

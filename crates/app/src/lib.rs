@@ -3,7 +3,7 @@
 mod assets;
 mod banners;
 mod fixture;
-mod link;
+pub mod link;
 mod look;
 mod panels;
 mod platform;
@@ -87,7 +87,7 @@ fn open_window(fixture: Fixture, cx: &mut App) {
         let appearance = appearance_of(window.appearance());
         let look = Look::new(appearance);
         let shown = fixture.shown();
-        let (port, published) = StandIn::start(shown.drawn.clone());
+        let (port, outputs) = StandIn::start(shown.drawn.clone());
         cx.new(|cx| {
             let follow =
                 cx.observe_window_appearance(window, |view: &mut WindowView, window, cx| {
@@ -98,7 +98,7 @@ fn open_window(fixture: Fixture, cx: &mut App) {
             follow.detach();
             let trial = Trial::default();
             let lights = TrafficLights::Native;
-            WindowView::new(shown, look, trial, lights, port, published, cx)
+            WindowView::new(shown, look, trial, lights, port, outputs, cx)
         })
     });
     if let Err(error) = opened {
@@ -107,7 +107,7 @@ fn open_window(fixture: Fixture, cx: &mut App) {
     }
 }
 
-fn appearance_of(system: WindowAppearance) -> Appearance {
+pub(crate) fn appearance_of(system: WindowAppearance) -> Appearance {
     match system {
         WindowAppearance::Light | WindowAppearance::VibrantLight => Appearance::Light,
         WindowAppearance::Dark | WindowAppearance::VibrantDark => Appearance::Dark,
