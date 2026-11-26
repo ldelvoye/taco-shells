@@ -29,5 +29,7 @@ postcard = { version = "1", default-features = false, features = ["use-std"] }
 [profile.dev]
 debug = "line-tables-only"
 
+# At opt-level 0 gpui takes about 50 ms to draw a full screen of styled text, against 3 ms at 2.
 [profile.dev.package."*"]
 debug = false
+opt-level = 2
