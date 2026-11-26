@@ -1,11 +1,11 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, App, AppContext, Context, Div, DragMoveEvent, Easing, ElementId, FontWeight,
-    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels, Point,
-    Render, SharedString, Stateful, StatefulInteractiveElement, Styled, TimedTransformation,
-    Transformation, Window, div, px, size, svg, transparent_black,
+    Animation, AnimationExt, AnyElement, App, AppContext, Context, Div, DragMoveEvent, Easing,
+    ElementId, FontWeight, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
+    ParentElement, Pixels, Point, Render, SharedString, Stateful, StatefulInteractiveElement,
+    Styled, TimedTransformation, Transformation, Window, div, px, size, svg, transparent_black,
 };
 use taco_protocol::{
     AgentRow, Arrangement, Dragged, DrawnState, Row, RowState, TabGroup, TabGroupId, TerminalId,
@@ -13,6 +13,7 @@ use taco_protocol::{
 use taco_rules::{DropMark, DropPoint, MarkEdge, MarkTarget, summary_state};
 
 use crate::assets::{DONE_ICON, PLUS_ICON, RIPPLE_ICON, TRASH_ICON, WORKING_ICON};
+use crate::done_checks::DRAW_TIME;
 use crate::drive;
 use crate::look::{FONT_FAMILY, Look, MARK_SIZE, ROW_HEIGHT, ROW_RADIUS, TEXT_SIZE, TRAY_RADIUS};
 use crate::window::WindowView;
@@ -55,6 +56,8 @@ pub struct ListInput<'a> {
     pub drawn: &'a DrawnState,
     pub mark: Option<&'a DropMark>,
     pub look: &'a Look,
+    /// The rows whose done check is still drawing itself.
+    pub drawing_checks: &'a HashSet<TerminalId>,
 }
 
 impl Render for DragPreview {
@@ -328,7 +331,7 @@ fn row_element(
         .h(px(ROW_HEIGHT))
         .px(px(8.))
         .rounded(px(ROW_RADIUS))
-        .child(state_mark(state, look))
+        .child(row_mark(state, &row.terminal, input))
         .child(name)
         .child(close_button(&row.terminal, look, cx));
     if selected {
@@ -484,6 +487,45 @@ pub fn state_mark(state: Option<RowState>, look: &Look) -> AnyElement {
         }
         Some(RowState::Idle) | None => place.into_any_element(),
     }
+}
+
+// gpui draws a one-shot animation finished at once, with no frames, under Reduce Motion.
+fn row_mark(state: Option<RowState>, terminal: &TerminalId, input: &ListInput) -> AnyElement {
+    let just_done = state == Some(RowState::Done) && input.drawing_checks.contains(terminal);
+    if just_done {
+        return drawing_check(terminal, input.look);
+    }
+    state_mark(state, input.look)
+}
+
+// The site's ts-draw: the check's stroke runs left to right, so revealing it from the left draws it.
+fn drawing_check(terminal: &TerminalId, look: &Look) -> AnyElement {
+    let check = svg()
+        .path(DONE_ICON)
+        .flex_none()
+        .size(px(MARK_SIZE))
+        .text_color(look.done);
+    let reveal = div()
+        .flex_none()
+        .h(px(MARK_SIZE))
+        .overflow_hidden()
+        .child(check);
+    let id = element_id("drawing-check", &terminal.0);
+    let draw = Animation::new(DRAW_TIME)
+        .with_easing(ease_out)
+        .with_max_fps(MARK_FPS);
+    let drawing = reveal.with_animation(id, draw, |reveal, delta| reveal.w(px(MARK_SIZE * delta)));
+    div()
+        .flex_none()
+        .size(px(MARK_SIZE))
+        .child(drawing)
+        .into_any_element()
+}
+
+// CSS's ease-out, which the site's check uses.
+fn ease_out(delta: f32) -> f32 {
+    let left = 1. - delta;
+    1. - left * left
 }
 
 // The site's needs-you ripple: a copy of the dot that grows to 2.8 times its size as it fades from half to nothing.

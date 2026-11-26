@@ -3,6 +3,7 @@
 mod activity;
 mod assets;
 mod banners;
+mod done_checks;
 pub mod drive;
 #[cfg(feature = "render")]
 mod fixture;
