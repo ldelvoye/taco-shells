@@ -110,8 +110,7 @@ fn update_banner(version: &str, problem: Option<&str>) -> Banner {
     }
 }
 
-/// The banners as a stack of cards in the middle's top-right corner, drawn over the terminal.
-/// The cards, `below` pixels down from the top of the middle so they never cover a page's header.
+/// The banners as a stack of cards in the middle's top-right corner, `below` pixels down so they never cover a page's header.
 pub fn banner_cards(
     banners: &[Banner],
     below: f32,
