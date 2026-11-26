@@ -5,6 +5,7 @@ use std::path::Path;
 use serde_json::{Map, Value, json};
 
 pub const RECORD_FILE: &str = "agents.json";
+pub const UNREADABLE_RECORD_FILE: &str = "agents.unreadable.json";
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct AgentRecord {
@@ -12,16 +13,43 @@ pub struct AgentRecord {
     pub written: Vec<String>,
 }
 
-fn read_record_file(config_directory: &Path) -> Map<String, Value> {
+enum RecordFile {
+    Missing,
+    Read(Map<String, Value>),
+    Unreadable(String),
+}
+
+fn load_record_file(config_directory: &Path) -> RecordFile {
     let path = config_directory.join(RECORD_FILE);
     let Ok(text) = fs::read_to_string(path) else {
-        return Map::new();
+        return RecordFile::Missing;
     };
     let parsed = serde_json::from_str::<Value>(&text);
     match parsed {
-        Ok(Value::Object(file)) => file,
-        _ => Map::new(),
+        Ok(Value::Object(file)) => RecordFile::Read(file),
+        _ => RecordFile::Unreadable(text),
     }
+}
+
+fn read_record_file(config_directory: &Path) -> Map<String, Value> {
+    let loaded = load_record_file(config_directory);
+    match loaded {
+        RecordFile::Read(file) => file,
+        RecordFile::Missing | RecordFile::Unreadable(_) => Map::new(),
+    }
+}
+
+fn replace_record_file(config_directory: &Path, text: &str) -> io::Result<()> {
+    let path = config_directory.join(RECORD_FILE);
+    let process = std::process::id();
+    let temporary_name = format!(".{RECORD_FILE}.{process}.taco-tmp");
+    let temporary = config_directory.join(temporary_name);
+    let written = fs::write(&temporary, text);
+    let renamed = written.and_then(|()| fs::rename(&temporary, &path));
+    if renamed.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    renamed
 }
 
 fn record_of(entry: &Value) -> Option<AgentRecord> {
@@ -54,14 +82,24 @@ pub fn write_agent_record(
     harness_id: &str,
     record: &AgentRecord,
 ) -> io::Result<()> {
-    let mut file = read_record_file(config_directory);
+    fs::create_dir_all(config_directory)?;
+    let loaded = load_record_file(config_directory);
+    let mut file = match loaded {
+        RecordFile::Read(file) => file,
+        RecordFile::Missing => Map::new(),
+        RecordFile::Unreadable(text) => {
+            // Kept beside it before it is replaced, so the other agents' records are not lost without a trace.
+            let aside = config_directory.join(UNREADABLE_RECORD_FILE);
+            fs::write(aside, text)?;
+            Map::new()
+        }
+    };
     let entry = json!({ "declined": record.declined, "written": record.written });
     file.insert(harness_id.to_string(), entry);
 
-    fs::create_dir_all(config_directory)?;
-    let path = config_directory.join(RECORD_FILE);
     let text = serde_json::to_string_pretty(&file)?;
-    fs::write(path, format!("{text}\n"))
+    let with_newline = format!("{text}\n");
+    replace_record_file(config_directory, &with_newline)
 }
 
 #[cfg(test)]
@@ -94,6 +132,26 @@ mod tests {
         fs::write(&path, "not json").unwrap();
         let from_broken_file = read_agent_record(&directory, "claude");
         assert_eq!(from_broken_file, AgentRecord::default());
+
+        let aside = directory.join(UNREADABLE_RECORD_FILE);
+        assert!(!aside.exists());
+        write_agent_record(&directory, "claude", &claude).unwrap();
+        let kept = fs::read_to_string(&aside).unwrap();
+        assert_eq!(kept, "not json");
+        let after_rewrite = read_agent_record(&directory, "claude");
+        assert_eq!(after_rewrite, claude);
+        fs::remove_file(&aside).unwrap();
+        write_agent_record(&directory, "other", &other).unwrap();
+        assert!(!aside.exists());
+        let names: Vec<String> = fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        let leftovers: Vec<&String> = names
+            .iter()
+            .filter(|name| name.ends_with("taco-tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
 
         fs::write(&path, r#"{"claude": {"declined": "yes", "written": []}}"#).unwrap();
         let from_bad_entry = read_agent_record(&directory, "claude");
