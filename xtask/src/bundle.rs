@@ -13,6 +13,7 @@ pub struct Options {
     pub profile: Profile,
     pub channel: Channel,
     pub zip: bool,
+    pub icon: bool,
 }
 
 pub struct Bundled {
@@ -37,7 +38,6 @@ pub fn create(options: &Options) -> Result<Bundled, String> {
     };
 
     let binaries = build::binaries(options.profile, options.channel)?;
-    let icon = ensure_icon(&repo_root, identity)?;
 
     let target = repo::target_dir()?;
     // Spotlight skips a folder ending in .noindex, so the build is not listed as a second copy of the app.
@@ -58,7 +58,10 @@ pub fn create(options: &Options) -> Result<Bundled, String> {
     for executable in EXECUTABLES {
         copy_file(&binaries.join(executable), &macos.join(executable))?;
     }
-    copy_file(&icon, &resources.join("icon.icns"))?;
+    if options.icon {
+        let icon = ensure_icon(&repo_root, identity)?;
+        copy_file(&icon, &resources.join("icon.icns"))?;
+    }
     copy_dir(&repo_root.join("hooks"), &resources.join("hooks"))?;
     let helper = repo_root.join("resources").join("update-helper.sh");
     copy_file(&helper, &resources.join("update-helper.sh"))?;

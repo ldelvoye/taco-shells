@@ -5,6 +5,7 @@ mod identity;
 mod install;
 mod repo;
 mod run;
+mod smoke;
 mod version;
 
 use std::env;
@@ -13,7 +14,7 @@ use std::process::ExitCode;
 use build::{Channel, Profile};
 use bundle::Options;
 
-const USAGE: &str = "usage: cargo xtask <run [-- <app args>] | bundle [--release] [--stable] [--zip] | install | ghostty-bindings>";
+const USAGE: &str = "usage: cargo xtask <run [-- <app args>] | bundle [--release] [--stable] [--zip] | install | smoke | ghostty-bindings>";
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = env::args().skip(1).collect();
@@ -31,6 +32,7 @@ fn main() -> ExitCode {
             None => return usage(),
         },
         "install" if rest.is_empty() => install::run(),
+        "smoke" if rest.is_empty() => smoke::run(),
         "ghostty-bindings" if rest.is_empty() => ghostty_bindings::run(),
         _ => return usage(),
     };
@@ -62,6 +64,7 @@ fn bundle_options(rest: &[String]) -> Option<Options> {
         profile: Profile::Debug,
         channel: Channel::Development,
         zip: false,
+        icon: true,
     };
     for argument in rest {
         match argument.as_str() {
