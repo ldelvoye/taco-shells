@@ -16,14 +16,11 @@ use taco_protocol::{HookCall, HookMessage};
 pub const FOCUS_PORTS: std::ops::RangeInclusive<u16> = 23456..=23460;
 
 const UPDATE_CHECK_ROUTE: &str = "/update/check";
-// /attention only marks a terminal as waiting, while /focus-tab switches to it.
-const FOCUS_TAB_ROUTE: &str = "/focus-tab";
 const ATTENTION_ROUTE: &str = "/attention";
 const AGENT_START_ROUTE: &str = "/agent-session/start";
 const AGENT_END_ROUTE: &str = "/agent-session/end";
 const AGENT_STATE_ROUTE: &str = "/agent-session/state";
 const AGENT_HOOK_ROUTE: &str = "/agent-session/hook";
-const AGENT_ROUTE_PREFIX: &str = "/agent-session/";
 
 const SMALL_BODY_CAP: u64 = 64 * 1024;
 const AGENT_HOOK_BODY_CAP: u64 = 16 * 1024 * 1024;
@@ -176,6 +173,15 @@ fn handle(
         return;
     }
 
+    // A browser sends Origin on every cross-origin POST and curl never does, and only our scripts and promote call this port.
+    if head.has_origin {
+        let drained = drain_body(&mut stream, leftover.len(), head.content_length, deadline);
+        if drained {
+            respond(&mut stream, 403);
+        }
+        return;
+    }
+
     if head.route == UPDATE_CHECK_ROUTE {
         respond(&mut stream, 200);
         on_event(ListenerEvent::UpdateCheck);
@@ -188,16 +194,6 @@ fn handle(
     };
     if head.chunked {
         respond(&mut stream, 400);
-        return;
-    }
-
-    // A browser sends Origin on every cross-origin POST and curl never does: a web page must not reach an agent's log.
-    let is_agent_route = head.route.starts_with(AGENT_ROUTE_PREFIX);
-    if is_agent_route && head.has_origin {
-        let drained = drain_body(&mut stream, leftover.len(), head.content_length, deadline);
-        if drained {
-            respond(&mut stream, 403);
-        }
         return;
     }
 
@@ -349,8 +345,9 @@ fn respond(stream: &mut TcpStream, status: u16) {
 fn body_cap(route: &str) -> Option<u64> {
     match route {
         AGENT_HOOK_ROUTE => Some(AGENT_HOOK_BODY_CAP),
-        FOCUS_TAB_ROUTE | ATTENTION_ROUTE | AGENT_START_ROUTE | AGENT_END_ROUTE
-        | AGENT_STATE_ROUTE => Some(SMALL_BODY_CAP),
+        ATTENTION_ROUTE | AGENT_START_ROUTE | AGENT_END_ROUTE | AGENT_STATE_ROUTE => {
+            Some(SMALL_BODY_CAP)
+        }
         _ => None,
     }
 }
@@ -418,7 +415,6 @@ fn read_pids(value: &Value) -> Option<Vec<u32>> {
 
 fn call_for(route: &str, object: &Map<String, Value>) -> Option<HookCall> {
     match route {
-        FOCUS_TAB_ROUTE => Some(HookCall::FocusTab),
         ATTENTION_ROUTE => Some(HookCall::Attention),
         _ => agent_call(route, object),
     }
@@ -572,17 +568,15 @@ mod tests {
         assert_eq!(status, 200);
         assert_eq!(next_event(&receiver), ListenerEvent::UpdateCheck);
 
-        post(port, "POST", ATTENTION_ROUTE, br#"{"pids":[4,5]}"#);
-        let attention = next_event(&receiver);
-        assert_eq!(attention, hook(vec![4, 5], HookCall::Attention));
         post(
             port,
             "POST",
-            FOCUS_TAB_ROUTE,
-            br#"{"pids":[4,"x",-1,5.5,99999999999]}"#,
+            ATTENTION_ROUTE,
+            br#"{"pids":[4,"x",-1,5.5,99999999999,5]}"#,
         );
-        let focus = next_event(&receiver);
-        assert_eq!(focus, hook(vec![4], HookCall::FocusTab));
+        let attention = next_event(&receiver);
+        assert_eq!(attention, hook(vec![4, 5], HookCall::Attention));
+        assert_eq!(post(port, "POST", "/focus-tab", br#"{"pids":[4]}"#), 404);
 
         let start = format!(
             r#"{{"pids":[1],"harness":"claude","sessionId":"{SESSION}","cwd":"/tmp/work","hasConversation":true}}"#
@@ -677,6 +671,16 @@ mod tests {
             hook_body.as_bytes(),
         );
         assert_eq!(refused, 403);
+        let page_attention = post_with(
+            port,
+            "POST",
+            ATTENTION_ROUTE,
+            from_a_page,
+            br#"{"pids":[6]}"#,
+        );
+        assert_eq!(page_attention, 403);
+        let page_check = post_with(port, "POST", UPDATE_CHECK_ROUTE, from_a_page, b"");
+        assert_eq!(page_check, 403);
         post(port, "POST", ATTENTION_ROUTE, br#"{"pids":[8]}"#);
         let after_page = next_event(&receiver);
         assert_eq!(after_page, hook(vec![8], HookCall::Attention));
