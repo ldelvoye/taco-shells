@@ -1,12 +1,11 @@
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 
 use taco_settings::{SettingChange, set_top_level};
 
-use crate::file_write::{real_file_of, replace_file};
+use crate::file_write::{read_text, write_if_unchanged};
 
 const SETTINGS_LABEL: &str = "settings.json";
 
@@ -18,27 +17,24 @@ pub struct SettingsWriter {
     thread: Option<JoinHandle<()>>,
 }
 
-fn read_fresh(path: &Path) -> Result<Option<String>, String> {
-    let read = fs::read_to_string(path);
-    match read {
-        Ok(text) => Ok(Some(text)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(format!("{SETTINGS_LABEL} could not be read: {error}")),
+fn refuse_read_only(path: &Path) -> Result<(), String> {
+    let metadata = fs::metadata(path);
+    match metadata {
+        Ok(found) if found.permissions().readonly() => Err(format!(
+            "{SETTINGS_LABEL} is read-only, so nothing was changed."
+        )),
+        _ => Ok(()),
     }
 }
 
 fn apply(path: &Path, change: &SettingChange) -> Result<(), String> {
     change.check()?;
-    let original = read_fresh(path)?;
+    refuse_read_only(path)?;
+    let original = read_text(path, SETTINGS_LABEL)?;
     let key = change.key();
     let value = change.value();
     let text = set_top_level(original.as_deref(), key, &value, SETTINGS_LABEL)?;
-    let real = real_file_of(path);
-    let written = real.and_then(|real| replace_file(&real, &text));
-    match written {
-        Ok(()) => Ok(()),
-        Err(error) => Err(format!("{SETTINGS_LABEL} could not be written: {error}")),
-    }
+    write_if_unchanged(path, SETTINGS_LABEL, original.as_deref(), &text)
 }
 
 fn write_loop(
@@ -47,7 +43,7 @@ fn write_loop(
     after_write: AfterWrite,
     on_refused: OnRefused,
 ) {
-    // One change at a time, each reading the file fresh, so changes asked quickly land in the order asked.
+    // One at a time, each reading the file fresh, so quick changes land in the order asked.
     for change in changes {
         let applied = apply(&path, &change);
         match applied {
@@ -179,6 +175,20 @@ mod tests {
         }
         let ordered = fs::read_to_string(&path).unwrap();
         assert_eq!(ordered, ORIGINAL.replace("12", "17"));
+
+        let mut read_only = fs::metadata(&path).unwrap().permissions();
+        read_only.set_readonly(true);
+        fs::set_permissions(&path, read_only).unwrap();
+        writer.write(SettingChange::FontSize(20.0));
+        expect_refused(&heard, "fontSize");
+        let protected = fs::read_to_string(&path).unwrap();
+        assert_eq!(protected, ORIGINAL.replace("12", "17"));
+
+        fs::remove_file(&path).unwrap();
+        writer.write(SettingChange::FontSize(20.0));
+        expect_written(&heard);
+        let created = fs::read_to_string(&path).unwrap();
+        assert_eq!(created, "{\n  \"fontSize\": 20\n}\n");
         writer.stop();
 
         let config = TempDir::new().unwrap();

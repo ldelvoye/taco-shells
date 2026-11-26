@@ -11,7 +11,7 @@ use crate::agent_hooks::{
 };
 use crate::agent_record::{AgentRecord, RECORD_FILE, read_agent_record, write_agent_record};
 use crate::agent_setup_state::{AgentSetupFacts, AgentSetupState, agent_setup_state_of};
-use crate::file_write::{real_file_of, replace_file};
+use crate::file_write::{read_text, write_if_unchanged};
 use crate::identity::CONFIG_DIRECTORY_VARIABLE;
 
 const HOOKS_DIRECTORY_NAME: &str = "hooks";
@@ -130,40 +130,13 @@ pub(crate) fn can_write_for(
 }
 
 fn read_settings(path: &Path) -> Result<Option<String>, String> {
-    let read = fs::read_to_string(path);
-    match read {
-        Ok(text) => Ok(Some(text)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => {
-            let shown = path.display();
-            Err(format!("{shown} could not be read: {error}"))
-        }
-    }
+    let shown = path.display().to_string();
+    read_text(path, &shown)
 }
 
 fn write_settings(path: &Path, original: Option<&str>, text: &str) -> Result<(), String> {
-    let current = read_settings(path);
-    let still_original = match &current {
-        Ok(found) => found.as_deref() == original,
-        Err(_) => false,
-    };
-    if !still_original {
-        let shown = path.display();
-        return Err(format!(
-            "{shown} changed while it was being edited, so nothing was changed."
-        ));
-    }
-
-    // Written to a temporary file beside the real file (a symlink's target) and renamed over it, so a crash never leaves it half-written and a symlink stays one.
-    let real = real_file_of(path);
-    let written = real.and_then(|real| replace_file(&real, text));
-    match written {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            let shown = path.display();
-            Err(format!("{shown} could not be written: {error}"))
-        }
-    }
+    let shown = path.display().to_string();
+    write_if_unchanged(path, &shown, original, text)
 }
 
 fn save_record(agent: &Agent, record: &AgentRecord) -> Result<(), String> {
