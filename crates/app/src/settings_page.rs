@@ -18,6 +18,20 @@ const OPEN_FILE_LABEL: &str = "Open settings.json";
 const FOOT_TEXT: &str = "Changes are written to settings.json and apply at once.";
 const FIELD_FONT: &str = "Menlo";
 const UNREAD_OPACITY: f32 = 0.45;
+const THEME_OPTIONS: [(&str, ThemeChoice); 3] = [
+    ("System", ThemeChoice::System),
+    ("Light", ThemeChoice::Light),
+    ("Dark", ThemeChoice::Dark),
+];
+const CURSOR_OPTIONS: [(&str, CursorStyle); 3] = [
+    ("Block", CursorStyle::Block),
+    ("Underline", CursorStyle::Underline),
+    ("Bar", CursorStyle::Bar),
+];
+const ROW_NAME_OPTIONS: [(&str, ShellRowName); 2] = [
+    ("Folder name", ShellRowName::Folder),
+    ("Short path", ShellRowName::Path),
+];
 const FONT_SIZE_STEP: f64 = 1.0;
 const SCROLL_SPEED_STEP: f64 = 1.0;
 const SCROLL_SPEED_MIN: f64 = 1.0;
@@ -89,8 +103,6 @@ pub struct SettingsInput<'a> {
     pub settings: &'a Settings,
     /// The config's problem lines; when there are any, a card at the top of the form shows them.
     pub problems: &'a [String],
-    /// The pages open, the top one drawn; more than one shows a back arrow.
-    pub depth: usize,
     /// The settings the file could not give, whose controls are drawn disabled.
     pub unread: &'a UnreadSettings,
     /// Why a setting's last write was refused, by its name in settings.json.
@@ -101,7 +113,7 @@ pub struct SettingsInput<'a> {
 struct Segment {
     label: &'static str,
     chosen: bool,
-    change: Option<SettingChange>,
+    change: SettingChange,
 }
 
 /// Nothing closes a terminal nobody can see, and anything that shows one closes the pages first.
@@ -111,15 +123,16 @@ pub fn over_page(command: CommandId) -> OverPage {
         CommandId::ConfigOpenSettings => OverPage::ToggleSettings,
         CommandId::TerminalNew
         | CommandId::TerminalFocusNextGroup
-        | CommandId::TerminalFocusPreviousGroup => OverPage::ShowTerminal,
-        CommandId::SidebarToggle | CommandId::ConfigOpenKeybindings => OverPage::Run,
+        | CommandId::TerminalFocusPreviousGroup
+        | CommandId::ConfigOpenKeybindings => OverPage::ShowTerminal,
+        CommandId::SidebarToggle => OverPage::Run,
         _ => OverPage::PassOn,
     }
 }
 
 pub fn settings_page(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
     let look = input.look;
-    let header = header(input.depth, look, cx);
+    let header = header(look, cx);
     let form = form(input, cx);
     let body = div()
         .id(SCROLL_ID)
@@ -139,8 +152,8 @@ pub fn settings_page(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div
         .child(body)
 }
 
-fn header(depth: usize, look: &Look, cx: &mut Context<WindowView>) -> Div {
-    let mut header = div()
+fn header(look: &Look, cx: &mut Context<WindowView>) -> Div {
+    let header = div()
         .flex()
         .flex_none()
         .items_center()
@@ -149,11 +162,6 @@ fn header(depth: usize, look: &Look, cx: &mut Context<WindowView>) -> Div {
         .pr(px(HEADER_PADDING_RIGHT))
         .border_b_1()
         .border_color(look.hairline);
-    if depth > 1 {
-        let back = header_button("settings-back", "‹", look.veil, look.secondary_text, look);
-        let back = back.on_click(cx.listener(|view, _, _, cx| view.close_page(cx)));
-        header = header.child(back);
-    }
     let title = div()
         .text_size(px(TITLE_SIZE))
         .font_weight(FontWeight::SEMIBOLD)
@@ -239,7 +247,7 @@ fn problem_card(problems: &[String], look: &Look, cx: &mut Context<WindowView>) 
 fn look_group(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
     let settings = input.settings;
     let look = input.look;
-    let theme_options = theme_segments(settings.theme);
+    let theme_options = segments_of(&THEME_OPTIONS, settings.theme, SettingChange::Theme);
     let theme = segmented(theme_options, look, cx);
     let font = field_box(settings.font_family.clone(), look)
         .flex_1()
@@ -257,12 +265,12 @@ fn look_group(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
     );
     let theme_hint = Some("System follows this computer.");
     let font_hint = Some("The terminal’s font, first one found.");
-    let theme_now = SettingChange::Theme(settings.theme);
-    let font_now = SettingChange::FontFamily(settings.font_family.clone());
-    let size_now = SettingChange::FontSize(settings.font_size);
-    let theme_row = setting_row(&theme_now, "Theme", theme_hint, theme, input);
-    let font_row = setting_row(&font_now, "Font", font_hint, font, input);
-    let size_row = setting_row(&size_now, "Font size", None, size, input);
+    let theme_shown = SettingChange::Theme(settings.theme);
+    let font_shown = SettingChange::FontFamily(settings.font_family.clone());
+    let size_shown = SettingChange::FontSize(settings.font_size);
+    let theme_row = setting_row(&theme_shown, "Theme", theme_hint, theme, input);
+    let font_row = setting_row(&font_shown, "Font", font_hint, font, input);
+    let size_row = setting_row(&size_shown, "Font size", None, size, input);
     group("Look", look)
         .child(theme_row)
         .child(font_row)
@@ -272,7 +280,11 @@ fn look_group(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
 fn terminal_group(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
     let settings = input.settings;
     let look = input.look;
-    let cursor_options = cursor_segments(settings.cursor_style);
+    let cursor_options = segments_of(
+        &CURSOR_OPTIONS,
+        settings.cursor_style,
+        SettingChange::CursorStyle,
+    );
     let cursor = segmented(cursor_options, look, cx);
     let blink = switch(
         "cursor-blink",
@@ -294,20 +306,20 @@ fn terminal_group(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
     );
     let scrollback_hint = Some("Lines of history kept per terminal.");
     let speed_hint = Some("Lines per notch of the wheel.");
-    let cursor_now = SettingChange::CursorStyle(settings.cursor_style);
-    let blink_now = SettingChange::CursorBlink(settings.cursor_blink);
-    let scrollback_now = SettingChange::Scrollback(settings.scrollback);
-    let speed_now = SettingChange::ScrollSensitivity(settings.scroll_sensitivity);
-    let cursor_row = setting_row(&cursor_now, "Cursor", None, cursor, input);
-    let blink_row = setting_row(&blink_now, "Cursor blinks", None, blink, input);
+    let cursor_shown = SettingChange::CursorStyle(settings.cursor_style);
+    let blink_shown = SettingChange::CursorBlink(settings.cursor_blink);
+    let scrollback_shown = SettingChange::Scrollback(settings.scrollback);
+    let speed_shown = SettingChange::ScrollSensitivity(settings.scroll_sensitivity);
+    let cursor_row = setting_row(&cursor_shown, "Cursor", None, cursor, input);
+    let blink_row = setting_row(&blink_shown, "Cursor blinks", None, blink, input);
     let scrollback_row = setting_row(
-        &scrollback_now,
+        &scrollback_shown,
         "Scrollback",
         scrollback_hint,
         scrollback,
         input,
     );
-    let speed_row = setting_row(&speed_now, "Scroll speed", speed_hint, speed, input);
+    let speed_row = setting_row(&speed_shown, "Scroll speed", speed_hint, speed, input);
     group("Terminal", look)
         .child(cursor_row)
         .child(blink_row)
@@ -318,27 +330,17 @@ fn terminal_group(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
 fn list_group(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
     let look = input.look;
     let chosen = input.settings.shell_row_name;
-    let options = [
-        ("Folder name", ShellRowName::Folder),
-        ("Short path", ShellRowName::Path),
-    ];
-    let mut segments = Vec::new();
-    for (label, name) in options {
-        let is_chosen = name == chosen;
-        let mut change = None;
-        if !is_chosen {
-            change = Some(SettingChange::ShellRowName(name));
-        }
-        segments.push(Segment {
-            label,
-            chosen: is_chosen,
-            change,
-        });
-    }
+    let segments = segments_of(&ROW_NAME_OPTIONS, chosen, SettingChange::ShellRowName);
     let names = segmented(segments, look, cx);
     let hint = Some("Rows with an agent keep the agent’s title.");
-    let names_now = SettingChange::ShellRowName(chosen);
-    let names_row = setting_row(&names_now, "A plain shell’s row shows", hint, names, input);
+    let names_shown = SettingChange::ShellRowName(chosen);
+    let names_row = setting_row(
+        &names_shown,
+        "A plain shell’s row shows",
+        hint,
+        names,
+        input,
+    );
     group("Terminals list", look).child(names_row)
 }
 
@@ -353,8 +355,8 @@ fn start_group(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
         cx,
     );
     let hint = Some("Each in its folder, when the app starts.");
-    let restore_now = SettingChange::RestoreOnLaunch(settings.restore_on_launch);
-    let restore_row = setting_row(&restore_now, "Reopen my terminals", hint, restore, input);
+    let restore_shown = SettingChange::RestoreOnLaunch(settings.restore_on_launch);
+    let restore_row = setting_row(&restore_shown, "Reopen my terminals", hint, restore, input);
     group("Starting up", look).child(restore_row)
 }
 
@@ -371,8 +373,8 @@ fn agents_group(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
     let hint = Some(
         "The app offers and keeps up the hooks coding agents need. Turn off to wire them by hand.",
     );
-    let hooks_now = SettingChange::ManageAgentHooks(settings.manage_agent_hooks);
-    let hooks_row = setting_row(&hooks_now, "Keep agent hooks set up", hint, hooks, input);
+    let hooks_shown = SettingChange::ManageAgentHooks(settings.manage_agent_hooks);
+    let hooks_row = setting_row(&hooks_shown, "Keep agent hooks set up", hint, hooks, input);
     group("Agents", look).child(hooks_row)
 }
 
@@ -402,16 +404,16 @@ fn group(heading: &str, look: &Look) -> Div {
     div().flex().flex_col().gap(px(GROUP_GAP)).child(title)
 }
 
-// A setting the file could not give is drawn at the default in use, and cannot be changed; a refused write says why where the hint is.
+/// One setting's row: `shown` is its current value, which names its key. An unread setting's control is dimmed and takes no clicks; a refusal replaces the hint.
 fn setting_row(
-    setting: &SettingChange,
+    shown: &SettingChange,
     label: &str,
     hint: Option<&str>,
     control: Div,
     input: &SettingsInput,
 ) -> Div {
     let look = input.look;
-    let key = setting.key();
+    let key = shown.key();
     let name = div()
         .font_weight(FontWeight::MEDIUM)
         .child(label.to_string());
@@ -467,49 +469,23 @@ pub fn is_unread(unread: &UnreadSettings, key: &str) -> bool {
     }
 }
 
-fn theme_segments(chosen: ThemeChoice) -> Vec<Segment> {
-    let options = [
-        ("System", ThemeChoice::System),
-        ("Light", ThemeChoice::Light),
-        ("Dark", ThemeChoice::Dark),
-    ];
+fn segments_of<T: Copy + PartialEq>(
+    options: &[(&'static str, T)],
+    chosen: T,
+    make: fn(T) -> SettingChange,
+) -> Vec<Segment> {
     let mut segments = Vec::new();
-    for (label, theme) in options {
+    for &(label, option) in options {
         segments.push(Segment {
             label,
-            chosen: theme == chosen,
-            change: Some(SettingChange::Theme(theme)),
-        });
-    }
-    segments
-}
-
-fn cursor_segments(chosen: CursorStyle) -> Vec<Segment> {
-    let options = [
-        ("Block", CursorStyle::Block),
-        ("Underline", CursorStyle::Underline),
-        ("Bar", CursorStyle::Bar),
-    ];
-    let mut segments = Vec::new();
-    for (label, style) in options {
-        segments.push(Segment {
-            label,
-            chosen: style == chosen,
-            change: Some(SettingChange::CursorStyle(style)),
+            chosen: option == chosen,
+            change: make(option),
         });
     }
     segments
 }
 
 fn segmented(segments: Vec<Segment>, look: &Look, cx: &mut Context<WindowView>) -> Div {
-    segment_track(segments, look, Some(cx))
-}
-
-fn segment_track(
-    segments: Vec<Segment>,
-    look: &Look,
-    mut cx: Option<&mut Context<WindowView>>,
-) -> Div {
     let mut track = div()
         .flex()
         .flex_none()
@@ -534,9 +510,8 @@ fn segment_track(
                 .shadow(look.card_shadow())
                 .text_color(look.text)
                 .font_weight(FontWeight::SEMIBOLD);
-        }
-        let clickable = segment.change.filter(|_| !segment.chosen);
-        if let (Some(change), Some(cx)) = (clickable, cx.as_deref_mut()) {
+        } else {
+            let change = segment.change;
             shown = shown
                 .cursor_pointer()
                 .on_click(cx.listener(move |view, _, _, _| {
@@ -555,10 +530,16 @@ fn switch(
     look: &Look,
     cx: &mut Context<WindowView>,
 ) -> Div {
-    let track_color = if on { look.text } else { look.strong_veil };
-    let border_color = if on { look.text } else { look.hairline };
-    let knob_color = if on { look.panels } else { look.secondary_text };
-    let knob_left = if on { KNOB_LEFT_ON } else { KNOB_LEFT_OFF };
+    let mut track_color = look.strong_veil;
+    let mut border_color = look.hairline;
+    let mut knob_color = look.secondary_text;
+    let mut knob_left = KNOB_LEFT_OFF;
+    if on {
+        track_color = look.text;
+        border_color = look.text;
+        knob_color = look.panels;
+        knob_left = KNOB_LEFT_ON;
+    }
     let knob = div()
         .absolute()
         .top(px(KNOB_TOP))
@@ -703,7 +684,7 @@ fn open_file_button(id: &'static str, look: &Look, cx: &mut Context<WindowView>)
         .cursor_pointer()
         .hover(move |style| style.bg(veil))
         .child(OPEN_FILE_LABEL)
-        .on_click(cx.listener(|view, _, _, _| view.open_settings_file()))
+        .on_click(cx.listener(|view, _, _, cx| view.open_settings_file(cx)))
 }
 
 #[cfg(test)]
@@ -726,6 +707,7 @@ mod tests {
             (CommandId::ConfigOpenSettings, OverPage::ToggleSettings),
             (CommandId::TerminalNew, OverPage::ShowTerminal),
             (CommandId::TerminalFocusNextGroup, OverPage::ShowTerminal),
+            (CommandId::ConfigOpenKeybindings, OverPage::ShowTerminal),
             (CommandId::SidebarToggle, OverPage::Run),
             (CommandId::TerminalPaste, OverPage::PassOn),
             (CommandId::TerminalKillLine, OverPage::PassOn),
@@ -736,17 +718,17 @@ mod tests {
     }
 
     #[test]
-    fn stepper_stays_inside_its_range() {
-        assert_eq!(
-            stepped(12.0, 1.0, FONT_SIZE_MIN, Some(FONT_SIZE_MAX)),
-            Some(13.0)
-        );
-        assert_eq!(
-            stepped(FONT_SIZE_MAX, 1.0, FONT_SIZE_MIN, Some(FONT_SIZE_MAX)),
-            None
-        );
-        assert_eq!(stepped(1.0, -1.0, SCROLL_SPEED_MIN, None), None);
+    fn stepper_reaches_its_bounds_and_stops_there() {
+        let below_max = FONT_SIZE_MAX - 1.0;
+        let above_min = FONT_SIZE_MIN + 1.0;
+        let up_to_max = stepped(below_max, 1.0, FONT_SIZE_MIN, Some(FONT_SIZE_MAX));
+        let past_max = stepped(FONT_SIZE_MAX, 1.0, FONT_SIZE_MIN, Some(FONT_SIZE_MAX));
+        let down_to_min = stepped(above_min, -1.0, FONT_SIZE_MIN, Some(FONT_SIZE_MAX));
+        let past_min = stepped(FONT_SIZE_MIN, -1.0, FONT_SIZE_MIN, Some(FONT_SIZE_MAX));
+        assert_eq!(up_to_max, Some(FONT_SIZE_MAX));
+        assert_eq!(past_max, None);
+        assert_eq!(down_to_min, Some(FONT_SIZE_MIN));
+        assert_eq!(past_min, None);
         assert_eq!(stepped(0.5, 1.0, SCROLL_SPEED_MIN, None), Some(1.5));
-        assert_eq!(stepped(3.0, -1.0, SCROLL_SPEED_MIN, None), Some(2.0));
     }
 }

@@ -19,7 +19,7 @@ const BEFORE_LAUNCH: [Check; 1] = [Check {
     run: bundle::holds_only_dev_names,
 }];
 
-const LAUNCHED: [LaunchedCheck; 7] = [
+const LAUNCHED: [LaunchedCheck; 8] = [
     LaunchedCheck {
         name: "the window draws rows",
         run: window::draws_rows,
@@ -31,6 +31,10 @@ const LAUNCHED: [LaunchedCheck; 7] = [
     LaunchedCheck {
         name: "a bound chord runs its command once and types nothing; an unbound one reaches the shell",
         run: window::chords_reach_their_command_or_the_shell,
+    },
+    LaunchedCheck {
+        name: "the settings page keeps what is typed on it and gives the keyboard back to the terminal",
+        run: window::the_settings_page_keeps_and_returns_the_keyboard,
     },
     LaunchedCheck {
         name: "every marked part of the window has bounds, and nothing else does",

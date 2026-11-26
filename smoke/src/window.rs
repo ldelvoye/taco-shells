@@ -35,6 +35,12 @@ const ERASED_TEXT: &str = "echo garbage";
 const CHORD_COMMAND: &str = "echo chord-$((3+3))";
 const CHORD_ANSWER: &str = "chord-6";
 const SECOND_RUN_WINDOW: Duration = Duration::from_millis(300);
+const OPEN_SETTINGS: &str = "cmd-,";
+const CLOSE_TERMINAL: &str = "cmd-w";
+const LEAKED_COMMAND: &str = "echo leaked-$((5+5))";
+const LEAKED_ANSWER: &str = "leaked-10";
+const RETURNED_COMMAND: &str = "echo returned-$((4*4))";
+const RETURNED_ANSWER: &str = "returned-16";
 const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
 const PNG_HEADER_LENGTH: usize = 24;
 
@@ -150,6 +156,46 @@ pub fn a_typed_command_is_answered_on_screen(_: &Smoke, driver: &mut Driver) -> 
     shown_lines(driver, &terminal, |lines| {
         lines.iter().any(|line| line == TYPED_ANSWER)
     })?;
+    Ok(())
+}
+
+/// cmd+w closes the page and not the terminal behind it, what is typed on the page never reaches the shell, and once
+/// Esc closes the page the terminal has the keyboard again.
+pub fn the_settings_page_keeps_and_returns_the_keyboard(
+    _: &Smoke,
+    driver: &mut Driver,
+) -> Result<(), String> {
+    let before = drawn(driver)?;
+    let rows = terminals_of(&before);
+    let rows_before = rows.len();
+    let selected = selected_index(&before);
+    let Some(terminal) = selected.and_then(|index| rows.get(index).cloned()) else {
+        return Err("no row is selected".to_string());
+    };
+
+    driver.keys(&[OPEN_SETTINGS, CLOSE_TERMINAL])?;
+    thread::sleep(SECOND_RUN_WINDOW);
+    let after_close = drawn(driver)?;
+    let rows_after = terminals_of(&after_close).len();
+    if rows_after != rows_before {
+        return Err(format!(
+            "cmd+w over the page left {rows_after} rows of {rows_before}"
+        ));
+    }
+
+    driver.keys(&[OPEN_SETTINGS])?;
+    driver.text(LEAKED_COMMAND)?;
+    driver.keys(&["enter", "escape"])?;
+    driver.text(RETURNED_COMMAND)?;
+    driver.keys(&["enter"])?;
+    shown_lines(driver, &terminal, |lines| {
+        lines.iter().any(|line| line == RETURNED_ANSWER)
+    })?;
+    let lines = driver.screen_text(&terminal)?;
+    let leaked = lines.is_some_and(|lines| lines.iter().any(|line| line == LEAKED_ANSWER));
+    if leaked {
+        return Err("text typed on the settings page reached the shell".to_string());
+    }
     Ok(())
 }
 

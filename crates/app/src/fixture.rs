@@ -9,7 +9,9 @@ use taco_protocol::{
 };
 use taco_rules::default_panels;
 use taco_services::{AgentSetupNotice, AgentSetupNoticeKind, AgentSetupView};
-use taco_settings::{Binding, ConfigTexts, Settings, UnreadSettings, resolve_config};
+use taco_settings::{
+    Binding, ConfigTexts, SettingChange, Settings, UnreadSettings, resolve_config,
+};
 
 use crate::activity::{MS_PER_MINUTE, now_ms};
 use crate::banners::Notices;
@@ -17,8 +19,7 @@ use crate::window::Shown;
 
 const CLAUDE: &str = "claude";
 const STATE_MINUTES_AGO: u64 = 52;
-const FONT_SIZE_KEY: &str = "fontSize";
-const UNREAD_FONT_SIZE: &str = "settings.json: \"fontSize\" must be a number between 1 and 72";
+const FONT_SIZE_PROBLEM: &str = "settings.json: \"fontSize\" must be a number between 1 and 72";
 const OFFER_TEXT: &str =
     "Claude Code is running here but isn't set up, so its activity can't show.";
 
@@ -259,8 +260,9 @@ fn quiet() -> Shown {
 
 fn broken() -> Shown {
     let mut shown = quiet();
-    shown.notices.config_problems = vec![UNREAD_FONT_SIZE.to_string()];
-    shown.unread = UnreadSettings::Keys(vec![FONT_SIZE_KEY]);
+    let font_size = SettingChange::FontSize(Settings::default().font_size);
+    shown.notices.config_problems = vec![FONT_SIZE_PROBLEM.to_string()];
+    shown.unread = UnreadSettings::Keys(vec![font_size.key()]);
     shown
 }
 

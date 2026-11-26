@@ -22,7 +22,7 @@ use crate::window::Shown;
 
 const LOG_PAGE: usize = 6;
 const CHECKOUT_HOOKS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../hooks");
-// The stand-in has no file to write, so every write is refused as a read-only file's would be.
+// The stand-in has no file to write, so it refuses every write.
 const REFUSED_WRITE: &str = "settings.json is read-only, so nothing was changed.";
 const SET_UP_TEXT: &str = "Claude Code is set up. Its activity shows here from its next session.";
 
