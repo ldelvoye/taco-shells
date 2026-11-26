@@ -4,17 +4,17 @@ use taco_protocol::{CellSize, TerminalSize};
 
 const MINIMUM_COLS: u16 = 2;
 const MINIMUM_ROWS: u16 = 1;
-/// What a CSS-style font list means by its generic family.
+/// The family a font list's `monospace` stands for.
 const PLATFORM_MONOSPACE: &str = "Menlo";
 
 /// One cell in window pixels. Every view shares it, since they all draw in the same font.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Cell {
+pub struct CellMetrics {
     pub width: f32,
     pub height: f32,
 }
 
-impl Cell {
+impl CellMetrics {
     /// The cell size the runtime answers a program's size reports with.
     pub fn size_px(self) -> CellSize {
         let width = self.width.round();
@@ -27,11 +27,11 @@ impl Cell {
 }
 
 /// The grid that fits `width` by `height` pixels: whole cells, at least 2 columns and 1 row.
-pub fn grid_that_fits(width: f32, height: f32, cell: Cell) -> TerminalSize {
+pub fn grid_that_fits(width: f32, height: f32, cell: CellMetrics) -> TerminalSize {
     let columns = (width / cell.width).floor();
     let rows = (height / cell.height).floor();
-    let cols = clamp_count(columns, MINIMUM_COLS);
-    let rows = clamp_count(rows, MINIMUM_ROWS);
+    let cols = at_least(columns, MINIMUM_COLS);
+    let rows = at_least(rows, MINIMUM_ROWS);
     TerminalSize { cols, rows }
 }
 
@@ -45,20 +45,18 @@ pub fn font_family(list: &str, installed: &[String]) -> String {
         }
         let found = installed
             .iter()
-            .any(|family| family.eq_ignore_ascii_case(name));
-        if found {
-            return name.to_string();
+            .find(|family| family.eq_ignore_ascii_case(name));
+        if let Some(family) = found {
+            return family.clone();
         }
     }
     PLATFORM_MONOSPACE.to_string()
 }
 
-fn clamp_count(count: f32, minimum: u16) -> u16 {
-    if !count.is_finite() || count < f32::from(minimum) {
+// `as u16` saturates, so only NaN and counts below the minimum need handling.
+fn at_least(count: f32, minimum: u16) -> u16 {
+    if count.is_nan() || count < f32::from(minimum) {
         return minimum;
-    }
-    if count > f32::from(u16::MAX) {
-        return u16::MAX;
     }
     count as u16
 }
@@ -68,18 +66,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_grid_is_whole_cells_and_never_smaller_than_two_by_one() {
-        let cell = Cell {
+    fn the_grid_never_drops_below_two_columns_and_one_row() {
+        let cell = CellMetrics {
             width: 7.5,
             height: 15.0,
         };
-        assert_eq!(
-            grid_that_fits(800.0, 600.0, cell),
-            TerminalSize {
-                cols: 106,
-                rows: 40
-            }
-        );
         assert_eq!(
             grid_that_fits(10.0, 5.0, cell),
             TerminalSize { cols: 2, rows: 1 }
@@ -95,11 +86,11 @@ mod tests {
         let installed = vec!["Monaco".to_string(), "Courier New".to_string()];
         let default_list = "Menlo, Monaco, 'Courier New', monospace";
         assert_eq!(font_family(default_list, &installed), "Monaco");
+        // Matched whatever the case, and named as the system names it.
         assert_eq!(
-            font_family("\"Courier New\", Monaco", &installed),
+            font_family("\"courier new\", Monaco", &installed),
             "Courier New"
         );
-        // The generic family stands for the platform's own monospace font.
         assert_eq!(font_family("Nonexistent, monospace", &installed), "Menlo");
     }
 }

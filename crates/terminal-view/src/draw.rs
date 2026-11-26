@@ -1,27 +1,34 @@
 //! Turning a view's rows into backgrounds, runs of text and a cursor, then painting them in the window.
 
 use gpui::{
-    App, Bounds, Font, FontStyle, FontWeight, Hsla, Pixels, Point, Rgba, StrikethroughStyle,
-    TextAlign, TextRun, UnderlineStyle, Window, fill, font, point, px, size,
+    App, BorderStyle, Bounds, Font, FontStyle, FontWeight, Hsla, Pixels, Point, Rgba,
+    StrikethroughStyle, TextAlign, TextRun, UnderlineStyle, Window, fill, font, outline, point, px,
+    size,
 };
-use taco_ghostty::render::{
-    Cell as GridCell, CursorShape, FrameColors, FrameCursor, Row, Underline, Width,
-};
+use taco_ghostty::render::{Cell, CursorShape, FrameColors, FrameCursor, Row, Underline, Width};
 use taco_protocol::Rgb;
 
-use crate::grid::Cell;
+use crate::grid::CellMetrics;
 
-const FAINT_ALPHA: f32 = 0.6;
-const LINE_THICKNESS: f32 = 1.0;
-const BAR_WIDTH: f32 = 2.0;
+const FAINT_TEXT_ALPHA: f32 = 0.6;
+/// A block cursor lets the character under it show through.
+const BLOCK_CURSOR_ALPHA: f32 = 0.6;
+const TEXT_LINE_THICKNESS: f32 = 1.0;
+const CURSOR_LINE_THICKNESS: f32 = 2.0;
 
-/// A cell's background where it differs from the terminal's.
+/// A stretch of cells in one row whose background differs from the terminal's.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Background {
     pub column: u16,
     pub row: u16,
-    pub span: u16,
+    pub columns: u16,
     pub color: Hsla,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextLine {
+    pub color: Hsla,
+    pub wavy: bool,
 }
 
 /// Cells in a row that share a style, drawn as one shaped line.
@@ -29,14 +36,16 @@ pub struct Background {
 pub struct Run {
     pub column: u16,
     pub row: u16,
+    /// How many cells the run covers, which its text alone does not say.
+    pub columns: u16,
     pub text: String,
     pub color: Hsla,
     pub bold: bool,
     pub italic: bool,
-    pub underline: Option<(Hsla, bool)>,
+    pub underline: Option<TextLine>,
     pub strikethrough: Option<Hsla>,
-    /// A wide character, drawn across two cells at its own advance.
-    pub wide: bool,
+    /// Each cell drawn at exactly one cell's width. Off for a wide character or a cell of several code points, which keep their own advance.
+    pub one_cell_per_glyph: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -45,7 +54,7 @@ pub struct CursorMark {
     pub row: u16,
     pub shape: CursorShape,
     pub color: Hsla,
-    pub span: u16,
+    pub columns: u16,
 }
 
 /// Everything one frame draws, in grid coordinates.
@@ -75,16 +84,16 @@ pub fn lay_out(
         if let Some(set) = colors.cursor {
             cursor_color = set;
         }
-        let mut span = 1;
+        let mut columns = 1;
         if is_wide_at(rows, column, row) {
-            span = 2;
+            columns = 2;
         }
         painting.cursor = Some(CursorMark {
             column,
             row,
             shape: cursor.shape,
             color: hsla(cursor_color),
-            span,
+            columns,
         });
     }
     painting
@@ -103,24 +112,24 @@ fn is_wide_at(rows: &[Row], column: u16, row: u16) -> bool {
 fn lay_out_row(row: &Row, y: u16, colors: &FrameColors, selection: Rgb, painting: &mut Painting) {
     for (index, cell) in row.cells.iter().enumerate() {
         let column = index as u16;
-        let skipped = matches!(cell.width, Width::SpacerTail | Width::SpacerHead);
-        if skipped {
+        let spacer = matches!(cell.width, Width::SpacerTail | Width::SpacerHead);
+        if spacer {
             continue;
         }
-        let wide = cell.width == Width::Wide;
-        let mut span = 1;
-        if wide {
-            span = 2;
+        let mut columns = 1;
+        if cell.width == Width::Wide {
+            columns = 2;
         }
 
         let (foreground, background) = cell_colors(cell, colors, selection);
         if let Some(color) = background {
-            painting.backgrounds.push(Background {
+            let stretch = Background {
                 column,
                 row: y,
-                span,
+                columns,
                 color: hsla(color),
-            });
+            };
+            add_background(&mut painting.backgrounds, stretch);
         }
 
         let text = row.cell_text(cell);
@@ -129,50 +138,51 @@ fn lay_out_row(row: &Row, y: u16, colors: &FrameColors, selection: Rgb, painting
         }
         let mut color = hsla(foreground);
         if cell.faint {
-            color.a *= FAINT_ALPHA;
+            color.a *= FAINT_TEXT_ALPHA;
         }
-        let underline = underline_of(cell, color);
         let mut strikethrough = None;
         if cell.strikethrough {
             strikethrough = Some(color);
         }
+        let several_code_points = text.chars().nth(1).is_some();
         let run = Run {
             column,
             row: y,
+            columns,
             text: text.to_string(),
             color,
             bold: cell.bold,
             italic: cell.italic,
-            underline,
+            underline: underline_of(cell, color),
             strikethrough,
-            wide,
+            one_cell_per_glyph: columns == 1 && !several_code_points,
         };
-        append(&mut painting.runs, run);
+        add_run(&mut painting.runs, run);
     }
 }
 
 /// The colors a cell is drawn in: inverse swaps them, and a selected cell takes the selection background.
-fn cell_colors(cell: &GridCell, colors: &FrameColors, selection: Rgb) -> (Rgb, Option<Rgb>) {
-    let mut foreground = colors.foreground;
+fn cell_colors(cell: &Cell, colors: &FrameColors, selection: Rgb) -> (Rgb, Option<Rgb>) {
+    let mut text = colors.foreground;
     if let Some(own) = cell.foreground {
-        foreground = own;
+        text = own;
     }
-    let mut background = cell.background;
+    let mut fill_color = cell.background;
     if cell.inverse {
-        let mut swapped_background = colors.background;
+        let mut ground = colors.background;
         if let Some(own) = cell.background {
-            swapped_background = own;
+            ground = own;
         }
-        background = Some(foreground);
-        foreground = swapped_background;
+        fill_color = Some(text);
+        text = ground;
     }
     if cell.selected {
-        background = Some(selection);
+        fill_color = Some(selection);
     }
-    (foreground, background)
+    (text, fill_color)
 }
 
-fn underline_of(cell: &GridCell, text_color: Hsla) -> Option<(Hsla, bool)> {
+fn underline_of(cell: &Cell, text_color: Hsla) -> Option<TextLine> {
     if cell.underline == Underline::None {
         return None;
     }
@@ -181,17 +191,28 @@ fn underline_of(cell: &GridCell, text_color: Hsla) -> Option<(Hsla, bool)> {
         color = hsla(own);
     }
     let wavy = cell.underline == Underline::Curly;
-    Some((color, wavy))
+    Some(TextLine { color, wavy })
 }
 
-/// Adds `run` to the last run when it continues it on the same row in the same style.
-fn append(runs: &mut Vec<Run>, run: Run) {
+fn add_background(backgrounds: &mut Vec<Background>, stretch: Background) {
+    if let Some(last) = backgrounds.last_mut() {
+        let continues = last.row == stretch.row
+            && last.column + last.columns == stretch.column
+            && last.color == stretch.color;
+        if continues {
+            last.columns += stretch.columns;
+            return;
+        }
+    }
+    backgrounds.push(stretch);
+}
+
+fn add_run(runs: &mut Vec<Run>, run: Run) {
     if let Some(last) = runs.last_mut() {
-        let next_column = last.column + last.text.chars().count() as u16;
-        let continues = !last.wide
-            && !run.wide
+        let continues = last.one_cell_per_glyph
+            && run.one_cell_per_glyph
             && last.row == run.row
-            && next_column == run.column
+            && last.column + last.columns == run.column
             && last.color == run.color
             && last.bold == run.bold
             && last.italic == run.italic
@@ -199,6 +220,7 @@ fn append(runs: &mut Vec<Run>, run: Run) {
             && last.strikethrough == run.strikethrough;
         if continues {
             last.text.push_str(&run.text);
+            last.columns += run.columns;
             return;
         }
     }
@@ -209,7 +231,7 @@ fn append(runs: &mut Vec<Run>, run: Run) {
 pub fn paint(
     painting: &Painting,
     origin: Point<Pixels>,
-    cell: Cell,
+    cell: CellMetrics,
     family: &str,
     font_size: Pixels,
     window: &mut Window,
@@ -224,7 +246,7 @@ pub fn paint(
     };
 
     for background in &painting.backgrounds {
-        let width = cell_width * f32::from(background.span);
+        let width = cell_width * f32::from(background.columns);
         let bounds = Bounds::new(
             at(background.column, background.row),
             size(width, cell_height),
@@ -234,9 +256,10 @@ pub fn paint(
 
     for run in &painting.runs {
         let text_run = text_run_for(run, family);
-        let mut force_width = Some(cell_width);
-        if run.wide {
-            force_width = None;
+        // gpui gives every glyph exactly this advance, which keeps a run on the grid.
+        let mut force_width = None;
+        if run.one_cell_per_glyph {
+            force_width = Some(cell_width);
         }
         let shaped = window.text_system().shape_line(
             run.text.clone().into(),
@@ -256,16 +279,20 @@ pub fn paint(
 
     if let Some(cursor) = painting.cursor {
         let top_left = at(cursor.column, cursor.row);
-        let width = cell_width * f32::from(cursor.span);
+        let width = cell_width * f32::from(cursor.columns);
         let bounds = cursor_bounds(cursor.shape, top_left, width, cell_height);
-        let mut color = cursor.color;
-        if cursor.shape == CursorShape::Block {
-            color.a *= FAINT_ALPHA;
-        }
-        if cursor.shape == CursorShape::BlockHollow {
-            window.paint_quad(gpui::outline(bounds, color, gpui::BorderStyle::Solid));
-        } else {
-            window.paint_quad(fill(bounds, color));
+        match cursor.shape {
+            CursorShape::BlockHollow => {
+                window.paint_quad(outline(bounds, cursor.color, BorderStyle::Solid));
+            }
+            CursorShape::Block => {
+                let mut color = cursor.color;
+                color.a *= BLOCK_CURSOR_ALPHA;
+                window.paint_quad(fill(bounds, color));
+            }
+            CursorShape::Bar | CursorShape::Underline => {
+                window.paint_quad(fill(bounds, cursor.color));
+            }
         }
     }
 }
@@ -276,11 +303,12 @@ fn cursor_bounds(
     width: Pixels,
     height: Pixels,
 ) -> Bounds<Pixels> {
+    let thickness = px(CURSOR_LINE_THICKNESS);
     match shape {
-        CursorShape::Bar => Bounds::new(top_left, size(px(BAR_WIDTH), height)),
+        CursorShape::Bar => Bounds::new(top_left, size(thickness, height)),
         CursorShape::Underline => {
-            let bottom = point(top_left.x, top_left.y + height - px(BAR_WIDTH));
-            Bounds::new(bottom, size(width, px(BAR_WIDTH)))
+            let bottom = point(top_left.x, top_left.y + height - thickness);
+            Bounds::new(bottom, size(width, thickness))
         }
         CursorShape::Block | CursorShape::BlockHollow => Bounds::new(top_left, size(width, height)),
     }
@@ -295,17 +323,17 @@ fn text_run_for(run: &Run, family: &str) -> TextRun {
         run_font.style = FontStyle::Italic;
     }
     let mut underline = None;
-    if let Some((color, wavy)) = run.underline {
+    if let Some(line) = run.underline {
         underline = Some(UnderlineStyle {
-            thickness: px(LINE_THICKNESS),
-            color: Some(color),
-            wavy,
+            thickness: px(TEXT_LINE_THICKNESS),
+            color: Some(line.color),
+            wavy: line.wavy,
         });
     }
     let mut strikethrough = None;
     if let Some(color) = run.strikethrough {
         strikethrough = Some(StrikethroughStyle {
-            thickness: px(LINE_THICKNESS),
+            thickness: px(TEXT_LINE_THICKNESS),
             color: Some(color),
         });
     }
@@ -333,21 +361,19 @@ pub fn hsla(color: Rgb) -> Hsla {
 mod tests {
     use super::*;
     use taco_ghostty::Terminal;
+    use taco_ghostty::input::CellPoint;
     use taco_ghostty::render::RenderState;
     use taco_protocol::TerminalSize;
 
-    fn rgb(value: u32) -> Rgb {
-        let [_, r, g, b] = value.to_be_bytes();
-        Rgb { r, g, b }
-    }
+    const SELECTION: Rgb = Rgb {
+        r: 0x3a,
+        g: 0x38,
+        b: 0x36,
+    };
 
-    #[test]
-    fn cells_become_backgrounds_runs_and_a_cursor_in_the_colors_we_chose() {
-        let mut terminal = Terminal::new(TerminalSize { cols: 20, rows: 2 }).unwrap();
-        // Plain text, an inverse word, a hidden word, a wide character, then the cursor after it.
-        terminal.write(b"ab \x1b[7minv\x1b[0m \x1b[8mhid\x1b[0m \xe6\x97\xa5");
+    fn painting_of(terminal: &Terminal) -> (Painting, FrameColors) {
         let mut state = RenderState::new().unwrap();
-        let mut frame = state.update(&terminal).unwrap();
+        let mut frame = state.update(terminal).unwrap();
         let mut rows = Vec::new();
         let mut row = Row::new();
         while frame.next_row(&mut row, false).unwrap() {
@@ -355,24 +381,81 @@ mod tests {
         }
         let colors = frame.colors().clone();
         let cursor = frame.cursor().unwrap();
-        let selection = rgb(0x3a3836);
-        let painting = lay_out(&rows, cursor, &colors, selection);
+        (lay_out(&rows, cursor, &colors, SELECTION), colors)
+    }
 
-        let texts: Vec<&str> = painting.runs.iter().map(|run| run.text.as_str()).collect();
-        // Same-style neighbours join; the inverse word is its own run; hidden text is not drawn; the wide character stands alone.
-        assert_eq!(texts, vec!["ab ", "inv", " ", " ", "日"]);
+    #[test]
+    fn cells_become_runs_and_backgrounds_in_the_colors_we_chose() {
+        let mut terminal = Terminal::new(TerminalSize { cols: 20, rows: 3 }).unwrap();
+        // Row 0: plain text, an inverse word, a hidden word, a wide character.
+        terminal.write(b"ab \x1b[7minv\x1b[0m \x1b[8mhid\x1b[0m \xe6\x97\xa5\r\n");
+        // Row 1: faint text, a curly underline, an e with a combining accent, then plain text after it.
+        terminal.write(b"\x1b[2mfa\x1b[0m \x1b[4:3mcu\x1b[0m e\xcc\x81 x");
+        terminal
+            .select(CellPoint { x: 0, y: 2 }, CellPoint { x: 3, y: 2 })
+            .unwrap();
+        let (painting, colors) = painting_of(&terminal);
+
+        let first_row: Vec<(&str, u16)> = painting
+            .runs
+            .iter()
+            .filter(|run| run.row == 0)
+            .map(|run| (run.text.as_str(), run.column))
+            .collect();
+        // Hidden text is not drawn, and the wide character stands alone.
+        assert_eq!(
+            first_row,
+            vec![("ab ", 0), ("inv", 3), (" ", 6), (" ", 10), ("日", 11)]
+        );
         let inverse = &painting.runs[1];
         assert_eq!(inverse.color, hsla(colors.background));
-        let inverse_backgrounds: Vec<u16> = painting
+        let inverse_fill = painting.backgrounds[0];
+        assert_eq!(
+            (
+                inverse_fill.column,
+                inverse_fill.columns,
+                inverse_fill.color
+            ),
+            (3, 3, hsla(colors.foreground))
+        );
+
+        let second_row: Vec<&Run> = painting.runs.iter().filter(|run| run.row == 1).collect();
+        let faint = second_row[0];
+        assert_eq!(faint.text, "fa");
+        assert!(faint.color.a < 1.0);
+        let curly = second_row.iter().find(|run| run.text == "cu").unwrap();
+        assert!(curly.underline.unwrap().wavy);
+        // The combined character is a run of its own, and the text after it keeps its column.
+        let accent = second_row
+            .iter()
+            .find(|run| run.text == "e\u{301}")
+            .unwrap();
+        assert!(!accent.one_cell_per_glyph);
+        let after = second_row.last().unwrap();
+        assert_eq!((after.text.as_str(), after.column), (" x", 7));
+
+        // The selected cells on the blank third row share one selection-colored stretch.
+        let selected = painting
             .backgrounds
             .iter()
-            .map(|quad| quad.column)
-            .collect();
-        assert_eq!(inverse_backgrounds, vec![3, 4, 5]);
-        let wide = &painting.runs[4];
-        assert_eq!((wide.column, wide.wide), (11, true));
+            .find(|stretch| stretch.row == 2)
+            .unwrap();
+        assert_eq!(
+            (selected.column, selected.columns, selected.color),
+            (0, 4, hsla(SELECTION))
+        );
+    }
 
-        let mark = painting.cursor.unwrap();
-        assert_eq!((mark.column, mark.row, mark.span), (13, 0, 1));
+    #[test]
+    fn the_cursor_covers_a_wide_character_and_is_not_drawn_when_hidden() {
+        let mut terminal = Terminal::new(TerminalSize { cols: 10, rows: 2 }).unwrap();
+        terminal.write(b"\xe6\x97\xa5\x1b[1;1H");
+        let (painting, _) = painting_of(&terminal);
+        let cursor = painting.cursor.unwrap();
+        assert_eq!((cursor.column, cursor.columns), (0, 2));
+
+        terminal.write(b"\x1b[?25l");
+        let (hidden, _) = painting_of(&terminal);
+        assert_eq!(hidden.cursor, None);
     }
 }
