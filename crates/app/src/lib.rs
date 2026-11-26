@@ -16,9 +16,6 @@ mod title_bar;
 mod trial;
 mod window;
 
-use std::rc::Rc;
-
-use futures::channel::mpsc::unbounded;
 use gpui::{
     App, AppContext, Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions, WindowAppearance,
     WindowBounds, WindowOptions, actions, px, size,
@@ -30,7 +27,6 @@ pub use fixture::Fixture;
 pub use trial::{BannerLayout, PlusPlace, Trial};
 
 use crate::assets::{Assets, load_fonts};
-use crate::link::WorkspacePort;
 use crate::look::Look;
 use crate::platform::TrafficLights;
 use crate::stand_in::StandIn;
@@ -91,9 +87,7 @@ fn open_window(fixture: Fixture, cx: &mut App) {
         let appearance = appearance_of(window.appearance());
         let look = Look::new(appearance);
         let shown = fixture.shown();
-        let (published, following) = unbounded();
-        let stand_in = StandIn::new(shown.drawn.clone(), published);
-        let port: Rc<dyn WorkspacePort> = Rc::new(stand_in);
+        let (port, published) = StandIn::start(shown.drawn.clone());
         cx.new(|cx| {
             let follow =
                 cx.observe_window_appearance(window, |view: &mut WindowView, window, cx| {
@@ -104,7 +98,7 @@ fn open_window(fixture: Fixture, cx: &mut App) {
             follow.detach();
             let trial = Trial::default();
             let lights = TrafficLights::Native;
-            WindowView::new(shown, look, trial, lights, port, following, cx)
+            WindowView::new(shown, look, trial, lights, port, published, cx)
         })
     });
     if let Err(error) = opened {

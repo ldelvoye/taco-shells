@@ -12,7 +12,7 @@ use taco_protocol::{
 use taco_rules::{DropMark, DropPoint, drop_for, drop_mark_for, selected_terminal};
 
 use crate::banners::{Banner, banner_cards, banner_strips};
-use crate::link::{Ahead, WorkspacePort, drawn_with};
+use crate::link::{Ahead, WorkspacePort, drawn_with, next_move};
 use crate::look::{FONT_FAMILY, Look, TEXT_SIZE};
 use crate::panels::{docked, open_on, title_plus};
 use crate::platform::TrafficLights;
@@ -41,11 +41,10 @@ pub struct WindowView {
     traffic_lights: TrafficLights,
     port: Rc<dyn WorkspacePort>,
     ahead: Option<Ahead>,
-    /// How many focus moves this window has made, counting on from the workspace's count.
-    moves: u64,
-    /// Where the drag in progress would land, if it would land anywhere.
+    /// The number of this window's last focus move.
+    last_move: u64,
     drop_place: Option<DropPlace>,
-    _published: Task<()>,
+    _following: Task<()>,
 }
 
 impl WindowView {
@@ -58,7 +57,7 @@ impl WindowView {
         published: UnboundedReceiver<DrawnState>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let moves = shown.drawn.focus_count;
+        let last_move = shown.drawn.focus_count;
         let following = cx.spawn(async move |this, cx| {
             let mut published = published;
             while let Some(state) = published.next().await {
@@ -75,9 +74,9 @@ impl WindowView {
             traffic_lights,
             port,
             ahead: None,
-            moves,
+            last_move,
             drop_place: None,
-            _published: following,
+            _following: following,
         }
     }
 
@@ -98,15 +97,15 @@ impl WindowView {
         drawn
     }
 
-    // Only the window holds the keyboard, so a selection is drawn at once and reported after.
+    // Drawn at once, ahead of the workspace, so a key typed straight after a selection reaches the new terminal.
     pub(crate) fn select(&mut self, terminal: &TerminalId, cx: &mut Context<Self>) {
         let drawn = self.drawn();
         let current = selected_terminal(drawn.arrangement.as_ref());
         if current == Some(terminal) {
             return;
         }
-        self.moves += 1;
-        let count = self.moves;
+        let count = next_move(self.last_move, self.shown.drawn.focus_count);
+        self.last_move = count;
         self.ahead = Some(Ahead {
             terminal: terminal.clone(),
             count,
@@ -119,27 +118,31 @@ impl WindowView {
         cx.notify();
     }
 
-    pub(crate) fn close(&mut self, terminal: &TerminalId, _cx: &mut Context<Self>) {
+    pub(crate) fn close(&self, terminal: &TerminalId) {
         let request = WorkspaceRequest::CloseTerminal {
             terminal: terminal.clone(),
         };
         self.port.send(request);
     }
 
-    pub(crate) fn toggle_group(&mut self, tab_group: &TabGroupId, _cx: &mut Context<Self>) {
+    pub(crate) fn toggle_group(&self, tab_group: &TabGroupId) {
         let request = WorkspaceRequest::TabGroupToggled {
             id: tab_group.clone(),
         };
         self.port.send(request);
     }
 
-    pub(crate) fn open_terminal_in(
-        &mut self,
-        tab_group: Option<TabGroupId>,
-        _cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn open_terminal_in(&self, tab_group: Option<TabGroupId>) {
         let request = WorkspaceRequest::OpenTerminalIn { tab_group };
         self.port.send(request);
+    }
+
+    pub(crate) fn leave_list(&mut self, cx: &mut Context<Self>) {
+        if self.drop_place.is_none() {
+            return;
+        }
+        self.drop_place = None;
+        cx.notify();
     }
 
     pub(crate) fn drag_over(
@@ -274,7 +277,7 @@ impl Render for WindowView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (drawn, kept) = drawn_with(&self.shown.drawn, self.ahead.as_ref());
         self.ahead = kept;
-        // A drag that ended outside the list leaves nothing to mark.
+        // Once no drag is under way, there is nothing to mark.
         if !cx.has_active_drag() {
             self.drop_place = None;
         }

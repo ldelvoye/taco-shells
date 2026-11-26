@@ -1,10 +1,8 @@
 //! The window drawn to an image with no window on screen, after any pointer gestures played into it.
 
 use std::path::Path;
-use std::rc::Rc;
 use std::sync::Arc;
 
-use futures::channel::mpsc::unbounded;
 use gpui::{
     AnyWindowHandle, AppContext, HeadlessAppContext, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, Pixels, PlatformInput, Point, Result, px, size,
@@ -13,7 +11,6 @@ use taco_settings::Appearance;
 
 use crate::assets::{Assets, load_fonts};
 use crate::fixture::Fixture;
-use crate::link::WorkspacePort;
 use crate::look::Look;
 use crate::platform::TrafficLights;
 use crate::stand_in::StandIn;
@@ -56,11 +53,9 @@ pub fn render_png(
     let window = cx.open_window(image_size, |_, cx| {
         let shown = fixture.shown();
         let look = Look::new(appearance);
-        let (published, following) = unbounded();
-        let stand_in = StandIn::new(shown.drawn.clone(), published);
-        let port: Rc<dyn WorkspacePort> = Rc::new(stand_in);
+        let (port, published) = StandIn::start(shown.drawn.clone());
         let lights = TrafficLights::StandIns;
-        cx.new(|cx| WindowView::new(shown, look, trial, lights, port, following, cx))
+        cx.new(|cx| WindowView::new(shown, look, trial, lights, port, published, cx))
     })?;
     let any_window = window.into();
     draw(&mut cx, any_window)?;

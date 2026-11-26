@@ -8,14 +8,23 @@ pub trait WorkspacePort {
     fn send(&self, request: WorkspaceRequest);
 }
 
-/// A focus move the window made itself and the workspace has not applied yet: the terminal, and which of the window's moves it was.
+/// A focus move the window made that the workspace has not applied yet.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Ahead {
     pub terminal: TerminalId,
     pub count: u64,
 }
 
-/// What to draw: the published state, with the window's own focus move laid over it until the workspace has applied that move.
+/// The number for the window's next focus move: past its own last one and past every move the workspace has applied.
+pub fn next_move(last_move: u64, applied: u64) -> u64 {
+    let mut latest = last_move;
+    if applied > latest {
+        latest = applied;
+    }
+    latest + 1
+}
+
+/// The published state with the window's own focus move laid over it, and that move again while the workspace has still not applied it.
 pub fn drawn_with(state: &DrawnState, ahead: Option<&Ahead>) -> (DrawnState, Option<Ahead>) {
     let Some(ahead) = ahead else {
         return (state.clone(), None);
@@ -43,7 +52,19 @@ mod tests {
     use taco_protocol::{Arrangement, DrawnState, Row, TerminalId};
     use taco_rules::{default_panels, selected_terminal};
 
-    use super::{Ahead, drawn_with};
+    use super::{Ahead, drawn_with, next_move};
+
+    #[test]
+    fn a_new_focus_move_is_numbered_past_every_move_already_applied() {
+        let cases = [
+            ("the window is ahead", 5, 3, 6),
+            ("the workspace's count passed the window's", 2, 7, 8),
+            ("both at the same count", 4, 4, 5),
+        ];
+        for (case, last_move, applied, next) in cases {
+            assert_eq!(next_move(last_move, applied), next, "{case}");
+        }
+    }
 
     fn state(focus_count: u64, terminals: &[&str]) -> DrawnState {
         let rows = terminals.iter().map(|name| Row {

@@ -81,7 +81,13 @@ pub fn terminal_list(input: &ListInput, cx: &mut Context<WindowView>) -> Statefu
         .gap(px(2.))
         .px(px(6.))
         .py(px(5.))
-        .on_drop(cx.listener(|view, drag: &ListDrag, _, cx| view.drop_on_list(drag, cx)));
+        .on_drop(cx.listener(|view, drag: &ListDrag, _, cx| view.drop_on_list(drag, cx)))
+        .on_drag_move(cx.listener(|view, event: &DragMoveEvent<ListDrag>, _, cx| {
+            if event.bounds.contains(&event.event.position) {
+                return;
+            }
+            view.leave_list(cx);
+        }));
     if input.plus == PlusPlace::Head {
         list = list.child(new_terminal_row(look, cx));
     }
@@ -100,7 +106,8 @@ pub fn terminal_list(input: &ListInput, cx: &mut Context<WindowView>) -> Statefu
             if !event.bounds.contains(&event.event.position) {
                 return;
             }
-            let dragged = event.drag(cx).dragged.clone();
+            let drag = event.drag(cx);
+            let dragged = drag.dragged.clone();
             view.drag_over(&dragged, DropPoint::End, cx);
         }));
     list.child(end)
@@ -161,6 +168,7 @@ fn tray_element(
     let mut tray = div()
         .relative()
         .flex()
+        .flex_none()
         .flex_col()
         .gap(px(2.))
         .pt(px(2.))
@@ -172,7 +180,7 @@ fn tray_element(
     if let Some(mark) = input.mark
         && mark.target == MarkTarget::Wrapper(tab_group.id.clone())
     {
-        tray = tray.child(drop_line(mark.edge, look));
+        tray = marked(tray, mark.edge, look);
     }
     if tab_group.collapsed {
         return tray;
@@ -230,7 +238,6 @@ fn tray_header(
         header = marked(header, mark.edge, look);
     }
 
-    let id = tab_group.id.clone();
     let toggled = tab_group.id.clone();
     let hovered = tab_group.id.clone();
     let drag = ListDrag {
@@ -239,15 +246,16 @@ fn tray_header(
         look: look.clone(),
     };
     header
-        .id(element_id("tray", &id.0))
-        .on_click(cx.listener(move |view, _, _, cx| view.toggle_group(&toggled, cx)))
+        .id(element_id("tray", &tab_group.id.0))
+        .on_click(cx.listener(move |view, _, _, _| view.toggle_group(&toggled)))
         .on_drag(drag, drag_preview)
         .on_drag_move(
             cx.listener(move |view, event: &DragMoveEvent<ListDrag>, _, cx| {
                 let Some(fraction) = fraction_over(event) else {
                     return;
                 };
-                let dragged = event.drag(cx).dragged.clone();
+                let drag = event.drag(cx);
+                let dragged = drag.dragged.clone();
                 let point = DropPoint::Header {
                     tab_group: hovered.clone(),
                     fraction,
@@ -273,8 +281,9 @@ fn open_in_group_button(
         .flex_none()
         .child(plus)
         .on_click(cx.listener(move |view, _, _, cx| {
+            // The header behind it collapses on a click.
             cx.stop_propagation();
-            view.open_terminal_in(Some(opened_in.clone()), cx);
+            view.open_terminal_in(Some(opened_in.clone()));
         }))
 }
 
@@ -303,6 +312,7 @@ fn row_element(
         .group(ROW_GROUP)
         .relative()
         .flex()
+        .flex_none()
         .items_center()
         .gap(px(6.))
         .h(px(ROW_HEIGHT))
@@ -337,7 +347,8 @@ fn row_element(
                 let Some(fraction) = fraction_over(event) else {
                     return;
                 };
-                let dragged = event.drag(cx).dragged.clone();
+                let drag = event.drag(cx);
+                let dragged = drag.dragged.clone();
                 let point = DropPoint::Row { index, fraction };
                 view.drag_over(&dragged, point, cx);
             }),
@@ -356,8 +367,9 @@ fn close_button(terminal: &TerminalId, look: &Look, cx: &mut Context<WindowView>
         .flex_none()
         .child(trash)
         .on_click(cx.listener(move |view, _, _, cx| {
+            // The row behind it would select itself on the same click.
             cx.stop_propagation();
-            view.close(&closed, cx);
+            view.close(&closed);
         }))
 }
 
@@ -369,11 +381,12 @@ fn agent_state(
     Some(agent_row.state)
 }
 
-/// How far down the hovered element the pointer is, from 0 at its top to 1 at its bottom, or none when it is elsewhere.
+/// The pointer's height within the hovered element, 0 to 1.
 fn fraction_over(event: &DragMoveEvent<ListDrag>) -> Option<f32> {
     let bounds = event.bounds;
     let position = event.event.position;
-    if !bounds.contains(&position) {
+    let has_height = bounds.size.height > px(0.);
+    if !has_height || !bounds.contains(&position) {
         return None;
     }
     let offset = position.y - bounds.top();
@@ -399,27 +412,22 @@ fn element_id(kind: &str, name: &str) -> ElementId {
     ElementId::Name(id)
 }
 
-/// Where a drop would land: a line above or below, or the whole thing lit when the drop goes into a collapsed group.
 fn marked(shown: Div, edge: MarkEdge, look: &Look) -> Div {
     match edge {
+        MarkEdge::Above => shown.child(drop_line(look).top(px(-DROP_LINE_THICKNESS))),
+        MarkEdge::Below => shown.child(drop_line(look).bottom(px(-DROP_LINE_THICKNESS))),
         MarkEdge::Whole => shown.bg(look.strong_veil),
-        MarkEdge::Above | MarkEdge::Below => shown.child(drop_line(edge, look)),
     }
 }
 
-fn drop_line(edge: MarkEdge, look: &Look) -> Div {
-    let line = div()
+fn drop_line(look: &Look) -> Div {
+    div()
         .absolute()
         .left(px(4.))
         .right(px(4.))
         .h(px(DROP_LINE_THICKNESS))
         .rounded_full()
-        .bg(look.text);
-    match edge {
-        MarkEdge::Above => line.top(px(-DROP_LINE_THICKNESS)),
-        MarkEdge::Below => line.bottom(px(-DROP_LINE_THICKNESS)),
-        MarkEdge::Whole => line.top(px(0.)),
-    }
+        .bg(look.text)
 }
 
 /// The one raised thing in the list: a card with a hairline, a soft shadow and a heavier name.
@@ -458,6 +466,7 @@ fn new_terminal_row(look: &Look, cx: &mut Context<WindowView>) -> Stateful<Div> 
     div()
         .id("new-terminal-row")
         .flex()
+        .flex_none()
         .items_center()
         .gap(px(6.))
         .h(px(ROW_HEIGHT))
@@ -467,5 +476,5 @@ fn new_terminal_row(look: &Look, cx: &mut Context<WindowView>) -> Stateful<Div> 
         .hover(|style| style.bg(look.veil))
         .child(plus)
         .child(NEW_TERMINAL)
-        .on_click(cx.listener(|view, _, _, cx| view.open_terminal_in(None, cx)))
+        .on_click(cx.listener(|view, _, _, _| view.open_terminal_in(None)))
 }
