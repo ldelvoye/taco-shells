@@ -433,6 +433,29 @@ impl Default for Row {
     }
 }
 
+impl Terminal {
+    /// The cursor's shape and blink when no program has chosen them. It takes effect at once, over a shape a program chose earlier.
+    pub fn set_cursor_defaults(&mut self, shape: CursorShape, blink: bool) -> Result<(), Error> {
+        let style = match shape {
+            CursorShape::Bar => sys::GhosttyCursorStyle_GHOSTTY_CURSOR_STYLE_BAR,
+            CursorShape::Block => sys::GhosttyCursorStyle_GHOSTTY_CURSOR_STYLE_BLOCK,
+            CursorShape::Underline => sys::GhosttyCursorStyle_GHOSTTY_CURSOR_STYLE_UNDERLINE,
+            CursorShape::BlockHollow => sys::GhosttyCursorStyle_GHOSTTY_CURSOR_STYLE_BLOCK_HOLLOW,
+        };
+        self.set(
+            sys::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_STYLE,
+            &style,
+        )?;
+        self.set(
+            sys::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_BLINK,
+            &blink,
+        )?;
+        // The defaults apply on a reset to them (DECSCUSR 0), which this is.
+        self.write(b"\x1b[0 q");
+        Ok(())
+    }
+}
+
 fn advance(rows: sys::GhosttyRenderStateRowIterator, only_dirty: bool) -> bool {
     if only_dirty {
         // The dirty walk also reports a position; `next_row` reads the row's own VIEWPORT_Y for both walks.
@@ -735,5 +758,27 @@ mod tests {
         assert_eq!(read.palette[1], ansi[1]);
         assert_eq!(read.cursor, Some(rgb(0x123456)));
         assert_eq!(frame.size().unwrap(), SIZE);
+    }
+
+    #[test]
+    fn the_cursor_takes_the_settings_shape_until_a_program_chooses_one() {
+        let mut terminal = Terminal::new(SIZE).unwrap();
+        let mut state = RenderState::new().unwrap();
+        let cursor_of = |state: &mut RenderState, terminal: &Terminal| {
+            let frame = state.update(terminal).unwrap();
+            frame.cursor().unwrap()
+        };
+
+        terminal
+            .set_cursor_defaults(CursorShape::Bar, true)
+            .unwrap();
+        let set = cursor_of(&mut state, &terminal);
+        assert_eq!((set.shape, set.blinking), (CursorShape::Bar, true));
+
+        // A program's own choice wins, and its reset goes back to the settings, not the library's block.
+        terminal.write(b"\x1b[2 q");
+        assert_eq!(cursor_of(&mut state, &terminal).shape, CursorShape::Block);
+        terminal.write(b"\x1b[0 q");
+        assert_eq!(cursor_of(&mut state, &terminal).shape, CursorShape::Bar);
     }
 }

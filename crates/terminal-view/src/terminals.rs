@@ -3,6 +3,7 @@
 use std::io;
 use std::ops::Range;
 use std::os::unix::net::UnixStream;
+use std::time::Duration;
 
 use futures::StreamExt as _;
 use gpui::{
@@ -16,11 +17,12 @@ use taco_ghostty::input::{
     CellPoint, Grid, Key, KeyEncoder, KeyPress, Mods, MouseAction, MouseButton as GridButton,
     MouseInput, Scroll,
 };
+use taco_ghostty::render::CursorShape;
 use taco_protocol::{TerminalColors, TerminalId, TerminalSize};
-use taco_settings::Settings;
+use taco_settings::{CursorStyle, Settings};
 
 use crate::connection::{Requests, connect};
-use crate::draw::{hsla, paint};
+use crate::draw::{cursor_as_shown, hsla, paint};
 use crate::grid::{CellMetrics, font_family, grid_that_fits};
 use crate::keys::key_press;
 use crate::view::{Drawn, ViewConfig};
@@ -29,6 +31,8 @@ use crate::views::{Fit, Views};
 /// The width of `m` as a share of the font size, for a font that cannot be measured.
 const FALLBACK_ADVANCE: f32 = 0.6;
 const MARKED_TEXT_UNDERLINE: f32 = 1.0;
+/// How long a blinking cursor stays on, then off.
+const BLINK_PHASE: Duration = Duration::from_millis(530);
 
 pub enum TerminalsEvent {
     /// A click put keyboard focus in this terminal. Not sent for a focus the app asked for.
@@ -60,11 +64,18 @@ pub struct Terminals {
     /// Wheel movement too small for a line yet.
     scroll_remainder: f32,
     scroll_sensitivity: f32,
+    /// The window and this view both have keyboard focus, as of the last frame.
+    focused: bool,
+    /// Which phase a blinking cursor is in; typing starts it on again.
+    blink_on: bool,
+    /// The cursor last drawn may blink, so the blink timer redraws.
+    cursor_blinks: bool,
     family: String,
     font_size: f32,
     cell: CellMetrics,
     config: ViewConfig,
     _events: Task<()>,
+    _blink: Task<()>,
 }
 
 /// What one frame paints, worked out before painting.
@@ -109,14 +120,26 @@ impl Terminals {
             }
         });
 
+        let blink = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(BLINK_PHASE).await;
+                let blinked = this.update(cx, |terminals, cx| {
+                    if terminals.focused && terminals.cursor_blinks {
+                        terminals.blink_on = !terminals.blink_on;
+                        cx.notify();
+                    }
+                });
+                if blinked.is_err() {
+                    break;
+                }
+            }
+        });
+
         let installed = cx.text_system().all_font_names();
         let family = font_family(&settings.font_family, &installed);
         let font_size = settings.font_size as f32;
         let cell = measure(&family, font_size, cx);
-        let config = ViewConfig {
-            scrollback: settings.scrollback,
-            colors: colors.clone(),
-        };
+        let config = view_config(settings, colors);
         let keys = KeyEncoder::new().map_err(io::Error::other)?;
         Ok(Terminals {
             requests,
@@ -133,12 +156,34 @@ impl Terminals {
             reported_press: false,
             scroll_remainder: 0.0,
             scroll_sensitivity: settings.scroll_sensitivity as f32,
+            focused: false,
+            blink_on: true,
+            cursor_blinks: false,
             family,
             font_size,
             cell,
             config,
             _events: task,
+            _blink: blink,
         })
+    }
+
+    /// New settings or theme colors: the font, the scrollback, the cursor, the wheel and every view's colors.
+    pub fn apply(
+        &mut self,
+        settings: &Settings,
+        colors: &TerminalColors,
+        cx: &mut Context<Terminals>,
+    ) {
+        let installed = cx.text_system().all_font_names();
+        self.family = font_family(&settings.font_family, &installed);
+        self.font_size = settings.font_size as f32;
+        self.cell = measure(&self.family, self.font_size, cx);
+        self.scroll_sensitivity = settings.scroll_sensitivity as f32;
+        self.config = view_config(settings, colors);
+        self.views.configure(self.config.clone());
+        self.send_requests();
+        cx.notify();
     }
 
     /// The open terminals and the one in the middle. Sent on every change to the arrangement; cheap when nothing changed.
@@ -222,6 +267,10 @@ impl Terminals {
             window.request_animation_frame();
         }
         let focused = self.focus.is_focused(window) && window.is_window_active();
+        if focused && !self.focused {
+            self.blink_on = true;
+        }
+        self.focused = focused;
         self.report_focus(focused);
         let prepared = self.draw_on_screen();
         self.send_requests();
@@ -264,7 +313,7 @@ impl Terminals {
         let id = self.views.on_screen().cloned()?;
         let selection = self.config.colors.selection;
         let view = self.views.view(&id)?;
-        let drawn = match view.draw(selection) {
+        let mut drawn = match view.draw(selection) {
             Ok(Some(drawn)) => drawn,
             Ok(None) => return None,
             Err(_) => {
@@ -272,9 +321,12 @@ impl Terminals {
                 return None;
             }
         };
-        if let Some(cursor) = drawn.painting.cursor {
-            self.cursor_cell = Some((cursor.column, cursor.row));
+        let cursor = drawn.painting.cursor;
+        if let Some(mark) = cursor {
+            self.cursor_cell = Some((mark.column, mark.row));
+            self.cursor_blinks = mark.blinking;
         }
+        drawn.painting.cursor = cursor_as_shown(cursor, self.focused, self.blink_on);
         Some(Prepared {
             drawn,
             marked_text: self.marked_text.clone(),
@@ -299,6 +351,7 @@ impl Terminals {
     }
 
     fn send_key(&mut self, press: &KeyPress) {
+        self.blink_on = true;
         let Some(id) = self.views.on_screen().cloned() else {
             return;
         };
@@ -619,6 +672,7 @@ impl EntityInputHandler for Terminals {
         cx: &mut Context<Terminals>,
     ) {
         self.marked_text = None;
+        self.blink_on = true;
         if let Some(view) = self.views.on_screen_view() {
             let _ = view.scroll(Scroll::Bottom);
         }
@@ -760,6 +814,20 @@ fn paint_marked_text(
     let background = hsla(prepared.drawn.background);
     window.paint_quad(fill(cover, background));
     let _ = shaped.paint(top_left, cell_height, TextAlign::Left, None, window, cx);
+}
+
+fn view_config(settings: &Settings, colors: &TerminalColors) -> ViewConfig {
+    let cursor_shape = match settings.cursor_style {
+        CursorStyle::Block => CursorShape::Block,
+        CursorStyle::Underline => CursorShape::Underline,
+        CursorStyle::Bar => CursorShape::Bar,
+    };
+    ViewConfig {
+        scrollback: settings.scrollback,
+        colors: colors.clone(),
+        cursor_shape,
+        cursor_blink: settings.cursor_blink,
+    }
 }
 
 fn mods_of(modifiers: Modifiers) -> Mods {

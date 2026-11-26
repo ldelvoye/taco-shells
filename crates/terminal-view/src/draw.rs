@@ -55,6 +55,8 @@ pub struct CursorMark {
     pub shape: CursorShape,
     pub color: Hsla,
     pub columns: u16,
+    /// The settings and the program both let it blink.
+    pub blinking: bool,
 }
 
 /// Everything one frame draws, in grid coordinates.
@@ -94,9 +96,29 @@ pub fn lay_out(
             shape: cursor.shape,
             color: hsla(cursor_color),
             columns,
+            blinking: cursor.blinking,
         });
     }
     painting
+}
+
+/// The cursor as drawn this frame: a block is hollow while the terminal does not have focus, and a blinking one is hidden in its off phase.
+pub fn cursor_as_shown(
+    cursor: Option<CursorMark>,
+    focused: bool,
+    blink_on: bool,
+) -> Option<CursorMark> {
+    let mut shown = cursor?;
+    if !focused {
+        if shown.shape == CursorShape::Block {
+            shown.shape = CursorShape::BlockHollow;
+        }
+        return Some(shown);
+    }
+    if shown.blinking && !blink_on {
+        return None;
+    }
+    Some(shown)
 }
 
 fn is_wide_at(rows: &[Row], column: u16, row: u16) -> bool {
@@ -457,5 +479,29 @@ mod tests {
         terminal.write(b"\x1b[?25l");
         let (hidden, _) = painting_of(&terminal);
         assert_eq!(hidden.cursor, None);
+    }
+
+    #[test]
+    fn an_unfocused_block_is_hollow_and_a_blinking_cursor_hides_in_its_off_phase() {
+        let block = CursorMark {
+            column: 0,
+            row: 0,
+            shape: CursorShape::Block,
+            color: hsla(SELECTION),
+            columns: 1,
+            blinking: true,
+        };
+        let shown = |focused, blink_on| cursor_as_shown(Some(block), focused, blink_on);
+        assert_eq!(shown(true, true), Some(block));
+        assert_eq!(shown(true, false), None);
+        // Without focus it never blinks, and a block is drawn as an outline.
+        let unfocused = shown(false, false).unwrap();
+        assert_eq!(unfocused.shape, CursorShape::BlockHollow);
+        let bar = CursorMark {
+            shape: CursorShape::Bar,
+            ..block
+        };
+        let unfocused_bar = cursor_as_shown(Some(bar), false, true).unwrap();
+        assert_eq!(unfocused_bar.shape, CursorShape::Bar);
     }
 }

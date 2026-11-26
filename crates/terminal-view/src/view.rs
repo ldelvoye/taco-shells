@@ -1,18 +1,21 @@
 //! One terminal's view: a silent copy of the runtime's terminal, fed in the order the terminal channel sends.
 
 use taco_ghostty::input::{CellPoint, KeyEncoder, KeyPress, MouseEncoder, MouseInput, Scroll};
-use taco_ghostty::render::{Dirty, RenderState, Row};
+use taco_ghostty::render::{CursorShape, Dirty, RenderState, Row};
 use taco_ghostty::{Error, Step, Terminal};
 use taco_protocol::{Rgb, TerminalColors, TerminalEvent};
 
 use crate::draw::{Painting, lay_out};
 use crate::links::url_at;
 
-/// What every view's terminal is set to.
+/// What every view's terminal is set to, from the settings and the theme.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ViewConfig {
     pub scrollback: u32,
     pub colors: TerminalColors,
+    /// The cursor until a program chooses its own.
+    pub cursor_shape: CursorShape,
+    pub cursor_blink: bool,
 }
 
 /// What an event did to the view.
@@ -72,9 +75,7 @@ impl View {
                     return Ok(Applied::Ignored);
                 }
                 let mut terminal = Terminal::restore(&screen)?;
-                let scrollback = self.config.scrollback as usize;
-                terminal.set_scrollback(scrollback)?;
-                terminal.set_colors(&self.config.colors)?;
+                configure_terminal(&mut terminal, &self.config)?;
                 self.terminal = Some(terminal);
                 self.history_pending = true;
                 Ok(Applied::Changed)
@@ -313,6 +314,22 @@ impl View {
         }
         self.terminal.as_mut()
     }
+
+    /// New settings or theme colors, applied to the terminal at once if it has arrived.
+    pub fn configure(&mut self, config: ViewConfig) -> Result<(), Error> {
+        self.config = config;
+        let Some(terminal) = self.terminal.as_mut() else {
+            return Ok(());
+        };
+        configure_terminal(terminal, &self.config)
+    }
+}
+
+fn configure_terminal(terminal: &mut Terminal, config: &ViewConfig) -> Result<(), Error> {
+    let scrollback = config.scrollback as usize;
+    terminal.set_scrollback(scrollback)?;
+    terminal.set_colors(&config.colors)?;
+    terminal.set_cursor_defaults(config.cursor_shape, config.cursor_blink)
 }
 
 #[cfg(test)]
@@ -339,6 +356,8 @@ mod tests {
                 selection: GREY,
                 ansi: [GREY; 16],
             },
+            cursor_shape: CursorShape::Block,
+            cursor_blink: false,
         }
     }
 

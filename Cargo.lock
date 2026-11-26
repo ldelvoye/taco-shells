@@ -5164,6 +5164,8 @@ version = "0.0.0"
 dependencies = [
  "futures",
  "gpui",
+ "gpui_platform",
+ "image",
  "taco-ghostty",
  "taco-protocol",
  "taco-settings",
