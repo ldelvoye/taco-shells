@@ -20,13 +20,6 @@ export interface Area {
   modules: string[]
 }
 
-export interface Hole {
-  file: string
-  imports: string
-  /** The number of the milestone that removes this import. */
-  closes: number
-}
-
 export interface Violation {
   file: string
   line: number
@@ -220,16 +213,4 @@ export function violationsIn(files: ReadonlyMap<string, string>, config: WallCon
   }
 
   return violations
-}
-
-function sameCrossing(violation: Violation, hole: Hole): boolean {
-  return violation.file === hole.file && violation.imports === hole.imports
-}
-
-export function unlisted(violations: Violation[], holes: Hole[]): Violation[] {
-  return violations.filter((violation) => !holes.some((hole) => sameCrossing(violation, hole)))
-}
-
-export function closed(violations: Violation[], holes: Hole[]): Hole[] {
-  return holes.filter((hole) => !violations.some((violation) => sameCrossing(violation, hole)))
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { type Area, type Hole, type WallConfig, closed, importsOf, unlisted, violationsIn } from './check'
+import { type Area, type WallConfig, importsOf, violationsIn } from './check'
 
 const WINDOW: Area = {
   name: 'window',
@@ -171,25 +171,5 @@ describe('violationsIn', () => {
     expect(violations).toEqual([
       { file: 'src/stray/thing.ts', line: 0, imports: '', reason: 'belongs to no area' }
     ])
-  })
-})
-
-describe('holes', () => {
-  it('an unlisted crossing and a closed hole are both caught', () => {
-    const sameFileTwice = "import { x } from '@workspace/x'\nimport { y } from '@workspace/y'"
-    const files = new Map([
-      ['src/rules/a.ts', sameFileTwice],
-      ['src/workspace/b.ts', "import { app } from 'electron'"]
-    ])
-    const violations = violationsIn(files, WALLS)
-    const holes: Hole[] = [
-      { file: 'src/rules/a.ts', imports: '@workspace/x', closes: 3 },
-      { file: 'src/gone.ts', imports: 'electron', closes: 4 }
-    ]
-
-    const [, otherImportOfListedFile, otherFile] = violations
-    const [, staleHole] = holes
-    expect(unlisted(violations, holes)).toEqual([otherImportOfListedFile, otherFile])
-    expect(closed(violations, holes)).toEqual([staleHole])
   })
 })
