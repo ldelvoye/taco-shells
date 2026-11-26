@@ -7,19 +7,30 @@ export const PAGE_PROBE = `(() => {
   const textWaiters = []
   const state = { loading: false, lastFrame: 0, frameGaps: [], longTasks: 0, observer: null, hidden: false }
 
-  window.tacoShells.pty.onData((event) => {
+  window.tacoShells.pty.onEvent((event) => {
+    let data = null
+    if (event.type === 'output') {
+      data = event.data
+    }
+    if (event.type === 'attached') {
+      data = event.snapshot
+    }
+    if (data === null) {
+      return
+    }
+
     const id = event.id
     let before = 0
     if (bytes[id]) {
       before = bytes[id]
     }
-    bytes[id] = before + event.data.length
+    bytes[id] = before + data.length
 
     for (const waiter of [...textWaiters]) {
       if (waiter.id !== id) {
         continue
       }
-      const combined = waiter.tail + event.data
+      const combined = waiter.tail + data
       if (combined.includes(waiter.text)) {
         textWaiters.splice(textWaiters.indexOf(waiter), 1)
         waiter.resolve()
