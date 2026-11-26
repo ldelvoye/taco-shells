@@ -176,6 +176,13 @@ impl WindowView {
     pub fn set_look(&mut self, look: Look) {
         self.look = look;
     }
+
+    /// The terminal view in the middle, for the driver to read; none on fixtures.
+    #[cfg(feature = "drive")]
+    pub(crate) fn terminals(&self) -> Option<Entity<Terminals>> {
+        self.terminals.clone()
+    }
+
     fn receive(&mut self, output: WindowOutput, cx: &mut Context<Self>) {
         match output {
             WindowOutput::State(state) => self.show(state, cx),
