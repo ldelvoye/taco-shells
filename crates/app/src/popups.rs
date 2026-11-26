@@ -7,7 +7,7 @@ use taco_protocol::{DrawnState, TabGroupId, TerminalId};
 use taco_rules::can_fork;
 
 use crate::look::{Look, ROW_RADIUS};
-use crate::text_field::TextField;
+use crate::text_field::{TextField, TextFieldEvent};
 use crate::window::WindowView;
 
 const POPUP_WIDTH: f32 = 180.;
@@ -33,6 +33,15 @@ pub enum Popup {
     },
 }
 
+/// What the window does with an event from the rename field.
+#[derive(Debug, PartialEq)]
+pub enum RenameStep {
+    Rename(String),
+    Close,
+    /// Esc undoes: the name the popup opened with goes back, since each keystroke was already applied.
+    RenameAndClose(String),
+}
+
 impl Popup {
     /// Whether the row or tab group the popup is on still exists.
     pub fn still_shown_in(&self, drawn: &DrawnState) -> bool {
@@ -53,6 +62,14 @@ impl Popup {
 }
 
 /// The popup card, drawn over the window next to where it was opened.
+pub fn rename_step(event: &TextFieldEvent, opening_name: &str) -> RenameStep {
+    match event {
+        TextFieldEvent::Edited(text) => RenameStep::Rename(text.clone()),
+        TextFieldEvent::Submitted => RenameStep::Close,
+        TextFieldEvent::Cancelled => RenameStep::RenameAndClose(opening_name.to_string()),
+    }
+}
+
 pub fn popup_layer(
     popup: &Popup,
     drawn: &DrawnState,
@@ -149,4 +166,26 @@ fn item(id: &'static str, label: String, enabled: bool, look: &Look) -> Stateful
         shown = shown.text_color(look.secondary_text);
     }
     shown
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn esc_after_several_keystrokes_puts_back_the_opening_name() {
+        let typed = ["T", "Ta", "Tac"];
+        let mut last_sent = String::new();
+        for text in typed {
+            let edited = TextFieldEvent::Edited(text.to_string());
+            if let RenameStep::Rename(name) = rename_step(&edited, "Tacos") {
+                last_sent = name;
+            }
+        }
+        assert_eq!(last_sent, "Tac");
+        let undone = rename_step(&TextFieldEvent::Cancelled, "Tacos");
+        assert_eq!(undone, RenameStep::RenameAndClose("Tacos".to_string()));
+        let kept = rename_step(&TextFieldEvent::Submitted, "Tacos");
+        assert_eq!(kept, RenameStep::Close);
+    }
 }

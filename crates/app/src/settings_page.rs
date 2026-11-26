@@ -1,18 +1,21 @@
 use std::collections::HashMap;
 
 use gpui::{
-    Context, Div, ElementId, FontWeight, Hsla, InteractiveElement, ParentElement, SharedString,
-    Stateful, StatefulInteractiveElement, Styled, div, px, transparent_black,
+    Context, Div, ElementId, Entity, FontWeight, Hsla, InteractiveElement, ParentElement,
+    SharedString, Stateful, StatefulInteractiveElement, Styled, div, px, transparent_black,
 };
 use taco_settings::{
     CommandId, CursorStyle, FONT_SIZE_MAX, FONT_SIZE_MIN, SettingChange, Settings, ShellRowName,
     ThemeChoice, UnreadSettings,
 };
 
+use crate::drive::mark;
 use crate::look::{FONT_FAMILY, Look, SMALL_TEXT_SIZE, TEXT_SIZE, TITLE_BAR_HEIGHT};
+use crate::text_field::TextField;
 use crate::window::WindowView;
 
 const SCROLL_ID: &str = "settings-scroll";
+const SCROLLBACK_MARK: &str = "settings:scrollback";
 const TITLE: &str = "Settings";
 const OPEN_FILE_LABEL: &str = "Open settings.json";
 const FOOT_TEXT: &str = "Changes are written to settings.json and apply at once.";
@@ -69,9 +72,6 @@ const STEPPER_RADIUS: f32 = 6.;
 const STEPPER_GAP: f32 = 6.;
 const STEPPER_VALUE_MIN_WIDTH: f32 = 22.;
 const STEPPER_DISABLED_OPACITY: f32 = 0.5;
-const FIELD_HEIGHT: f32 = 26.;
-const FIELD_PADDING: f32 = 8.;
-const FIELD_RADIUS: f32 = 6.;
 const FIELD_MAX_WIDTH: f32 = 280.;
 const SCROLLBACK_FIELD_WIDTH: f32 = 96.;
 const BUTTON_RADIUS: f32 = 6.;
@@ -107,7 +107,29 @@ pub struct SettingsInput<'a> {
     pub unread: &'a UnreadSettings,
     /// Why a setting's last write was refused, by its name in settings.json.
     pub refused: &'a HashMap<&'static str, String>,
+    pub fields: &'a SettingsFields,
     pub look: &'a Look,
+}
+
+/// The settings typed rather than chosen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TypedSetting {
+    Font,
+    Scrollback,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Typed {
+    Change(SettingChange),
+    Unchanged,
+    /// Scrollback that is not a whole number, which is never sent.
+    NotWhole,
+}
+
+/// The page's two typed fields, kept by the window so an edit survives a redraw.
+pub struct SettingsFields {
+    pub font: Entity<TextField>,
+    pub scrollback: Entity<TextField>,
 }
 
 struct Segment {
@@ -249,7 +271,7 @@ fn look_group(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
     let look = input.look;
     let theme_options = segments_of(&THEME_OPTIONS, settings.theme, SettingChange::Theme);
     let theme = segmented(theme_options, look, cx);
-    let font = field_box(settings.font_family.clone(), look)
+    let font = typed_field(&input.fields.font)
         .flex_1()
         .min_w_0()
         .max_w(px(FIELD_MAX_WIDTH));
@@ -293,7 +315,8 @@ fn terminal_group(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
         look,
         cx,
     );
-    let scrollback = field_box(settings.scrollback.to_string(), look).w(px(SCROLLBACK_FIELD_WIDTH));
+    let scrollback_field = typed_field(&input.fields.scrollback).w(px(SCROLLBACK_FIELD_WIDTH));
+    let scrollback = mark(scrollback_field, SCROLLBACK_MARK);
     let speed = stepper(
         "scroll-speed",
         settings.scroll_sensitivity,
@@ -653,21 +676,49 @@ fn stepped(value: f64, by: f64, min: f64, max: Option<f64>) -> Option<f64> {
     Some(next)
 }
 
-fn field_box(text: String, look: &Look) -> Div {
+fn typed_field(field: &Entity<TextField>) -> Div {
     div()
-        .flex()
-        .items_center()
-        .h(px(FIELD_HEIGHT))
-        .px(px(FIELD_PADDING))
-        .rounded(px(FIELD_RADIUS))
-        .border_1()
-        .border_color(look.hairline)
-        .bg(look.selected_card)
-        .overflow_hidden()
-        .whitespace_nowrap()
         .font_family(FIELD_FONT)
         .text_size(px(SMALL_TEXT_SIZE))
-        .child(text)
+        .child(field.clone())
+}
+
+impl TypedSetting {
+    pub fn key(self) -> &'static str {
+        let named = match self {
+            TypedSetting::Font => SettingChange::FontFamily(String::new()),
+            TypedSetting::Scrollback => SettingChange::Scrollback(0),
+        };
+        named.key()
+    }
+}
+
+/// What a typed value comes to once Enter is pressed or the field is left.
+pub fn typed(setting: TypedSetting, text: &str, settings: &Settings) -> Typed {
+    let trimmed = text.trim();
+    let change = match setting {
+        TypedSetting::Font => SettingChange::FontFamily(trimmed.to_string()),
+        TypedSetting::Scrollback => {
+            let parsed = trimmed.parse::<u32>();
+            let Ok(lines) = parsed else {
+                return Typed::NotWhole;
+            };
+            SettingChange::Scrollback(lines)
+        }
+    };
+    let published = published_text(setting, settings);
+    if trimmed == published {
+        return Typed::Unchanged;
+    }
+    Typed::Change(change)
+}
+
+/// The text a field shows for the setting as the file has it.
+pub fn published_text(setting: TypedSetting, settings: &Settings) -> String {
+    match setting {
+        TypedSetting::Font => settings.font_family.clone(),
+        TypedSetting::Scrollback => settings.scrollback.to_string(),
+    }
 }
 
 fn open_file_button(id: &'static str, look: &Look, cx: &mut Context<WindowView>) -> Stateful<Div> {
@@ -690,6 +741,23 @@ fn open_file_button(id: &'static str, look: &Look, cx: &mut Context<WindowView>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scrollback_is_sent_only_as_a_whole_number_and_nothing_is_sent_when_nothing_changed() {
+        let settings = Settings::default();
+        let published = settings.scrollback.to_string();
+        let font = format!("  {}  ", settings.font_family);
+        for not_whole in ["12.5", "", "abc", "-3"] {
+            let result = typed(TypedSetting::Scrollback, not_whole, &settings);
+            assert_eq!(result, Typed::NotWhole, "{not_whole:?}");
+        }
+        let more = typed(TypedSetting::Scrollback, " 5000 ", &settings);
+        assert_eq!(more, Typed::Change(SettingChange::Scrollback(5000)));
+        let same_lines = typed(TypedSetting::Scrollback, &published, &settings);
+        assert_eq!(same_lines, Typed::Unchanged);
+        let same_font = typed(TypedSetting::Font, &font, &settings);
+        assert_eq!(same_font, Typed::Unchanged);
+    }
 
     #[test]
     fn a_setting_the_file_could_not_give_cannot_be_changed_and_a_broken_file_locks_them_all() {

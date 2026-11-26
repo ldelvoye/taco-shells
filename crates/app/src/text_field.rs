@@ -1,12 +1,12 @@
 use std::ops::Range;
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, CursorStyle, Element, ElementId, ElementInputHandler,
-    Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId,
-    InteractiveElement, IntoElement, KeyBinding, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, PaintQuad, ParentElement, Pixels, Point, Render, ShapedLine,
-    Style, Styled, TextAlign, TextRun, UTF16Selection, UnderlineStyle, Window, actions, div, fill,
-    point, px, relative, size,
+    App, Bounds, ClipboardItem, ContentMask, Context, CursorStyle, Element, ElementId,
+    ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
+    GlobalElementId, InteractiveElement, IntoElement, KeyBinding, LayoutId, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, ParentElement, Pixels, Point, Render,
+    ShapedLine, Style, Styled, TextAlign, TextRun, UTF16Selection, UnderlineStyle, Window, actions,
+    div, fill, point, px, relative, size,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -34,6 +34,7 @@ actions!(
         Cut,
         Copy,
         Submit,
+        Cancel,
     ]
 );
 
@@ -43,6 +44,8 @@ pub enum TextFieldEvent {
     Edited(String),
     /// Enter was pressed.
     Submitted,
+    /// Esc was pressed.
+    Cancelled,
 }
 
 pub struct TextField {
@@ -55,6 +58,8 @@ pub struct TextField {
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
     is_selecting: bool,
+    /// How far the line is drawn left of the field's edge, so the caret stays in view.
+    scroll: f32,
 }
 
 struct TextElement {
@@ -63,6 +68,9 @@ struct TextElement {
 
 struct PrepaintState {
     line: Option<ShapedLine>,
+    /// Where the whole line sits, its start possibly left of the field.
+    line_bounds: Bounds<Pixels>,
+    scroll: f32,
     caret: Option<PaintQuad>,
     selection: Option<PaintQuad>,
 }
@@ -82,7 +90,33 @@ impl TextField {
             last_layout: None,
             last_bounds: None,
             is_selecting: false,
+            scroll: 0.,
         }
+    }
+
+    /// Replaces the text, all of it selected, without telling the owner it was edited.
+    pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        if self.content == text {
+            return;
+        }
+        self.content = text.to_string();
+        self.selected_range = 0..text.len();
+        self.selection_reversed = false;
+        self.marked_range = None;
+        cx.notify();
+    }
+
+    pub fn text(&self) -> &str {
+        &self.content
+    }
+
+    pub fn set_look(&mut self, look: Look, cx: &mut Context<Self>) {
+        self.look = look;
+        cx.notify();
+    }
+
+    fn cancel(&mut self, _: &Cancel, _: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(TextFieldEvent::Cancelled);
     }
 
     fn left(&mut self, _: &Left, window: &mut Window, cx: &mut Context<Self>) {
@@ -525,6 +559,8 @@ impl Element for TextElement {
         let selected_range = field.selected_range.clone();
         let marked_range = field.marked_range.clone();
         let caret_offset = field.cursor_offset();
+        let last_scroll = field.scroll;
+        let focused = field.focus_handle.is_focused(window);
         let look = field.look.clone();
         let style = window.text_style();
 
@@ -575,21 +611,37 @@ impl Element for TextElement {
 
         let top = bounds.top();
         let bottom = bounds.bottom();
+        let caret_in_line = f32::from(line.x_for_index(caret_offset));
+        let line_width = f32::from(line.width);
+        let visible = f32::from(bounds.size.width);
+        // A field nobody is typing in shows its start.
+        let mut scroll = 0.;
+        if focused {
+            scroll = scroll_showing(last_scroll, caret_in_line, line_width, visible);
+        }
+        let line_left = bounds.left() - px(scroll);
+        let line_size = size(bounds.size.width + px(scroll), bounds.size.height);
+        let line_bounds = Bounds::new(point(line_left, top), line_size);
         let mut caret = None;
         let mut selection = None;
-        if selected_range.is_empty() {
-            let caret_x = bounds.left() + line.x_for_index(caret_offset);
+        let typing_at = focused && selected_range.is_empty();
+        let selecting = focused && !selected_range.is_empty();
+        if typing_at {
+            let caret_x = line_left + line.x_for_index(caret_offset);
             let caret_size = size(px(CARET_WIDTH), bottom - top);
             let caret_bounds = Bounds::new(point(caret_x, top), caret_size);
             caret = Some(fill(caret_bounds, look.text));
-        } else {
-            let start = point(bounds.left() + line.x_for_index(selected_range.start), top);
-            let end = point(bounds.left() + line.x_for_index(selected_range.end), bottom);
+        }
+        if selecting {
+            let start = point(line_left + line.x_for_index(selected_range.start), top);
+            let end = point(line_left + line.x_for_index(selected_range.end), bottom);
             let selection_bounds = Bounds::from_corners(start, end);
             selection = Some(fill(selection_bounds, look.strong_veil));
         }
         PrepaintState {
             line: Some(line),
+            line_bounds,
+            scroll,
             caret,
             selection,
         }
@@ -606,36 +658,59 @@ impl Element for TextElement {
         cx: &mut App,
     ) {
         let focus_handle = self.field.read(cx).focus_handle.clone();
-        let handler = ElementInputHandler::new(bounds, self.field.clone());
+        let line_bounds = prepaint.line_bounds;
+        let handler = ElementInputHandler::new(line_bounds, self.field.clone());
         window.handle_input(&focus_handle, handler, cx);
-        if let Some(selection) = prepaint.selection.take() {
-            window.paint_quad(selection);
-        }
         let Some(line) = prepaint.line.take() else {
             return;
         };
-        let line_height = window.line_height();
-        let painted = line.paint(
-            bounds.origin,
-            line_height,
-            TextAlign::Left,
-            None,
-            window,
-            cx,
-        );
-        if let Err(error) = painted {
-            eprintln!("the text field's line did not paint: {error:#}");
-        }
-        if focus_handle.is_focused(window)
-            && let Some(caret) = prepaint.caret.take()
-        {
-            window.paint_quad(caret);
-        }
+        // The line can start left of the field, so only what is inside the field is drawn.
+        let mask = ContentMask { bounds };
+        window.with_content_mask(Some(mask), |window| {
+            paint_line(&line, prepaint, line_bounds.origin, window, cx);
+        });
+        let scroll = prepaint.scroll;
         self.field.update(cx, |field, _| {
             field.last_layout = Some(line);
-            field.last_bounds = Some(bounds);
+            field.last_bounds = Some(line_bounds);
+            field.scroll = scroll;
         });
     }
+}
+
+fn paint_line(
+    line: &ShapedLine,
+    prepaint: &mut PrepaintState,
+    origin: Point<Pixels>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if let Some(selection) = prepaint.selection.take() {
+        window.paint_quad(selection);
+    }
+    let line_height = window.line_height();
+    let painted = line.paint(origin, line_height, TextAlign::Left, None, window, cx);
+    if let Err(error) = painted {
+        eprintln!("the text field's line did not paint: {error:#}");
+    }
+    if let Some(caret) = prepaint.caret.take() {
+        window.paint_quad(caret);
+    }
+}
+
+/// How far to scroll the line so the caret at `caret` stays inside a field `visible` wide, moving as little as it can
+/// from `scroll`, and never past the line's end.
+fn scroll_showing(scroll: f32, caret: f32, line_width: f32, visible: f32) -> f32 {
+    let room = visible - CARET_WIDTH;
+    let mut shown = scroll;
+    if caret < shown {
+        shown = caret;
+    }
+    if caret > shown + room {
+        shown = caret - room;
+    }
+    let furthest = (line_width - room).max(0.);
+    shown.clamp(0., furthest)
 }
 
 impl Focusable for TextField {
@@ -667,6 +742,7 @@ impl Render for TextField {
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::submit))
+            .on_action(cx.listener(Self::cancel))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
@@ -703,6 +779,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-x", Cut, context),
         KeyBinding::new("cmd-v", Paste, context),
         KeyBinding::new("enter", Submit, context),
+        KeyBinding::new("escape", Cancel, context),
     ]);
 }
 
@@ -728,6 +805,22 @@ fn one_line(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_caret_stays_in_view_and_the_line_never_scrolls_past_its_end() {
+        let visible = 100.;
+        let room = visible - CARET_WIDTH;
+        // A short line never scrolls.
+        assert_eq!(scroll_showing(0., 40., 60., visible), 0.);
+        // The caret at a long line's end brings that end to the field's right edge.
+        assert_eq!(scroll_showing(0., 300., 300., visible), 300. - room);
+        // A caret already in view does not move the line.
+        assert_eq!(scroll_showing(150., 200., 300., visible), 150.);
+        // A caret left of the view scrolls back just enough to show it.
+        assert_eq!(scroll_showing(150., 120., 300., visible), 120.);
+        // A line made shorter, by a deletion, gives back the scroll it no longer needs.
+        assert_eq!(scroll_showing(250., 120., 150., visible), 150. - room);
+    }
 
     #[test]
     fn one_line_turns_each_run_of_line_breaks_into_one_space() {

@@ -40,7 +40,7 @@ pub enum DriveRequest {
     /// A press at `from`, moves, and a release at `to`.
     Drag { from: Point, to: Point },
     /// Where a named thing is drawn: `row:<terminal id>`, `panel:<panel>`, `panel:<panel>:title`,
-    /// `strip:<panel or settings>` or `middle`, with panels named `terminals` and `agent_activity`.
+    /// `strip:<panel or settings>`, `middle` or `settings:scrollback`, with panels named `terminals` and `agent_activity`.
     Bounds { target: String },
     /// The state the window last drew, with its own focus move laid over it.
     DrawnState,
