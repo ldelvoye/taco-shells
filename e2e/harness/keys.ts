@@ -13,6 +13,7 @@ export interface Key {
 
 export const KEY = {
   b: { code: 'KeyB', text: 'b', virtualKeyCode: 66 },
+  k: { code: 'KeyK', text: 'k', virtualKeyCode: 75 },
   t: { code: 'KeyT', text: 't', virtualKeyCode: 84 },
   w: { code: 'KeyW', text: 'w', virtualKeyCode: 87 },
   backslash: { code: 'Backslash', text: '\\', virtualKeyCode: 220 },
