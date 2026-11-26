@@ -77,7 +77,7 @@ pub struct Workspace {
     unsaved_since: Option<u64>,
     frozen: bool,
     logs: BTreeMap<TerminalId, Log>,
-    /// The terminal Agent Activity shows, which is sent each entry as it is logged.
+    /// The terminal Agent Activity shows; it is sent each entry as it is logged.
     watched: Option<TerminalId>,
 }
 
@@ -90,6 +90,19 @@ fn agent_labels() -> BTreeMap<HarnessId, AgentLabel> {
         (harness.id(), label)
     });
     labels.collect()
+}
+
+// A terminal's log is read from storage the first time it is needed.
+fn loaded_log<'a>(
+    logs: &'a mut BTreeMap<TerminalId, Log>,
+    storage: &dyn Storage,
+    terminal: &TerminalId,
+) -> &'a mut Log {
+    let entry = logs.entry(terminal.clone());
+    entry.or_insert_with(|| {
+        let lines = storage.read_log(terminal);
+        Log::from_lines(&lines)
+    })
 }
 
 fn runtime_problem(reason: &str) -> String {
@@ -265,7 +278,8 @@ impl Workspace {
                 if !self.holds(&terminal) {
                     return Vec::new();
                 }
-                let page = self.log_of(&terminal).newest();
+                let log = loaded_log(&mut self.logs, self.options.storage.as_ref(), &terminal);
+                let page = log.newest();
                 ActivityEvent::Loaded {
                     terminal,
                     entries: page.entries,
@@ -276,7 +290,8 @@ impl Workspace {
                 if !self.holds(&terminal) {
                     return Vec::new();
                 }
-                let page = self.log_of(&terminal).older_than(before);
+                let log = loaded_log(&mut self.logs, self.options.storage.as_ref(), &terminal);
+                let page = log.older_than(before);
                 ActivityEvent::Older {
                     terminal,
                     entries: page.entries,
@@ -523,11 +538,14 @@ impl Workspace {
         accepted(None)
     }
 
-    // After a freeze, a quit or the runtime dying, the terminals going keep their logs, since the next launch reopens them.
     fn terminal_exited(&mut self, terminal: &TerminalId) {
+        // a frozen shutdown, a quit or the runtime dying, keeps the logs: the next launch reopens these terminals
         if !self.frozen {
             self.logs.remove(terminal);
             self.options.storage.delete_log(terminal);
+        }
+        if self.watched.as_ref() == Some(terminal) {
+            self.watched = None;
         }
         self.sessions.forget(terminal);
         self.directories.remove(terminal);
@@ -657,20 +675,6 @@ impl Workspace {
         }
     }
 
-    // A terminal's log is read from storage the first time it is needed, and tidied then if its file holds lines it no longer keeps.
-    fn log_of(&mut self, terminal: &TerminalId) -> &mut Log {
-        if !self.logs.contains_key(terminal) {
-            let lines = self.options.storage.read_log(terminal);
-            let (mut log, needs_rewrite) = Log::from_lines(&lines);
-            if needs_rewrite {
-                let kept = log.rewritten();
-                self.options.storage.rewrite_log(terminal, &kept);
-            }
-            self.logs.insert(terminal.clone(), log);
-        }
-        self.logs.entry(terminal.clone()).or_default()
-    }
-
     // The log belongs to the terminal, not to one session of its agent, so every session in it appends to the same one.
     fn log_entry(
         &mut self,
@@ -679,17 +683,19 @@ impl Workspace {
         now_ms: u64,
         out: &mut Vec<Outbound>,
     ) {
-        let log = self.log_of(terminal);
-        let (entry, needs_rewrite) = log.append(kind, now_ms);
-        let mut rewrite = None;
-        if needs_rewrite {
-            rewrite = Some(log.rewritten());
-        }
-        match (rewrite, line_of(&entry)) {
-            (Some(lines), _) => self.options.storage.rewrite_log(terminal, &lines),
-            (None, Some(line)) => self.options.storage.append_log(terminal, &line),
-            (None, None) => {}
-        }
+        let log = loaded_log(&mut self.logs, self.options.storage.as_ref(), terminal);
+        let entry = log.append(kind, now_ms);
+        let rewrite = log.needs_rewrite();
+        let storage = &mut self.options.storage;
+        let succeeded = if rewrite {
+            storage.rewrite_log(terminal, &log.lines())
+        } else {
+            match line_of(&entry) {
+                Some(line) => storage.append_log(terminal, &line),
+                None => false,
+            }
+        };
+        log.file_written(rewrite, succeeded);
         if self.watched.as_ref() == Some(terminal) {
             let appended = ActivityEvent::Appended {
                 terminal: terminal.clone(),
@@ -699,7 +705,6 @@ impl Workspace {
         }
     }
 
-    /// Forgets the logs of terminals that are no longer open, once a restore has said which are.
     fn drop_orphan_logs(&mut self) {
         let stored = self.options.storage.logs();
         for terminal in stored {

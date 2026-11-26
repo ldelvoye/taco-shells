@@ -1,6 +1,6 @@
-use std::fs::{self, OpenOptions};
-use std::io::Write;
-use std::path::PathBuf;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 
 use taco_protocol::TerminalId;
 
@@ -15,6 +15,7 @@ pub const UNREADABLE_COPY_FILE: &str = "workspace.unreadable.json";
 /// The folder of the config directory that holds one Agent Activity log per terminal.
 pub const ACTIVITY_DIRECTORY: &str = "activity";
 const LOG_SUFFIX: &str = ".jsonl";
+const LOG_TEMPORARY_EXTENSION: &str = "jsonl.tmp";
 
 /// Where the workspace keeps what outlives a launch.
 pub trait Storage: Send {
@@ -22,11 +23,12 @@ pub trait Storage: Send {
     fn read_save(&self) -> Option<String>;
     /// Replaces the save file, and says whether it did; the workspace tries a failed save again.
     fn write_save(&mut self, text: &str) -> bool;
-    /// The lines of a terminal's activity log, oldest first, or none when it has no log.
+    /// The lines of a terminal's activity log, oldest first; empty when it has no log.
     fn read_log(&self, terminal: &TerminalId) -> Vec<String>;
-    fn append_log(&mut self, terminal: &TerminalId, line: &str);
-    /// Replaces a terminal's log with these lines.
-    fn rewrite_log(&mut self, terminal: &TerminalId, lines: &[String]);
+    /// Adds a line to a terminal's log, and says whether it did; the workspace rewrites a log whose append failed.
+    fn append_log(&mut self, terminal: &TerminalId, line: &str) -> bool;
+    /// Replaces a terminal's log with these lines, and says whether it did.
+    fn rewrite_log(&mut self, terminal: &TerminalId, lines: &[String]) -> bool;
     fn delete_log(&mut self, terminal: &TerminalId);
     /// Every terminal that has a log.
     fn logs(&self) -> Vec<TerminalId>;
@@ -37,7 +39,7 @@ pub struct FileStorage {
     directory: PathBuf,
 }
 
-/// The file name a terminal's log has, or none for an id that is not safe as one, which then has no log on disk.
+/// A terminal's log file name, or none for an id that is unsafe as a file name.
 fn log_file_name(terminal: &TerminalId) -> Option<String> {
     let TerminalId(id) = terminal;
     let safe = id
@@ -47,6 +49,18 @@ fn log_file_name(terminal: &TerminalId) -> Option<String> {
         return None;
     }
     Some(format!("{id}{LOG_SUFFIX}"))
+}
+
+fn ends_a_line(path: &Path) -> bool {
+    let Ok(mut file) = File::open(path) else {
+        return true;
+    };
+    if file.seek(SeekFrom::End(-1)).is_err() {
+        return true;
+    }
+    let mut last = [0u8; 1];
+    let read = file.read_exact(&mut last);
+    read.is_err() || last[0] == b'\n'
 }
 
 /// The copy a file this build did not write needs before it is replaced, or none for our own save.
@@ -102,39 +116,63 @@ impl Storage for FileStorage {
         fs::rename(&temporary, path).is_ok()
     }
 
+    // Read as bytes, so a crash that cut a character in half costs that line and not the whole log.
     fn read_log(&self, terminal: &TerminalId) -> Vec<String> {
         let Some(path) = self.log_path(terminal) else {
             return Vec::new();
         };
-        let Ok(text) = fs::read_to_string(path) else {
+        let Ok(bytes) = fs::read(path) else {
             return Vec::new();
         };
-        let lines = text.lines().map(str::to_string);
-        lines.collect()
+        let lines = bytes.split(|byte| *byte == b'\n');
+        let texts = lines.filter_map(|line| std::str::from_utf8(line).ok());
+        let kept = texts.filter(|text| !text.is_empty()).map(str::to_string);
+        kept.collect()
     }
 
-    fn append_log(&mut self, terminal: &TerminalId, line: &str) {
+    fn append_log(&mut self, terminal: &TerminalId, line: &str) -> bool {
         let Some(path) = self.log_path(terminal) else {
-            return;
+            return false;
+        };
+        let mut opened = OpenOptions::new().create(true).append(true).open(&path);
+        if opened.is_err() {
+            let folder = self.directory.join(ACTIVITY_DIRECTORY);
+            let _ = fs::create_dir_all(folder);
+            opened = OpenOptions::new().create(true).append(true).open(&path);
+        }
+        let Ok(mut file) = opened else {
+            return false;
+        };
+        // a line a crash cut short is ended first, so the new entry does not join it
+        let mut separated = String::new();
+        if !ends_a_line(&path) {
+            separated.push('\n');
+        }
+        separated.push_str(line);
+        separated.push('\n');
+        file.write_all(separated.as_bytes()).is_ok()
+    }
+
+    fn rewrite_log(&mut self, terminal: &TerminalId, lines: &[String]) -> bool {
+        let Some(path) = self.log_path(terminal) else {
+            return false;
         };
         let folder = self.directory.join(ACTIVITY_DIRECTORY);
         let _ = fs::create_dir_all(folder);
-        let opened = OpenOptions::new().create(true).append(true).open(path);
-        if let Ok(mut file) = opened {
-            let _ = writeln!(file, "{line}");
+        let temporary = path.with_extension(LOG_TEMPORARY_EXTENSION);
+        let mut text = String::new();
+        for line in lines {
+            text.push_str(line);
+            text.push('\n');
         }
-    }
-
-    fn rewrite_log(&mut self, terminal: &TerminalId, lines: &[String]) {
-        let Some(path) = self.log_path(terminal) else {
-            return;
-        };
-        let temporary = path.with_extension("jsonl.tmp");
-        let mut text = lines.join("\n");
-        text.push('\n');
-        if fs::write(&temporary, text).is_ok() {
-            let _ = fs::rename(&temporary, path);
+        if fs::write(&temporary, text).is_err() {
+            return false;
         }
+        let renamed = fs::rename(&temporary, path).is_ok();
+        if !renamed {
+            let _ = fs::remove_file(&temporary);
+        }
+        renamed
     }
 
     fn delete_log(&mut self, terminal: &TerminalId) {
@@ -202,23 +240,32 @@ mod tests {
     fn a_log_is_a_file_per_terminal_and_an_id_unsafe_as_a_file_name_has_none() {
         let directory = tempfile::tempdir().unwrap();
         let mut storage = FileStorage::new(directory.path().to_path_buf());
-        let terminal = TerminalId("3fa9c1d2".into());
+        let terminal = TerminalId("3fa9c1d2-b_7".into());
+        let file = directory
+            .path()
+            .join(ACTIVITY_DIRECTORY)
+            .join("3fa9c1d2-b_7.jsonl");
 
-        storage.append_log(&terminal, "one");
-        storage.append_log(&terminal, "two");
-        assert_eq!(storage.read_log(&terminal), vec!["one", "two"]);
-        storage.rewrite_log(&terminal, &["two".to_string()]);
-        assert_eq!(storage.read_log(&terminal), vec!["two"]);
+        assert!(storage.append_log(&terminal, "one"));
+        assert!(storage.rewrite_log(&terminal, &["two".to_string()]));
+        assert!(storage.append_log(&terminal, "three"));
+        assert_eq!(storage.read_log(&terminal), vec!["two", "three"]);
         assert_eq!(storage.logs(), vec![terminal.clone()]);
 
-        let escaping = TerminalId("../../workspace".into());
-        storage.append_log(&escaping, "lost");
-        assert!(storage.read_log(&escaping).is_empty());
-        let outside = directory.path().parent().unwrap().join("workspace.jsonl");
-        assert!(
-            !outside.exists(),
-            "nothing is written outside the activity folder"
-        );
+        // a crash can cut the last line short, even inside a character
+        let mut torn = fs::read(&file).unwrap();
+        torn.extend_from_slice("{\"seq\":9,\"kind\":\"😀".as_bytes());
+        torn.truncate(torn.len() - 2);
+        fs::write(&file, torn).unwrap();
+        assert!(storage.append_log(&terminal, "four"));
+        assert_eq!(storage.read_log(&terminal), vec!["two", "three", "four"]);
+
+        for unsafe_id in ["../escaped", ""] {
+            let escaping = TerminalId(unsafe_id.into());
+            assert!(!storage.append_log(&escaping, "lost"));
+            assert!(storage.read_log(&escaping).is_empty());
+        }
+        assert!(!directory.path().join("escaped.jsonl").exists());
 
         storage.delete_log(&terminal);
         assert!(storage.logs().is_empty());

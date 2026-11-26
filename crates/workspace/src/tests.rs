@@ -63,15 +63,23 @@ impl Storage for Disk {
         }
     }
 
-    fn append_log(&mut self, terminal: &TerminalId, line: &str) {
+    fn append_log(&mut self, terminal: &TerminalId, line: &str) -> bool {
+        if *self.failing.lock().unwrap() {
+            return false;
+        }
         let mut logs = self.logs.lock().unwrap();
         let lines = logs.entry(terminal.clone()).or_default();
         lines.push(line.to_string());
+        true
     }
 
-    fn rewrite_log(&mut self, terminal: &TerminalId, lines: &[String]) {
+    fn rewrite_log(&mut self, terminal: &TerminalId, lines: &[String]) -> bool {
+        if *self.failing.lock().unwrap() {
+            return false;
+        }
         let mut logs = self.logs.lock().unwrap();
         logs.insert(terminal.clone(), lines.to_vec());
+        true
     }
 
     fn delete_log(&mut self, terminal: &TerminalId) {
@@ -707,7 +715,7 @@ fn logged(workspace: &mut Workspace, terminal: &str) -> Vec<String> {
     };
     let out = workspace.activity(watch);
     let Some(ActivityEvent::Loaded { entries, .. }) = activity(&out).pop() else {
-        return Vec::new();
+        panic!("watching {terminal} loads its log");
     };
     let texts = entries.into_iter().map(|entry| match entry.kind {
         ActivityKind::Asked { text } => text,
@@ -739,11 +747,40 @@ fn a_log_belongs_to_its_terminal_across_sessions_and_only_the_watched_one_is_str
 
     let nothing = ActivityRequest::Watch { terminal: None };
     assert!(workspace.activity(nothing).is_empty());
-    let quiet = prompted(&mut workspace, "t1", SESSION, "fourth");
+    let quiet = prompted(&mut workspace, "t2", SESSION, "fourth");
     assert!(
         activity(&quiet).is_empty(),
         "nothing is streamed once no terminal is watched"
     );
+    let not_open = ActivityRequest::Watch {
+        terminal: Some(id("gone")),
+    };
+    assert!(workspace.activity(not_open).is_empty());
+}
+
+#[test]
+fn a_log_file_stays_small_and_a_failed_write_is_made_good_by_the_next_one() {
+    let disk = Disk::default();
+    let mut workspace = Workspace::new(options_on(&disk, 0));
+    workspace.start(0);
+    let lines = |disk: &Disk| disk.read_log(&id("t1")).len();
+
+    for index in 0..(2 * crate::KEPT_ENTRIES) {
+        prompted(&mut workspace, "t1", SESSION, &index.to_string());
+    }
+    assert_eq!(
+        lines(&disk),
+        crate::KEPT_ENTRIES,
+        "rewritten down to what it keeps"
+    );
+
+    disk.fail(true);
+    prompted(&mut workspace, "t1", SESSION, "lost on the disk");
+    disk.fail(false);
+    prompted(&mut workspace, "t1", SESSION, "after");
+    let on_disk = disk.read_log(&id("t1"));
+    assert_eq!(on_disk.len(), crate::KEPT_ENTRIES);
+    assert!(on_disk[on_disk.len() - 2].contains("lost on the disk"));
 }
 
 #[test]
