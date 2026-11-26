@@ -22,6 +22,12 @@ pub struct JsoncResult {
     pub problems: Vec<String>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum TopLevelEdit {
+    Set(String, Value),
+    Remove(String),
+}
+
 fn refused(problem: String) -> JsoncResult {
     JsoncResult {
         value: None,
@@ -94,29 +100,56 @@ fn input_from(value: &Value) -> CstInputValue {
     }
 }
 
-fn properties_named(object: &CstObject, name: &str) -> Vec<CstObjectProp> {
+fn properties_matching(
+    object: &CstObject,
+    key: &str,
+    same_key: &dyn Fn(&str, &str) -> bool,
+) -> Vec<CstObjectProp> {
     let properties = object.properties();
     let mut matching = Vec::new();
     for property in properties {
         let decoded = property.decoded_name();
-        if decoded.as_deref() == Some(name) {
+        let Some(line_key) = decoded else {
+            continue;
+        };
+        if same_key(&line_key, key) {
             matching.push(property);
         }
     }
     matching
 }
 
-pub fn set_top_level(
+fn text_from_sets(edits: &[TopLevelEdit]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for edit in edits {
+        if let TopLevelEdit::Set(key, value) = edit {
+            let name = Value::from(key.as_str());
+            lines.push(format!("  {name}: {value}"));
+        }
+    }
+    let body = lines.join(",\n");
+    format!("{{\n{body}\n}}\n")
+}
+
+pub fn edit_top_level(
     text: Option<&str>,
-    key: &str,
-    value: &Value,
+    edits: &[TopLevelEdit],
     label: &str,
+    same_key: &dyn Fn(&str, &str) -> bool,
 ) -> Result<String, String> {
     let source = match text {
         Some(source) if !source.trim().is_empty() => source,
         _ => {
-            let name = Value::from(key);
-            return Ok(format!("{{\n  {name}: {value}\n}}\n"));
+            let has_set = edits
+                .iter()
+                .any(|edit| matches!(edit, TopLevelEdit::Set(..)));
+            if !has_set {
+                return match text {
+                    Some(blank) => Ok(blank.to_string()),
+                    None => Ok(String::new()),
+                };
+            }
+            return Ok(text_from_sets(edits));
         }
     };
 
@@ -131,21 +164,45 @@ pub fn set_top_level(
         Err(error) => return Err(describe_error(&error, source, label)),
     };
     let object = root.object_value_or_set();
-    let matching = properties_named(&object, key);
 
-    // The reader uses the last of two and the edit changes the first, so a write would silently do nothing.
-    if matching.len() > 1 {
-        return Err(format!("{label} has \"{key}\" twice"));
-    }
+    for edit in edits {
+        match edit {
+            TopLevelEdit::Set(key, value) => {
+                let matching = properties_matching(&object, key, same_key);
 
-    let input = input_from(value);
-    match matching.first() {
-        Some(property) => property.set_value(input),
-        None => {
-            object.append(key, input);
+                // The reader uses the last of two and the edit changes the first, so a write would silently do nothing.
+                if matching.len() > 1 {
+                    return Err(format!("{label} has \"{key}\" twice"));
+                }
+
+                let input = input_from(value);
+                match matching.first() {
+                    Some(property) => property.set_value(input),
+                    None => {
+                        object.append(key, input);
+                    }
+                }
+            }
+            TopLevelEdit::Remove(key) => {
+                let matching = properties_matching(&object, key, same_key);
+                for property in matching {
+                    property.remove();
+                }
+            }
         }
     }
     Ok(root.to_string())
+}
+
+pub fn set_top_level(
+    text: Option<&str>,
+    key: &str,
+    value: &Value,
+    label: &str,
+) -> Result<String, String> {
+    let edits = [TopLevelEdit::Set(key.to_string(), value.clone())];
+    let same_key = |line_key: &str, edit_key: &str| line_key == edit_key;
+    edit_top_level(text, &edits, label, &same_key)
 }
 
 #[cfg(test)]
