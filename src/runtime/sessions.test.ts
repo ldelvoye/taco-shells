@@ -15,6 +15,7 @@ interface FakeSpawn {
   spawned: Spawned[]
   written: string[]
   flow: string[]
+  killed: { count: number }
   spawn: SpawnPty
 }
 
@@ -22,6 +23,7 @@ function fakeSpawn(failure: Error | null = null): FakeSpawn {
   const spawned: Spawned[] = []
   const written: string[] = []
   const flow: string[] = []
+  const killed = { count: 0 }
   const spawn: SpawnPty = (_file, _args, options) => {
     if (failure !== null) {
       throw failure
@@ -39,13 +41,15 @@ function fakeSpawn(failure: Error | null = null): FakeSpawn {
       resume: () => {
         flow.push('resume')
       },
-      kill: () => undefined,
+      kill: () => {
+        killed.count += 1
+      },
       onData: () => ({ dispose: () => undefined }),
       onExit: () => ({ dispose: () => undefined })
     }
     return pty
   }
-  return { spawned, written, flow, spawn }
+  return { spawned, written, flow, killed, spawn }
 }
 
 function startOf(id: string, overrides: Partial<TerminalStart> = {}): TerminalStart {
@@ -156,6 +160,41 @@ describe('PtySessions', () => {
 
     expect(spawned).toEqual([])
     expect(exits.map((event) => event.id)).toEqual(['pty-1'])
+  })
+
+  it('ignores an open for an id that is already opening or live', async () => {
+    const { spawned, spawn } = fakeSpawn()
+    const sessions = new PtySessions(spawn)
+    const started = nextStarts(sessions, 1)
+    const exits: PtyExitEvent[] = []
+    sessions.onExit((event) => {
+      exits.push(event)
+    })
+
+    sessions.open(startOf('pty-1'))
+    sessions.open(startOf('pty-1'))
+    await started
+    sessions.open(startOf('pty-1'))
+    await new Promise((resolve) => setTimeout(resolve, 10))
+
+    expect(spawned).toHaveLength(1)
+    expect(exits).toEqual([])
+  })
+
+  it('ends every shell when the runtime is stopping, and starts none that was still opening', async () => {
+    const { spawned, killed, spawn } = fakeSpawn()
+    const sessions = new PtySessions(spawn)
+    const started = nextStarts(sessions, 2)
+    sessions.open(startOf('pty-1'))
+    sessions.open(startOf('pty-2'))
+    await started
+    sessions.open(startOf('pty-3', { directoryOf: 'pty-1' }))
+
+    sessions.closeAll()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+
+    expect(killed.count).toBe(2)
+    expect(spawned).toHaveLength(2)
   })
 
   it('reports an exit for a shell that cannot start', async () => {
