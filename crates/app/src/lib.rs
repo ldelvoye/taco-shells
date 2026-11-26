@@ -2,6 +2,7 @@
 
 mod assets;
 mod banners;
+pub mod drive;
 mod fixture;
 pub mod link;
 mod look;
