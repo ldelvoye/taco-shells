@@ -6,10 +6,11 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use taco_protocol::ConfigFile;
 use taco_settings::{Config, resolve_config};
 
 use crate::config_files::{
-    ConfigFile, config_file_path, read_config_texts, seed_config_files, unreadable_problems,
+    config_file_path, read_config_texts, seed_config_files, unreadable_problems,
 };
 
 const WATCH_QUIET: Duration = Duration::from_millis(100);
@@ -153,7 +154,7 @@ fn watch_directory(
 }
 
 impl ConfigStore {
-    /// The store, with `on_change` called on its own thread; the callback must not call back into the store or drop it.
+    /// The store; `on_change` runs on the watcher's thread, and inside `set_system_dark` on its caller's, so it must not call back into the store or drop it.
     pub fn start(directory: PathBuf, system_is_dark: bool, on_change: OnChange) -> ConfigStore {
         let mut start_problems = seed_config_files(&directory);
 

@@ -2,17 +2,12 @@ use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
+use taco_protocol::ConfigFile;
 use taco_settings::{ConfigTexts, DEFAULT_KEYBINDINGS_TEXT, DEFAULT_SETTINGS_TEXT};
 
 const SETTINGS_FILE: &str = "settings.json";
 const KEYBINDINGS_FILE: &str = "keybindings.json";
 const FOCUS_PORT_FILE: &str = "focus-port";
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ConfigFile {
-    Settings,
-    Keybindings,
-}
 
 pub fn config_file_path(directory: &Path, which: ConfigFile) -> PathBuf {
     let file_name = match which {

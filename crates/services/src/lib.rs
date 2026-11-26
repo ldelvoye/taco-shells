@@ -5,8 +5,7 @@ mod config_store;
 mod identity;
 
 pub use config_files::{
-    ConfigFile, config_file_path, focus_port_path, read_config_texts, seed_config_files,
-    unreadable_problems,
+    config_file_path, focus_port_path, read_config_texts, seed_config_files, unreadable_problems,
 };
 pub use config_store::ConfigStore;
 pub use identity::{
