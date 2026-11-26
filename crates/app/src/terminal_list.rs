@@ -18,6 +18,8 @@ use crate::done_checks::DRAW_TIME;
 use crate::drive;
 use crate::look::{FONT_FAMILY, Look, MARK_SIZE, ROW_HEIGHT, ROW_RADIUS, TEXT_SIZE, TRAY_RADIUS};
 use crate::row_name::row_name;
+use crate::shell::{shell_orange, shell_outline};
+use crate::slot::{Slot, fraction_at};
 use crate::window::WindowView;
 
 const UNNAMED_TAB_GROUP: &str = "Group";
@@ -28,7 +30,9 @@ const LIST_ID: &str = "terminal-list";
 const LIST_END_ID: &str = "terminal-list-end";
 const ROW_ICON_SIZE: f32 = 14.;
 const TRAY_HEADER_HEIGHT: f32 = 26.;
-const DROP_LINE_THICKNESS: f32 = 2.;
+const SLOT_OUTLINE: f32 = 2.;
+const SLOT_ANGLE: f32 = 90.;
+const SLOT_WASH: f32 = 0.12;
 const DRAG_PREVIEW_WIDTH: f32 = 200.;
 // The marks move as tacoshells.dev's do (public/site.css): ts-spin and ts-ripple.
 const SPIN_PERIOD: Duration = Duration::from_millis(1100);
@@ -61,6 +65,8 @@ pub struct ListInput<'a> {
     pub drawing_checks: &'a HashSet<TerminalId>,
     /// Where a plain shell's folder is named "~".
     pub home: Option<&'a Path>,
+    /// The slot opening where a dragged row or group will land.
+    pub slot: Option<Slot>,
 }
 
 impl Render for DragPreview {
@@ -106,19 +112,31 @@ pub fn terminal_list(input: &ListInput, cx: &mut Context<WindowView>) -> Statefu
     if let Some(arrangement) = &input.drawn.arrangement {
         let entries = entries_of(arrangement, input, cx);
         list = list.children(entries);
+        if let Some(slot) = input.slot
+            && slot.line.at == arrangement.rows.len()
+        {
+            list = list.child(slot_element(slot));
+        }
+    }
+    let mut end_shift = 0.;
+    if let Some(slot) = input.slot {
+        end_shift = slot.shift_of_end();
     }
     let end = div()
         .id(LIST_END_ID)
         .flex_1()
         .min_h(px(ROW_HEIGHT))
-        .on_drag_move(cx.listener(|view, event: &DragMoveEvent<ListDrag>, _, cx| {
-            if !event.bounds.contains(&event.event.position) {
-                return;
-            }
-            let drag = event.drag(cx);
-            let dragged = drag.dragged.clone();
-            view.drag_over(&dragged, DropPoint::End, cx);
-        }));
+        .on_drag_move(
+            cx.listener(move |view, event: &DragMoveEvent<ListDrag>, _, cx| {
+                let pointer = event.event.position;
+                if fraction_at(event.bounds, pointer, end_shift).is_none() {
+                    return;
+                }
+                let drag = event.drag(cx);
+                let dragged = drag.dragged.clone();
+                view.drag_over(&dragged, DropPoint::End, cx);
+            }),
+        );
     list.child(end)
 }
 
@@ -132,6 +150,13 @@ fn entries_of(
     let mut index = 0;
     while index < arrangement.rows.len() {
         let row = &arrangement.rows[index];
+        // A slot at a group's first row sits before the whole tray, unless it goes under the header.
+        if let Some(slot) = input.slot
+            && slot.line.at == index
+            && !slot.line.header_before
+        {
+            entries.push(slot_element(slot));
+        }
         let Some(tab_group) = tab_group_of(arrangement, row) else {
             let shown = row_element(arrangement, index, input, cx);
             entries.push(shown.into_any_element());
@@ -173,7 +198,7 @@ fn tray_element(
     let look = input.look;
     let members = &arrangement.rows[first..=last];
     let holds_selected = (first..=last).contains(&arrangement.selected);
-    let header = tray_header(tab_group, members, holds_selected, input, cx);
+    let header = tray_header(tab_group, first, members, holds_selected, input, cx);
     let mut tray = div()
         .relative()
         .flex()
@@ -186,16 +211,17 @@ fn tray_element(
         .rounded(px(TRAY_RADIUS))
         .bg(look.veil)
         .child(header);
-    if let Some(mark) = input.mark
-        && mark.target == MarkTarget::Wrapper(tab_group.id.clone())
-    {
-        tray = marked(tray, mark.edge, look);
-    }
     if tab_group.collapsed {
         return tray;
     }
     for offset in 0..members.len() {
         let index = first + offset;
+        if let Some(slot) = input.slot
+            && slot.line.at == index
+            && (index != first || slot.line.header_before)
+        {
+            tray = tray.child(slot_element(slot));
+        }
         tray = tray.child(row_element(arrangement, index, input, cx));
     }
     tray
@@ -203,6 +229,7 @@ fn tray_element(
 
 fn tray_header(
     tab_group: &TabGroup,
+    first: usize,
     members: &[Row],
     holds_selected: bool,
     input: &ListInput,
@@ -243,8 +270,13 @@ fn tray_header(
         .child(open_in_group_button(&tab_group.id, look, cx));
     if let Some(mark) = input.mark
         && mark.target == MarkTarget::Header(tab_group.id.clone())
+        && mark.edge == MarkEdge::Whole
     {
-        header = marked(header, mark.edge, look);
+        header = header.bg(look.strong_veil);
+    }
+    let mut shift = 0.;
+    if let Some(slot) = input.slot {
+        shift = slot.shift_of_header(first);
     }
 
     let toggled = tab_group.id.clone();
@@ -267,7 +299,8 @@ fn tray_header(
         .on_drag(drag, drag_preview)
         .on_drag_move(
             cx.listener(move |view, event: &DragMoveEvent<ListDrag>, _, cx| {
-                let Some(fraction) = fraction_over(event) else {
+                let pointer = event.event.position;
+                let Some(fraction) = fraction_at(event.bounds, pointer, shift) else {
                     return;
                 };
                 let drag = event.drag(cx);
@@ -345,8 +378,13 @@ fn row_element(
     }
     if let Some(mark) = input.mark
         && mark.target == MarkTarget::Row(index)
+        && mark.edge == MarkEdge::Whole
     {
-        shown = marked(shown, mark.edge, look);
+        shown = shown.bg(look.strong_veil);
+    }
+    let mut shift = 0.;
+    if let Some(slot) = input.slot {
+        shift = slot.shift_of_row(index);
     }
     let terminal_name = &row.terminal.0;
     shown = drive::mark(shown, format!("row:{terminal_name}"));
@@ -370,7 +408,8 @@ fn row_element(
         .on_drag(drag, drag_preview)
         .on_drag_move(
             cx.listener(move |view, event: &DragMoveEvent<ListDrag>, _, cx| {
-                let Some(fraction) = fraction_over(event) else {
+                let pointer = event.event.position;
+                let Some(fraction) = fraction_at(event.bounds, pointer, shift) else {
                     return;
                 };
                 let drag = event.drag(cx);
@@ -408,18 +447,6 @@ fn agent_state(
 }
 
 /// The pointer's height within the hovered element, 0 to 1.
-fn fraction_over(event: &DragMoveEvent<ListDrag>) -> Option<f32> {
-    let bounds = event.bounds;
-    let position = event.event.position;
-    let has_height = bounds.size.height > px(0.);
-    if !has_height || !bounds.contains(&position) {
-        return None;
-    }
-    let offset = position.y - bounds.top();
-    let fraction = offset / bounds.size.height;
-    Some(fraction.clamp(0., 1.))
-}
-
 fn drag_preview(
     drag: &ListDrag,
     _position: Point<Pixels>,
@@ -438,22 +465,20 @@ fn element_id(kind: &str, name: &str) -> ElementId {
     ElementId::Name(id)
 }
 
-fn marked(shown: Div, edge: MarkEdge, look: &Look) -> Div {
-    match edge {
-        MarkEdge::Above => shown.child(drop_line(look).top(px(-DROP_LINE_THICKNESS))),
-        MarkEdge::Below => shown.child(drop_line(look).bottom(px(-DROP_LINE_THICKNESS))),
-        MarkEdge::Whole => shown.bg(look.strong_veil),
-    }
-}
-
-fn drop_line(look: &Look) -> Div {
+// The "taco shell slot" Lucas chose: a row-sized gap outlined left to right in the shell's yellow and orange.
+fn slot_element(slot: Slot) -> AnyElement {
+    let opened = slot.height / ROW_HEIGHT;
+    let wash = shell_orange().opacity(SLOT_WASH);
+    let outline = shell_outline(SLOT_OUTLINE, ROW_RADIUS, SLOT_ANGLE);
     div()
-        .absolute()
-        .left(px(4.))
-        .right(px(4.))
-        .h(px(DROP_LINE_THICKNESS))
-        .rounded_full()
-        .bg(look.text)
+        .relative()
+        .flex_none()
+        .h(px(slot.height))
+        .rounded(px(ROW_RADIUS))
+        .opacity(opened)
+        .bg(wash)
+        .child(outline)
+        .into_any_element()
 }
 
 /// The one raised thing in the list: a card with a hairline, a soft shadow and a heavier name.

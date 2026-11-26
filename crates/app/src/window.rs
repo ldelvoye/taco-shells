@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use gpui::{
-    AnyElement, AppContext, Bounds, ClipboardItem, Context, Div, DragMoveEvent, Entity,
+    AnyElement, App, AppContext, Bounds, ClipboardItem, Context, Div, DragMoveEvent, Entity,
     FocusHandle, Focusable, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Pixels,
     Point, Render, Size, Styled, Task, Window, div, point, px, size,
 };
@@ -26,7 +26,7 @@ use crate::keys::chord_of;
 use crate::link::{
     Ahead, Ports, ServicesOutput, ServicesPort, WindowOutput, WorkspacePort, drawn_with, next_move,
 };
-use crate::look::{FONT_FAMILY, Look, STRIP_WIDTH, TEXT_SIZE, TITLE_BAR_HEIGHT};
+use crate::look::{FONT_FAMILY, Look, ROW_HEIGHT, STRIP_WIDTH, TEXT_SIZE, TITLE_BAR_HEIGHT};
 use crate::menu::{
     AgentMenuClicked, Minimize, Quit, RestartToUpdate, ShowHookScripts, Zoom, set_menus,
 };
@@ -37,6 +37,7 @@ use crate::panels::{
 };
 use crate::platform::TrafficLights;
 use crate::popups::{Popup, popup_layer};
+use crate::slot::{Slot, SlotLine, opened_height, slot_line_for};
 use crate::strip::strip;
 use crate::terminal_list::{ListDrag, ListInput, terminal_list};
 use crate::text_field::{TextField, TextFieldEvent};
@@ -97,6 +98,10 @@ pub struct WindowView {
     home: Option<PathBuf>,
     /// The window's size as of this frame, which bounds the panels.
     viewport: Size<Pixels>,
+    /// Where the landing slot is and when it started opening there.
+    slot_opened: Option<(SlotLine, Instant)>,
+    /// The slot as drawn this frame.
+    slot: Option<Slot>,
 }
 
 /// What the window does with a reply it asked for.
@@ -179,6 +184,8 @@ impl WindowView {
             done_checks: DoneChecks::default(),
             home: std::env::home_dir(),
             viewport: Size::default(),
+            slot_opened: None,
+            slot: None,
         }
     }
 
@@ -409,6 +416,30 @@ impl WindowView {
     pub(crate) fn close_panel(&self, panel: Panel) {
         let request = WorkspaceRequest::PanelClosed { panel };
         self.port.send(request, None);
+    }
+
+    /// The slot to draw this frame, opening from when it last moved; it opens on this clock rather than gpui's so the rows' hit test subtracts exactly the height drawn.
+    fn open_slot(&mut self, line: Option<SlotLine>, window: &mut Window, cx: &App) -> Option<Slot> {
+        let Some(line) = line else {
+            self.slot_opened = None;
+            return None;
+        };
+        let now = Instant::now();
+        let mut opened = now;
+        if let Some((open_line, since)) = self.slot_opened
+            && open_line == line
+        {
+            opened = since;
+        }
+        self.slot_opened = Some((line, opened));
+        let mut height = ROW_HEIGHT;
+        if !cx.reduce_motion() {
+            height = opened_height(now - opened, ROW_HEIGHT);
+        }
+        if height < ROW_HEIGHT {
+            window.request_animation_frame();
+        }
+        Some(Slot { line, height })
     }
 
     /// Notes the edge a dragged panel would go to with the pointer here; true when it changed.
@@ -784,6 +815,7 @@ impl WindowView {
                     look,
                     drawing_checks: &drawing_checks,
                     home: self.home.as_deref(),
+                    slot: self.slot,
                 };
                 let list = terminal_list(&input, cx);
                 docked(panel, edge, size, list, look, cx)
@@ -906,6 +938,11 @@ impl Render for WindowView {
         if let (Some(arrangement), Some(place)) = (&drawn.arrangement, &self.drop_place) {
             mark = drop_mark_for(arrangement, place);
         }
+        let mut line = None;
+        if let (Some(arrangement), Some(mark)) = (&drawn.arrangement, &mark) {
+            line = slot_line_for(arrangement, mark);
+        }
+        self.slot = self.open_slot(line, window, cx);
 
         let popup_stays = match &self.popup {
             Some(popup) => popup.still_shown_in(&drawn),
