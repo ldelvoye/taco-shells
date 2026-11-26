@@ -57,9 +57,10 @@ fn draw(colors: &TerminalColors, path: &Path) {
     );
     cx.allow_parking();
     let settings = Settings::default();
+    let channel = Terminals::connect(ours).expect("the terminal channel");
     let window = cx
         .open_window(size(px(900.), px(420.)), |_, cx| {
-            cx.new(|cx| Terminals::new(ours, &settings, colors, cx).expect("terminals"))
+            cx.new(|cx| Terminals::new(channel, &settings, colors, cx))
         })
         .expect("a headless window");
     let id = sample_id();

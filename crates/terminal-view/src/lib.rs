@@ -10,4 +10,4 @@ mod terminals;
 mod view;
 mod views;
 
-pub use terminals::{Terminals, TerminalsEvent};
+pub use terminals::{TerminalChannel, Terminals, TerminalsEvent};
