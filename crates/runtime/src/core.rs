@@ -3,8 +3,8 @@ use std::time::{Duration, Instant};
 
 use taco_ghostty::{Snapshot, Terminal};
 use taco_protocol::{
-    CellSize, RuntimeAnswer, RuntimeCommand, RuntimeQuery, RuntimeReport, TerminalColors,
-    TerminalEvent, TerminalId, TerminalRequest, TerminalSize, TerminalStart,
+    CellSize, CursorShape, RuntimeAnswer, RuntimeCommand, RuntimeQuery, RuntimeReport,
+    TerminalColors, TerminalEvent, TerminalId, TerminalRequest, TerminalSize, TerminalStart,
 };
 
 use crate::shells::Shells;
@@ -81,6 +81,8 @@ pub struct Core<S: Shells> {
     screens: HashMap<TerminalId, Screen>,
     scrollback: usize,
     colors: Option<TerminalColors>,
+    /// The cursor's shape and blink when a program has not chosen them; the library's until the app pushes them.
+    cursor_defaults: Option<(CursorShape, bool)>,
     effects: Vec<Effect>,
 }
 
@@ -91,6 +93,7 @@ impl<S: Shells> Core<S> {
             screens: HashMap::new(),
             scrollback: DEFAULT_SCROLLBACK,
             colors: None,
+            cursor_defaults: None,
             effects: Vec::new(),
         }
     }
@@ -151,6 +154,9 @@ impl<S: Shells> Core<S> {
             RuntimeCommand::Close { id } => self.shells.close(&id),
             RuntimeCommand::Scrollback { lines } => self.set_scrollback(lines as usize),
             RuntimeCommand::Colors(colors) => self.set_colors(colors),
+            RuntimeCommand::CursorDefaults { shape, blink } => {
+                self.set_cursor_defaults(shape, blink)
+            }
             RuntimeCommand::Ask { ask, query } => {
                 let value = self.answer(query);
                 self.report(RuntimeReport::Answer { ask, value });
@@ -238,6 +244,9 @@ impl<S: Shells> Core<S> {
         terminal.set_scrollback(self.scrollback)?;
         if let Some(colors) = &self.colors {
             terminal.set_colors(colors)?;
+        }
+        if let Some((shape, blink)) = self.cursor_defaults {
+            terminal.set_cursor_defaults(shape, blink)?;
         }
         // The runtime's screen answers a program's questions: a view is not always there to.
         terminal.answer_queries()?;
@@ -481,6 +490,25 @@ impl<S: Shells> Core<S> {
             }
         }
         self.colors = Some(colors);
+    }
+
+    /// New defaults for every terminal; a shape a program chose stays. A snapshot carries them, so only live views are sent them.
+    fn set_cursor_defaults(&mut self, shape: CursorShape, blink: bool) {
+        self.cursor_defaults = Some((shape, blink));
+        for (id, screen) in &mut self.screens {
+            if let Err(error) = screen.terminal.set_cursor_defaults(shape, blink) {
+                eprintln!("could not set the cursor of {}: {error}", id.0);
+                continue;
+            }
+            if matches!(screen.view, View::Attached) {
+                let defaults = TerminalEvent::CursorDefaults {
+                    id: id.clone(),
+                    shape,
+                    blink,
+                };
+                self.effects.push(Effect::Event(defaults));
+            }
+        }
     }
 
     fn answer(&self, query: RuntimeQuery) -> RuntimeAnswer {

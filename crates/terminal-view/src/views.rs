@@ -272,6 +272,7 @@ fn event_terminal(event: &TerminalEvent) -> &TerminalId {
         TerminalEvent::Output { id, .. } => id,
         TerminalEvent::Resized { id, .. } => id,
         TerminalEvent::Cleared { id } => id,
+        TerminalEvent::CursorDefaults { id, .. } => id,
         TerminalEvent::End { id } => id,
     }
 }

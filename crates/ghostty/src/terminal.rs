@@ -2,7 +2,7 @@ use std::ffi::c_void;
 use std::fmt;
 use std::ptr;
 
-use taco_protocol::{Rgb, TerminalColors, TerminalSize};
+use taco_protocol::{CursorShape, Rgb, TerminalColors, TerminalSize};
 
 use crate::restore::{Restore, Step};
 use crate::sys;
@@ -216,6 +216,23 @@ impl Terminal {
         self.set(
             sys::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES,
             &lines,
+        )
+    }
+
+    /// The cursor shown while no program has chosen one, or after it gives its choice back; a shape a program chose stays. A snapshot carries them.
+    pub fn set_cursor_defaults(&mut self, shape: CursorShape, blink: bool) -> Result<(), Error> {
+        let style = match shape {
+            CursorShape::Block => sys::GhosttyCursorStyle_GHOSTTY_CURSOR_STYLE_BLOCK,
+            CursorShape::Bar => sys::GhosttyCursorStyle_GHOSTTY_CURSOR_STYLE_BAR,
+            CursorShape::Underline => sys::GhosttyCursorStyle_GHOSTTY_CURSOR_STYLE_UNDERLINE,
+        };
+        self.set(
+            sys::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_STYLE,
+            &style,
+        )?;
+        self.set(
+            sys::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_BLINK,
+            &blink,
         )
     }
 
