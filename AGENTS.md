@@ -83,6 +83,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 **CI checks the Rust app on every pull request that touches it** (`.github/workflows/rust.yml`): `cargo fmt --check`, `clippy` with every warning an error, and `cargo test`, which fails if the run takes over 20 s once compiled. Nothing in `cargo test` opens a window, starts the app or sleeps on a timer. The toolchain is pinned in `rust-toolchain.toml`, and the profiles in the root `Cargo.toml`.
 
+**Worktrees share compiled dependencies through sccache, on this machine only.** The main checkout holds an untracked `.cargo/config.toml` setting `build.rustc-wrapper = "sccache"`, and cargo reads it from every worktree under `.worktrees/`, so gpui is compiled once rather than once per worktree. A fresh clone has none and builds without it. Keep the repo free of a tracked `.cargo/config.toml`: it would sit at the same path.
+
 **`npm run measure` is run by hand, never by CI.** It shows a strip of a window at the right edge of the rightmost display for about a minute, uses the e2e suite's debug port so the two cannot run together, and its numbers and how to read them are in `scripts/measure/README.md`.
 
 ## Two apps, and which one a build becomes
