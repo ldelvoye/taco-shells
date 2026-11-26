@@ -5,12 +5,12 @@ use std::rc::Rc;
 
 use futures::channel::mpsc::unbounded;
 use taco_protocol::{
-    ActivityRequest, Arrangement, DrawnState, RequestReply, TabGroupId, TerminalId,
+    ActivityRequest, Arrangement, DrawnState, Panels, RequestReply, TabGroupId, TerminalId,
     WorkspaceRequest,
 };
 use taco_rules::{
-    add_row_to, apply_drop, close_row, create_tab_group, fork_row, rename_tab_group, select_row,
-    toggle_tab_group, ungroup_tab_group,
+    add_row_to, apply_drop, close_panel, close_row, create_tab_group, fork_row, move_panel,
+    open_panel, rename_tab_group, resize_panel, select_row, toggle_tab_group, ungroup_tab_group,
 };
 
 use crate::link::{WindowOutput, WindowReceiver, WindowSender, WorkspacePort};
@@ -97,6 +97,18 @@ impl StandIn {
             WorkspaceRequest::TabGroupUngrouped { id } => {
                 rearrange(&mut state, |before| ungroup_tab_group(before, &id))
             }
+            WorkspaceRequest::PanelOpened { panel } => {
+                repanel(&mut state, |before| open_panel(before, panel))
+            }
+            WorkspaceRequest::PanelClosed { panel } => {
+                repanel(&mut state, |before| close_panel(before, panel))
+            }
+            WorkspaceRequest::PanelMoved { panel, edge } => {
+                repanel(&mut state, |before| move_panel(before, panel, edge))
+            }
+            WorkspaceRequest::PanelResized { panel, size } => {
+                repanel(&mut state, |before| resize_panel(before, panel, size))
+            }
             // The stand-in answers only what the window sends.
             _ => false,
         };
@@ -143,5 +155,13 @@ fn rearrange(
         return false;
     };
     state.arrangement = Some(after);
+    true
+}
+
+fn repanel(state: &mut DrawnState, change: impl FnOnce(&Panels) -> Option<Panels>) -> bool {
+    let Some(after) = change(&state.panels) else {
+        return false;
+    };
+    state.panels = after;
     true
 }
