@@ -1027,6 +1027,7 @@ impl WindowView {
                     look,
                     drawing_checks: &drawing_checks,
                     home: self.home.as_deref(),
+                    shell_row_name: self.shown.settings.shell_row_name,
                     slot: self.slot,
                 };
                 let list = terminal_list(&input, cx);

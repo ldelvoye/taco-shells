@@ -10,7 +10,7 @@ use taco_protocol::{
 use taco_rules::default_panels;
 use taco_services::{AgentSetupNotice, AgentSetupNoticeKind, AgentSetupView};
 use taco_settings::{
-    Binding, ConfigTexts, SettingChange, Settings, UnreadSettings, resolve_config,
+    Binding, ConfigTexts, SettingChange, Settings, ShellRowName, UnreadSettings, resolve_config,
 };
 
 use crate::activity::{MS_PER_MINUTE, now_ms};
@@ -117,6 +117,8 @@ pub enum Fixture {
     Empty,
     /// The quiet one with a settings file whose font size could not be read.
     Broken,
+    /// The quiet one with plain shells named by their short path.
+    Paths,
 }
 
 struct FixtureRow {
@@ -140,6 +142,7 @@ impl Fixture {
             "quiet" => Some(Self::Quiet),
             "empty" => Some(Self::Empty),
             "broken" => Some(Self::Broken),
+            "paths" => Some(Self::Paths),
             _ => None,
         }
     }
@@ -150,6 +153,7 @@ impl Fixture {
             Self::Quiet => quiet(),
             Self::Empty => empty(),
             Self::Broken => broken(),
+            Self::Paths => paths(),
         }
     }
 
@@ -255,6 +259,12 @@ fn mixed() -> Shown {
 fn quiet() -> Shown {
     let mut shown = mixed();
     shown.notices = Notices::default();
+    shown
+}
+
+fn paths() -> Shown {
+    let mut shown = quiet();
+    shown.settings.shell_row_name = ShellRowName::Path;
     shown
 }
 
