@@ -82,6 +82,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo xtask run      # build both programs and start the app from target/
 cargo xtask bundle   # the .app into target/bundle.noindex/; --release, --stable, --zip
 cargo xtask install  # release build of Taco Shells Dev, into /Applications
+cargo xtask smoke    # the tests that drive the real app, against a development bundle
 ```
 
 **`cargo xtask` is the Rust app's build scripts**, a program in `xtask/` run through the alias in `.cargo/config.toml`. It uses no Node. A bundle holds `taco-shells` and `taco-shells-runtime` side by side in `Contents/MacOS/`, with the icon, `hooks/` and `update-helper.sh` in `Contents/Resources/`. Its `CFBundleShortVersionString` is always a plain `X.Y.Z`, because the updater reads it: the tag the build is on, or the last tag before it. `CFBundleVersion` holds what `git describe` says. `--stable` sets `TACO_SHELLS_CHANNEL=stable` for the build, which `services` reads at compile time. `install` refuses while the app runs, and moves the copy it replaces to the Trash.
