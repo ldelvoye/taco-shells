@@ -12,6 +12,8 @@ pub const PLUS_ICON: &str = "icons/plus.svg";
 pub const TRASH_ICON: &str = "icons/trash.svg";
 pub const WORKING_ICON: &str = "icons/working.svg";
 pub const DONE_ICON: &str = "icons/done.svg";
+/// A dot 1/2.8 the width of its box, so it can grow to fill the box without leaving it.
+pub const RIPPLE_ICON: &str = "icons/ripple.svg";
 
 const FONTS: [&[u8]; 3] = [
     include_bytes!("../assets/fonts/Figtree-Regular.ttf"),
@@ -19,7 +21,7 @@ const FONTS: [&[u8]; 3] = [
     include_bytes!("../assets/fonts/Figtree-SemiBold.ttf"),
 ];
 
-const FILES: [(&str, &[u8]); 9] = [
+const FILES: [(&str, &[u8]); 10] = [
     (
         MARK,
         include_bytes!("../../../branding/icons/taco-shells-mark.svg"),
@@ -41,6 +43,7 @@ const FILES: [(&str, &[u8]); 9] = [
     (TRASH_ICON, include_bytes!("../assets/icons/trash.svg")),
     (WORKING_ICON, include_bytes!("../assets/icons/working.svg")),
     (DONE_ICON, include_bytes!("../assets/icons/done.svg")),
+    (RIPPLE_ICON, include_bytes!("../assets/icons/ripple.svg")),
 ];
 
 // The development build's mark: the stable mark's colors, turned round the hue wheel as the dev Dock icon is.

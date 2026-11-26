@@ -1,17 +1,18 @@
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use gpui::{
-    AnyElement, App, AppContext, Context, Div, DragMoveEvent, ElementId, FontWeight,
+    AnyElement, App, AppContext, Context, Div, DragMoveEvent, Easing, ElementId, FontWeight,
     InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels, Point,
-    Render, SharedString, Stateful, StatefulInteractiveElement, Styled, Window, div, px, svg,
-    transparent_black,
+    Render, SharedString, Stateful, StatefulInteractiveElement, Styled, TimedTransformation,
+    Transformation, Window, div, px, size, svg, transparent_black,
 };
 use taco_protocol::{
     AgentRow, Arrangement, Dragged, DrawnState, Row, RowState, TabGroup, TabGroupId, TerminalId,
 };
 use taco_rules::{DropMark, DropPoint, MarkEdge, MarkTarget, summary_state};
 
-use crate::assets::{DONE_ICON, PLUS_ICON, TRASH_ICON, WORKING_ICON};
+use crate::assets::{DONE_ICON, PLUS_ICON, RIPPLE_ICON, TRASH_ICON, WORKING_ICON};
 use crate::drive;
 use crate::look::{FONT_FAMILY, Look, MARK_SIZE, ROW_HEIGHT, ROW_RADIUS, TEXT_SIZE, TRAY_RADIUS};
 use crate::window::WindowView;
@@ -27,6 +28,13 @@ const ROW_ICON_SIZE: f32 = 14.;
 const TRAY_HEADER_HEIGHT: f32 = 26.;
 const DROP_LINE_THICKNESS: f32 = 2.;
 const DRAG_PREVIEW_WIDTH: f32 = 200.;
+// The marks move as tacoshells.dev's do (public/site.css): ts-spin and ts-ripple.
+const SPIN_PERIOD: Duration = Duration::from_millis(1100);
+const RIPPLE_PERIOD: Duration = Duration::from_millis(1600);
+const RIPPLE_GROWTH: f32 = 2.8;
+const RIPPLE_START_ALPHA: f32 = 0.5;
+// Smooth at this size, and half the presents of a 60 Hz screen while an agent works for hours.
+const MARK_FPS: f32 = 30.;
 
 /// What a drag out of the list carries: the thing dragged, and the name its picture shows.
 #[derive(Clone, Debug)]
@@ -456,16 +464,50 @@ pub fn state_mark(state: Option<RowState>, look: &Look) -> AnyElement {
     let place = div().flex_none().size(px(MARK_SIZE));
     match state {
         Some(RowState::Working) => {
-            let ring = svg().path(WORKING_ICON).size(px(MARK_SIZE));
+            // Turned in the scene the window already has: no view is drawn again while it spins.
+            let turn = TimedTransformation::rotation(SPIN_PERIOD, Transformation::default());
+            let spin = turn.with_max_fps(MARK_FPS);
+            let ring = svg()
+                .path(WORKING_ICON)
+                .size(px(MARK_SIZE))
+                .with_timed_transformation(spin);
             ring.flex_none().text_color(look.working).into_any_element()
         }
-        Some(RowState::Needs) => place.rounded_full().bg(look.needs).into_any_element(),
+        Some(RowState::Needs) => {
+            let ripple = ripple(look);
+            let dot = place.relative().rounded_full().bg(look.needs);
+            dot.child(ripple).into_any_element()
+        }
         Some(RowState::Done) => {
             let check = svg().path(DONE_ICON).size(px(MARK_SIZE));
             check.flex_none().text_color(look.done).into_any_element()
         }
         Some(RowState::Idle) | None => place.into_any_element(),
     }
+}
+
+// The site's needs-you ripple: a copy of the dot that grows to 2.8 times its size as it fades from half to nothing.
+fn ripple(look: &Look) -> AnyElement {
+    let box_size = MARK_SIZE * RIPPLE_GROWTH;
+    let offset = (box_size - MARK_SIZE) / 2.;
+    let start = Transformation::alpha(RIPPLE_START_ALPHA);
+    let end = Transformation::scale(size(RIPPLE_GROWTH, RIPPLE_GROWTH)).with_alpha(0.);
+    let pulse = TimedTransformation::new(RIPPLE_PERIOD)
+        .from(start)
+        .to(end)
+        .with_easing(Easing::EaseOutQuint)
+        .with_max_fps(MARK_FPS);
+    let spread = svg()
+        .path(RIPPLE_ICON)
+        .size(px(box_size))
+        .with_timed_transformation(pulse)
+        .text_color(look.needs);
+    div()
+        .absolute()
+        .left(px(-offset))
+        .top(px(-offset))
+        .child(spread)
+        .into_any_element()
 }
 
 fn new_terminal_row(look: &Look, cx: &mut Context<WindowView>) -> Stateful<Div> {
