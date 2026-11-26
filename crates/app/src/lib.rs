@@ -17,6 +17,7 @@ mod platform;
 mod popups;
 #[cfg(feature = "render")]
 pub mod render;
+mod row_name;
 pub mod runtime_client;
 pub mod services_host;
 #[cfg(feature = "render")]
