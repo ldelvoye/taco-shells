@@ -10,7 +10,7 @@ use crate::terminal::{Error, Terminal, check};
 const MODE_FOCUS_EVENTS: u16 = 1004;
 const MODE_ALTERNATE_SCROLL: u16 = 1007;
 const MODE_BRACKETED_PASTE: u16 = 2004;
-/// Enough for any key or mouse sequence; a longer one is retried at the size the library asks for.
+/// Enough for any key, mouse or focus sequence.
 const SEQUENCE_BYTES: usize = 128;
 /// What bracketed paste adds around the text: `ESC [200~` and `ESC [201~`.
 const BRACKETS_BYTES: usize = 12;
@@ -73,7 +73,7 @@ pub enum MouseButton {
     WheelRight,
 }
 
-/// The drawn grid in pixels, for turning a pointer position into a cell.
+/// The drawn grid in pixels, for turning a pointer position into a cell. Cell sizes must not be zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Grid {
     pub width_px: u32,
@@ -91,6 +91,7 @@ pub struct MouseInput {
     /// Pixels from the grid's top-left corner.
     pub x: f32,
     pub y: f32,
+    /// Whether any button is held, so a motion is reported as a drag.
     pub any_pressed: bool,
     pub grid: Grid,
 }
@@ -116,7 +117,7 @@ pub struct KeyEncoder {
     event: sys::GhosttyKeyEvent,
 }
 
-/// Turns pointer events into mouse reports, for a program that tracks the mouse.
+/// Turns pointer events into mouse reports. Keep one per terminal: it remembers the last cell it reported.
 pub struct MouseEncoder {
     encoder: sys::GhosttyMouseEncoder,
     event: sys::GhosttyMouseEvent,
@@ -133,7 +134,21 @@ impl KeyEncoder {
             unsafe { sys::ghostty_key_encoder_free(encoder) };
             return Err(error);
         }
-        Ok(KeyEncoder { encoder, event })
+        let keys = KeyEncoder { encoder, event };
+
+        // Option types its own characters (Option-e is é); it is never Meta.
+        let option_as_alt: sys::GhosttyOptionAsAlt =
+            sys::GhosttyOptionAsAlt_GHOSTTY_OPTION_AS_ALT_FALSE;
+        let pointer = &option_as_alt as *const sys::GhosttyOptionAsAlt as *const c_void;
+        let set = unsafe {
+            sys::ghostty_key_encoder_set(
+                keys.encoder,
+                sys::GhosttyKeyEncoderOption_GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT,
+                pointer,
+            )
+        };
+        check(set, "set Option as not Alt")?;
+        Ok(keys)
     }
 
     /// The bytes for `press`, empty when the key sends nothing.
@@ -141,18 +156,6 @@ impl KeyEncoder {
         let from_terminal =
             unsafe { sys::ghostty_key_encoder_set_from_terminal(self.encoder, terminal.as_raw()) };
         check(from_terminal, "read the terminal's keyboard modes")?;
-        // Option types its own characters (Option-e is é), as on every Mac; it is never Meta.
-        let option_as_alt: sys::GhosttyOptionAsAlt =
-            sys::GhosttyOptionAsAlt_GHOSTTY_OPTION_AS_ALT_FALSE;
-        let pointer = &option_as_alt as *const sys::GhosttyOptionAsAlt as *const c_void;
-        let set = unsafe {
-            sys::ghostty_key_encoder_set(
-                self.encoder,
-                sys::GhosttyKeyEncoderOption_GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT,
-                pointer,
-            )
-        };
-        check(set, "set Option as not Alt")?;
 
         let mut action = sys::GhosttyKeyAction_GHOSTTY_KEY_ACTION_PRESS;
         if press.repeat {
@@ -161,37 +164,29 @@ impl KeyEncoder {
         let key = sys_key(press.key);
         let mods = sys_mods(press.mods);
         let unshifted = unshifted_of(press.key);
-        // The event borrows the text rather than copying it; `press` outlives the encode below.
+        let set = unsafe { sys::ghostty_key_event_set_action(self.event, action) };
+        check(set, "set a key's action")?;
+        let set = unsafe { sys::ghostty_key_event_set_key(self.event, key) };
+        check(set, "set a key")?;
+        let set = unsafe { sys::ghostty_key_event_set_mods(self.event, mods) };
+        check(set, "set a key's modifiers")?;
+        let set = unsafe { sys::ghostty_key_event_set_unshifted_codepoint(self.event, unshifted) };
+        check(set, "set a key's unshifted character")?;
+
+        // The event borrows the text rather than copying it, so it is set last and cleared before any result is checked.
         let text = sys::GhosttyString {
             ptr: press.text.as_ptr(),
             len: press.text.len(),
         };
-        unsafe {
-            check(
-                sys::ghostty_key_event_set_action(self.event, action),
-                "set a key's action",
-            )?;
-            check(sys::ghostty_key_event_set_key(self.event, key), "set a key")?;
-            check(
-                sys::ghostty_key_event_set_mods(self.event, mods),
-                "set a key's modifiers",
-            )?;
-            check(
-                sys::ghostty_key_event_set_utf8(self.event, text),
-                "set a key's text",
-            )?;
-            check(
-                sys::ghostty_key_event_set_unshifted_codepoint(self.event, unshifted),
-                "set a key's unshifted character",
-            )?;
-        }
-
+        let set_text = unsafe { sys::ghostty_key_event_set_utf8(self.event, text) };
         let encoder = self.encoder;
         let event = self.event;
-        let encoded = encode_into(|buf, len, written| unsafe {
-            sys::ghostty_key_encoder_encode(encoder, event, buf, len, written)
-        });
-        // Clear the borrowed text so the event never holds a pointer past this call.
+        let mut encoded = Err(set_text);
+        if set_text == sys::GhosttyResult_GHOSTTY_SUCCESS {
+            encoded = encode_into(|buf, len, written| unsafe {
+                sys::ghostty_key_encoder_encode(encoder, event, buf, len, written)
+            });
+        }
         let cleared = sys::GhosttyString {
             ptr: ptr::null(),
             len: 0,
@@ -222,7 +217,16 @@ impl MouseEncoder {
             unsafe { sys::ghostty_mouse_encoder_free(encoder) };
             return Err(error);
         }
-        Ok(MouseEncoder { encoder, event })
+        let mut mouse = MouseEncoder { encoder, event };
+
+        // Motion within the cell last reported sends nothing.
+        let track_last_cell = true;
+        mouse.set(
+            sys::GhosttyMouseEncoderOption_GHOSTTY_MOUSE_ENCODER_OPT_TRACK_LAST_CELL,
+            &track_last_cell,
+            "track the last reported cell",
+        )?;
+        Ok(mouse)
     }
 
     /// The mouse report for `input`, empty when the program does not track this kind of event.
@@ -233,25 +237,21 @@ impl MouseEncoder {
         check(from_terminal, "read the terminal's mouse modes")?;
 
         let mut size: sys::GhosttyMouseEncoderSize = unsafe { mem::zeroed() };
-        // A sized struct: the library reads `size` to know which version of it it is given.
+        // A sized struct: the library reads `size` as the struct's version.
         size.size = mem::size_of::<sys::GhosttyMouseEncoderSize>();
         size.screen_width = input.grid.width_px;
         size.screen_height = input.grid.height_px;
-        size.cell_width = input.grid.cell_width_px.max(1);
-        size.cell_height = input.grid.cell_height_px.max(1);
+        size.cell_width = input.grid.cell_width_px;
+        size.cell_height = input.grid.cell_height_px;
         self.set(
             sys::GhosttyMouseEncoderOption_GHOSTTY_MOUSE_ENCODER_OPT_SIZE,
             &size,
+            "set the grid's size",
         )?;
         self.set(
             sys::GhosttyMouseEncoderOption_GHOSTTY_MOUSE_ENCODER_OPT_ANY_BUTTON_PRESSED,
             &input.any_pressed,
-        )?;
-        // Motion inside the cell already reported sends nothing.
-        let track_last_cell = true;
-        self.set(
-            sys::GhosttyMouseEncoderOption_GHOSTTY_MOUSE_ENCODER_OPT_TRACK_LAST_CELL,
-            &track_last_cell,
+            "set whether a button is held",
         )?;
 
         let action = match input.action {
@@ -264,20 +264,12 @@ impl MouseEncoder {
             y: input.y,
         };
         let mods = sys_mods(input.mods);
-        unsafe {
-            check(
-                sys::ghostty_mouse_event_set_action(self.event, action),
-                "set a mouse action",
-            )?;
-            check(
-                sys::ghostty_mouse_event_set_position(self.event, position),
-                "set a mouse position",
-            )?;
-            check(
-                sys::ghostty_mouse_event_set_mods(self.event, mods),
-                "set a mouse event's modifiers",
-            )?;
-        }
+        let set = unsafe { sys::ghostty_mouse_event_set_action(self.event, action) };
+        check(set, "set a mouse action")?;
+        let set = unsafe { sys::ghostty_mouse_event_set_position(self.event, position) };
+        check(set, "set a mouse position")?;
+        let set = unsafe { sys::ghostty_mouse_event_set_mods(self.event, mods) };
+        check(set, "set a mouse event's modifiers")?;
         match input.button {
             Some(button) => {
                 let raw = sys_button(button);
@@ -301,10 +293,15 @@ impl MouseEncoder {
         })
     }
 
-    fn set<T>(&mut self, option: sys::GhosttyMouseEncoderOption, value: &T) -> Result<(), Error> {
+    fn set<T>(
+        &mut self,
+        option: sys::GhosttyMouseEncoderOption,
+        value: &T,
+        call: &'static str,
+    ) -> Result<(), Error> {
         let pointer = value as *const T as *const c_void;
         let set = unsafe { sys::ghostty_mouse_encoder_set(self.encoder, option, pointer) };
-        check(set, "set a mouse encoder option")
+        check(set, call)
     }
 }
 
@@ -322,10 +319,7 @@ impl Terminal {
         if !wanted {
             return Ok(None);
         }
-        let mut event = sys::GhosttyFocusEvent_GHOSTTY_FOCUS_LOST;
-        if focused {
-            event = sys::GhosttyFocusEvent_GHOSTTY_FOCUS_GAINED;
-        }
+        let event = focus_event(focused);
         let encoded = encode_into(|buf, len, written| unsafe {
             sys::ghostty_focus_encode(event, buf, len, written)
         });
@@ -336,16 +330,17 @@ impl Terminal {
         Ok(Some(bytes))
     }
 
-    /// `text` as a paste: bracketed when the program asked for it (mode 2004), so a multi-line paste is not run line by line.
+    /// `text` as a paste, bracketed when the program asked for it (mode 2004).
     pub fn paste_bytes(&self, text: &str) -> Result<Vec<u8>, Error> {
         let bracketed = self.dec_mode(MODE_BRACKETED_PASTE)?;
         // The library may rewrite the text in place, so it gets a copy.
         let mut data = text.as_bytes().to_vec();
         let data_pointer = data.as_mut_ptr() as *mut c_char;
         let data_len = data.len();
+        // The output is the text, rewritten no longer than it was, plus the brackets.
         let mut out = vec![0u8; data_len + BRACKETS_BYTES];
         let mut written = 0usize;
-        let mut encoded = unsafe {
+        let encoded = unsafe {
             sys::ghostty_paste_encode(
                 data_pointer,
                 data_len,
@@ -355,19 +350,6 @@ impl Terminal {
                 &mut written,
             )
         };
-        if encoded == sys::GhosttyResult_GHOSTTY_OUT_OF_SPACE {
-            out.resize(written, 0);
-            encoded = unsafe {
-                sys::ghostty_paste_encode(
-                    data_pointer,
-                    data_len,
-                    bracketed,
-                    out.as_mut_ptr(),
-                    out.len(),
-                    &mut written,
-                )
-            };
-        }
         check(encoded, "encode a paste")?;
         out.truncate(written);
         Ok(out)
@@ -418,7 +400,7 @@ impl Terminal {
         check(scrolled, "scroll the viewport")
     }
 
-    /// Selects from one cell to another, both included, in the order the text flows.
+    /// Selects from one cell to another, both included.
     pub fn select(&mut self, from: CellPoint, to: CellPoint) -> Result<(), Error> {
         let start = self.grid_ref(from)?;
         let end = self.grid_ref(to)?;
@@ -433,43 +415,30 @@ impl Terminal {
         )
     }
 
-    /// Selects the word under `at`, as a double click does.
+    /// Selects the word under `at`, as a double click does; with no word there, the selection is cleared.
     pub fn select_word(&mut self, at: CellPoint) -> Result<(), Error> {
         let mut options: sys::GhosttyTerminalSelectWordOptions = unsafe { mem::zeroed() };
         options.size = mem::size_of::<sys::GhosttyTerminalSelectWordOptions>();
         options.ref_ = self.grid_ref(at)?;
         let mut selection: sys::GhosttySelection = unsafe { mem::zeroed() };
-        let selected =
+        let found =
             unsafe { sys::ghostty_terminal_select_word(self.as_raw(), &options, &mut selection) };
-        if selected == sys::GhosttyResult_GHOSTTY_NO_VALUE {
-            return self.clear_selection();
-        }
-        check(selected, "select a word")?;
-        self.set(
-            sys::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_SELECTION,
-            &selection,
-        )
+        self.take_found(found, &selection, "select a word")
     }
 
-    /// Selects the line under `at`, as a triple click does.
+    /// Selects the line under `at`, as a triple click does; with no text there, the selection is cleared.
     pub fn select_line(&mut self, at: CellPoint) -> Result<(), Error> {
         let mut options: sys::GhosttyTerminalSelectLineOptions = unsafe { mem::zeroed() };
         options.size = mem::size_of::<sys::GhosttyTerminalSelectLineOptions>();
         options.ref_ = self.grid_ref(at)?;
         let mut selection: sys::GhosttySelection = unsafe { mem::zeroed() };
-        let selected =
+        let found =
             unsafe { sys::ghostty_terminal_select_line(self.as_raw(), &options, &mut selection) };
-        if selected == sys::GhosttyResult_GHOSTTY_NO_VALUE {
-            return self.clear_selection();
-        }
-        check(selected, "select a line")?;
-        self.set(
-            sys::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_SELECTION,
-            &selection,
-        )
+        self.take_found(found, &selection, "select a line")
     }
 
     pub fn clear_selection(&mut self) -> Result<(), Error> {
+        // A null selection is the library's way to clear it.
         let cleared = unsafe {
             sys::ghostty_terminal_set(
                 self.as_raw(),
@@ -509,6 +478,7 @@ impl Terminal {
     /// The hyperlink a program attached to the cell at `at` (OSC 8), if any.
     pub fn hyperlink_at(&self, at: CellPoint) -> Result<Option<String>, Error> {
         let grid_ref = self.grid_ref(at)?;
+        // Asked with no room, the library answers OUT_OF_SPACE with the size a link needs, or SUCCESS when there is none.
         let mut needed = 0usize;
         let sized = unsafe {
             sys::ghostty_grid_ref_hyperlink_uri(&grid_ref, ptr::null_mut(), 0, &mut needed)
@@ -535,10 +505,27 @@ impl Terminal {
         Ok(Some(text.into_owned()))
     }
 
+    /// Makes a found selection the terminal's, or clears it when the library found nothing.
+    fn take_found(
+        &mut self,
+        found: sys::GhosttyResult,
+        selection: &sys::GhosttySelection,
+        call: &'static str,
+    ) -> Result<(), Error> {
+        if found == sys::GhosttyResult_GHOSTTY_NO_VALUE {
+            return self.clear_selection();
+        }
+        check(found, call)?;
+        self.set(
+            sys::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_SELECTION,
+            selection,
+        )
+    }
+
+    /// A DEC private mode (`ESC [ ? n h`).
     fn dec_mode(&self, number: u16) -> Result<bool, Error> {
-        // A DEC private mode is the number with the top bit clear; ANSI modes set it.
         let mut config = sys::GhosttyTerminalModeConfig {
-            mode: number & 0x7fff,
+            mode: number,
             value: false,
         };
         self.get(
@@ -566,17 +553,17 @@ fn format_selection(
     formatter: sys::GhosttyFormatter,
     selection: &sys::GhosttySelection,
 ) -> Result<String, Error> {
-    let unwrap = true;
-    let trim = true;
+    let unwrap_lines = true;
+    let trim_blanks = true;
     set_formatter(
         formatter,
         sys::GhosttyFormatterOption_GHOSTTY_FORMATTER_OPT_UNWRAP,
-        &unwrap,
+        &unwrap_lines,
     )?;
     set_formatter(
         formatter,
         sys::GhosttyFormatterOption_GHOSTTY_FORMATTER_OPT_TRIM,
-        &trim,
+        &trim_blanks,
     )?;
     set_formatter(
         formatter,
@@ -590,8 +577,13 @@ fn format_selection(
         sys::ghostty_formatter_format_alloc(formatter, ptr::null(), &mut bytes, &mut len)
     };
     check(formatted, "format the selection")?;
+    // Empty output comes back as a null pointer, which a slice cannot be made from.
+    if bytes.is_null() {
+        return Ok(String::new());
+    }
     let slice = unsafe { std::slice::from_raw_parts(bytes, len) };
-    let text = String::from_utf8_lossy(slice).into_owned();
+    let decoded = String::from_utf8_lossy(slice);
+    let text = decoded.into_owned();
     unsafe { sys::ghostty_free(ptr::null(), bytes, len) };
     Ok(text)
 }
@@ -606,22 +598,24 @@ fn set_formatter<T>(
     check(set, "set a formatter option")
 }
 
-/// Runs an encoder that writes into a caller's buffer, growing the buffer once if the encoder says it is too small.
 fn encode_into(
     mut encode: impl FnMut(*mut u8, usize, *mut usize) -> sys::GhosttyResult,
 ) -> Result<Vec<u8>, sys::GhosttyResult> {
     let mut out = vec![0u8; SEQUENCE_BYTES];
     let mut written = 0usize;
-    let mut result = encode(out.as_mut_ptr(), out.len(), &mut written);
-    if result == sys::GhosttyResult_GHOSTTY_OUT_OF_SPACE {
-        out.resize(written, 0);
-        result = encode(out.as_mut_ptr(), out.len(), &mut written);
-    }
+    let result = encode(out.as_mut_ptr(), out.len(), &mut written);
     if result != sys::GhosttyResult_GHOSTTY_SUCCESS {
         return Err(result);
     }
     out.truncate(written);
     Ok(out)
+}
+
+fn focus_event(focused: bool) -> sys::GhosttyFocusEvent {
+    if focused {
+        return sys::GhosttyFocusEvent_GHOSTTY_FOCUS_GAINED;
+    }
+    sys::GhosttyFocusEvent_GHOSTTY_FOCUS_LOST
 }
 
 fn sys_mods(mods: Mods) -> sys::GhosttyMods {
@@ -653,10 +647,13 @@ fn sys_button(button: MouseButton) -> sys::GhosttyMouseButton {
     }
 }
 
-/// The character a key types without Shift, which the Kitty keyboard protocol reports; 0 for keys that type none.
+/// The character a key types without Shift; 0 for keys that type none.
 fn unshifted_of(key: Key) -> u32 {
     match key {
-        Key::Char(character) => u32::from(character),
+        Key::Char(character) => {
+            let lower = character.to_ascii_lowercase();
+            u32::from(lower)
+        }
         Key::Space => u32::from(' '),
         _ => 0,
     }
@@ -702,7 +699,7 @@ fn function_key(number: u8) -> sys::GhosttyKey {
     }
 }
 
-/// The physical key for a character on a US layout. Anything else is unidentified, and the encoder goes by its text.
+/// The physical key for a character on a US layout; anything else is unidentified.
 fn char_key(character: char) -> sys::GhosttyKey {
     let lower = character.to_ascii_lowercase();
     if lower.is_ascii_lowercase() {
@@ -752,12 +749,28 @@ mod tests {
         }
     }
 
+    fn mouse(action: MouseAction, button: Option<MouseButton>, x: f32, y: f32) -> MouseInput {
+        MouseInput {
+            action,
+            button,
+            mods: Mods::default(),
+            x,
+            y,
+            any_pressed: false,
+            grid: GRID,
+        }
+    }
+
     fn first_row(terminal: &Terminal) -> Row {
         let mut state = RenderState::new().unwrap();
         let mut frame = state.update(terminal).unwrap();
         let mut row = Row::new();
         frame.next_row(&mut row, false).unwrap();
         row
+    }
+
+    fn selected(terminal: &Terminal) -> Option<String> {
+        terminal.selection_text().unwrap()
     }
 
     #[test]
@@ -772,8 +785,11 @@ mod tests {
             alt: true,
             ..Mods::default()
         };
+        let shift = Mods {
+            shift: true,
+            ..Mods::default()
+        };
 
-        // Option types its own character rather than sending Esc first.
         let option_e = keys
             .encode(&terminal, &press(Key::Char('e'), alt, "é"))
             .unwrap();
@@ -782,16 +798,32 @@ mod tests {
             .encode(&terminal, &press(Key::Char('c'), ctrl, "c"))
             .unwrap();
         assert_eq!(ctrl_c, b"\x03");
-        let enter = keys
-            .encode(&terminal, &press(Key::Enter, Mods::default(), ""))
+        let back_tab = keys.encode(&terminal, &press(Key::Tab, shift, "")).unwrap();
+        assert_eq!(back_tab, b"\x1b[Z");
+        let f5 = keys
+            .encode(&terminal, &press(Key::Function(5), Mods::default(), ""))
             .unwrap();
-        assert_eq!(enter, b"\r");
+        assert_eq!(f5, b"\x1b[15~");
 
-        // Arrows follow the program's cursor-key mode.
+        // Cursor-key application mode (DECCKM) changes the arrows.
         let up = press(Key::Up, Mods::default(), "");
-        assert_eq!(keys.encode(&terminal, &up).unwrap(), b"\x1b[A");
+        let normal_up = keys.encode(&terminal, &up).unwrap();
+        assert_eq!(normal_up, b"\x1b[A");
         terminal.write(b"\x1b[?1h");
-        assert_eq!(keys.encode(&terminal, &up).unwrap(), b"\x1bOA");
+        let application_up = keys.encode(&terminal, &up).unwrap();
+        assert_eq!(application_up, b"\x1bOA");
+
+        // Under the Kitty keyboard protocol, Ctrl+Shift+A is reported by its unshifted key, 97.
+        terminal.write(b"\x1b[>1u");
+        let ctrl_shift = Mods {
+            ctrl: true,
+            shift: true,
+            ..Mods::default()
+        };
+        let kitty = keys
+            .encode(&terminal, &press(Key::Char('A'), ctrl_shift, "A"))
+            .unwrap();
+        assert_eq!(kitty, b"\x1b[97;6u");
     }
 
     #[test]
@@ -800,9 +832,9 @@ mod tests {
         let plain = terminal.paste_bytes("one\ntwo").unwrap();
         assert!(!plain.starts_with(b"\x1b[200~"));
         assert_eq!(terminal.focus_report(true).unwrap(), None);
-        assert!(!terminal.wheel_sends_arrows().unwrap());
 
-        terminal.write(b"\x1b[?2004h\x1b[?1004h\x1b[?1049h\x1b[?1007h");
+        // Bracketed paste (2004) and focus events (1004).
+        terminal.write(b"\x1b[?2004h\x1b[?1004h");
         let bracketed = terminal.paste_bytes("one\ntwo").unwrap();
         assert!(bracketed.starts_with(b"\x1b[200~") && bracketed.ends_with(b"\x1b[201~"));
         assert_eq!(
@@ -813,55 +845,91 @@ mod tests {
             terminal.focus_report(false).unwrap(),
             Some(b"\x1b[O".to_vec())
         );
+
+        // Arrows need both the alternate screen (1049) and alternate scroll (1007), which the library starts with on.
+        assert!(!terminal.wheel_sends_arrows().unwrap());
+        terminal.write(b"\x1b[?1007l\x1b[?1049h");
+        assert!(!terminal.wheel_sends_arrows().unwrap());
+        terminal.write(b"\x1b[?1007h");
         assert!(terminal.wheel_sends_arrows().unwrap());
     }
 
     #[test]
-    fn a_click_is_reported_at_its_cell_only_to_a_program_tracking_the_mouse() {
+    fn the_mouse_is_reported_at_its_cell_only_to_a_program_tracking_it() {
         let mut terminal = Terminal::new(SIZE).unwrap();
-        let mut mouse = MouseEncoder::new().unwrap();
-        // The third column of the second row.
-        let click = MouseInput {
-            action: MouseAction::Press,
-            button: Some(MouseButton::Left),
-            mods: Mods::default(),
-            x: 25.0,
-            y: 30.0,
-            any_pressed: true,
-            grid: GRID,
-        };
+        let mut encoder = MouseEncoder::new().unwrap();
+        // 10 by 20 pixel cells: (25, 30) is in column 3 of row 2, counted from 1.
+        let click = mouse(MouseAction::Press, Some(MouseButton::Left), 25.0, 30.0);
         assert!(!terminal.mouse_tracking().unwrap());
-        assert!(mouse.encode(&terminal, &click).unwrap().is_empty());
+        assert!(encoder.encode(&terminal, &click).unwrap().is_empty());
 
-        terminal.write(b"\x1b[?1000h\x1b[?1006h");
+        // Any-motion tracking (1003) in SGR format (1006).
+        terminal.write(b"\x1b[?1003h\x1b[?1006h");
         assert!(terminal.mouse_tracking().unwrap());
-        assert_eq!(mouse.encode(&terminal, &click).unwrap(), b"\x1b[<0;3;2M");
+        assert_eq!(encoder.encode(&terminal, &click).unwrap(), b"\x1b[<0;3;2M");
+        let release = mouse(MouseAction::Release, Some(MouseButton::Left), 25.0, 30.0);
+        assert_eq!(
+            encoder.encode(&terminal, &release).unwrap(),
+            b"\x1b[<0;3;2m"
+        );
+        let wheel = mouse(MouseAction::Press, Some(MouseButton::WheelUp), 25.0, 30.0);
+        assert_eq!(encoder.encode(&terminal, &wheel).unwrap(), b"\x1b[<64;3;2M");
+
+        let moved = mouse(MouseAction::Motion, None, 45.0, 30.0);
+        assert_eq!(encoder.encode(&terminal, &moved).unwrap(), b"\x1b[<35;5;2M");
+        let within_the_same_cell = mouse(MouseAction::Motion, None, 48.0, 32.0);
+        assert!(
+            encoder
+                .encode(&terminal, &within_the_same_cell)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
     fn a_selection_is_drawn_copied_and_cleared() {
         let mut terminal = Terminal::new(SIZE).unwrap();
-        terminal.write(b"hello world");
+        // The long line wraps onto the second row, and the third row is blank.
+        terminal.write(b"hello world, then some more\r\n\r\nlast");
 
-        let start = CellPoint { x: 1, y: 0 };
-        let end = CellPoint { x: 4, y: 0 };
-        terminal.select(start, end).unwrap();
-        assert_eq!(terminal.selection_text().unwrap().as_deref(), Some("ello"));
+        terminal
+            .select(CellPoint { x: 1, y: 0 }, CellPoint { x: 4, y: 0 })
+            .unwrap();
+        assert_eq!(selected(&terminal).as_deref(), Some("ello"));
+        // The render state draws the same columns, both ends included.
         let row = first_row(&terminal);
-        let selected: Vec<usize> = row
+        let columns: Vec<usize> = row
             .cells
             .iter()
             .enumerate()
             .filter(|(_, cell)| cell.selected)
             .map(|(column, _)| column)
             .collect();
-        assert_eq!(selected, vec![1, 2, 3, 4]);
+        assert_eq!(columns, vec![1, 2, 3, 4]);
+
+        // Copying joins the wrapped line and drops the blanks after it.
+        terminal
+            .select(CellPoint { x: 13, y: 0 }, CellPoint { x: 19, y: 1 })
+            .unwrap();
+        assert_eq!(selected(&terminal).as_deref(), Some("then some more"));
 
         terminal.select_word(CellPoint { x: 8, y: 0 }).unwrap();
-        assert_eq!(terminal.selection_text().unwrap().as_deref(), Some("world"));
+        assert_eq!(selected(&terminal).as_deref(), Some("world"));
+        terminal.select_line(CellPoint { x: 0, y: 3 }).unwrap();
+        assert_eq!(selected(&terminal).as_deref(), Some("last"));
 
+        // A run of blank cells copies as nothing.
+        terminal
+            .select(CellPoint { x: 0, y: 2 }, CellPoint { x: 5, y: 2 })
+            .unwrap();
+        assert_eq!(selected(&terminal).as_deref(), Some(""));
+
+        // A double click on blank space clears the selection.
+        terminal.select_word(CellPoint { x: 10, y: 2 }).unwrap();
+        assert_eq!(selected(&terminal), None);
+        terminal.select_word(CellPoint { x: 0, y: 3 }).unwrap();
         terminal.clear_selection().unwrap();
-        assert_eq!(terminal.selection_text().unwrap(), None);
+        assert_eq!(selected(&terminal), None);
     }
 
     #[test]
@@ -879,11 +947,14 @@ mod tests {
     #[test]
     fn scrolling_back_shows_older_lines() {
         let mut terminal = Terminal::new(SIZE).unwrap();
+        // 100 lines then an empty prompt line: the 4-row viewport shows lines 97 to 99 and the prompt.
         for line in 0..100 {
             terminal.write(format!("line {line}\r\n").as_bytes());
         }
         terminal.scroll(Scroll::Lines(-10)).unwrap();
         assert_eq!(first_row(&terminal).text, "line 87");
+        terminal.scroll(Scroll::Top).unwrap();
+        assert_eq!(first_row(&terminal).text, "line 0");
         terminal.scroll(Scroll::Bottom).unwrap();
         assert_eq!(first_row(&terminal).text, "line 97");
     }
