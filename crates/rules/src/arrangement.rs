@@ -49,7 +49,7 @@ pub fn selected_terminal(arrangement: Option<&Arrangement>) -> Option<&TerminalI
     Some(&row.terminal)
 }
 
-/// The arrangement with the tab group of the row at this index opened, if it was collapsed.
+/// Opens the tab group of the row at this index, if it was collapsed.
 pub(crate) fn open_at(arrangement: &mut Arrangement, index: usize) {
     if !is_hidden(arrangement, index) {
         return;
@@ -59,6 +59,16 @@ pub(crate) fn open_at(arrangement: &mut Arrangement, index: usize) {
         if Some(&record.id) == tab_group.as_ref() {
             record.collapsed = false;
         }
+    }
+}
+
+/// Puts the selection back on this terminal after the rows moved under it.
+pub(crate) fn reselect(arrangement: &mut Arrangement, terminal: Option<&TerminalId>) {
+    let Some(terminal) = terminal else {
+        return;
+    };
+    if let Some(index) = locate_row(arrangement, terminal) {
+        arrangement.selected = index;
     }
 }
 
@@ -85,8 +95,11 @@ pub(crate) fn settle(arrangement: &mut Arrangement) {
     }
 }
 
-/// The settled result of a change, or none when it changed nothing.
-pub(crate) fn changed(before: &Arrangement, mut after: Arrangement) -> Option<Arrangement> {
+/// The change settled, or none when it changed nothing.
+pub(crate) fn settled_if_changed(
+    before: &Arrangement,
+    mut after: Arrangement,
+) -> Option<Arrangement> {
     settle(&mut after);
     if after == *before {
         return None;
