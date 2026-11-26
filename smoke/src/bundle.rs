@@ -5,15 +5,18 @@ use std::process::Command;
 use crate::Smoke;
 
 const DEV_BUNDLE_ID: &str = "com.ldelvoye.tacoshells.dev";
-const EXECUTABLES: [&str; 2] = ["taco-shells", "taco-shells-runtime"];
+const STABLE_BUNDLE_ID: &str = "com.ldelvoye.tacoshells";
+const DEV_ID_ENDING: &str = ".dev";
+const DEV_APPLICATION_NAME: &str = "Taco Shells Dev";
+const APP_EXECUTABLE: &str = "taco-shells";
+const EXECUTABLES: [&str; 2] = [APP_EXECUTABLE, "taco-shells-runtime"];
 
-// Each stable name is the start of its dev one, so it counts only where the dev ending does not follow.
-const STABLE_NAMES: [(&str, &str); 2] = [
-    ("com.ldelvoye.tacoshells", ".dev"),
-    (".taco-shells", "-dev"),
-];
-
-/// A dev build that carried the stable app's id or config directory would read and write the app in daily use.
+/// A dev build that carried the stable app's identity would read and write the app in daily use.
+///
+/// `services` picks the whole identity, name and config directory, with one compile-time switch, so finding the dev
+/// name in the app shows which side was built. The stable config directory is not searched for: `.taco-shells` also
+/// forms wherever one string ends in a dot and the next begins with the app's name, and nothing marks where strings
+/// meet in a binary.
 pub fn holds_only_dev_names(smoke: &Smoke) -> Result<(), String> {
     let app = &smoke.app;
     let plist = app.join("Contents").join("Info.plist");
@@ -27,8 +30,16 @@ pub fn holds_only_dev_names(smoke: &Smoke) -> Result<(), String> {
         let path = programs.join(executable);
         let bytes = fs::read(&path)
             .map_err(|error| format!("could not read {}: {error}", path.display()))?;
-        if let Some(name) = stable_name_in(&bytes) {
-            return Err(format!("{executable} holds the stable app's {name}"));
+        if holds_the_stable_id(&bytes) {
+            return Err(format!(
+                "{executable} holds the stable app's {STABLE_BUNDLE_ID}"
+            ));
+        }
+        let is_app = executable == APP_EXECUTABLE;
+        if is_app && find(&bytes, DEV_APPLICATION_NAME.as_bytes()).is_none() {
+            return Err(format!(
+                "{executable} holds no \"{DEV_APPLICATION_NAME}\", so it was not built as the dev app"
+            ));
         }
     }
     Ok(())
@@ -48,19 +59,13 @@ fn plist_value(plist: &Path, key: &str) -> Result<String, String> {
     Ok(value.trim().to_string())
 }
 
-fn stable_name_in(bytes: &[u8]) -> Option<&'static str> {
-    for (name, dev_ending) in STABLE_NAMES {
-        if appears_without(bytes, name.as_bytes(), dev_ending.as_bytes()) {
-            return Some(name);
-        }
-    }
-    None
-}
-
-fn appears_without(bytes: &[u8], name: &[u8], ending: &[u8]) -> bool {
+// The stable id is the start of the dev one, so it counts only where the dev ending does not follow.
+fn holds_the_stable_id(bytes: &[u8]) -> bool {
+    let id = STABLE_BUNDLE_ID.as_bytes();
+    let ending = DEV_ID_ENDING.as_bytes();
     let mut start = 0;
-    while let Some(offset) = find(&bytes[start..], name) {
-        let end = start + offset + name.len();
+    while let Some(offset) = find(&bytes[start..], id) {
+        let end = start + offset + id.len();
         let after = &bytes[end..];
         if !after.starts_with(ending) {
             return true;
@@ -80,25 +85,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_stable_name_counts_only_without_the_dev_ending() {
-        let cases: [(&[u8], Option<&str>); 5] = [
+    fn only_the_stable_id_without_the_dev_ending_counts() {
+        let cases: [(&[u8], bool); 5] = [
+            (b"..com.ldelvoye.tacoshells.dev..", false),
+            (b"..com.ldelvoye.tacoshells..", true),
             (
-                b"..com.ldelvoye.tacoshells.dev..~/.taco-shells-dev/..",
-                None,
+                b"com.ldelvoye.tacoshells.devcom.ldelvoye.tacoshellsTaco",
+                true,
             ),
-            (
-                b"..com.ldelvoye.tacoshells..",
-                Some("com.ldelvoye.tacoshells"),
-            ),
-            (
-                b"~/.taco-shells-dev ~/.taco-shellsTaco Shells",
-                Some(".taco-shells"),
-            ),
-            (b"~/.taco-shells", Some(".taco-shells")),
-            (b"", None),
+            (b"relied on for safety.taco-shells-runtime", false),
+            (b"", false),
         ];
         for (bytes, expected) in cases {
-            let found = stable_name_in(bytes);
+            let found = holds_the_stable_id(bytes);
             assert_eq!(found, expected, "for {:?}", String::from_utf8_lossy(bytes));
         }
     }
