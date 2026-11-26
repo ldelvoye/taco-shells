@@ -2,6 +2,9 @@ use std::collections::BTreeMap;
 
 use taco_protocol::{HarnessId, TerminalId};
 
+/// How long a restored session waits for its agent's start before it is forgotten.
+pub const PROVISIONAL_MS: u64 = 60_000;
+
 // An agent killed without its end hook leaves its session behind, so the oldest go past this many.
 const MAX_SESSIONS_PER_TERMINAL: usize = 16;
 
@@ -13,10 +16,17 @@ pub struct AgentSession {
     pub cwd: String,
 }
 
+#[derive(Clone, Debug)]
+struct Entry {
+    session: AgentSession,
+    /// When a restored session was seeded, until its start confirms it.
+    provisional_since: Option<u64>,
+}
+
 /// The agent sessions each terminal has run, newest last; the newest is the one it resumes or forks.
 #[derive(Default)]
 pub struct AgentSessions {
-    by_terminal: BTreeMap<TerminalId, Vec<AgentSession>>,
+    by_terminal: BTreeMap<TerminalId, Vec<Entry>>,
     frozen: bool,
 }
 
@@ -25,36 +35,56 @@ impl AgentSessions {
         if self.frozen {
             return;
         }
-        let sessions = self.by_terminal.entry(terminal.clone()).or_default();
-        let known = sessions.iter().any(|known| {
-            known.harness == session.harness && known.session_id == session.session_id
+        let entries = self.by_terminal.entry(terminal.clone()).or_default();
+        let mut known = entries.iter_mut();
+        let existing = known.find(|entry| {
+            entry.session.harness == session.harness
+                && entry.session.session_id == session.session_id
         });
-        if known {
+        if let Some(entry) = existing {
+            entry.provisional_since = None;
             return;
         }
-        sessions.push(session);
-        if sessions.len() > MAX_SESSIONS_PER_TERMINAL {
-            sessions.remove(0);
-        }
+        let entry = Entry {
+            session,
+            provisional_since: None,
+        };
+        push_capped(entries, entry);
     }
 
     pub fn record_end(&mut self, terminal: &TerminalId, harness: &HarnessId, session_id: &str) {
         if self.frozen {
             return;
         }
-        let Some(sessions) = self.by_terminal.get_mut(terminal) else {
+        let Some(entries) = self.by_terminal.get_mut(terminal) else {
             return;
         };
-        sessions.retain(|known| !(known.harness == *harness && known.session_id == session_id));
-        if sessions.is_empty() {
+        entries.retain(|entry| {
+            !(entry.session.harness == *harness && entry.session.session_id == session_id)
+        });
+        if entries.is_empty() {
             self.by_terminal.remove(terminal);
         }
     }
 
+    /// A restored session, kept only until its start confirms it or `PROVISIONAL_MS` passes.
+    pub fn seed(&mut self, terminal: &TerminalId, session: AgentSession, now_ms: u64) {
+        if self.frozen {
+            return;
+        }
+        let entries = self.by_terminal.entry(terminal.clone()).or_default();
+        let entry = Entry {
+            session,
+            provisional_since: Some(now_ms),
+        };
+        push_capped(entries, entry);
+    }
+
     /// The newest session; an older one may belong to an agent that died without its end hook.
     pub fn session_of(&self, terminal: &TerminalId) -> Option<&AgentSession> {
-        let sessions = self.by_terminal.get(terminal)?;
-        sessions.last()
+        let entries = self.by_terminal.get(terminal)?;
+        let newest = entries.last()?;
+        Some(&newest.session)
     }
 
     pub fn forget(&mut self, terminal: &TerminalId) {
@@ -64,9 +94,30 @@ impl AgentSessions {
         self.by_terminal.remove(terminal);
     }
 
+    /// Forgets restored sessions whose agent never started again.
+    pub fn drop_expired(&mut self, now_ms: u64) {
+        if self.frozen {
+            return;
+        }
+        for entries in self.by_terminal.values_mut() {
+            entries.retain(|entry| match entry.provisional_since {
+                Some(since) => now_ms.saturating_sub(since) <= PROVISIONAL_MS,
+                None => true,
+            });
+        }
+        self.by_terminal.retain(|_, entries| !entries.is_empty());
+    }
+
     /// Nothing changes after this: what is saved has to stay as the terminals were.
     pub fn freeze(&mut self) {
         self.frozen = true;
+    }
+}
+
+fn push_capped(entries: &mut Vec<Entry>, entry: Entry) {
+    entries.push(entry);
+    if entries.len() > MAX_SESSIONS_PER_TERMINAL {
+        entries.remove(0);
     }
 }
 
@@ -88,7 +139,7 @@ mod tests {
     }
 
     #[test]
-    fn a_terminal_resumes_its_newest_session_through_clear_and_freeze() {
+    fn a_terminal_resumes_its_newest_session_through_clear_expiry_and_freeze() {
         let terminal = TerminalId("t".into());
         let claude = HarnessId("claude".into());
         let mut sessions = AgentSessions::default();
@@ -108,9 +159,21 @@ mod tests {
         sessions.record_start(&terminal, session("after"));
         assert_eq!(resumed(&sessions, &terminal).as_deref(), Some("after"));
 
+        let restored = TerminalId("r".into());
+        sessions.seed(&restored, session("kept"), 0);
+        sessions.record_start(&restored, session("kept"));
+        let never_started = TerminalId("n".into());
+        sessions.seed(&never_started, session("lost"), 0);
+        sessions.drop_expired(PROVISIONAL_MS);
+        assert_eq!(resumed(&sessions, &never_started).as_deref(), Some("lost"));
+        sessions.drop_expired(PROVISIONAL_MS + 1);
+        assert_eq!(resumed(&sessions, &restored).as_deref(), Some("kept"));
+        assert_eq!(resumed(&sessions, &never_started), None);
+
         sessions.freeze();
         sessions.forget(&terminal);
-        sessions.record_end(&terminal, &claude, "after");
+        sessions.record_end(&restored, &claude, "kept");
         assert_eq!(resumed(&sessions, &terminal).as_deref(), Some("after"));
+        assert_eq!(resumed(&sessions, &restored).as_deref(), Some("kept"));
     }
 }

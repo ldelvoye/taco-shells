@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use taco_agents::{HARNESSES, default_harness, harness_of};
 use taco_protocol::{
     AgentLabel, AgentSignal, Arrangement, ConfigFile, DrawnState, HarnessId, HookCall, HookEvent,
-    Panels, RequestReply, RowState, RuntimeCommand, RuntimeReport, TabGroupId, TerminalId,
-    TerminalSize, TerminalStart, WorkspaceRequest,
+    Panels, RequestReply, Row, RowState, RuntimeCommand, RuntimeReport, TabGroup, TabGroupId,
+    TerminalId, TerminalSize, TerminalStart, WorkspaceRequest,
 };
 use taco_rules::{
     add_row, add_row_to, apply_drop, can_fork, close_panel, close_row, create_tab_group,
@@ -16,10 +16,14 @@ use taco_rules::{
 use crate::rows::{
     AgentRows, Signalled, apply_idle_title, apply_on_screen, apply_question, apply_signal,
 };
+use crate::save::{Saved, SavedRow, SavedTabGroup, harness_for, read_saved, saved_text};
 use crate::sessions::{AgentSession, AgentSessions};
 use crate::start::{ShellStart, editor_command, fork_start};
+use crate::storage::Storage;
 
 const INITIAL_SIZE: TerminalSize = TerminalSize { cols: 80, rows: 24 };
+/// How long the save waits after a change, so a burst of changes is written once.
+pub const SAVE_DEBOUNCE_MS: u64 = 250;
 
 /// What the workspace is given at launch.
 pub struct Options {
@@ -27,6 +31,9 @@ pub struct Options {
     pub keybindings_path: String,
     /// Mints the id of each new terminal; an id is kept for as long as its row lives, across launches.
     pub new_terminal_id: Box<dyn FnMut() -> TerminalId + Send>,
+    pub storage: Box<dyn Storage>,
+    /// The `restoreOnLaunch` setting: when false, the saved terminals are not reopened.
+    pub restore_on_launch: bool,
 }
 
 /// What has to go out after an input: to the runtime, to the window, or to the app.
@@ -57,6 +64,11 @@ pub struct Workspace {
     revision: u64,
     published: Option<DrawnState>,
     agents: BTreeMap<HarnessId, AgentLabel>,
+    /// The save's text as the state now is, and when it is due to be written.
+    wanted_save: Option<String>,
+    save_due: Option<u64>,
+    written_save: Option<String>,
+    frozen: bool,
 }
 
 fn agent_labels() -> BTreeMap<HarnessId, AgentLabel> {
@@ -103,16 +115,50 @@ impl Workspace {
             revision: 0,
             published: None,
             agents: agent_labels(),
+            wanted_save: None,
+            save_due: None,
+            written_save: None,
+            frozen: false,
         }
     }
 
-    /// Opens the first terminal. Called once, after the app can carry what comes out.
+    /// Reopens the saved terminals, or opens a first one. Called once, after the app can carry what comes out.
     pub fn start(&mut self, now_ms: u64) -> Vec<Outbound> {
         let mut out = Vec::new();
         let before = self.row_count();
-        self.open_fresh(None, &mut out);
+        let mut saved = None;
+        if self.options.restore_on_launch
+            && let Some(text) = self.options.storage.read_save()
+        {
+            saved = read_saved(&text);
+        }
+        let restored = match saved {
+            Some(saved) => self.restore(saved, now_ms, &mut out),
+            None => false,
+        };
+        if !restored {
+            self.open_fresh(None, &mut out);
+        }
         self.finish(before, now_ms, &mut out);
         out
+    }
+
+    /// When `tick` next has something to do.
+    pub fn next_deadline(&self) -> Option<u64> {
+        self.save_due
+    }
+
+    /// Writes the save once its debounce has passed.
+    pub fn tick(&mut self, now_ms: u64) {
+        let due = self.save_due.is_some_and(|due| due <= now_ms);
+        if due {
+            self.write_save(now_ms);
+        }
+    }
+
+    /// The last write at quit, after `freeze`: the terminals as they were when the quit began.
+    pub fn flush(&mut self, now_ms: u64) {
+        self.write_save(now_ms);
     }
 
     /// Everything the window draws, as it is now.
@@ -210,8 +256,9 @@ impl Workspace {
         out
     }
 
-    /// The start of a quit: from here on nothing changes what is saved.
+    /// The start of a quit: from here on nothing changes what is saved, so the terminals closing as the app quits stay in the save.
     pub fn freeze(&mut self) {
+        self.frozen = true;
         self.sessions.freeze();
     }
 
@@ -324,14 +371,13 @@ impl Workspace {
                 accepted(None)
             }
             WorkspaceRequest::TabGroupCreated { terminal } => {
-                let id = TabGroupId(format!("tab-group-{}", self.next_tab_group));
+                let id = self.next_tab_group_id();
                 let created = self.change_arrangement(|arrangement| {
                     create_tab_group(arrangement, &terminal, id.clone())
                 });
                 if !created {
                     return accepted(None);
                 }
-                self.next_tab_group += 1;
                 accepted(Some(id))
             }
             WorkspaceRequest::TabGroupRenamed { id, name } => {
@@ -556,6 +602,8 @@ impl Workspace {
             out.push(Outbound::Emptied);
         }
 
+        self.schedule_save(now_ms);
+
         // drawn() carries the current revision, which is the published one's, so equal means unchanged
         let mut state = self.drawn();
         if self.published.as_ref() == Some(&state) {
@@ -565,5 +613,177 @@ impl Workspace {
         state.revision = self.revision;
         self.published = Some(state.clone());
         out.push(Outbound::State(state));
+    }
+
+    /// The save as the state now is, or none before the first terminal.
+    fn saved_now(&self) -> Option<Saved> {
+        let arrangement = self.arrangement.as_ref()?;
+        // a tab group's index in the file is its place in the list, so the records follow the rows
+        let mut ordered: Vec<&TabGroupId> = Vec::new();
+        for row in &arrangement.rows {
+            if let Some(tab_group) = &row.tab_group
+                && !ordered.contains(&tab_group)
+            {
+                ordered.push(tab_group);
+            }
+        }
+        let rows = arrangement.rows.iter().map(|row| {
+            let tab_group = match &row.tab_group {
+                Some(tab_group) => ordered.iter().position(|known| *known == tab_group),
+                None => None,
+            };
+            SavedRow {
+                id: Some(row.terminal.clone()),
+                directory: self.directories.get(&row.terminal).cloned(),
+                agent: self.sessions.session_of(&row.terminal).cloned(),
+                tab_group,
+            }
+        });
+        let tab_groups = ordered.iter().filter_map(|id| {
+            let mut records = arrangement.tab_groups.iter();
+            let record = records.find(|record| record.id == **id)?;
+            let saved = SavedTabGroup {
+                name: record.name.clone(),
+                collapsed: record.collapsed,
+            };
+            Some(saved)
+        });
+        let saved = Saved {
+            rows: rows.collect(),
+            selected: arrangement.selected,
+            tab_groups: tab_groups.collect(),
+            panels: Some(self.panels.clone()),
+        };
+        Some(saved)
+    }
+
+    // Each change to what is saved pushes the write back, so a burst of changes is written once.
+    fn schedule_save(&mut self, now_ms: u64) {
+        if self.frozen {
+            return;
+        }
+        let Some(saved) = self.saved_now() else {
+            return;
+        };
+        let text = saved_text(&saved);
+        if self.wanted_save.as_ref() == Some(&text) {
+            return;
+        }
+        self.wanted_save = Some(text);
+        self.save_due = Some(now_ms + SAVE_DEBOUNCE_MS);
+    }
+
+    fn write_save(&mut self, now_ms: u64) {
+        self.save_due = None;
+        self.sessions.drop_expired(now_ms);
+        let text = match (self.frozen, self.saved_now()) {
+            (false, Some(saved)) => saved_text(&saved),
+            _ => match &self.wanted_save {
+                Some(text) => text.clone(),
+                None => return,
+            },
+        };
+        if self.written_save.as_ref() == Some(&text) {
+            return;
+        }
+        self.options.storage.write_save(&text);
+        self.wanted_save = Some(text.clone());
+        self.written_save = Some(text);
+    }
+
+    /// Rebuilds the saved terminals under their saved ids and opens each where it was. False when the save holds none.
+    fn restore(&mut self, saved: Saved, now_ms: u64, out: &mut Vec<Outbound>) -> bool {
+        if saved.rows.is_empty() {
+            return false;
+        }
+        let tab_group_ids: Vec<TabGroupId> = saved
+            .tab_groups
+            .iter()
+            .map(|_| self.next_tab_group_id())
+            .collect();
+
+        let mut rows = Vec::new();
+        let mut starts = Vec::new();
+        for saved_row in saved.rows {
+            let already_used = |id: &TerminalId| rows.iter().any(|row: &Row| row.terminal == *id);
+            let terminal = match saved_row.id {
+                Some(id) if !already_used(&id) => id,
+                _ => (self.options.new_terminal_id)(),
+            };
+            let tab_group = match saved_row.tab_group {
+                Some(index) => tab_group_ids.get(index).cloned(),
+                None => None,
+            };
+            rows.push(Row {
+                terminal: terminal.clone(),
+                title: String::new(),
+                tab_group,
+            });
+            let shell =
+                self.restored_shell(&terminal, saved_row.directory, saved_row.agent, now_ms);
+            starts.push((terminal, shell));
+        }
+
+        let records = saved.tab_groups.into_iter().zip(tab_group_ids);
+        let tab_groups = records.map(|(record, id)| TabGroup {
+            id,
+            name: record.name,
+            collapsed: record.collapsed,
+        });
+        let mut arrangement = Arrangement {
+            selected: saved.selected,
+            rows,
+            tab_groups: tab_groups.collect(),
+        };
+        let selected = arrangement.rows[arrangement.selected].terminal.clone();
+        // the selected row's tab group opens, as selecting it would
+        if let Some(opened) = select_row(&arrangement, &selected) {
+            arrangement = opened;
+        }
+        self.arrangement = Some(arrangement);
+        if let Some(panels) = saved.panels {
+            self.panels = panels;
+        }
+        for (terminal, shell) in starts {
+            self.open(terminal, shell, out);
+        }
+        true
+    }
+
+    // What a saved row resumes, and where it was, are known before its shell exists: the first save can come before any shell starts.
+    fn restored_shell(
+        &mut self,
+        terminal: &TerminalId,
+        directory: Option<String>,
+        agent: Option<AgentSession>,
+        now_ms: u64,
+    ) -> ShellStart {
+        let Some(agent) = agent else {
+            if let Some(directory) = &directory {
+                self.directories.insert(terminal.clone(), directory.clone());
+            }
+            return ShellStart {
+                directory,
+                ..ShellStart::default()
+            };
+        };
+        let command = match harness_for(&agent) {
+            Some(harness) => harness.resume_command(&agent.session_id),
+            None => None,
+        };
+        self.directories.insert(terminal.clone(), agent.cwd.clone());
+        let shell = ShellStart {
+            directory: Some(agent.cwd.clone()),
+            directory_of: None,
+            command,
+        };
+        self.sessions.seed(terminal, agent, now_ms);
+        shell
+    }
+
+    fn next_tab_group_id(&mut self) -> TabGroupId {
+        let id = TabGroupId(format!("tab-group-{}", self.next_tab_group));
+        self.next_tab_group += 1;
+        id
     }
 }
