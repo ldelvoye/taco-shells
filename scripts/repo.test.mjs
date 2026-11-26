@@ -70,6 +70,7 @@ describe('choosing a version from real commits', () => {
   it('leaves commits to the release page out of the version and the notes', () => {
     git('tag', 'v1.0.0')
     commit('feat(site): a new section on the page', 'apps/site/public/index.html')
+    commit('feat(site): check the page on its own', '.github/workflows/site.yml')
     commit('fix: an app fix')
 
     const { bump, notes } = bumpAndNotes()
