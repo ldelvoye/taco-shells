@@ -6,6 +6,10 @@ name: main
 on:
   push:
     branches: [main]
+    # The release page is not part of the app: a push touching only it must not cut a version.
+    paths-ignore:
+      - "apps/site/**"
+      - ".github/workflows/site.yml"
   workflow_dispatch:
 
 permissions:
