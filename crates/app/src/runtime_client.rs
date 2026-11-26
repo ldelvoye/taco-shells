@@ -82,6 +82,10 @@ impl RuntimeClient {
         // Between fork and exec only async-signal-safe calls. The copies at 3 and 4 stay open across exec; the ones above close.
         unsafe {
             command.pre_exec(move || {
+                // A mask survives exec, and std does not reset it on this path: the runtime starts with none blocked.
+                let mut nothing_blocked: libc::sigset_t = std::mem::zeroed();
+                libc::sigemptyset(&mut nothing_blocked);
+                libc::pthread_sigmask(libc::SIG_SETMASK, &nothing_blocked, std::ptr::null_mut());
                 let control_high = libc::fcntl(control_fd, libc::F_DUPFD_CLOEXEC, ABOVE_BOTH);
                 let terminals_high = libc::fcntl(terminals_fd, libc::F_DUPFD_CLOEXEC, ABOVE_BOTH);
                 if control_high < 0 || terminals_high < 0 {
@@ -241,13 +245,25 @@ mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
-    /// A stand-in runtime: it takes one byte of what it is sent, then exits with `code`.
+    /// A stand-in runtime. It writes whether SIGTERM is blocked in it to `<itself>.mask`, takes one byte of what it is sent, and exits with `code`.
     fn stand_in(name: &str, code: i32) -> PathBuf {
         let directory =
             std::env::temp_dir().join(format!("taco-runtime-client-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join(name);
-        let script = format!("#!/bin/sh\nhead -c 1 <&{CONTROL_FD} >/dev/null\nexit {code}\n");
+        let script = format!(
+            r#"#!/usr/bin/perl
+use POSIX;
+my $old = POSIX::SigSet->new;
+sigprocmask(SIG_BLOCK, POSIX::SigSet->new, $old);
+open(my $mask, '>', "$0.mask") or die;
+print $mask ($old->ismember(SIGTERM) ? 1 : 0);
+close $mask;
+open(my $control, '<&=', {CONTROL_FD}) or die;
+read($control, my $byte, 1);
+exit {code};
+"#
+        );
         std::fs::write(&path, script).unwrap();
         let executable = std::fs::Permissions::from_mode(0o755);
         std::fs::set_permissions(&path, executable).unwrap();
@@ -256,12 +272,21 @@ mod tests {
 
     #[test]
     fn an_ask_in_flight_when_the_runtime_dies_is_answered_with_none() {
+        // Whatever the starting thread blocks, the runtime starts with nothing blocked.
+        let mut blocked: libc::sigset_t = unsafe { std::mem::zeroed() };
+        let mut previous: libc::sigset_t = unsafe { std::mem::zeroed() };
+        unsafe {
+            libc::sigemptyset(&mut blocked);
+            libc::sigaddset(&mut blocked, libc::SIGTERM);
+            libc::pthread_sigmask(libc::SIG_BLOCK, &blocked, &mut previous);
+        }
         let (events, received) = mpsc::channel();
         let program = stand_in("dies", 7);
         let started = RuntimeClient::start(&program, move |event| {
             let _ = events.send(event);
         })
         .unwrap();
+        unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, &previous, std::ptr::null_mut()) };
 
         let pending = started
             .client
@@ -282,6 +307,9 @@ mod tests {
             panic!("a report from a stand-in")
         };
         assert_eq!(reason, "The terminal runtime stopped (exit code 7).");
+        let mask_report = program.with_extension("mask");
+        let sigterm_blocked = std::fs::read_to_string(mask_report).unwrap();
+        assert_eq!(sigterm_blocked, "0", "SIGTERM blocked in the runtime");
 
         // A runtime that goes because it was asked to is not reported as dying.
         let (events, received) = mpsc::channel();
