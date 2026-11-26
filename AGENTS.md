@@ -23,6 +23,7 @@ hooks/          the scripts an agent's hooks run, shipped beside the app as file
 e2e/            drives the real app over the Chrome DevTools protocol
 scripts/        build, install and release commands
 apps/site/      the release page for tacoshells.dev, a package of its own (see "The release page")
+crates/         the Rust app that will replace this one: a Cargo workspace, one crate per layer
 ```
 
 A package may import only what `walls/areas.ts` allows, and `npm test` fails on anything else. Imports across packages use the package's alias; imports inside one are relative. There is no list of exceptions: an import that crosses a wall fails the test, and the only way through is a line in the table. A line there is a decision about which layer owns something, so it is added when ownership changes and not to get an import to compile.

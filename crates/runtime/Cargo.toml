@@ -1,0 +1,9 @@
+[package]
+name = "taco-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+taco-protocol.workspace = true
