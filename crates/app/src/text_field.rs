@@ -168,8 +168,7 @@ impl TextField {
         if self.selected_range.is_empty() {
             return;
         }
-        let selected = self.content[self.selected_range.clone()].to_string();
-        cx.write_to_clipboard(ClipboardItem::new_string(selected));
+        self.copy(&Copy, window, cx);
         self.replace_text_in_range(None, "", window, cx);
     }
 
@@ -308,12 +307,18 @@ impl TextField {
         self.selected_range.clone()
     }
 
-    fn splice(&mut self, range: &Range<usize>, new_text: &str, cx: &mut Context<Self>) {
+    /// Whether the text changed.
+    fn splice(&mut self, range: &Range<usize>, new_text: &str) -> bool {
         let mut next = String::new();
         next.push_str(&self.content[..range.start]);
         next.push_str(new_text);
         next.push_str(&self.content[range.end..]);
+        let changed = next != self.content;
         self.content = next;
+        changed
+    }
+
+    fn tell_edited(&self, cx: &mut Context<Self>) {
         let edited = TextFieldEvent::Edited(self.content.clone());
         cx.emit(edited);
     }
@@ -374,7 +379,10 @@ impl EntityInputHandler for TextField {
     }
 
     fn unmark_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.marked_range = None;
+        let was_composing = self.marked_range.take().is_some();
+        if was_composing {
+            self.tell_edited(cx);
+        }
         window.notify_text_input_changed(&self.focus_handle);
         cx.notify();
     }
@@ -387,7 +395,11 @@ impl EntityInputHandler for TextField {
         cx: &mut Context<Self>,
     ) {
         let range = self.replaced_range(range_utf16);
-        self.splice(&range, new_text, cx);
+        let was_composing = self.marked_range.is_some();
+        let changed = self.splice(&range, new_text);
+        if changed || was_composing {
+            self.tell_edited(cx);
+        }
         let caret = range.start + new_text.len();
         self.selected_range = caret..caret;
         self.selection_reversed = false;
@@ -405,7 +417,8 @@ impl EntityInputHandler for TextField {
         cx: &mut Context<Self>,
     ) {
         let range = self.replaced_range(range_utf16);
-        self.splice(&range, new_text, cx);
+        // Text still being composed is not an edit yet: it is told once the composition ends.
+        self.splice(&range, new_text);
         let inserted_end = range.start + new_text.len();
         if new_text.is_empty() {
             self.marked_range = None;
