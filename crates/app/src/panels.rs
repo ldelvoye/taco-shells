@@ -1,7 +1,7 @@
-use gpui::{AnyElement, Div, FontWeight, IntoElement, ParentElement, Styled, div, px, svg};
+use gpui::{Div, FontWeight, IntoElement, ParentElement, Styled, div, px, svg};
 use taco_protocol::{Edge, Panel, PanelPlace, Panels};
 
-use crate::assets::{CLOSE_ICON, PLUS_ICON};
+use crate::assets::CLOSE_ICON;
 use crate::drive::mark;
 use crate::look::{Look, PANEL_TITLE_HEIGHT};
 
@@ -33,14 +33,8 @@ pub fn open_on(panels: &Panels, edge: Edge) -> Option<(Panel, &PanelPlace)> {
 }
 
 /// A docked panel: its title, then its contents, sized along the edge it sits on.
-pub fn docked(
-    panel: Panel,
-    place: &PanelPlace,
-    title_extra: Option<AnyElement>,
-    contents: impl IntoElement,
-    look: &Look,
-) -> Div {
-    let title = panel_title(panel, title_extra, look);
+pub fn docked(panel: Panel, place: &PanelPlace, contents: impl IntoElement, look: &Look) -> Div {
+    let title = panel_title(panel, look);
     let body = div().flex_1().min_h_0().overflow_hidden().child(contents);
     let driver_name = driver_name_of(panel);
     let framed = div()
@@ -62,16 +56,11 @@ pub fn docked(
     }
 }
 
-fn panel_title(panel: Panel, extra: Option<AnyElement>, look: &Look) -> Div {
+fn panel_title(panel: Panel, look: &Look) -> Div {
     let close = svg()
         .path(CLOSE_ICON)
         .size(px(TITLE_ICON_SIZE))
         .text_color(look.secondary_text);
-    let mut controls = div().flex().items_center().gap(px(8.));
-    if let Some(element) = extra {
-        controls = controls.child(element);
-    }
-    controls = controls.child(close);
     let title = div()
         .relative()
         .flex()
@@ -86,16 +75,7 @@ fn panel_title(panel: Panel, extra: Option<AnyElement>, look: &Look) -> Div {
         .text_size(px(12.))
         .font_weight(FontWeight::SEMIBOLD)
         .child(name_of(panel))
-        .child(controls);
+        .child(close);
     let driver_name = driver_name_of(panel);
     mark(title, format!("panel:{driver_name}:title"))
-}
-
-/// The new-terminal button for the trial that puts it in the Terminals title.
-pub fn title_plus(look: &Look) -> AnyElement {
-    let plus = svg()
-        .path(PLUS_ICON)
-        .size(px(TITLE_ICON_SIZE))
-        .text_color(look.secondary_text);
-    plus.into_any_element()
 }

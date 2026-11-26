@@ -5080,6 +5080,7 @@ dependencies = [
  "taco-terminal-view",
  "taco-wire",
  "taco-workspace",
+ "unicode-segmentation",
  "uuid",
 ]
 

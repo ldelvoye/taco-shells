@@ -12,18 +12,17 @@ use taco_protocol::{
 };
 use taco_rules::{DropMark, DropPoint, drop_for, drop_mark_for, selected_terminal};
 
-use crate::banners::{Banner, banner_cards, banner_strips};
+use crate::banners::{Banner, banner_cards};
 use crate::drive::mark;
 use crate::link::{Ahead, WindowOutput, WindowReceiver, WorkspacePort, drawn_with, next_move};
 use crate::look::{FONT_FAMILY, Look, TEXT_SIZE};
-use crate::panels::{docked, open_on, title_plus};
+use crate::panels::{docked, open_on};
 use crate::platform::TrafficLights;
 use crate::popups::{Popup, popup_layer};
 use crate::strip::strip;
 use crate::terminal_list::{ListDrag, ListInput, terminal_list};
 use crate::text_field::{TextField, TextFieldEvent};
 use crate::title_bar::title_bar;
-use crate::trial::{BannerLayout, PlusPlace, Trial};
 
 const MIDDLE_MARK: &str = "middle";
 const PLACEHOLDER_FONT: &str = "Menlo";
@@ -42,7 +41,6 @@ pub struct Shown {
 pub struct WindowView {
     shown: Shown,
     look: Look,
-    trial: Trial,
     traffic_lights: TrafficLights,
     port: Rc<dyn WorkspacePort>,
     ahead: Option<Ahead>,
@@ -65,7 +63,6 @@ impl WindowView {
     pub fn new(
         shown: Shown,
         look: Look,
-        trial: Trial,
         traffic_lights: TrafficLights,
         port: Rc<dyn WorkspacePort>,
         outputs: WindowReceiver,
@@ -84,7 +81,6 @@ impl WindowView {
         Self {
             shown,
             look,
-            trial,
             traffic_lights,
             port,
             ahead: None,
@@ -362,24 +358,15 @@ impl WindowView {
         let look = &self.look;
         match panel {
             Panel::Terminals => {
-                let input = ListInput {
-                    drawn,
-                    mark,
-                    look,
-                    plus: self.trial.plus,
-                };
+                let input = ListInput { drawn, mark, look };
                 let list = terminal_list(&input, cx);
-                let mut extra = None;
-                if self.trial.plus == PlusPlace::Title {
-                    extra = Some(title_plus(look));
-                }
-                docked(panel, place, extra, list, look)
+                docked(panel, place, list, look)
             }
-            Panel::AgentActivity => docked(panel, place, None, div(), look),
+            Panel::AgentActivity => docked(panel, place, div(), look),
         }
     }
 
-    // The selected terminal, with the banners over it or above it.
+    // The selected terminal, with the banners as cards over it so they never change its size.
     fn middle(&self) -> Div {
         let look = &self.look;
         let banners = &self.shown.banners;
@@ -390,20 +377,11 @@ impl WindowView {
             .overflow_hidden()
             .bg(look.terminal_background)
             .child(self.placeholder());
+        if !banners.is_empty() {
+            terminal = terminal.child(banner_cards(banners, look));
+        }
         terminal = mark(terminal, MIDDLE_MARK);
-        let mut middle = div().flex().flex_col().flex_1().min_h_0();
-        if banners.is_empty() {
-            return middle.child(terminal);
-        }
-        match self.trial.banners {
-            BannerLayout::Cards => {
-                terminal = terminal.child(banner_cards(banners, look));
-            }
-            BannerLayout::Strips => {
-                middle = middle.children(banner_strips(banners, look));
-            }
-        }
-        middle.child(terminal)
+        div().flex().flex_col().flex_1().min_h_0().child(terminal)
     }
 
     fn placeholder(&self) -> AnyElement {

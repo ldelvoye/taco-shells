@@ -37,21 +37,6 @@ pub fn banner_cards(banners: &[Banner], look: &Look) -> Div {
         .children(cards)
 }
 
-/// The banners as strips across the top of the middle, each pushing the terminal down.
-pub fn banner_strips(banners: &[Banner], look: &Look) -> Vec<Div> {
-    let strips = banners.iter().map(|banner| {
-        let strip = div()
-            .flex_none()
-            .py(px(6.))
-            .px(px(12.))
-            .bg(look.panels)
-            .border_b_1()
-            .border_color(look.hairline);
-        filled(strip, banner, look)
-    });
-    strips.collect()
-}
-
 fn filled(container: Div, banner: &Banner, look: &Look) -> Div {
     let text = div().flex_1().min_w_0().child(banner.text.clone());
     let close = svg()

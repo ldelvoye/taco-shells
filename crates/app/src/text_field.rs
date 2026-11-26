@@ -8,6 +8,7 @@ use gpui::{
     Style, Styled, TextAlign, TextRun, UTF16Selection, UnderlineStyle, Window, actions, div, fill,
     point, px, relative, size,
 };
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::look::Look;
 
@@ -245,10 +246,11 @@ impl TextField {
         line.closest_index_for_x(x)
     }
 
+    // The caret moves by what reads as one character, so an emoji or a letter with its accents goes whole.
     fn previous_boundary(&self, offset: usize) -> usize {
         let before = &self.content[..offset];
-        let mut chars = before.char_indices();
-        match chars.next_back() {
+        let mut graphemes = before.grapheme_indices(true);
+        match graphemes.next_back() {
             Some((index, _)) => index,
             None => 0,
         }
@@ -256,9 +258,9 @@ impl TextField {
 
     fn next_boundary(&self, offset: usize) -> usize {
         let after = &self.content[offset..];
-        let mut chars = after.chars();
-        match chars.next() {
-            Some(next) => offset + next.len_utf8(),
+        let mut graphemes = after.graphemes(true);
+        match graphemes.next() {
+            Some(next) => offset + next.len(),
             None => offset,
         }
     }
