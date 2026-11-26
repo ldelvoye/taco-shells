@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -17,6 +17,7 @@ use crate::agent_setup_state::{
     agent_menu_of, runs_agent,
 };
 use crate::identity::IS_STABLE;
+use crate::sync::lock;
 
 const SUBMIT_CHECK_DELAY: Duration = Duration::from_secs(1);
 
@@ -105,13 +106,6 @@ pub struct AgentSetups {
     submit_delay: Duration,
     timer: Option<Sender<TimerMessage>>,
     thread: Option<JoinHandle<()>>,
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    match mutex.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => PoisonError::into_inner(poisoned),
-    }
 }
 
 fn real_env(name: &str) -> Option<String> {

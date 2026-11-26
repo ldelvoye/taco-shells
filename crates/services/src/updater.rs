@@ -4,12 +4,13 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::identity::IS_STABLE;
 use crate::mac;
+use crate::sync::lock;
 
 pub(crate) const FIRST_CHECK_DELAY: Duration = Duration::from_secs(10);
 pub(crate) const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
@@ -76,8 +77,15 @@ enum Message {
     Stop,
 }
 
+enum Applying {
+    NothingReady,
+    Refused(String),
+    Started,
+}
+
 struct Shared {
     ready: Mutex<Option<ReadyApp>>,
+    applying: AtomicBool,
     stopping: AtomicBool,
     host: UpdaterHost,
 }
@@ -86,13 +94,6 @@ pub struct Updater {
     shared: Arc<Shared>,
     sender: Option<Sender<Message>>,
     thread: Option<JoinHandle<()>>,
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    match mutex.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => PoisonError::into_inner(poisoned),
-    }
 }
 
 fn version_parts(text: &str) -> Option<[u64; 3]> {
@@ -410,6 +411,34 @@ fn emit(shared: &Shared, event: UpdateEvent) {
     on_event(event);
 }
 
+fn begin_apply(shared: &Shared, slot: &mut Option<ReadyApp>) -> Applying {
+    let Some(ready) = slot.clone() else {
+        return Applying::NothingReady;
+    };
+    let Some(installed) = mac::installed_bundle(&shared.host.executable) else {
+        return Applying::Refused(NOT_IN_APPLICATIONS.to_string());
+    };
+    if !ready.path.is_dir() {
+        *slot = None;
+        let message = "The update could not be started: the downloaded update is missing";
+        return Applying::Refused(message.to_string());
+    }
+    let helper = installed.join(HELPER_PATH);
+    if !helper.is_file() {
+        let message = "The update could not be started: the update helper is missing";
+        return Applying::Refused(message.to_string());
+    }
+
+    shared.applying.store(true, Ordering::SeqCst);
+    let pid = process::id();
+    let spawned = mac::spawn_update_helper(&helper, pid, &installed, &ready.path);
+    if let Err(error) = spawned {
+        shared.applying.store(false, Ordering::SeqCst);
+        return Applying::Refused(format!("Taco Shells could not start the update: {error}"));
+    }
+    Applying::Started
+}
+
 fn run_check(shared: &Shared, updates: &Path, current: &str, feed: &dyn Feed) {
     let Ok(payload) = feed.latest() else {
         return;
@@ -435,12 +464,17 @@ fn run_check(shared: &Shared, updates: &Path, current: &str, feed: &dyn Feed) {
     };
     {
         let mut ready = lock(&shared.ready);
+        // Swapped and pruned under the lock apply_ready holds, and not at all once an apply has started, so the folder it hands the helper is never removed.
+        let is_applying = shared.applying.load(Ordering::SeqCst);
+        if is_applying {
+            return;
+        }
         *ready = Some(ReadyApp {
             version: release.version.clone(),
             path,
         });
+        remove_other_versions(updates, &release.version);
     }
-    remove_other_versions(updates, &release.version);
     emit(shared, UpdateEvent::Ready(release.version));
 }
 
@@ -516,6 +550,7 @@ impl Updater {
         let adopted_version = adopted.as_ref().map(|app| app.version.clone());
         let shared = Arc::new(Shared {
             ready: Mutex::new(adopted),
+            applying: AtomicBool::new(false),
             stopping: AtomicBool::new(false),
             host,
         });
@@ -538,6 +573,7 @@ impl Updater {
     fn idle(host: UpdaterHost) -> Updater {
         let shared = Shared {
             ready: Mutex::new(None),
+            applying: AtomicBool::new(false),
             stopping: AtomicBool::new(false),
             host,
         };
@@ -560,48 +596,18 @@ impl Updater {
     }
 
     pub fn apply_ready(&self) {
-        let ready = {
-            let ready = lock(&self.shared.ready);
-            ready.clone()
+        let outcome = {
+            let mut slot = lock(&self.shared.ready);
+            begin_apply(&self.shared, &mut slot)
         };
-        let Some(ready) = ready else {
-            return;
-        };
-
-        let host = &self.shared.host;
-        let Some(installed) = mac::installed_bundle(&host.executable) else {
-            emit(
-                &self.shared,
-                UpdateEvent::Problem(NOT_IN_APPLICATIONS.to_string()),
-            );
-            return;
-        };
-
-        if !ready.path.is_dir() {
-            {
-                let mut slot = lock(&self.shared.ready);
-                *slot = None;
+        match outcome {
+            Applying::NothingReady => {}
+            Applying::Refused(problem) => emit(&self.shared, UpdateEvent::Problem(problem)),
+            Applying::Started => {
+                let quit = &self.shared.host.quit;
+                quit();
             }
-            let message = "The update could not be started: the downloaded update is missing";
-            emit(&self.shared, UpdateEvent::Problem(message.to_string()));
-            return;
         }
-        let helper = installed.join(HELPER_PATH);
-        if !helper.is_file() {
-            let message = "The update could not be started: the update helper is missing";
-            emit(&self.shared, UpdateEvent::Problem(message.to_string()));
-            return;
-        }
-
-        let pid = process::id();
-        let spawned = mac::spawn_update_helper(&helper, pid, &installed, &ready.path);
-        if let Err(error) = spawned {
-            let message = format!("Taco Shells could not start the update: {error}");
-            emit(&self.shared, UpdateEvent::Problem(message));
-            return;
-        }
-        let quit = &host.quit;
-        quit();
     }
 
     pub fn stop(mut self) {
@@ -976,6 +982,7 @@ mod tests {
         let (host, received, _quit_called) = recording_host(temp.path().join("taco"));
         let shared = Shared {
             ready: Mutex::new(None),
+            applying: AtomicBool::new(false),
             stopping: AtomicBool::new(false),
             host,
         };
@@ -994,12 +1001,31 @@ mod tests {
         run_check(&shared, &updates, "1.0.0", &feed);
 
         assert_eq!(downloads.load(Ordering::SeqCst), 2);
-        let ready = lock(&shared.ready);
-        let ready_version = ready.as_ref().map(|app| app.version.clone());
+        let ready_version = {
+            let ready = lock(&shared.ready);
+            ready.as_ref().map(|app| app.version.clone())
+        };
         assert_eq!(ready_version, Some("1.0.2".to_string()));
         assert_eq!(child_names(&updates), vec!["1.0.2"]);
         let events: Vec<UpdateEvent> = received.try_iter().collect();
         assert_eq!(events, vec![UpdateEvent::Ready("1.0.2".to_string())]);
+
+        shared.applying.store(true, Ordering::SeqCst);
+        {
+            let mut slot = lock(&release);
+            *slot = release_payload("v1.0.3", "taco-shells-1.0.3-arm64.zip", json!(size));
+        }
+        run_check(&shared, &updates, "1.0.0", &feed);
+
+        let while_applying = {
+            let ready = lock(&shared.ready);
+            ready.as_ref().map(|app| app.version.clone())
+        };
+        assert_eq!(while_applying, Some("1.0.2".to_string()));
+        let staged = updates.join("1.0.2");
+        assert!(staged.is_dir());
+        let events: Vec<UpdateEvent> = received.try_iter().collect();
+        assert!(events.is_empty(), "{events:?}");
     }
 
     #[test]
