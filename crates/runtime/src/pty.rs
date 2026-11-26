@@ -126,6 +126,7 @@ impl PtyShells {
         if std::env::var_os("LANG").is_none() {
             command.env("LANG", "en_US.UTF-8");
         }
+        let shell_side = slave.try_clone()?;
         command.stdin(Stdio::from(slave.try_clone()?));
         command.stdout(Stdio::from(slave.try_clone()?));
         command.stderr(Stdio::from(slave));
@@ -153,7 +154,7 @@ impl PtyShells {
         }
         let (wake_reader, wake_writer) = wake_pipe()?;
         let child = command.spawn()?;
-        // Closes this process's copies of the pty's slave, so the pty closes once the shell's side lets go.
+        // Closes the copies the shell was given; the reader keeps its own until the shell's last output is read.
         drop(command);
         let pid = child.id();
 
@@ -166,6 +167,7 @@ impl PtyShells {
             &master,
             budget,
             &reaped,
+            shell_side,
             wake_reader,
             wake_writer,
         );
@@ -194,6 +196,7 @@ impl PtyShells {
         master: &Arc<OwnedFd>,
         budget: Arc<Budget>,
         reaped: &Arc<AtomicBool>,
+        shell_side: OwnedFd,
         wake_reader: OwnedFd,
         wake_writer: OwnedFd,
     ) -> io::Result<Sender<Vec<u8>>> {
@@ -220,6 +223,7 @@ impl PtyShells {
         let reader = Reader {
             id: id.clone(),
             master: File::from(reader_master),
+            shell_side,
             wake: wake_reader,
             exit_code,
             budget,
@@ -328,6 +332,8 @@ impl Shells for PtyShells {
 struct Reader {
     id: TerminalId,
     master: File,
+    /// A copy of the pty's slave, held until the last output is read: macOS throws away unread output once the slave's last copy closes.
+    shell_side: OwnedFd,
     wake: OwnedFd,
     exit_code: Arc<Mutex<Option<i32>>>,
     budget: Arc<Budget>,
@@ -343,7 +349,7 @@ enum Polled {
 
 enum Drained {
     Data(usize),
-    /// Every process has let go of the pty, or nothing is left to read.
+    /// Nothing is left to read, or the pty cannot be read.
     Closed,
     /// The core has gone, so nothing more is wanted.
     Unwanted,
@@ -384,6 +390,7 @@ impl Reader {
                 Drained::Unwanted => return,
             }
         }
+        drop(self.shell_side);
 
         let recorded = *self.exit_code.lock().expect("exit code lock");
         let mut code = UNKNOWN_EXIT_CODE;
@@ -540,10 +547,15 @@ fn exit_code_of(status: std::process::ExitStatus) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::budget::BUDGET_BYTES;
     use std::sync::mpsc::Receiver;
     use std::time::Duration;
 
     const SIZE: TerminalSize = TerminalSize { cols: 80, rows: 24 };
+    /// How much of what a shell printed a failure shows.
+    const TAIL_CHARS: usize = 80;
+    /// Well past the point where macOS discards a closed slave's unread output.
+    const PAST_DISCARD: Duration = Duration::from_millis(1500);
     /// Only a safety net: every wait below ends on output the shell prints. Well under the suite's 20 s budget.
     const PATIENCE: Duration = Duration::from_secs(5);
     /// Prints whether SIGTERM is blocked in the process running it.
@@ -672,13 +684,39 @@ mod tests {
         assert_eq!(reported.trim(), "sigterm blocked: 0");
     }
 
+    /// A budget's worth of filler stops the reader, so the last line is still unread when the shell exits.
+    /// Its exit waits for the line to be read; without the reader's copy of the slave, macOS discards it after about 0.6 s.
+    #[test]
+    fn what_a_shell_prints_as_it_exits_reaches_the_core_though_nothing_had_read_it() {
+        let print_then_exit = format!(
+            r#"$| = 1; print "x" x {BUDGET_BYTES}; select(undef, undef, undef, 0.2); print "last line\n";"#
+        );
+        let (inputs, received) = mpsc::channel();
+        let program = ShellProgram {
+            path: "/usr/bin/perl".into(),
+            arguments: vec!["-e".into(), print_then_exit],
+            home: "/".into(),
+            open_file_limit: None,
+        };
+        let budgets = Arc::new(Budgets::default());
+        let mut shells = PtyShells::new(program, inputs, budgets.clone());
+        let id = TerminalId("last-line".into());
+        shells.start(&id, None, SIZE);
+
+        let filler = "x".repeat(BUDGET_BYTES);
+        text_until(&received, &id, &filler);
+        thread::sleep(PAST_DISCARD);
+        budgets.give_back(&id, BUDGET_BYTES);
+        text_until(&received, &id, "last line\r\n");
+    }
+
     /// The shell's output up to the first `marker`. An exit before it fails at once, with what was seen.
     fn text_until(received: &Receiver<Input>, watched: &TerminalId, marker: &str) -> String {
         let mut seen = String::new();
         while !seen.contains(marker) {
             let input = received.recv_timeout(PATIENCE);
             let Ok(input) = input else {
-                panic!("nothing more from {} after {seen:?}", watched.0);
+                panic!("nothing more from {} after {}", watched.0, described(&seen));
             };
             match input {
                 Input::Output { id, data } if id == *watched => {
@@ -687,13 +725,21 @@ mod tests {
                 }
                 Input::Exited { id, code } if id == *watched => {
                     panic!(
-                        "{} exited with {code} before {marker:?}, after {seen:?}",
-                        watched.0
+                        "{} exited with {code} before {marker:?}, after {}",
+                        watched.0,
+                        described(&seen)
                     );
                 }
                 _ => {}
             }
         }
         seen
+    }
+
+    /// What a shell printed, for a failure: its length and how it ends.
+    fn described(seen: &str) -> String {
+        let reversed_tail: String = seen.chars().rev().take(TAIL_CHARS).collect();
+        let tail: String = reversed_tail.chars().rev().collect();
+        format!("{} bytes ending {tail:?}", seen.len())
     }
 }
