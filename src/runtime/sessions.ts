@@ -7,6 +7,16 @@ import { processCwd } from './cwd'
 import { foregroundCommands } from './foreground'
 import { shellArguments, shellEnvironment, shellPath } from './shell'
 
+// A pty in line-buffered mode emits roughly one chunk per line: `seq 1 200000`
+// arrives as ~78,000 chunks of about 19 bytes. Emitting each one separately
+// means a message to the window and a write to a screen each, and past about a
+// million of those the window stops keeping up and its memory climbs without bound.
+// Coalescing on a short timer turns a burst into a few hundred messages a
+// second, and 5ms is well inside a frame, so an echoed keystroke still looks
+// immediate.
+const FLUSH_INTERVAL_MS = 5
+const CARRIAGE_RETURN = '\r'
+
 export type SpawnedPty = Pick<IPty, 'pid' | 'write' | 'resize' | 'pause' | 'resume' | 'kill' | 'onData' | 'onExit'>
 export type SpawnPty = (...args: Parameters<typeof spawn>) => SpawnedPty
 
@@ -30,16 +40,6 @@ interface Opening {
   directory: Promise<string>
 }
 
-// A pty in line-buffered mode emits roughly one chunk per line: `seq 1 200000`
-// arrives as ~78,000 chunks of about 19 bytes. Emitting each one separately
-// means a message to the window and a write to a screen each, and past about a
-// million of those the window stops keeping up and its memory climbs without bound.
-// Coalescing on a short timer turns a burst into a few hundred messages a
-// second, and 5ms is well inside a frame, so an echoed keystroke still looks
-// immediate.
-const FLUSH_INTERVAL_MS = 5
-const CARRIAGE_RETURN = '\r'
-
 export class PtySessions {
   private readonly sessions = new Map<SessionId, Session>()
   private readonly opening = new Map<SessionId, Opening>()
@@ -54,6 +54,11 @@ export class PtySessions {
   }
 
   open(start: TerminalStart): void {
+    const known = this.opening.has(start.id) || this.sessions.has(start.id)
+    if (known) {
+      return
+    }
+
     const directory = this.resolveStartingDirectory(start)
     this.opening.set(start.id, { size: start.size, closed: false, typed: [], directory })
     void this.spawnWhenReady(start, directory)
@@ -193,6 +198,17 @@ export class PtySessions {
     this.clearFlushTimer(session)
     this.sessions.delete(id)
     session.pty.kill()
+  }
+
+  /** Ends every shell, started or still starting, for when the runtime itself is being stopped. */
+  closeAll(): void {
+    for (const opening of this.opening.values()) {
+      opening.closed = true
+    }
+    const live = [...this.sessions.keys()]
+    for (const id of live) {
+      this.close(id)
+    }
   }
 
   onData(listener: DataListener): void {

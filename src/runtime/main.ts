@@ -11,6 +11,14 @@ const server = serveRuntime(sessions, screens, (report) => {
   parent.postMessage(report)
 })
 
+// The app stops this process with SIGTERM. A shell hears that its terminal has
+// gone only once it has taken the terminal as its own, and one still starting has
+// not: it would wait for ever, belonging to nobody. So each is ended by hand.
+process.on('SIGTERM', () => {
+  sessions.closeAll()
+  process.exit(0)
+})
+
 parent.on('message', (event) => {
   if (event.ports.length === 0) {
     const command: RuntimeCommand = event.data
