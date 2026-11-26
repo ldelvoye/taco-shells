@@ -14,6 +14,7 @@ const OUTSIDE_THE_RUST_APP = [
   ':(top,exclude)Cargo.toml',
   ':(top,exclude)Cargo.lock',
   ':(top,exclude)rust-toolchain.toml',
+  ':(top,exclude).cargo',
   ':(top,exclude).github/workflows/rust.yml'
 ]
 

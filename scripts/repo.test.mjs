@@ -72,6 +72,7 @@ describe('choosing a version from real commits', () => {
     commit('feat(runtime): hold every shell', 'crates/runtime/src/lib.rs')
     commit('feat!: a new dependency', 'Cargo.lock')
     commit('feat(ci): check the Rust code', '.github/workflows/rust.yml')
+    commit('feat(xtask): a cargo alias', '.cargo/config.toml')
     commit('fix: an app fix')
 
     const { bump, notes } = bumpAndNotes()
