@@ -1,26 +1,77 @@
 use std::collections::BTreeMap;
 
 use gpui::{
-    AnyElement, Div, FontWeight, InteractiveElement, IntoElement, ParentElement, Stateful,
-    StatefulInteractiveElement, Styled, div, px, svg, transparent_black,
+    AnyElement, App, AppContext, Context, Div, DragMoveEvent, ElementId, FontWeight,
+    InteractiveElement, IntoElement, ParentElement, Pixels, Point, Render, SharedString, Stateful,
+    StatefulInteractiveElement, Styled, Window, div, px, svg, transparent_black,
 };
-use taco_protocol::{AgentRow, Arrangement, DrawnState, Row, RowState, TabGroup, TerminalId};
-use taco_rules::summary_state;
+use taco_protocol::{
+    AgentRow, Arrangement, Dragged, DrawnState, Row, RowState, TabGroup, TabGroupId, TerminalId,
+};
+use taco_rules::{DropMark, DropPoint, MarkEdge, MarkTarget, summary_state};
 
 use crate::assets::{DONE_ICON, PLUS_ICON, TRASH_ICON, WORKING_ICON};
-use crate::look::{Look, MARK_SIZE, ROW_HEIGHT, ROW_RADIUS, TRAY_RADIUS};
+use crate::look::{FONT_FAMILY, Look, MARK_SIZE, ROW_HEIGHT, ROW_RADIUS, TEXT_SIZE, TRAY_RADIUS};
 use crate::trial::PlusPlace;
+use crate::window::WindowView;
 
 const UNTITLED_ROW: &str = "Terminal";
 const UNNAMED_TAB_GROUP: &str = "Group";
 const NEW_TERMINAL: &str = "New terminal";
 const ROW_GROUP: &str = "row";
+const HEADER_GROUP: &str = "tray-header";
 const LIST_ID: &str = "terminal-list";
+const LIST_END_ID: &str = "terminal-list-end";
 const ROW_ICON_SIZE: f32 = 14.;
 const TRAY_HEADER_HEIGHT: f32 = 26.;
+const DROP_LINE_THICKNESS: f32 = 2.;
+const DRAG_PREVIEW_WIDTH: f32 = 200.;
+
+/// What a drag out of the list carries: the thing dragged, and the name its picture shows.
+#[derive(Clone, Debug)]
+pub struct ListDrag {
+    pub dragged: Dragged,
+    label: String,
+    look: Look,
+}
+
+/// The picture that follows the pointer during a drag.
+struct DragPreview {
+    label: String,
+    look: Look,
+}
+
+/// Everything one drawing of the list reads.
+pub struct ListInput<'a> {
+    pub drawn: &'a DrawnState,
+    pub mark: Option<&'a DropMark>,
+    pub look: &'a Look,
+    pub plus: PlusPlace,
+}
+
+impl Render for DragPreview {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let look = &self.look;
+        let card = div()
+            .w(px(DRAG_PREVIEW_WIDTH))
+            .h(px(ROW_HEIGHT))
+            .flex()
+            .items_center()
+            .px(px(8.))
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .text_ellipsis()
+            .font_family(FONT_FAMILY)
+            .text_size(px(TEXT_SIZE))
+            .text_color(look.text)
+            .child(self.label.clone());
+        raised(card, look).opacity(0.9)
+    }
+}
 
 /// The Terminals panel's list: every row, with a tab group's rows in a neutral tray under its name.
-pub fn terminal_list(drawn: &DrawnState, look: &Look, plus: PlusPlace) -> Stateful<Div> {
+pub fn terminal_list(input: &ListInput, cx: &mut Context<WindowView>) -> Stateful<Div> {
+    let look = input.look;
     let mut list = div()
         .id(LIST_ID)
         .size_full()
@@ -29,38 +80,50 @@ pub fn terminal_list(drawn: &DrawnState, look: &Look, plus: PlusPlace) -> Statef
         .flex_col()
         .gap(px(2.))
         .px(px(6.))
-        .py(px(5.));
-    if plus == PlusPlace::Head {
-        list = list.child(new_terminal_row(look));
+        .py(px(5.))
+        .on_drop(cx.listener(|view, drag: &ListDrag, _, cx| view.drop_on_list(drag, cx)));
+    if input.plus == PlusPlace::Head {
+        list = list.child(new_terminal_row(look, cx));
     }
-    if let Some(arrangement) = &drawn.arrangement {
-        let entries = entries_of(arrangement, &drawn.agent_rows, look);
+    if let Some(arrangement) = &input.drawn.arrangement {
+        let entries = entries_of(arrangement, input, cx);
         list = list.children(entries);
     }
-    if plus == PlusPlace::Foot {
-        list = list.child(new_terminal_row(look));
+    if input.plus == PlusPlace::Foot {
+        list = list.child(new_terminal_row(look, cx));
     }
-    list
+    let end = div()
+        .id(LIST_END_ID)
+        .flex_1()
+        .min_h(px(ROW_HEIGHT))
+        .on_drag_move(cx.listener(|view, event: &DragMoveEvent<ListDrag>, _, cx| {
+            if !event.bounds.contains(&event.event.position) {
+                return;
+            }
+            let dragged = event.drag(cx).dragged.clone();
+            view.drag_over(&dragged, DropPoint::End, cx);
+        }));
+    list.child(end)
 }
 
 // Walks the rows once, folding each run of rows in one tab group into a tray, so every row is drawn exactly once.
 fn entries_of(
     arrangement: &Arrangement,
-    agent_rows: &BTreeMap<TerminalId, AgentRow>,
-    look: &Look,
+    input: &ListInput,
+    cx: &mut Context<WindowView>,
 ) -> Vec<AnyElement> {
     let mut entries = Vec::new();
     let mut index = 0;
     while index < arrangement.rows.len() {
         let row = &arrangement.rows[index];
         let Some(tab_group) = tab_group_of(arrangement, row) else {
-            let shown = row_element(row, index == arrangement.selected, agent_rows, look);
+            let shown = row_element(arrangement, index, input, cx);
             entries.push(shown.into_any_element());
             index += 1;
             continue;
         };
         let last = end_of_run(&arrangement.rows, index);
-        let shown = tray_element(arrangement, tab_group, index, last, agent_rows, look);
+        let shown = tray_element(arrangement, tab_group, index, last, input, cx);
         entries.push(shown.into_any_element());
         index = last + 1;
     }
@@ -88,13 +151,15 @@ fn tray_element(
     tab_group: &TabGroup,
     first: usize,
     last: usize,
-    agent_rows: &BTreeMap<TerminalId, AgentRow>,
-    look: &Look,
+    input: &ListInput,
+    cx: &mut Context<WindowView>,
 ) -> Div {
+    let look = input.look;
     let members = &arrangement.rows[first..=last];
     let holds_selected = (first..=last).contains(&arrangement.selected);
-    let header = tray_header(tab_group, members, holds_selected, agent_rows, look);
+    let header = tray_header(tab_group, members, holds_selected, input, cx);
     let mut tray = div()
+        .relative()
         .flex()
         .flex_col()
         .gap(px(2.))
@@ -104,13 +169,17 @@ fn tray_element(
         .rounded(px(TRAY_RADIUS))
         .bg(look.veil)
         .child(header);
+    if let Some(mark) = input.mark
+        && mark.target == MarkTarget::Wrapper(tab_group.id.clone())
+    {
+        tray = tray.child(drop_line(mark.edge, look));
+    }
     if tab_group.collapsed {
         return tray;
     }
-    for (offset, row) in members.iter().enumerate() {
+    for offset in 0..members.len() {
         let index = first + offset;
-        let selected = index == arrangement.selected;
-        tray = tray.child(row_element(row, selected, agent_rows, look));
+        tray = tray.child(row_element(arrangement, index, input, cx));
     }
     tray
 }
@@ -119,9 +188,10 @@ fn tray_header(
     tab_group: &TabGroup,
     members: &[Row],
     holds_selected: bool,
-    agent_rows: &BTreeMap<TerminalId, AgentRow>,
-    look: &Look,
-) -> Div {
+    input: &ListInput,
+    cx: &mut Context<WindowView>,
+) -> Stateful<Div> {
+    let look = input.look;
     let mut name = tab_group.name.trim();
     if name.is_empty() {
         name = UNNAMED_TAB_GROUP;
@@ -131,6 +201,8 @@ fn tray_header(
         .text_color(look.secondary_text)
         .child(members.len().to_string());
     let mut header = div()
+        .group(HEADER_GROUP)
+        .relative()
         .flex()
         .items_center()
         .gap(px(7.))
@@ -141,32 +213,85 @@ fn tray_header(
         .font_weight(FontWeight::SEMIBOLD)
         .child(name.to_string())
         .child(count);
-    if !tab_group.collapsed {
-        return header;
+    if tab_group.collapsed {
+        let terminals: Vec<&TerminalId> = members.iter().map(|row| &row.terminal).collect();
+        let summary = summary_state(&input.drawn.agent_rows, &terminals);
+        header = header.child(state_mark(summary, look));
+        if holds_selected {
+            header = raised(header, look);
+        }
     }
-    let terminals: Vec<&TerminalId> = members.iter().map(|row| &row.terminal).collect();
-    let summary = summary_state(agent_rows, &terminals);
-    header = header.child(state_mark(summary, look));
-    if holds_selected {
-        header = raised(header, look);
+    header = header
+        .child(div().flex_1())
+        .child(open_in_group_button(&tab_group.id, look, cx));
+    if let Some(mark) = input.mark
+        && mark.target == MarkTarget::Header(tab_group.id.clone())
+    {
+        header = marked(header, mark.edge, look);
     }
+
+    let id = tab_group.id.clone();
+    let toggled = tab_group.id.clone();
+    let hovered = tab_group.id.clone();
+    let drag = ListDrag {
+        dragged: Dragged::TabGroup(tab_group.id.clone()),
+        label: name.to_string(),
+        look: look.clone(),
+    };
     header
+        .id(element_id("tray", &id.0))
+        .on_click(cx.listener(move |view, _, _, cx| view.toggle_group(&toggled, cx)))
+        .on_drag(drag, drag_preview)
+        .on_drag_move(
+            cx.listener(move |view, event: &DragMoveEvent<ListDrag>, _, cx| {
+                let Some(fraction) = fraction_over(event) else {
+                    return;
+                };
+                let dragged = event.drag(cx).dragged.clone();
+                let point = DropPoint::Header {
+                    tab_group: hovered.clone(),
+                    fraction,
+                };
+                view.drag_over(&dragged, point, cx);
+            }),
+        )
+}
+
+fn open_in_group_button(
+    tab_group: &TabGroupId,
+    look: &Look,
+    cx: &mut Context<WindowView>,
+) -> Stateful<Div> {
+    let opened_in = tab_group.clone();
+    let plus = svg()
+        .path(PLUS_ICON)
+        .size(px(ROW_ICON_SIZE))
+        .text_color(transparent_black())
+        .group_hover(HEADER_GROUP, |style| style.text_color(look.secondary_text));
+    div()
+        .id(element_id("tray-plus", &tab_group.0))
+        .flex_none()
+        .child(plus)
+        .on_click(cx.listener(move |view, _, _, cx| {
+            cx.stop_propagation();
+            view.open_terminal_in(Some(opened_in.clone()), cx);
+        }))
 }
 
 fn row_element(
-    row: &Row,
-    selected: bool,
-    agent_rows: &BTreeMap<TerminalId, AgentRow>,
-    look: &Look,
-) -> Div {
+    arrangement: &Arrangement,
+    index: usize,
+    input: &ListInput,
+    cx: &mut Context<WindowView>,
+) -> Stateful<Div> {
+    let look = input.look;
+    let row = &arrangement.rows[index];
+    let selected = index == arrangement.selected;
     let mut label = row.title.as_str();
     if label.is_empty() {
         label = UNTITLED_ROW;
     }
-    let mut state = None;
-    if let Some(agent_row) = agent_rows.get(&row.terminal) {
-        state = Some(agent_row.state);
-    }
+    let state = agent_state(&input.drawn.agent_rows, &row.terminal);
     let name = div()
         .flex_1()
         .min_w_0()
@@ -174,14 +299,9 @@ fn row_element(
         .whitespace_nowrap()
         .text_ellipsis()
         .child(label.to_string());
-    let trash = svg()
-        .path(TRASH_ICON)
-        .size(px(ROW_ICON_SIZE))
-        .flex_none()
-        .text_color(transparent_black())
-        .group_hover(ROW_GROUP, |style| style.text_color(look.secondary_text));
-    let shown = div()
+    let mut shown = div()
         .group(ROW_GROUP)
+        .relative()
         .flex()
         .items_center()
         .gap(px(6.))
@@ -190,11 +310,116 @@ fn row_element(
         .rounded(px(ROW_RADIUS))
         .child(state_mark(state, look))
         .child(name)
-        .child(trash);
+        .child(close_button(&row.terminal, look, cx));
     if selected {
-        return raised(shown, look);
+        shown = raised(shown, look);
+    } else {
+        shown = shown.hover(|style| style.bg(look.veil));
     }
-    shown.hover(|style| style.bg(look.veil))
+    if let Some(mark) = input.mark
+        && mark.target == MarkTarget::Row(index)
+    {
+        shown = marked(shown, mark.edge, look);
+    }
+
+    let selected_terminal = row.terminal.clone();
+    let drag = ListDrag {
+        dragged: Dragged::Row(row.terminal.clone()),
+        label: label.to_string(),
+        look: look.clone(),
+    };
+    shown
+        .id(element_id("row", &row.terminal.0))
+        .on_click(cx.listener(move |view, _, _, cx| view.select(&selected_terminal, cx)))
+        .on_drag(drag, drag_preview)
+        .on_drag_move(
+            cx.listener(move |view, event: &DragMoveEvent<ListDrag>, _, cx| {
+                let Some(fraction) = fraction_over(event) else {
+                    return;
+                };
+                let dragged = event.drag(cx).dragged.clone();
+                let point = DropPoint::Row { index, fraction };
+                view.drag_over(&dragged, point, cx);
+            }),
+        )
+}
+
+fn close_button(terminal: &TerminalId, look: &Look, cx: &mut Context<WindowView>) -> Stateful<Div> {
+    let closed = terminal.clone();
+    let trash = svg()
+        .path(TRASH_ICON)
+        .size(px(ROW_ICON_SIZE))
+        .text_color(transparent_black())
+        .group_hover(ROW_GROUP, |style| style.text_color(look.secondary_text));
+    div()
+        .id(element_id("close", &terminal.0))
+        .flex_none()
+        .child(trash)
+        .on_click(cx.listener(move |view, _, _, cx| {
+            cx.stop_propagation();
+            view.close(&closed, cx);
+        }))
+}
+
+fn agent_state(
+    agent_rows: &BTreeMap<TerminalId, AgentRow>,
+    terminal: &TerminalId,
+) -> Option<RowState> {
+    let agent_row = agent_rows.get(terminal)?;
+    Some(agent_row.state)
+}
+
+/// How far down the hovered element the pointer is, from 0 at its top to 1 at its bottom, or none when it is elsewhere.
+fn fraction_over(event: &DragMoveEvent<ListDrag>) -> Option<f32> {
+    let bounds = event.bounds;
+    let position = event.event.position;
+    if !bounds.contains(&position) {
+        return None;
+    }
+    let offset = position.y - bounds.top();
+    let fraction = offset / bounds.size.height;
+    Some(fraction.clamp(0., 1.))
+}
+
+fn drag_preview(
+    drag: &ListDrag,
+    _position: Point<Pixels>,
+    _window: &mut Window,
+    cx: &mut App,
+) -> gpui::Entity<DragPreview> {
+    let preview = DragPreview {
+        label: drag.label.clone(),
+        look: drag.look.clone(),
+    };
+    cx.new(|_| preview)
+}
+
+fn element_id(kind: &str, name: &str) -> ElementId {
+    let id = SharedString::from(format!("{kind}:{name}"));
+    ElementId::Name(id)
+}
+
+/// Where a drop would land: a line above or below, or the whole thing lit when the drop goes into a collapsed group.
+fn marked(shown: Div, edge: MarkEdge, look: &Look) -> Div {
+    match edge {
+        MarkEdge::Whole => shown.bg(look.strong_veil),
+        MarkEdge::Above | MarkEdge::Below => shown.child(drop_line(edge, look)),
+    }
+}
+
+fn drop_line(edge: MarkEdge, look: &Look) -> Div {
+    let line = div()
+        .absolute()
+        .left(px(4.))
+        .right(px(4.))
+        .h(px(DROP_LINE_THICKNESS))
+        .rounded_full()
+        .bg(look.text);
+    match edge {
+        MarkEdge::Above => line.top(px(-DROP_LINE_THICKNESS)),
+        MarkEdge::Below => line.bottom(px(-DROP_LINE_THICKNESS)),
+        MarkEdge::Whole => line.top(px(0.)),
+    }
 }
 
 /// The one raised thing in the list: a card with a hairline, a soft shadow and a heavier name.
@@ -224,13 +449,14 @@ pub fn state_mark(state: Option<RowState>, look: &Look) -> AnyElement {
     }
 }
 
-fn new_terminal_row(look: &Look) -> Div {
+fn new_terminal_row(look: &Look, cx: &mut Context<WindowView>) -> Stateful<Div> {
     let plus = svg()
         .path(PLUS_ICON)
         .size(px(ROW_ICON_SIZE))
         .flex_none()
         .text_color(look.secondary_text);
     div()
+        .id("new-terminal-row")
         .flex()
         .items_center()
         .gap(px(6.))
@@ -241,4 +467,5 @@ fn new_terminal_row(look: &Look) -> Div {
         .hover(|style| style.bg(look.veil))
         .child(plus)
         .child(NEW_TERMINAL)
+        .on_click(cx.listener(|view, _, _, cx| view.open_terminal_in(None, cx)))
 }

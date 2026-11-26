@@ -27,4 +27,5 @@ taco-services.workspace = true
 taco-terminal-view.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
+futures.workspace = true
 image = { workspace = true, optional = true }
