@@ -3,18 +3,20 @@ mod bundle;
 mod ghostty_bindings;
 mod identity;
 mod install;
+mod rehearse;
 mod repo;
 mod run;
 mod smoke;
 mod version;
 
 use std::env;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use build::{Channel, Profile};
 use bundle::Options;
 
-const USAGE: &str = "usage: cargo xtask <run [-- <app args>] | bundle [--release] [--stable] [--zip] | install | smoke | ghostty-bindings>";
+const USAGE: &str = "usage: cargo xtask <run [-- <app args>] | bundle [--release] [--stable] [--zip] | install | rehearse-update [--electron <app>] [--until-ready] | smoke | ghostty-bindings>";
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = env::args().skip(1).collect();
@@ -32,6 +34,10 @@ fn main() -> ExitCode {
             None => return usage(),
         },
         "install" if rest.is_empty() => install::run(),
+        "rehearse-update" => match rehearse_options(rest) {
+            Some(options) => rehearse::run(&options),
+            None => return usage(),
+        },
         "smoke" if rest.is_empty() => smoke::run(),
         "ghostty-bindings" if rest.is_empty() => ghostty_bindings::run(),
         _ => return usage(),
@@ -57,6 +63,25 @@ fn app_arguments(rest: &[String]) -> Option<&[String]> {
         [separator, app_arguments @ ..] if separator == "--" => Some(app_arguments),
         _ => None,
     }
+}
+
+fn rehearse_options(rest: &[String]) -> Option<rehearse::Options> {
+    let mut options = rehearse::Options {
+        electron: None,
+        until_ready: false,
+    };
+    let mut remaining = rest.iter();
+    while let Some(argument) = remaining.next() {
+        match argument.as_str() {
+            "--electron" => {
+                let path = remaining.next()?;
+                options.electron = Some(PathBuf::from(path));
+            }
+            "--until-ready" => options.until_ready = true,
+            _ => return None,
+        }
+    }
+    Some(options)
 }
 
 fn bundle_options(rest: &[String]) -> Option<Options> {

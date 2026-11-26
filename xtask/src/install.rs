@@ -74,7 +74,7 @@ pub fn run() -> Result<(), String> {
     Ok(())
 }
 
-fn is_running(installed: &Path) -> Result<bool, String> {
+pub(crate) fn is_running(installed: &Path) -> Result<bool, String> {
     let pattern = format!("{}/Contents/MacOS/", installed.display());
     let mut pgrep = Command::new("pgrep");
     pgrep.args(["-f", &pattern]);
