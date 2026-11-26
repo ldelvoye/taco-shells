@@ -38,7 +38,11 @@ jobs:
       # Installs the version rust-toolchain.toml pins.
       - run: rustup toolchain install
 
+      # Saved from main only: gpui makes each cache several GB, and caches saved from pull
+      # requests would push main's out of the repo's 10 GB, leaving every check to build cold.
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # Ghostty's library, which crates/ghostty/build.rs fetches into TACO_GHOSTTY_DIR on a
       # miss. Keyed on build.rs, which pins it, so a new pin is a new cache.
