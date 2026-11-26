@@ -21,9 +21,25 @@ const CONTROL_FD: RawFd = 3;
 const TERMINALS_FD: RawFd = 4;
 /// Above both, so moving one connection into place cannot overwrite the other.
 const ABOVE_BOTH: RawFd = 10;
-/// How long each step of a stop waits: to send `Stop`, for the runtime to go by itself, and after each signal.
-const STOP_PATIENCE: Duration = Duration::from_secs(2);
+/// Four seconds in all, which the app's quit allows for after its save. A runtime that is not wedged goes within milliseconds of `Stop`.
+const STOP_PATIENCE: StopPatience = StopPatience {
+    send: Duration::from_millis(500),
+    exit: Duration::from_millis(1500),
+    after_sigterm: Duration::from_millis(1500),
+    after_sigkill: Duration::from_millis(500),
+};
 const LOCK_RETRY: Duration = Duration::from_millis(10);
+
+/// How long each step of a stop may take. A stop takes at most their sum.
+#[derive(Clone, Copy)]
+struct StopPatience {
+    /// To take the connection and write `Stop`, both within this one deadline.
+    send: Duration,
+    /// For the runtime to go by itself once it has `Stop`.
+    exit: Duration,
+    after_sigterm: Duration,
+    after_sigkill: Duration,
+}
 
 pub enum RuntimeEvent {
     Report(RuntimeReport),
@@ -51,6 +67,7 @@ struct Shared {
     /// Asks waiting for their answer. Taken whole, and answered with none, once the runtime is gone.
     asks: Mutex<Option<HashMap<u64, mpsc::Sender<Option<RuntimeAnswer>>>>>,
     stopping: AtomicBool,
+    patience: StopPatience,
     exit: Mutex<Option<ExitStatus>>,
     exited: Condvar,
 }
@@ -70,6 +87,14 @@ impl RuntimeClient {
     pub fn start(
         program: &Path,
         on_event: impl FnMut(RuntimeEvent) + Send + 'static,
+    ) -> io::Result<RuntimeStart> {
+        RuntimeClient::start_with(program, on_event, STOP_PATIENCE)
+    }
+
+    fn start_with(
+        program: &Path,
+        on_event: impl FnMut(RuntimeEvent) + Send + 'static,
+        patience: StopPatience,
     ) -> io::Result<RuntimeStart> {
         let (control, control_end) = UnixStream::pair()?;
         let (terminals, terminals_end) = UnixStream::pair()?;
@@ -113,6 +138,7 @@ impl RuntimeClient {
             next_ask: AtomicU64::new(0),
             asks: Mutex::new(Some(HashMap::new())),
             stopping: AtomicBool::new(false),
+            patience,
             exit: Mutex::new(None),
             exited: Condvar::new(),
         });
@@ -160,35 +186,40 @@ impl RuntimeClient {
         answered
     }
 
-    /// Sends `Stop`, then SIGTERM, then SIGKILL, waiting up to two seconds for the exit after each; a runtime that cannot be sent `Stop` goes straight to SIGTERM.
-    /// About four seconds at worst. A stop never produces `RuntimeEvent::Died`.
+    /// Sends `Stop`, then SIGTERM, then SIGKILL, until the runtime has gone; one that cannot be sent `Stop` goes straight to SIGTERM.
+    /// Four seconds at worst. A stop never produces `RuntimeEvent::Died`.
     pub fn stop(&self) {
+        let patience = self.shared.patience;
         self.shared.stopping.store(true, Ordering::SeqCst);
-        let stop_sent = self.send_stop();
-        if stop_sent && self.wait_for_exit() {
+        let stop_sent = self.send_stop(patience.send);
+        if stop_sent && self.wait_for_exit(patience.exit) {
             return;
         }
         self.signal(libc::SIGTERM);
-        if self.wait_for_exit() {
+        if self.wait_for_exit(patience.after_sigterm) {
             return;
         }
         self.signal(libc::SIGKILL);
-        self.wait_for_exit();
+        self.wait_for_exit(patience.after_sigkill);
     }
 
-    /// Whether `Stop` went out within `STOP_PATIENCE`. A send stuck on a full connection holds it, so a stop does not wait its turn.
-    fn send_stop(&self) -> bool {
-        let Some(mut control) = self.control_within(STOP_PATIENCE) else {
+    /// Whether `Stop` went out in time. A send stuck on a full connection holds it, so a stop does not wait its turn.
+    fn send_stop(&self, patience: Duration) -> bool {
+        let deadline = Instant::now() + patience;
+        let Some(mut control) = self.control_by(deadline) else {
             return false;
         };
-        if control.set_write_timeout(Some(STOP_PATIENCE)).is_err() {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return false;
+        }
+        if control.set_write_timeout(Some(left)).is_err() {
             return false;
         }
         taco_wire::write_frame(&mut *control, &RuntimeCommand::Stop).is_ok()
     }
 
-    fn control_within(&self, patience: Duration) -> Option<MutexGuard<'_, UnixStream>> {
-        let deadline = Instant::now() + patience;
+    fn control_by(&self, deadline: Instant) -> Option<MutexGuard<'_, UnixStream>> {
         loop {
             match self.shared.control.try_lock() {
                 Ok(control) => return Some(control),
@@ -206,13 +237,13 @@ impl RuntimeClient {
         unsafe { libc::kill(self.shared.pid as libc::pid_t, signal) };
     }
 
-    /// Whether the runtime has exited, waiting up to `STOP_PATIENCE` for it.
-    fn wait_for_exit(&self) -> bool {
+    /// Whether the runtime has exited, waiting up to `patience` for it.
+    fn wait_for_exit(&self, patience: Duration) -> bool {
         let exit = self.shared.exit.lock().expect("runtime exit lock");
         let (exit, _) = self
             .shared
             .exited
-            .wait_timeout_while(exit, STOP_PATIENCE, |status| status.is_none())
+            .wait_timeout_while(exit, patience, |status| status.is_none())
             .expect("runtime exit lock");
         exit.is_some()
     }
@@ -310,8 +341,24 @@ exit {code};
         path
     }
 
-    /// Stops it on a thread of its own, so a stop that hangs fails the test instead of hanging it.
+    /// Short enough to keep the tests quick, long enough for a killed stand-in to be reaped.
+    const QUICK: StopPatience = StopPatience {
+        send: Duration::from_millis(300),
+        exit: Duration::from_millis(300),
+        after_sigterm: Duration::from_millis(300),
+        after_sigkill: Duration::from_millis(1000),
+    };
+    /// What a busy machine may add to the steps' own waits.
+    const SCHEDULING: Duration = Duration::from_millis(300);
+
+    fn started_quick(program: &Path) -> RuntimeStart {
+        RuntimeClient::start_with(program, |_| {}, QUICK).unwrap()
+    }
+
+    /// Stops it on a thread of its own, so a stop that hangs fails the test instead of hanging it, and holds it to the sum of its steps.
     fn stopped_in_time(client: &RuntimeClient) -> Option<ExitStatus> {
+        let bound = QUICK.send + QUICK.exit + QUICK.after_sigterm + QUICK.after_sigkill;
+        let began = Instant::now();
         let (done, stopped) = mpsc::channel();
         let stopping = client.clone();
         thread::spawn(move || {
@@ -319,15 +366,17 @@ exit {code};
             let _ = done.send(());
         });
         stopped
-            .recv_timeout(Duration::from_secs(15))
-            .expect("the stop returned");
+            .recv_timeout(bound + SCHEDULING)
+            .expect("the stop returned within the sum of its steps");
+        let took = began.elapsed();
+        assert!(took <= bound + SCHEDULING, "the stop took {took:?}");
         *client.shared.exit.lock().unwrap()
     }
 
     #[test]
     fn a_stop_ends_a_runtime_that_reads_nothing_while_a_send_is_stuck() {
         let program = program("reads-nothing", "#!/bin/sh\nexec sleep 999\n");
-        let started = RuntimeClient::start(&program, |_| {}).unwrap();
+        let started = started_quick(&program);
         let sender = started.client.clone();
         thread::spawn(move || {
             for lines in 0..100_000 {
@@ -335,7 +384,7 @@ exit {code};
             }
         });
         // Long enough for the connection to fill and the sender to stick, holding it.
-        thread::sleep(Duration::from_millis(500));
+        thread::sleep(Duration::from_millis(200));
         let exit = stopped_in_time(&started.client);
         assert!(exit.is_some(), "the runtime is gone");
     }
@@ -343,7 +392,7 @@ exit {code};
     #[test]
     fn a_stop_ends_a_runtime_that_reads_nothing_once_its_connection_is_full() {
         let program = program("reads-nothing-full", "#!/bin/sh\nexec sleep 999\n");
-        let started = RuntimeClient::start(&program, |_| {}).unwrap();
+        let started = started_quick(&program);
         {
             let mut control = started.client.shared.control.lock().unwrap();
             control.set_nonblocking(true).unwrap();
@@ -359,9 +408,16 @@ exit {code};
     fn a_stop_kills_a_runtime_that_ignores_sigterm() {
         let program = program(
             "ignores-sigterm",
-            "#!/usr/bin/perl\n$SIG{TERM} = 'IGNORE';\nsleep 999;\n",
+            "#!/usr/bin/perl\n$SIG{TERM} = 'IGNORE';\nopen(my $ready, '>', \"$0.ready\");\nclose $ready;\nsleep 999;\n",
         );
-        let started = RuntimeClient::start(&program, |_| {}).unwrap();
+        let ready = program.with_extension("ready");
+        let _ = std::fs::remove_file(&ready);
+        let started = started_quick(&program);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !ready.exists() {
+            assert!(Instant::now() < deadline, "the stand-in never got ready");
+            thread::sleep(Duration::from_millis(10));
+        }
         let exit = stopped_in_time(&started.client).expect("the runtime is gone");
         assert_eq!(exit.signal(), Some(libc::SIGKILL));
     }
