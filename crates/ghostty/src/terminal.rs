@@ -30,6 +30,11 @@ pub struct Cursor {
 struct Effects {
     replies: Vec<u8>,
     title_changed: bool,
+    /// What a program's size reports (CSI 14, 16 and 18 t) answer: the library asks for them rather than keeping them.
+    rows: u16,
+    columns: u16,
+    cell_width_px: u32,
+    cell_height_px: u32,
 }
 
 /// One terminal's screen, scrollback and modes. Silent until `answer_queries` is called.
@@ -87,7 +92,7 @@ impl Terminal {
     fn adopt(raw: sys::GhosttyTerminal, history: Option<Restore>) -> Result<Terminal, Error> {
         let boxed = Box::new(Effects::default());
         let effects = Box::into_raw(boxed);
-        let terminal = Terminal {
+        let mut terminal = Terminal {
             raw,
             effects,
             history,
@@ -111,6 +116,20 @@ impl Terminal {
             )
         };
         check(set, "set the title callback")?;
+
+        let mut columns: u16 = 0;
+        let mut rows: u16 = 0;
+        terminal.get(
+            sys::GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_COLS,
+            &mut columns,
+        )?;
+        terminal.get(
+            sys::GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_ROWS,
+            &mut rows,
+        )?;
+        let effects = terminal.effects();
+        effects.columns = columns;
+        effects.rows = rows;
         Ok(terminal)
     }
 
@@ -128,7 +147,16 @@ impl Terminal {
                 reply_callback,
             )
         };
-        check(set, "set the reply callback")
+        check(set, "set the reply callback")?;
+        let size_callback = on_size as *const c_void;
+        let set = unsafe {
+            sys::ghostty_terminal_set(
+                self.raw,
+                sys::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_SIZE,
+                size_callback,
+            )
+        };
+        check(set, "set the size callback")
     }
 
     pub fn write(&mut self, data: &[u8]) {
@@ -170,7 +198,13 @@ impl Terminal {
                 cell_height_px,
             )
         };
-        check(resized, "ghostty_terminal_resize")
+        check(resized, "ghostty_terminal_resize")?;
+        let effects = self.effects();
+        effects.rows = size.rows;
+        effects.columns = size.cols;
+        effects.cell_width_px = cell_width_px;
+        effects.cell_height_px = cell_height_px;
+        Ok(())
     }
 
     /// A limit in lines. The library's default byte limit is lifted: left in place it drops history long before the line limit.
@@ -337,4 +371,18 @@ unsafe extern "C" fn on_write_pty(
 unsafe extern "C" fn on_title_changed(_terminal: sys::GhosttyTerminal, userdata: *mut c_void) {
     let effects = unsafe { &mut *(userdata as *mut Effects) };
     effects.title_changed = true;
+}
+
+unsafe extern "C" fn on_size(
+    _terminal: sys::GhosttyTerminal,
+    userdata: *mut c_void,
+    out_size: *mut sys::GhosttySizeReportSize,
+) -> bool {
+    let effects = unsafe { &*(userdata as *const Effects) };
+    let size = unsafe { &mut *out_size };
+    size.rows = effects.rows;
+    size.columns = effects.columns;
+    size.cell_width = effects.cell_width_px;
+    size.cell_height = effects.cell_height_px;
+    true
 }
