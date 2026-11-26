@@ -22,7 +22,7 @@ const BACKGROUND_WINDOW_VARIABLE: &str = "TACO_SHELLS_BACKGROUND_WINDOW";
 const READY_TIMEOUT: Duration = Duration::from_secs(120);
 const READY_POLL: Duration = Duration::from_millis(500);
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
-const CLICK_THROUGH_NOT_READY: &str = "clicking through to the Rust app waits for a config directory compiled into the dev build and a window that runs; use --until-ready";
+const RUST_EXECUTABLE: &str = "Contents/MacOS/taco-shells";
 
 pub struct Options {
     pub electron: Option<PathBuf>,
@@ -41,9 +41,6 @@ struct Rehearsal {
 }
 
 pub fn run(options: &Options) -> Result<(), String> {
-    if !options.until_ready {
-        return Err(CLICK_THROUGH_NOT_READY.to_string());
-    }
     let electron = check_electron(&options.electron)?;
 
     let target = repo::target_dir()?;
@@ -54,7 +51,12 @@ pub fn run(options: &Options) -> Result<(), String> {
     }
     create_dir(&config)?;
 
-    let zip = build_zip(&work)?;
+    let profile = if options.until_ready {
+        Profile::Debug
+    } else {
+        Profile::Release
+    };
+    let zip = build_zip(&work, &config, profile)?;
     let zip_size = file_size(&zip)?;
 
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -88,7 +90,11 @@ pub fn run(options: &Options) -> Result<(), String> {
         config,
         feed_url,
     };
-    run_until_ready(&electron, &rehearsal)
+    if options.until_ready {
+        run_until_ready(&electron, &rehearsal)
+    } else {
+        run_click_through(&electron, &rehearsal)
+    }
 }
 
 fn check_electron(requested: &Option<PathBuf>) -> Result<ElectronApp, String> {
@@ -135,14 +141,16 @@ fn plist_value(app: &Path, key: &str) -> Result<String, String> {
     }
 }
 
-fn build_zip(work: &Path) -> Result<PathBuf, String> {
+// The update script reopens the app with `open`, which passes it no environment, so the Rust app carries the
+// rehearsal's config directory compiled in and opens on what the Electron copy left there.
+fn build_zip(work: &Path, config: &Path, profile: Profile) -> Result<PathBuf, String> {
     let options = BundleOptions {
-        profile: Profile::Debug,
+        profile,
         channel: Channel::Development,
         zip: false,
         icon: false,
         drive: false,
-        config_dir: None,
+        config_dir: Some(config.to_path_buf()),
     };
     let bundled = bundle::create(&options)?;
     let zip = work.join(zip_name());
@@ -230,7 +238,11 @@ fn response_header(status: &str, content_type: &str, length: u64) -> String {
     )
 }
 
-fn launch(electron: &ElectronApp, rehearsal: &Rehearsal) -> Result<Child, String> {
+fn launch(
+    electron: &ElectronApp,
+    rehearsal: &Rehearsal,
+    background: bool,
+) -> Result<Child, String> {
     let executable = Path::new(REHEARSAL_APP)
         .join("Contents/MacOS")
         .join(&electron.executable);
@@ -244,7 +256,9 @@ fn launch(electron: &ElectronApp, rehearsal: &Rehearsal) -> Result<Child, String
     let mut command = Command::new(&executable);
     command.env(CONFIG_DIR_VARIABLE, &rehearsal.config);
     command.env(UPDATE_FEED_VARIABLE, &rehearsal.feed_url);
-    command.env(BACKGROUND_WINDOW_VARIABLE, "1");
+    if background {
+        command.env(BACKGROUND_WINDOW_VARIABLE, "1");
+    }
     command.stdout(Stdio::from(log));
     command.stderr(Stdio::from(error_log));
     command
@@ -253,7 +267,7 @@ fn launch(electron: &ElectronApp, rehearsal: &Rehearsal) -> Result<Child, String
 }
 
 fn run_until_ready(electron: &ElectronApp, rehearsal: &Rehearsal) -> Result<(), String> {
-    let mut child = match launch(electron, rehearsal) {
+    let mut child = match launch(electron, rehearsal, true) {
         Ok(child) => child,
         Err(error) => {
             remove_rehearsal_app();
@@ -282,6 +296,51 @@ fn run_until_ready(electron: &ElectronApp, rehearsal: &Rehearsal) -> Result<(), 
             rehearsal.work.join("electron.log").display()
         )),
     }
+}
+
+// A person's run: the Electron copy is shown, they click Restart to Update, and the Rust app opens in its place.
+fn run_click_through(electron: &ElectronApp, rehearsal: &Rehearsal) -> Result<(), String> {
+    let mut child = match launch(electron, rehearsal, false) {
+        Ok(child) => child,
+        Err(error) => {
+            remove_rehearsal_app();
+            return Err(error);
+        }
+    };
+
+    println!(
+        "Taco Shells Rehearsal is open: the Electron Dev build, on {}.",
+        rehearsal.config.display()
+    );
+    println!("Wait for the Update menu (about 15 s), then click Restart to Update.");
+    println!(
+        "It should reopen as the Rust app, on the same config. The Electron copy goes to the Trash."
+    );
+    println!("Press Enter here once you have looked.");
+    let mut answer = String::new();
+    let read = io::stdin().read_line(&mut answer);
+
+    let electron_still_running = matches!(child.try_wait(), Ok(None));
+    if electron_still_running {
+        end_child(&mut child);
+    }
+    let became_rust = Path::new(REHEARSAL_APP).join(RUST_EXECUTABLE).exists();
+    if became_rust {
+        println!("{REHEARSAL_APP} is now the Rust app.");
+    } else {
+        println!("{REHEARSAL_APP} was not replaced: the update did not happen.");
+    }
+    let rehearsal_app = Path::new(REHEARSAL_APP);
+    match install::is_running(rehearsal_app) {
+        Ok(false) => remove_rehearsal_app(),
+        Ok(true) => println!("{REHEARSAL_APP} is still running. Quit it, then delete it."),
+        Err(error) => println!("{error}; delete {REHEARSAL_APP} by hand once it has quit."),
+    }
+
+    if let Err(error) = read {
+        return Err(format!("could not read from stdin: {error}"));
+    }
+    Ok(())
 }
 
 fn wait_for_ready_app(updates: &Path) -> Option<PathBuf> {
