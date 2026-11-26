@@ -8,3 +8,5 @@ publish.workspace = true
 [dependencies]
 taco-protocol.workspace = true
 taco-settings.workspace = true
+gpui.workspace = true
+gpui_platform.workspace = true
