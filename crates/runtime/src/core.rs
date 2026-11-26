@@ -3,8 +3,8 @@ use std::time::{Duration, Instant};
 
 use taco_ghostty::{Snapshot, Terminal};
 use taco_protocol::{
-    RuntimeAnswer, RuntimeCommand, RuntimeQuery, RuntimeReport, TerminalColors, TerminalEvent,
-    TerminalId, TerminalRequest, TerminalSize, TerminalStart,
+    CellSize, RuntimeAnswer, RuntimeCommand, RuntimeQuery, RuntimeReport, TerminalColors,
+    TerminalEvent, TerminalId, TerminalRequest, TerminalSize, TerminalStart,
 };
 
 use crate::shells::Shells;
@@ -17,6 +17,11 @@ const TITLE_CHARS: usize = 1024;
 const DIRECTORY_FLOOR: Duration = Duration::from_millis(200);
 /// A write holding this byte submits a line, typed or pasted.
 const CARRIAGE_RETURN: u8 = b'\r';
+/// A terminal's cell size until a view gives one: a program asking for pixels is told zero.
+const NO_CELL: CellSize = CellSize {
+    width_px: 0,
+    height_px: 0,
+};
 /// What a shell that could not start reports, like an exit.
 const FAILED_START_CODE: i32 = 1;
 
@@ -61,6 +66,8 @@ enum View {
 struct Screen {
     terminal: Terminal,
     size: TerminalSize,
+    /// The last cell size a view gave, which a program's size reports in pixels answer from.
+    cell: CellSize,
     view: View,
     reported_title: Option<String>,
     reported_directory: String,
@@ -158,14 +165,15 @@ impl<S: Shells> Core<S> {
                 id,
                 attachment,
                 size,
-            } => self.attach(id, attachment, size),
+                cell,
+            } => self.attach(id, attachment, size, cell),
             TerminalRequest::Detach { id } => {
                 if let Some(screen) = self.screens.get_mut(&id) {
                     screen.view = View::None;
                 }
             }
             TerminalRequest::Write { id, data } => self.write(id, data),
-            TerminalRequest::Resize { id, size } => self.resize(&id, size),
+            TerminalRequest::Resize { id, size, cell } => self.resize(&id, size, Some(cell)),
             TerminalRequest::Clear { id } => self.clear(id),
         }
     }
@@ -208,6 +216,7 @@ impl<S: Shells> Core<S> {
         let screen = Screen {
             terminal,
             size: start.size,
+            cell: NO_CELL,
             view: View::None,
             reported_title: None,
             reported_directory: directory.clone(),
@@ -340,15 +349,23 @@ impl<S: Shells> Core<S> {
         self.report(RuntimeReport::Exited { id, code });
     }
 
-    fn attach(&mut self, id: TerminalId, attachment: u64, size: Option<TerminalSize>) {
+    fn attach(
+        &mut self,
+        id: TerminalId,
+        attachment: u64,
+        size: Option<TerminalSize>,
+        cell: Option<CellSize>,
+    ) {
         let Some(screen) = self.screens.get_mut(&id) else {
             return;
         };
         // With no view while it resizes, nobody is told: the snapshot that follows has the new size already.
         screen.view = View::None;
+        let mut target = screen.size;
         if let Some(size) = size {
-            self.resize(&id, size);
+            target = size;
         }
+        self.resize(&id, target, cell);
         self.send_snapshot(&id, attachment);
     }
 
@@ -398,18 +415,32 @@ impl<S: Shells> Core<S> {
         }
     }
 
-    fn resize(&mut self, id: &TerminalId, size: TerminalSize) {
+    /// A new size, a new cell, or both. Without a cell the terminal keeps the last one it was given.
+    fn resize(&mut self, id: &TerminalId, size: TerminalSize, cell: Option<CellSize>) {
         let Some(screen) = self.screens.get_mut(id) else {
             return;
         };
-        if screen.size == size {
+        let mut target_cell = screen.cell;
+        if let Some(cell) = cell {
+            target_cell = cell;
+        }
+        let size_changed = screen.size != size;
+        if !size_changed && screen.cell == target_cell {
             return;
         }
-        if let Err(error) = screen.terminal.resize(size, 0, 0) {
+        let resized = screen
+            .terminal
+            .resize(size, target_cell.width_px, target_cell.height_px);
+        if let Err(error) = resized {
             eprintln!("could not resize {}: {error}", id.0);
             return;
         }
         screen.size = size;
+        screen.cell = target_cell;
+        // A new cell alone changes only what size reports answer: the shell and the view keep their size.
+        if !size_changed {
+            return;
+        }
         let attached = matches!(screen.view, View::Attached);
         self.shells.resize(id, size);
         if attached {

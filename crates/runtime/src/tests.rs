@@ -3,14 +3,18 @@ use std::time::{Duration, Instant};
 
 use taco_ghostty::{Snapshot, Step, Terminal};
 use taco_protocol::{
-    Rgb, RuntimeAnswer, RuntimeCommand, RuntimeQuery, RuntimeReport, TerminalColors, TerminalEvent,
-    TerminalId, TerminalRequest, TerminalSize, TerminalStart,
+    CellSize, Rgb, RuntimeAnswer, RuntimeCommand, RuntimeQuery, RuntimeReport, TerminalColors,
+    TerminalEvent, TerminalId, TerminalRequest, TerminalSize, TerminalStart,
 };
 
 use crate::core::{Core, Effect, Input};
 use crate::shells::Shells;
 
 const SIZE: TerminalSize = TerminalSize { cols: 80, rows: 24 };
+const NO_CELL: CellSize = CellSize {
+    width_px: 0,
+    height_px: 0,
+};
 const HOME: &str = "/Users/someone";
 
 #[derive(Default)]
@@ -191,12 +195,14 @@ fn a_view_gets_the_output_before_its_attach_in_the_snapshot_and_follows_in_order
         id: id("a"),
         attachment: 7,
         size: Some(wider),
+        cell: None,
     };
     let mut effects = request(&mut core, attach, now);
     effects.extend(output(&mut core, "a", b"1mred\x1b[0m after", now));
     let narrower = TerminalRequest::Resize {
         id: id("a"),
         size: SIZE,
+        cell: NO_CELL,
     };
     effects.extend(request(&mut core, narrower.clone(), now));
     effects.extend(request(&mut core, narrower, now));
@@ -262,6 +268,7 @@ fn only_the_newest_attach_of_a_terminal_is_sent_anything() {
             id: id("a"),
             attachment: 1,
             size: None,
+            cell: None,
         },
         now,
     );
@@ -274,6 +281,7 @@ fn only_the_newest_attach_of_a_terminal_is_sent_anything() {
         id: id("a"),
         attachment: 2,
         size: Some(wider),
+        cell: None,
     };
     let again = request(&mut core, reattach, now);
     for event in events(&again) {
@@ -299,6 +307,7 @@ fn output_goes_back_to_the_shell_budget_now_only_when_no_view_will_write_it() {
             id: id("watched"),
             attachment: 1,
             size: None,
+            cell: None,
         },
         now,
     );
@@ -331,6 +340,7 @@ fn an_exit_ends_the_view_after_the_last_output_and_the_terminal_is_gone() {
             id: id("a"),
             attachment: 1,
             size: None,
+            cell: None,
         },
         now,
     );
@@ -356,6 +366,7 @@ fn an_exit_ends_the_view_after_the_last_output_and_the_terminal_is_gone() {
             id: id("a"),
             attachment: 2,
             size: None,
+            cell: None,
         },
         now,
     );
@@ -558,5 +569,64 @@ fn a_hook_belongs_to_the_terminal_of_its_nearest_shell() {
             ask: 9,
             value: RuntimeAnswer::Terminal(None)
         }]
+    );
+}
+
+#[test]
+fn a_size_report_in_pixels_is_answered_from_the_last_cell_size_a_view_gave() {
+    let (mut core, now) = opened(&["a"]);
+    let size_reports = b"\x1b[16t\x1b[14t";
+    let answer = |core: &mut Core<FakeShells>| core.shells_mut().written.last().unwrap().1.clone();
+
+    let narrow_font = CellSize {
+        width_px: 9,
+        height_px: 18,
+    };
+    let resize = TerminalRequest::Resize {
+        id: id("a"),
+        size: SIZE,
+        cell: narrow_font,
+    };
+    request(&mut core, resize, now);
+    output(&mut core, "a", size_reports, now);
+    // A cell of 9 by 18, and 80 by 24 of them: 720 by 432.
+    assert_eq!(answer(&mut core), b"\x1b[6;18;9t\x1b[4;432;720t".to_vec());
+
+    let wide_font = CellSize {
+        width_px: 10,
+        height_px: 20,
+    };
+    let attach = TerminalRequest::Attach {
+        id: id("a"),
+        attachment: 1,
+        size: None,
+        cell: Some(wide_font),
+    };
+    let attached = request(&mut core, attach, now);
+    output(&mut core, "a", size_reports, now);
+    assert_eq!(answer(&mut core), b"\x1b[6;20;10t\x1b[4;480;800t".to_vec());
+
+    let reattach = TerminalRequest::Attach {
+        id: id("a"),
+        attachment: 2,
+        size: None,
+        cell: None,
+    };
+    request(&mut core, reattach, now);
+    output(&mut core, "a", size_reports, now);
+    assert_eq!(
+        answer(&mut core),
+        b"\x1b[6;20;10t\x1b[4;480;800t".to_vec(),
+        "an attach without a cell keeps the last one"
+    );
+
+    let resized: Vec<&TerminalEvent> = events(&attached)
+        .into_iter()
+        .filter(|event| matches!(event, TerminalEvent::Resized { .. }))
+        .collect();
+    assert!(resized.is_empty(), "a new cell alone is not a new size");
+    assert!(
+        core.shells_mut().resized.is_empty(),
+        "nor does the shell hear of it"
     );
 }
