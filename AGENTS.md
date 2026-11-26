@@ -25,7 +25,7 @@ scripts/        build, install and release commands
 apps/site/      the release page for tacoshells.dev, a package of its own (see "The release page")
 ```
 
-A package may import only what `walls/areas.ts` allows, and `npm test` fails on anything else. Imports across packages use the package's alias; imports inside one are relative. There is no list of exceptions: an import that crosses a wall fails the test, and the only way through is a line in the table.
+A package may import only what `walls/areas.ts` allows, and `npm test` fails on anything else. Imports across packages use the package's alias; imports inside one are relative. There is no list of exceptions: an import that crosses a wall fails the test, and the only way through is a line in the table. A line there is a decision about which layer owns something, so it is added when ownership changes and not to get an import to compile.
 
 **The arrangement of terminals is not the window's to change.** It lives in `src/workspace/` in the main process; the window sends a `WorkspaceRequest` for each thing the user does and draws the `DrawnState` it is sent. Keyboard focus is the one thing the window moves first: `src/window/workspace/link.ts` lays its own focus move over the workspace's state until the workspace has applied it.
 
@@ -37,7 +37,7 @@ A package may import only what `walls/areas.ts` allows, and `npm test` fails on 
 
 ## The three contracts
 
-The app is three layers with a wall between each pair, and every wall is a set of plain-data messages in `src/protocol/`. A window is built against the first and the third, and could be replaced without the other two layers knowing. A type in `src/protocol/plain.ts` fails the type check for a message that is not plain data.
+The app is three layers: the window, the workspace (the arrangement, in the main process) and the terminal runtime (the shells and their screens, in a process of its own). Each pair talks only through a set of plain-data messages in `src/protocol/`, described below. The window talks to the workspace and to the runtime, so a window is built against the first and the third of these, and could be replaced without the workspace or the runtime changing. A type in `src/protocol/plain.ts` fails the type check for a message that is not plain data.
 
 **Window and workspace** (`src/protocol/workspace.ts`). The window sends a `WorkspaceRequest` for each thing the user does and gets a `RequestReply`. The workspace publishes the whole `DrawnState` each time it changes, with a revision number, and the window draws it. The window stores nothing. Keyboard focus is the exception to "the window changes nothing": it moves focus at once and reports it, and keeps its own move on screen until the published `focusCount` has caught up.
 
@@ -47,12 +47,13 @@ The app is three layers with a wall between each pair, and every wall is a set o
 
 **What the terminal engine does not do yet.** These are known and none is a bug to chase without reading this first.
 
-- A snapshot does not carry the scroll region, origin mode, the saved cursor, the line-drawing character set, tab stops, the cursor's shape or hyperlinks. The first five are cases in `src/conformance/cases.ts` marked `known`, which run as expected failures. A full-screen program that is running when its terminal is brought back repaints itself; one that relies on a scroll region it set earlier can draw in the wrong place until it does.
-- Bringing back a terminal that has no view costs as much as its scrollback is long: about 20 ms for a short one and over half a second for a full 100,000 lines. The runtime writes the snapshot out in one go and sends nothing else while it does.
+- A snapshot does not carry the scroll region, origin mode, the saved cursor, the line-drawing character set or tab stops. Those five are the cases in `src/conformance/cases.ts` marked `known`, which run as expected failures. A full-screen program that is running when its terminal is brought back repaints itself; one that relies on a scroll region it set earlier can draw in the wrong place until it does.
+- A snapshot does not carry the cursor's shape or hyperlinks either. No test shows it: the serialize add-on has no code for them, and a headless terminal gives a test no way to read them.
+- Bringing back a terminal that has no view costs as much as its scrollback is long. In `scripts/measure/README.md` a switch to a terminal with no view takes about 20 ms at the median, and 544 and 836 ms at the 95th percentile, which are the terminals with a full 100,000 lines. The snapshot is written in one synchronous call, so the runtime does nothing else during it.
 - A terminal brought back starts scrolled to the bottom with nothing selected.
 - A color a program has set and then asks for is answered from the theme, not from what it set. The color itself is kept and shown.
-- The window's memory creeps up as views are made and disposed, by about 90 MB over 480 of them in one measured run. What a disposed view leaves behind has not been found.
-- A shell that is still starting when the app is killed outright can be left behind for ever, as a `spawn-helper` process with no parent: node-pty's helper waits to open a terminal whose other end is gone. When the app is asked to stop, the runtime ends its shells itself (`src/runtime/main.ts`), so this is left only for a kill the app cannot see. It shows up under load, when a helper takes long enough to start.
+- The window may not give back everything a disposed view held. One run in `scripts/measure/README.md` made and disposed about 480 views with eight alive throughout, and the window ended about 90 MB larger than it was early in the run. Whether that is held or only not yet returned was not found out.
+- A shell that is still starting when the app is killed outright can be left behind for ever, as a `spawn-helper` process with no parent: node-pty's helper waits to open a terminal whose other end is gone. When the app stops the runtime in the usual way (`kill()` on the utility process, which is SIGTERM), the runtime ends its shells itself (`src/runtime/main.ts`), so this is left only for a kill the app cannot see. It was seen on a busy machine, where a helper takes longer to start.
 
 ## Commands
 
