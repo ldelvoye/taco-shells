@@ -316,16 +316,27 @@ fn a_close_goes_through_the_runtime_and_the_last_exit_ends_the_app_once() {
     );
     assert_eq!(listed(&workspace), "t1 [t2]");
     agent_starts(&mut workspace, "t1");
+    assert!(
+        workspace.drawn().started.is_empty(),
+        "opened, but no shell reported yet"
+    );
     let started = RuntimeReport::Started {
         id: id("t1"),
         directory: "/work".into(),
     };
-    workspace.runtime_report(started, 0);
+    let out = workspace.runtime_report(started, 0);
+    let published = published(&out).unwrap();
+    assert_eq!(
+        published.started,
+        [id("t1")].into(),
+        "the window may attach to it now"
+    );
     exited(&mut workspace, "t1");
     assert_eq!(listed(&workspace), "[t2]");
     let drawn = workspace.drawn();
     assert!(!drawn.agent_rows.contains_key(&id("t1")));
     assert!(!drawn.directories.contains_key(&id("t1")));
+    assert!(drawn.started.is_empty());
 
     // reports for a terminal that is not open change nothing
     let stray = RuntimeReport::DirectoryChanged {
@@ -523,6 +534,10 @@ fn an_electron_save_reopens_each_pane_as_a_row_where_it_was_and_resumes_its_agen
     assert_eq!(
         drawn.directories.get(&id("t2")).map(String::as_str),
         Some("/Users/me/code/tacos/docs")
+    );
+    assert!(
+        drawn.started.is_empty(),
+        "a restored row has a directory before its shell starts"
     );
 }
 

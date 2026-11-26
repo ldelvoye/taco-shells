@@ -95,7 +95,7 @@ pub fn drawn_with(state: &DrawnState, ahead: Option<&Ahead>) -> (DrawnState, Opt
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use taco_protocol::{Arrangement, DrawnState, Row, TerminalId};
     use taco_rules::{default_panels, selected_terminal};
@@ -130,6 +130,7 @@ mod tests {
             arrangement: Some(arrangement),
             agent_rows: BTreeMap::new(),
             directories: BTreeMap::new(),
+            started: BTreeSet::new(),
             refocus: 0,
             focus_count,
             agents: BTreeMap::new(),

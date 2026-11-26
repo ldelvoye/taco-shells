@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use taco_agents::{HARNESSES, default_harness, harness_of};
 use taco_protocol::{
@@ -57,6 +57,8 @@ pub struct Workspace {
     arrangement: Option<Arrangement>,
     rows: AgentRows,
     directories: BTreeMap<TerminalId, String>,
+    /// The terminals the runtime has reported started, for the window to attach to.
+    started: BTreeSet<TerminalId>,
     raw_titles: BTreeMap<TerminalId, String>,
     sessions: AgentSessions,
     panels: Panels,
@@ -144,6 +146,7 @@ impl Workspace {
             arrangement: None,
             rows: AgentRows::new(),
             directories: BTreeMap::new(),
+            started: BTreeSet::new(),
             raw_titles: BTreeMap::new(),
             sessions: AgentSessions::default(),
             panels: default_panels(),
@@ -234,6 +237,7 @@ impl Workspace {
             arrangement: self.arrangement.clone(),
             agent_rows: rows.collect(),
             directories: self.directories.clone(),
+            started: self.started.clone(),
             refocus: self.refocus,
             focus_count: self.focus_count,
             agents: self.agents.clone(),
@@ -264,8 +268,13 @@ impl Workspace {
         let mut out = Vec::new();
         let before = self.row_count();
         match report {
-            RuntimeReport::Started { id, directory }
-            | RuntimeReport::DirectoryChanged { id, directory } => {
+            RuntimeReport::Started { id, directory } => {
+                if self.holds(&id) {
+                    self.started.insert(id.clone());
+                    self.directories.insert(id, directory);
+                }
+            }
+            RuntimeReport::DirectoryChanged { id, directory } => {
                 if self.holds(&id) {
                     self.directories.insert(id, directory);
                 }
@@ -568,6 +577,7 @@ impl Workspace {
         if self.watched.as_ref() == Some(terminal) {
             self.watched = None;
         }
+        self.started.remove(terminal);
         self.sessions.forget(terminal);
         self.directories.remove(terminal);
         self.raw_titles.remove(terminal);

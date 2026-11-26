@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -83,6 +83,8 @@ pub struct DrawnState {
     pub arrangement: Option<Arrangement>,
     pub agent_rows: BTreeMap<TerminalId, AgentRow>,
     pub directories: BTreeMap<TerminalId, String>,
+    /// The terminals whose shell the runtime has reported started; attaching to one before then could reach the runtime ahead of its open.
+    pub started: BTreeSet<TerminalId>,
     /// A counter that goes up each time the window should hand the keyboard back to the selected terminal.
     pub refocus: u64,
     /// How many of the window's own focus moves the workspace has applied: the highest `count` it was sent.
