@@ -86,7 +86,9 @@ impl Restore {
 
 impl Drop for Restore {
     fn drop(&mut self) {
-        unsafe { sys::ghostty_snapshot_decoder_free(self.decoder) };
+        if !self.decoder.is_null() {
+            unsafe { sys::ghostty_snapshot_decoder_free(self.decoder) };
+        }
         let source = unsafe { Box::from_raw(self.source) };
         drop(source);
     }
