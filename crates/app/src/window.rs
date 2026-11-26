@@ -14,18 +14,19 @@ use taco_protocol::{
 };
 use taco_rules::{DropMark, DropPoint, drop_for, drop_mark_for, focus_target, selected_terminal};
 use taco_services::{AgentMenuAction, AgentSetupView};
-use taco_settings::{Binding, CommandId, command_for};
+use taco_settings::{Binding, CommandId, Config, command_for};
 
 use crate::activity::{ActivityInput, ActivityLog, activity_panel, now_ms};
 use crate::banners::{Dismissal, Notices, banner_cards, banners_of};
 use crate::drive::mark;
 use crate::keys::chord_of;
 use crate::link::{
-    Ahead, ServicesOutput, ServicesPort, WindowOutput, WindowReceiver, WorkspacePort, drawn_with,
-    next_move,
+    Ahead, Ports, ServicesOutput, ServicesPort, WindowOutput, WorkspacePort, drawn_with, next_move,
 };
 use crate::look::{FONT_FAMILY, Look, TEXT_SIZE};
-use crate::menu::{AgentMenuClicked, Minimize, RestartToUpdate, ShowHookScripts, Zoom, set_menus};
+use crate::menu::{
+    AgentMenuClicked, Minimize, Quit, RestartToUpdate, ShowHookScripts, Zoom, set_menus,
+};
 use crate::panels::{
     PanelDrag, ResizeDrag, docked, drop_bands, open_on, place_of, size_for_pointer,
 };
@@ -59,6 +60,7 @@ pub struct WindowView {
     traffic_lights: TrafficLights,
     port: Rc<dyn WorkspacePort>,
     services: Rc<dyn ServicesPort>,
+    config_changed: Box<dyn Fn(&Config)>,
     activity: ActivityLog,
     /// The log lines whose files are shown, by `seq`.
     expanded: HashSet<u64>,
@@ -91,13 +93,17 @@ impl WindowView {
         shown: Shown,
         look: Look,
         traffic_lights: TrafficLights,
-        port: Rc<dyn WorkspacePort>,
-        services: Rc<dyn ServicesPort>,
-        outputs: WindowReceiver,
+        ports: Ports,
         cx: &mut Context<Self>,
     ) -> Self {
         let last_move = shown.drawn.focus_count;
         set_menus(&shown, cx);
+        let Ports {
+            workspace: port,
+            services,
+            outputs,
+            config_changed,
+        } = ports;
         let following = cx.spawn(async move |this, cx| {
             let mut outputs = outputs;
             while let Some(output) = outputs.next().await {
@@ -127,6 +133,7 @@ impl WindowView {
             traffic_lights,
             port,
             services,
+            config_changed,
             activity: ActivityLog::default(),
             expanded: HashSet::new(),
             ahead: None,
@@ -144,6 +151,7 @@ impl WindowView {
         }
     }
 
+    #[cfg(feature = "drive")]
     pub fn set_look(&mut self, look: Look) {
         self.look = look;
     }
@@ -152,7 +160,8 @@ impl WindowView {
         match output {
             WindowOutput::State(state) => self.show(state, cx),
             WindowOutput::Replied { token, reply } => self.replied(token, reply, cx),
-            WindowOutput::Emptied => cx.quit(),
+            // Through `Quit`, not `cx.quit()`, so everything behind the window is stopped in order first.
+            WindowOutput::Emptied => cx.dispatch_action(&Quit),
             WindowOutput::Activity(event) => {
                 self.activity.apply(event);
                 cx.notify();
@@ -169,6 +178,8 @@ impl WindowView {
                 set_menus(&self.shown, cx);
             }
             ServicesOutput::Config(config) => {
+                (self.config_changed)(&config);
+                self.look = Look::new(config.appearance);
                 self.shown.bindings = config.bindings;
                 notices.config_problems = config.problems;
             }
@@ -183,7 +194,7 @@ impl WindowView {
                     notices.problems.push(problem);
                 }
             }
-            ServicesOutput::QuitForUpdate => cx.quit(),
+            ServicesOutput::QuitForUpdate => cx.dispatch_action(&Quit),
         }
         cx.notify();
     }

@@ -1,6 +1,7 @@
 //! The window's side of its contracts: requests out to the workspace, and everything sent back to the window's thread.
 
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use taco_protocol::{
@@ -27,6 +28,15 @@ pub trait ServicesPort {
     fn dismiss_notice(&self, harness: &HarnessId);
     fn apply_update(&self);
     fn hooks_directory(&self) -> PathBuf;
+}
+
+/// What the window sends to, receives from, and tells of a new config.
+pub struct Ports {
+    pub workspace: Rc<dyn WorkspacePort>,
+    pub services: Rc<dyn ServicesPort>,
+    pub outputs: WindowReceiver,
+    /// Runs on the window's thread for each new config, after the window has taken it.
+    pub config_changed: Box<dyn Fn(&Config)>,
 }
 
 /// What the services send the window.
