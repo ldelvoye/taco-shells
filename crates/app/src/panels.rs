@@ -108,10 +108,19 @@ pub fn size_for_pointer(edge: Edge, pointer: Point<Pixels>, window: Size<Pixels>
     let height = f32::from(window.height);
     let x = f32::from(pointer.x);
     let y = f32::from(pointer.y);
-    let (wanted, minimum, room) = match edge {
-        Edge::Left => (x - STRIP_WIDTH, MIN_SIDE_PANEL, width),
-        Edge::Right => (width - x, MIN_SIDE_PANEL, width),
-        Edge::Bottom => (height - y, MIN_BOTTOM_PANEL, height),
+    let wanted = match edge {
+        Edge::Left => x - STRIP_WIDTH,
+        Edge::Right => width - x,
+        Edge::Bottom => height - y,
+    };
+    bounded_size(edge, wanted, window)
+}
+
+/// A panel's size kept between a usable minimum and half the window, whether it is being dragged or was saved in a larger window.
+pub fn bounded_size(edge: Edge, wanted: f32, window: Size<Pixels>) -> f32 {
+    let (minimum, room) = match edge {
+        Edge::Left | Edge::Right => (MIN_SIDE_PANEL, f32::from(window.width)),
+        Edge::Bottom => (MIN_BOTTOM_PANEL, f32::from(window.height)),
     };
     let maximum = room * MAX_WINDOW_SHARE;
     wanted.clamp(minimum, maximum.max(minimum))
@@ -267,4 +276,24 @@ fn panel_preview(
         look: drag.look.clone(),
     };
     cx.new(|_| preview)
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::{px, size};
+    use taco_protocol::Edge;
+
+    use super::bounded_size;
+
+    #[test]
+    fn a_panel_never_takes_more_than_half_the_window_or_less_than_a_usable_size() {
+        let small_window = size(px(800.), px(500.));
+        assert_eq!(bounded_size(Edge::Left, 600., small_window), 400.);
+        assert_eq!(bounded_size(Edge::Right, 300., small_window), 300.);
+        assert_eq!(bounded_size(Edge::Bottom, 400., small_window), 250.);
+        assert_eq!(bounded_size(Edge::Left, 20., small_window), 140.);
+        assert_eq!(bounded_size(Edge::Bottom, 20., small_window), 120.);
+        let tiny_window = size(px(200.), px(200.));
+        assert_eq!(bounded_size(Edge::Left, 600., tiny_window), 140.);
+    }
 }

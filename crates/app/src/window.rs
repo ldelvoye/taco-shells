@@ -32,7 +32,7 @@ use crate::menu::{
 };
 use crate::middle::{Attachable, attachable, line_editing_bytes, opens_link};
 use crate::panels::{
-    PanelDrag, ResizeDrag, docked, drop_bands, open_on, place_of, size_for_pointer,
+    PanelDrag, ResizeDrag, bounded_size, docked, drop_bands, open_on, place_of, size_for_pointer,
 };
 use crate::platform::TrafficLights;
 use crate::popups::{Popup, popup_layer};
@@ -94,6 +94,8 @@ pub struct WindowView {
     refocus: u64,
     done_checks: DoneChecks,
     home: Option<PathBuf>,
+    /// The window's size as of this frame, which bounds the panels.
+    viewport: Size<Pixels>,
 }
 
 /// What the window does with a reply it asked for.
@@ -175,6 +177,7 @@ impl WindowView {
             refocus,
             done_checks: DoneChecks::default(),
             home: std::env::home_dir(),
+            viewport: Size::default(),
         }
     }
 
@@ -736,7 +739,8 @@ impl WindowView {
     ) -> Div {
         let look = &self.look;
         let edge = place.edge;
-        let mut size = place.size;
+        // A size saved in a larger window, or edited by hand, must not cover the middle.
+        let mut size = bounded_size(edge, place.size, self.viewport);
         if let Some((resized, live)) = self.resizing
             && resized == panel
         {
@@ -859,6 +863,7 @@ impl WindowView {
 
 impl Render for WindowView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.viewport = window.viewport_size();
         let (drawn, kept) = drawn_with(&self.shown.drawn, self.ahead.as_ref());
         self.ahead = kept;
         // Rendering is the one place the drawn selection is final, whether it came from the workspace or a move ahead of it.
