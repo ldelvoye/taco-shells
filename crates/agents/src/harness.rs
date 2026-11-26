@@ -1,0 +1,97 @@
+use taco_protocol::{AgentSignal, HarnessId};
+
+/// A terminal title read as a row name, and whether the agent said it is idle.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentTitle {
+    pub name: String,
+    pub idle: bool,
+}
+
+/// One hook the app writes into the agent's settings: the event, the script it runs, and whether the agent waits for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HookEntry {
+    pub event: &'static str,
+    pub script: &'static str,
+    pub is_async: bool,
+}
+
+/// How the app wires an agent's hooks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HarnessSetup {
+    /// The agent's name in the Agents menu and the setup line: "Claude Code".
+    pub product_name: &'static str,
+    /// The names the agent's program runs under in a terminal: "claude".
+    pub commands: &'static [&'static str],
+    /// The environment variable that moves the agent's config directory.
+    pub config_directory_variable: &'static str,
+    /// The config directory's name under home when the variable is unset.
+    pub default_config_directory: &'static str,
+    pub settings_file: &'static str,
+    pub entries: &'static [HookEntry],
+}
+
+/// What the app knows about one coding agent.
+pub struct Harness {
+    pub(crate) id: &'static str,
+    pub(crate) name: &'static str,
+    pub(crate) session_id_check: fn(&str) -> bool,
+    pub(crate) signal_reader: fn(&str, Option<&str>) -> Option<AgentSignal>,
+    pub(crate) title_reader: Option<fn(&str) -> AgentTitle>,
+    pub(crate) resume_line: fn(&str) -> Option<String>,
+    pub(crate) fork_line: Option<fn(&str, &str) -> Option<String>>,
+    pub(crate) setup: Option<&'static HarnessSetup>,
+}
+
+impl Harness {
+    /// The agent's name on the wire and in the save file: "claude".
+    pub fn id(&self) -> HarnessId {
+        HarnessId(self.id.to_string())
+    }
+
+    /// The agent's name in the menu: "Fork with Claude".
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+
+    /// Whether a value is one of this agent's session ids. An id is typed into a shell, so nothing else may pass.
+    pub fn is_session_id(&self, value: &str) -> bool {
+        (self.session_id_check)(value)
+    }
+
+    /// The signal a hook event stands for, or none for an event that changes nothing.
+    pub fn signal_for(&self, event: &str, detail: Option<&str>) -> Option<AgentSignal> {
+        (self.signal_reader)(event, detail)
+    }
+
+    /// A terminal title as a row name; the raw title, never idle, when the agent's titles carry nothing to read.
+    pub fn title_of(&self, title: &str) -> AgentTitle {
+        match self.title_reader {
+            Some(reader) => reader(title),
+            None => AgentTitle {
+                name: title.to_string(),
+                idle: false,
+            },
+        }
+    }
+
+    /// The line typed into a shell to resume a session, or none to type nothing.
+    pub fn resume_command(&self, session_id: &str) -> Option<String> {
+        (self.resume_line)(session_id)
+    }
+
+    /// Whether the agent's sessions can be forked at all.
+    pub fn forks(&self) -> bool {
+        self.fork_line.is_some()
+    }
+
+    /// The line typed into a shell to fork a session under a name, or none.
+    pub fn fork_command(&self, session_id: &str, name: &str) -> Option<String> {
+        let line = self.fork_line?;
+        line(session_id, name)
+    }
+
+    /// The hooks the app can wire; an agent without them has no Agents menu entry and no setup line.
+    pub fn setup(&self) -> Option<&'static HarnessSetup> {
+        self.setup
+    }
+}
