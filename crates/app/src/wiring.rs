@@ -34,7 +34,7 @@ pub struct Started {
     pub hosts: Hosts,
     pub outputs: WindowReceiver,
     pub first_config: Config,
-    /// The runtime's terminals connection, kept open for as long as the app runs.
+    /// The runtime's terminals connection, for the terminal view.
     pub terminals: UnixStream,
 }
 

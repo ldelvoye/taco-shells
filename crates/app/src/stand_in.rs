@@ -48,6 +48,7 @@ impl StandIn {
             services,
             outputs,
             config_changed: Box::new(|_| {}),
+            terminals: None,
         }
     }
 
