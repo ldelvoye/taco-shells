@@ -1,12 +1,12 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { cpus, tmpdir, totalmem } from 'node:os'
 import { join, resolve } from 'node:path'
 
 import { type App, launchApp } from '../e2e/app.ts'
 import { DEBUG_PORT, evaluate, evaluateInMain } from '../e2e/harness/connection.ts'
 import { type Key, KEY } from '../e2e/harness/keys.ts'
-import { sleep } from '../e2e/harness/poll.ts'
+import { pollFor, sleep } from '../e2e/harness/poll.ts'
 import { MEMORY, START_LAG, STOP_LAG } from './measure/mainProbe.mts'
 import { PAGE_PROBE } from './measure/pageProbe.mts'
 import {
@@ -37,6 +37,7 @@ const FRAME_CHECK_MIN_GAPS = 10
 const QUIET_WINDOW_MS = 1000
 const QUIET_WINDOW_TRIES = 20
 const SWITCH_SETTLE_MS = 100
+const FILL_TIMEOUT_MS = 120000
 const SWITCH_PAIRS = 10
 const KILOBYTES_PER_MEGABYTE = 1024
 const BYTES_PER_MEGABYTE = 1024 * 1024
@@ -237,7 +238,10 @@ async function receivedCharacters(app: App, ids: string[]): Promise<number> {
   const bytes = await inPage<Record<string, number>>(app, 'window.__measure.bytes')
   let total = 0
   for (const id of ids) {
-    total += bytes[id]
+    // A terminal the window has no view of has sent it nothing.
+    if (id in bytes) {
+      total += bytes[id]
+    }
   }
   return total
 }
@@ -258,19 +262,27 @@ async function interrupt(app: App, id: string): Promise<void> {
   await evaluate(app.page, call)
 }
 
-async function fillScrollback(app: App, ids: string[]): Promise<void> {
+// A terminal the window has no view of sends it no output, so each shell says it
+// has finished by making a file.
+async function fillScrollback(app: App, ids: string[], markers: string): Promise<void> {
   const lineCount = SCROLLBACK + 10000
-  const command = `seq 1 ${lineCount} && echo measure-"filled"\r`
-  const keystrokes = JSON.stringify(command)
-  const call = `(() => {
-    const ids = ${idList(ids)}
-    const waits = ids.map((id) => window.__measure.waitForText(id, 'measure-filled'))
-    for (const id of ids) {
-      window.tacoShells.pty.write(id, ${keystrokes})
-    }
-    return Promise.all(waits)
-  })()`
-  await inPage<unknown>(app, call)
+  const marked: string[] = []
+  for (const id of ids) {
+    const marker = join(markers, `filled-${id}`)
+    marked.push(marker)
+    await app.runInPane(id, `seq 1 ${lineCount} && touch '${marker}'`)
+  }
+  await pollFor(
+    'every scrollback to be filled',
+    async () => {
+      const filled = marked.every((marker) => existsSync(marker))
+      if (filled) {
+        return true
+      }
+      return null
+    },
+    FILL_TIMEOUT_MS
+  )
 }
 
 async function switchOnce(app: App, bracket: Key): Promise<number> {
@@ -293,7 +305,12 @@ async function openTerminals(app: App, terminals: number): Promise<void> {
   await app.until(`there are ${terminals} terminals`, (screen) => screen.rows.length === terminals)
 }
 
-async function measure(app: App, flags: Flags, parameters: Parameters): Promise<Result> {
+async function measure(
+  app: App,
+  flags: Flags,
+  parameters: Parameters,
+  markers: string
+): Promise<Result> {
   const { terminals, full, flooding, floodSeconds, samples } = flags
   const typedId = terminalId(terminals)
   const floodIds = [terminalId(terminals - 1)]
@@ -365,7 +382,7 @@ async function measure(app: App, flags: Flags, parameters: Parameters): Promise<
     for (let number = flooding; number < full; number += 1) {
       fillIds.push(terminalId(number))
     }
-    await fillScrollback(app, fillIds)
+    await fillScrollback(app, fillIds, markers)
 
     for (let attempt = 0; attempt < QUIET_WINDOW_TRIES; attempt += 1) {
       await evaluate(app.page, 'window.__measure.startLoad()')
@@ -474,7 +491,7 @@ async function main(): Promise<void> {
       window: { width: WINDOW_WIDTH, height: WINDOW_HEIGHT, parked: true },
       env: { ZDOTDIR: zdotdir }
     })
-    const result = await measure(app, flags, parameters)
+    const result = await measure(app, flags, parameters, state)
 
     mkdirSync(RESULT_DIR, { recursive: true })
     const path = join(RESULT_DIR, `${result.date}-${result.commit}.json`)
