@@ -37,9 +37,9 @@ Main process timer lag is how late a 5 ms timer in the main process fired. A bus
 
 Frame gap is the time between two consecutive frames drawn by the window, and long tasks are stretches of more than 50 ms where the window's main thread did nothing else.
 
-Output reaching the window is how many characters of terminal output arrived per second while the flooding terminals ran. Backlog after printing stopped is how long output kept arriving after the printing programs were interrupted.
+Output reaching the window is how many characters of terminal output arrived per second while the flooding terminals ran. A terminal the window has no view of sends it nothing, so since the window stopped keeping a view for every terminal this counts one of the four flooding terminals, the one on screen. Backlog after printing stopped is how long output kept arriving after the printing programs were interrupted.
 
-A switch runs from the key press to the second frame drawn after the new entry is on screen. The first switch row goes through every entry in turn, so each terminal is shown for the second time with whatever graphics context it has left. The second switch row is two neighbouring entries, back and forth.
+A switch runs from the key press to the second frame drawn after the new entry is on screen. When the terminal switched to has no view, the clock runs on until its new view has taken in the runtime's snapshot. The first switch row goes through every entry in turn, so since the window stopped keeping a view for every terminal, almost every switch in it is to a terminal with no view, seven of them with a full scrollback. The second switch row is two neighbouring entries, back and forth, which both have views.
 
 A lost graphics context means that terminal draws with xterm's slower renderer from then on, and Chromium allows a page about 16. The last two rows count terminals that lost theirs and terminals now on the slower renderer.
 
@@ -229,3 +229,61 @@ What it shows:
 | Switch, between two entries: median / 95th / worst (ms) | 6.3 / 6.9 / 7.3 |
 | Graphics contexts lost | 8 |
 | Terminals on the slow renderer | 8 |
+
+### After the window let go of hidden terminals
+
+Two runs on 2026-11-25, same machine and settings, at the commit that added `src/window/terminal/shown.ts`. The window keeps a view for the terminals on screen and the most recently shown, eight in all, and the runtime keeps every terminal's screen. The comparisons below are with the two runs before the core rip out, at the top of these results.
+
+What they show:
+
+- **No terminal loses its graphics context.** It was 8 of 24 in every run before this one.
+- **The window no longer holds every scrollback.** With eight full scrollbacks it is at about 355 MB, against about 1,830 MB. The runtime holds them: about 1,950 MB. All processes together are at about 2,600 MB.
+- **The window's size at the end is not a saving.** After every terminal has been shown in turn the window is at 1,405 and 1,572 MB. It never has more than eight views, but seven of the terminals shown one after another have full scrollbacks, so for a while it holds seven of them, and its resident size stays near that mark afterwards. A separate run over twelve terminals of 60,000 lines, cycled forty times, found the window level at about 1,450 MB with eight views throughout; how much of a process's resident size is free inside it was not measured.
+- **Typing while four terminals print is the same as typing when nothing prints**: 10 ms at the median and 12 ms at the 95th percentile, against about 100 and 115 ms. Three of the four printing terminals have no view, so their output never reaches the window, and the runtime pauses a shell it cannot keep up with.
+- **Switching to a terminal that has a view takes about 6 ms, as before.**
+- **Switching to a terminal that has none takes about 20 ms at the median, and over half a second when its scrollback is full**: 544 and 836 ms at the 95th percentile. That is the runtime writing out 100,000 lines and the new view reading them in.
+
+| Measure | Run 1 | Run 2 |
+| --- | --- | --- |
+| Memory, one terminal: Browser | 160 | 161 |
+| Memory, one terminal: GPU | 101 | 101 |
+| Memory, one terminal: Network Service | 48 | 48 |
+| Memory, one terminal: Terminal runtime | 76 | 76 |
+| Memory, one terminal: Tab | 141 | 141 |
+| Memory, one terminal: total | 526 | 526 |
+| Memory, one terminal: window's JavaScript heap | 11 | 11 |
+| Memory, 24 terminals, each shown once: Browser | 162 | 162 |
+| Memory, 24 terminals, each shown once: GPU | 114 | 117 |
+| Memory, 24 terminals, each shown once: Network Service | 48 | 48 |
+| Memory, 24 terminals, each shown once: Terminal runtime | 103 | 103 |
+| Memory, 24 terminals, each shown once: Tab | 177 | 178 |
+| Memory, 24 terminals, each shown once: total | 603 | 607 |
+| Memory, 24 terminals, each shown once: window's JavaScript heap | 11 | 11 |
+| Memory, 8 terminals with a full scrollback: Browser | 145 | 165 |
+| Memory, 8 terminals with a full scrollback: GPU | 92 | 115 |
+| Memory, 8 terminals with a full scrollback: Network Service | 41 | 48 |
+| Memory, 8 terminals with a full scrollback: Terminal runtime | 2028 | 1900 |
+| Memory, 8 terminals with a full scrollback: Tab | 351 | 360 |
+| Memory, 8 terminals with a full scrollback: total | 2657 | 2587 |
+| Memory, 8 terminals with a full scrollback: window's JavaScript heap | 11 | 11 |
+| Memory, at the end: Browser | 145 | 162 |
+| Memory, at the end: GPU | 97 | 114 |
+| Memory, at the end: Network Service | 41 | 48 |
+| Memory, at the end: Terminal runtime | 2057 | 1651 |
+| Memory, at the end: Tab | 1405 | 1572 |
+| Memory, at the end: total | 3746 | 3547 |
+| Memory, at the end: window's JavaScript heap | 11 | 11 |
+| Typing delay, nothing printing: median / 95th / worst (ms) | 10.2 / 10.7 / 10.9 | 9.4 / 11.0 / 12.0 |
+| Typing delay, while printing: median / 95th / worst (ms) | 9.8 / 12.1 / 13.7 | 9.5 / 11.1 / 14.0 |
+| Main process timer lag, nothing printing: median / 95th / worst (ms) | 0.7 / 0.8 / 4.3 | 0.8 / 1.5 / 4.4 |
+| Main process timer lag, while printing: median / 95th / worst (ms) | 0.7 / 0.8 / 6.0 | 0.8 / 1.6 / 5.4 |
+| Frame gap, nothing printing: median / 95th / worst (ms) | 4.2 / 4.3 / 4.8 | 4.2 / 4.4 / 4.8 |
+| Frame gap, while printing: median / 95th / worst (ms) | 4.2 / 4.5 / 4.8 | 4.2 / 4.5 / 4.8 |
+| Long tasks over 50 ms, nothing printing | 0 | 0 |
+| Long tasks over 50 ms, while printing | 0 | 0 |
+| Output reaching the window while printing (MB/s) | 12.8 | 5.1 |
+| Backlog after printing stopped (ms) | 4.3 | 3.9 |
+| Switch, every entry in turn: median / 95th / worst (ms) | 19.3 / 543.7 / 573.0 | 23.5 / 836.4 / 861.5 |
+| Switch, between two entries: median / 95th / worst (ms) | 6.2 / 6.8 / 6.8 | 5.9 / 8.3 / 9.2 |
+| Graphics contexts lost | 0 | 0 |
+| Terminals on the slow renderer | 0 | 0 |
