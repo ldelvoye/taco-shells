@@ -8,12 +8,14 @@ pub mod link;
 mod look;
 mod panels;
 mod platform;
+mod popups;
 #[cfg(feature = "render")]
 pub mod render;
 pub mod runtime_client;
 mod stand_in;
 mod strip;
 mod terminal_list;
+mod text_field;
 mod title_bar;
 mod trial;
 mod window;
@@ -55,6 +57,7 @@ pub fn run(fixture: Fixture) {
             eprintln!("the window's fonts did not load: {error:#}");
         }
         install_menu(cx);
+        text_field::bind_keys(cx);
         let window = open_window(fixture, background, cx);
         if !background {
             cx.activate(true);

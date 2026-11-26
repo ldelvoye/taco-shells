@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 
 use gpui::{
     AnyElement, App, AppContext, Context, Div, DragMoveEvent, ElementId, FontWeight,
-    InteractiveElement, IntoElement, ParentElement, Pixels, Point, Render, SharedString, Stateful,
-    StatefulInteractiveElement, Styled, Window, div, px, svg, transparent_black,
+    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels, Point,
+    Render, SharedString, Stateful, StatefulInteractiveElement, Styled, Window, div, px, svg,
+    transparent_black,
 };
 use taco_protocol::{
     AgentRow, Arrangement, Dragged, DrawnState, Row, RowState, TabGroup, TabGroupId, TerminalId,
@@ -241,6 +242,7 @@ fn tray_header(
 
     let toggled = tab_group.id.clone();
     let hovered = tab_group.id.clone();
+    let popped = tab_group.id.clone();
     let drag = ListDrag {
         dragged: Dragged::TabGroup(tab_group.id.clone()),
         label: name.to_string(),
@@ -249,6 +251,12 @@ fn tray_header(
     header
         .id(element_id("tray", &tab_group.id.0))
         .on_click(cx.listener(move |view, _, _, _| view.toggle_group(&toggled)))
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                view.open_group_popup(popped.clone(), event.position, cx);
+            }),
+        )
         .on_drag(drag, drag_preview)
         .on_drag_move(
             cx.listener(move |view, event: &DragMoveEvent<ListDrag>, _, cx| {
@@ -336,6 +344,7 @@ fn row_element(
     shown = drive::mark(shown, format!("row:{terminal_name}"));
 
     let selected_terminal = row.terminal.clone();
+    let popped = row.terminal.clone();
     let drag = ListDrag {
         dragged: Dragged::Row(row.terminal.clone()),
         label: label.to_string(),
@@ -344,6 +353,12 @@ fn row_element(
     shown
         .id(element_id("row", &row.terminal.0))
         .on_click(cx.listener(move |view, _, _, cx| view.select(&selected_terminal, cx)))
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                view.open_row_popup(popped.clone(), event.position, cx);
+            }),
+        )
         .on_drag(drag, drag_preview)
         .on_drag_move(
             cx.listener(move |view, event: &DragMoveEvent<ListDrag>, _, cx| {
