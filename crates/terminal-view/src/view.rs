@@ -1,7 +1,7 @@
 //! One terminal's view: a silent copy of the runtime's terminal, fed in the order the terminal channel sends.
 
 use taco_ghostty::input::{CellPoint, KeyEncoder, KeyPress, MouseEncoder, MouseInput, Scroll};
-use taco_ghostty::render::{Dirty, RenderState, Row};
+use taco_ghostty::render::{Dirty, FrameColors, FrameCursor, RenderState, Row};
 use taco_ghostty::{Error, Step, Terminal};
 use taco_protocol::{Rgb, TerminalColors, TerminalEvent};
 
@@ -140,6 +140,31 @@ impl View {
 
     /// The viewport laid out for drawing, with the rows that changed read again. None before `Attached`.
     pub fn draw(&mut self, selection: Rgb) -> Result<Option<Drawn>, Error> {
+        let Some((colors, cursor)) = self.read_rows()? else {
+            return Ok(None);
+        };
+        let painting = lay_out(&self.rows, cursor, &colors, selection);
+        Ok(Some(Drawn {
+            painting,
+            background: colors.background,
+        }))
+    }
+
+    /// The viewport's rows as text, top to bottom, without trailing blanks. None before `Attached`.
+    pub fn visible_lines(&mut self) -> Result<Option<Vec<String>>, Error> {
+        if self.read_rows()?.is_none() {
+            return Ok(None);
+        }
+        let lines = self
+            .rows
+            .iter()
+            .map(|row| row.text.trim_end().to_string())
+            .collect();
+        Ok(Some(lines))
+    }
+
+    /// Reads again the rows that changed since the last read, and the frame's colors and cursor.
+    fn read_rows(&mut self) -> Result<Option<(FrameColors, FrameCursor)>, Error> {
         let Some(terminal) = self.terminal.as_ref() else {
             return Ok(None);
         };
@@ -162,11 +187,7 @@ impl View {
         let colors = frame.colors().clone();
         let cursor = frame.cursor()?;
         frame.clean()?;
-        let painting = lay_out(&self.rows, cursor, &colors, selection);
-        Ok(Some(Drawn {
-            painting,
-            background: colors.background,
-        }))
+        Ok(Some((colors, cursor)))
     }
 
     /// What `press` sends to the program, under its current modes. Empty before `Attached`.
@@ -399,10 +420,8 @@ mod tests {
         events.collect()
     }
 
-    /// Each row's text, read the way a frame is drawn.
     fn texts(view: &mut View) -> Vec<String> {
-        view.draw(GREY).unwrap().unwrap();
-        view.rows.iter().map(|row| row.text.clone()).collect()
+        view.visible_lines().unwrap().unwrap()
     }
 
     #[test]
