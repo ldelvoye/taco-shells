@@ -29,8 +29,10 @@ pub struct Config {
     pub settings: Settings,
     pub appearance: Appearance,
     pub bindings: Vec<Binding>,
+    pub default_bindings: Vec<Binding>,
     pub problems: Vec<String>,
     pub unread_settings: UnreadSettings,
+    pub unread_keybindings: bool,
 }
 
 fn appearance_for(theme: ThemeChoice, system_is_dark: bool) -> Appearance {
@@ -77,12 +79,15 @@ pub fn resolve_config(texts: &ConfigTexts, system_is_dark: bool) -> Config {
     }
 
     let mut user_keymap: Option<Map<String, Value>> = None;
+    let mut unread_keybindings = false;
     if let Some(keybindings_text) = &texts.keybindings {
         let user_result = parse_jsonc(keybindings_text, KEYBINDINGS_LABEL);
         problems.extend(user_result.problems);
         user_keymap = user_result.value;
+        unread_keybindings = user_keymap.is_none();
     }
 
+    let default_resolution = resolve_keymap(&default_keymap, None, KEYBINDINGS_LABEL);
     let resolution = resolve_keymap(&default_keymap, user_keymap.as_ref(), KEYBINDINGS_LABEL);
     problems.extend(resolution.problems);
 
@@ -92,8 +97,10 @@ pub fn resolve_config(texts: &ConfigTexts, system_is_dark: bool) -> Config {
         settings,
         appearance,
         bindings: resolution.bindings,
+        default_bindings: default_resolution.bindings,
         problems,
         unread_settings,
+        unread_keybindings,
     }
 }
 
@@ -147,6 +154,18 @@ mod tests {
 
         let clean = resolve_config(&texts(Some("{ \"fontSize\": 14 }")), false);
         assert_eq!(clean.unread_settings, UnreadSettings::None);
+
+        let keybindings = |text: &str| ConfigTexts {
+            settings: None,
+            keybindings: Some(text.to_string()),
+        };
+        let unparsed = resolve_config(&keybindings("{ broken"), false);
+        assert!(unparsed.unread_keybindings);
+        let one_bad_line = resolve_config(&keybindings("{ \"hyper+x\": \"terminal.new\" }"), false);
+        assert!(!one_bad_line.unread_keybindings);
+        let cleared = parse_chord("cmd+k").expect("cmd+k");
+        let default_command = command_for(&unparsed.default_bindings, &cleared);
+        assert_eq!(default_command, Some(CommandId::TerminalClear));
     }
 
     #[test]
