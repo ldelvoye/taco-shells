@@ -79,11 +79,18 @@ For the Rust app, from the repo root:
 cargo test           # every crate; under about 10 s once compiled
 cargo fmt --all      # CI fails on anything rustfmt would change
 cargo clippy --workspace --all-targets -- -D warnings
+cargo xtask run      # build both programs and start the app from target/
+cargo xtask bundle   # the .app into target/bundle.noindex/; --release, --stable, --zip
+cargo xtask install  # release build of Taco Shells Dev, into /Applications
 ```
+
+**`cargo xtask` is the Rust app's build scripts**, a program in `xtask/` run through the alias in `.cargo/config.toml`. It uses no Node. A bundle holds `taco-shells` and `taco-shells-runtime` side by side in `Contents/MacOS/`, with the icon, `hooks/` and `update-helper.sh` in `Contents/Resources/`. Its `CFBundleShortVersionString` is always a plain `X.Y.Z`, because the updater reads it: the tag the build is on, or the last tag before it. `CFBundleVersion` holds what `git describe` says. `--stable` sets `TACO_SHELLS_CHANNEL=stable` for the build, which `services` reads at compile time. `install` refuses while the app runs, and moves the copy it replaces to the Trash.
+
+**Taco Shells Dev is the Rust app once `cargo xtask install` has run.** `npm run install-app` would put the Electron build back over it, and both use `~/.taco-shells-dev`.
 
 **CI checks the Rust app on every pull request that touches it** (`.github/workflows/rust.yml`): `cargo fmt --check`, `clippy` with every warning an error, and `cargo test`, which fails if the run takes over 20 s once compiled. Nothing in `cargo test` opens a window, starts the app or sleeps on a timer. The toolchain is pinned in `rust-toolchain.toml`, and the profiles in the root `Cargo.toml`.
 
-**Worktrees share compiled dependencies through sccache, on this machine only.** The main checkout holds an untracked `.cargo/config.toml` setting `build.rustc-wrapper = "sccache"`, and cargo reads it from every worktree under `.worktrees/`, so gpui is compiled once rather than once per worktree. A fresh clone has none and builds without it. Keep the repo free of a tracked `.cargo/config.toml`: it would sit at the same path.
+**Worktrees share compiled dependencies through sccache, on this machine only.** `.worktrees/.cargo/config.toml` in the main checkout sets `build.rustc-wrapper = "sccache"`, and cargo reads config from every parent directory, so every worktree picks it up beside the tracked `.cargo/config.toml` and gpui is compiled once rather than once per worktree. `.worktrees/` is git-excluded, so a fresh clone has none and builds without it.
 
 **`npm run measure` is run by hand, never by CI.** It shows a strip of a window at the right edge of the rightmost display for about a minute, uses the e2e suite's debug port so the two cannot run together, and its numbers and how to read them are in `scripts/measure/README.md`.
 
