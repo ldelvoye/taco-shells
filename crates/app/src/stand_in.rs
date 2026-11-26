@@ -15,12 +15,15 @@ use taco_rules::{
     open_panel, rename_tab_group, resize_panel, select_row, toggle_tab_group, ungroup_tab_group,
 };
 use taco_services::{AgentMenuAction, AgentSetupNoticeKind, AgentSetupView};
+use taco_settings::SettingChange;
 
 use crate::link::{Ports, ServicesOutput, ServicesPort, WindowOutput, WindowSender, WorkspacePort};
 use crate::window::Shown;
 
 const LOG_PAGE: usize = 6;
 const CHECKOUT_HOOKS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../hooks");
+// The stand-in has no file to write, so every write is refused as a read-only file's would be.
+const REFUSED_WRITE: &str = "settings.json is read-only, so nothing was changed.";
 const SET_UP_TEXT: &str = "Claude Code is set up. Its activity shows here from its next session.";
 
 pub struct StandIn {
@@ -244,6 +247,13 @@ impl ServicesPort for StandIn {
 
     fn hooks_directory(&self) -> PathBuf {
         PathBuf::from(CHECKOUT_HOOKS)
+    }
+
+    fn write_setting(&self, change: SettingChange) {
+        let key = change.key();
+        let reason = REFUSED_WRITE.to_string();
+        let refused = ServicesOutput::SettingRefused { key, reason };
+        self.publish(WindowOutput::Services(refused));
     }
 }
 

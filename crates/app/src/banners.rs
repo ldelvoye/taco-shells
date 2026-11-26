@@ -111,7 +111,13 @@ fn update_banner(version: &str, problem: Option<&str>) -> Banner {
 }
 
 /// The banners as a stack of cards in the middle's top-right corner, drawn over the terminal.
-pub fn banner_cards(banners: &[Banner], look: &Look, cx: &mut Context<WindowView>) -> Div {
+/// The cards, `below` pixels down from the top of the middle so they never cover a page's header.
+pub fn banner_cards(
+    banners: &[Banner],
+    below: f32,
+    look: &Look,
+    cx: &mut Context<WindowView>,
+) -> Div {
     let mut cards = Vec::new();
     for (index, banner) in banners.iter().enumerate() {
         let card = div()
@@ -127,7 +133,7 @@ pub fn banner_cards(banners: &[Banner], look: &Look, cx: &mut Context<WindowView
     }
     div()
         .absolute()
-        .top(px(10.))
+        .top(px(below + 10.))
         .right(px(10.))
         .flex()
         .flex_col()

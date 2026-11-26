@@ -20,6 +20,7 @@ pub mod render;
 mod row_name;
 pub mod runtime_client;
 pub mod services_host;
+mod settings_page;
 mod shell;
 mod slot;
 #[cfg(feature = "render")]
@@ -317,6 +318,8 @@ fn shown_from(config: &Config) -> Shown {
         placeholder_screen: Vec::new(),
         setups: AgentSetupView::default(),
         bindings: config.bindings.clone(),
+        settings: config.settings.clone(),
+        unread: config.unread_settings.clone(),
     }
 }
 
