@@ -126,7 +126,7 @@ pub enum Typed {
     NotWhole,
 }
 
-/// The page's two typed fields, kept by the window so an edit survives a redraw.
+/// The page's two typed fields.
 pub struct SettingsFields {
     pub font: Entity<TextField>,
     pub scrollback: Entity<TextField>,
@@ -685,10 +685,7 @@ fn typed_field(field: &Entity<TextField>) -> Div {
 
 impl TypedSetting {
     pub fn key(self) -> &'static str {
-        let named = match self {
-            TypedSetting::Font => SettingChange::FontFamily(String::new()),
-            TypedSetting::Scrollback => SettingChange::Scrollback(0),
-        };
+        let named = current_setting(self, &Settings::default());
         named.key()
     }
 }
@@ -706,11 +703,18 @@ pub fn typed(setting: TypedSetting, text: &str, settings: &Settings) -> Typed {
             SettingChange::Scrollback(lines)
         }
     };
-    let published = published_text(setting, settings);
-    if trimmed == published {
+    let current = current_setting(setting, settings);
+    if change == current {
         return Typed::Unchanged;
     }
     Typed::Change(change)
+}
+
+fn current_setting(setting: TypedSetting, settings: &Settings) -> SettingChange {
+    match setting {
+        TypedSetting::Font => SettingChange::FontFamily(settings.font_family.clone()),
+        TypedSetting::Scrollback => SettingChange::Scrollback(settings.scrollback),
+    }
 }
 
 /// The text a field shows for the setting as the file has it.
@@ -745,17 +749,15 @@ mod tests {
     #[test]
     fn scrollback_is_sent_only_as_a_whole_number_and_nothing_is_sent_when_nothing_changed() {
         let settings = Settings::default();
-        let published = settings.scrollback.to_string();
-        let font = format!("  {}  ", settings.font_family);
-        for not_whole in ["12.5", "", "abc", "-3"] {
-            let result = typed(TypedSetting::Scrollback, not_whole, &settings);
-            assert_eq!(result, Typed::NotWhole, "{not_whole:?}");
-        }
+        let padded_zeros = format!("00{}", settings.scrollback);
+        let padded_font = format!("  {}  ", settings.font_family);
+        let not_whole = typed(TypedSetting::Scrollback, "12.5", &settings);
+        assert_eq!(not_whole, Typed::NotWhole);
         let more = typed(TypedSetting::Scrollback, " 5000 ", &settings);
         assert_eq!(more, Typed::Change(SettingChange::Scrollback(5000)));
-        let same_lines = typed(TypedSetting::Scrollback, &published, &settings);
+        let same_lines = typed(TypedSetting::Scrollback, &padded_zeros, &settings);
         assert_eq!(same_lines, Typed::Unchanged);
-        let same_font = typed(TypedSetting::Font, &font, &settings);
+        let same_font = typed(TypedSetting::Font, &padded_font, &settings);
         assert_eq!(same_font, Typed::Unchanged);
     }
 

@@ -320,7 +320,7 @@ mod enabled {
             return Err("the window's root is not the window view".to_string());
         };
         let asked = settings_appearance(appearance);
-        view.update(cx, |view, _, _| view.set_look(Look::new(asked)))
+        view.update(cx, |view, _, cx| view.set_look(Look::new(asked), cx))
             .map_err(closed)?;
         let drawn = window
             .update(cx, |_, window, cx| {
@@ -332,7 +332,7 @@ mod enabled {
             .map_err(closed)?;
         let (image, own) = drawn;
         view.update(cx, |view, _, cx| {
-            view.set_look(Look::new(own));
+            view.set_look(Look::new(own), cx);
             cx.notify();
         })
         .map_err(closed)?;

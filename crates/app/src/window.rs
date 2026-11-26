@@ -224,8 +224,9 @@ impl WindowView {
     }
 
     #[cfg(feature = "drive")]
-    pub fn set_look(&mut self, look: Look) {
+    pub fn set_look(&mut self, look: Look, cx: &mut Context<Self>) {
         self.look = look;
+        self.refresh_fields(cx);
     }
 
     /// The terminal view in the middle, for the driver to read; none on fixtures.
@@ -584,6 +585,7 @@ impl WindowView {
                 self.send_typed(setting, cx);
             }
             TextFieldEvent::Cancelled => {
+                // The field gives the keyboard to the page, so the blur that follows finds nothing new to write and a second Esc closes the page.
                 self.show_published(setting, cx);
                 self.page_wants_keyboard = true;
                 cx.notify();
@@ -591,7 +593,7 @@ impl WindowView {
         }
     }
 
-    // Left by a click elsewhere or the page closing, the value is written as if Enter had been pressed; Esc has already put back the published one.
+    /// Writes the field's value on losing focus, as Enter would.
     fn left_field(&mut self, setting: TypedSetting, cx: &mut Context<Self>) {
         if self.editing == Some(setting) {
             self.editing = None;

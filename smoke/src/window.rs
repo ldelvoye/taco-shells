@@ -231,7 +231,7 @@ pub fn a_typed_scrollback_is_written_to_the_settings_file(
         }
         thread::sleep(SETTLE_POLL);
     }
-    // The first Esc leaves the field, the second closes the page.
+    // The first Esc is the field's, the second closes the page.
     driver.keys(&["escape", "escape"])?;
     Ok(())
 }
