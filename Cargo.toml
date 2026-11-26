@@ -18,3 +18,5 @@ taco-services = { path = "crates/services" }
 taco-runtime = { path = "crates/runtime" }
 taco-terminal-view = { path = "crates/terminal-view" }
 taco-app = { path = "crates/app" }
+
+serde = { version = "1", features = ["derive"] }
