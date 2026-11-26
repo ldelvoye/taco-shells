@@ -336,9 +336,9 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
       await placeWindow(options.window)
     }
     await until(page, waitDescription, (state) => state.rows.length === expectedRows)
-    // The rows are drawn a moment before the window can take a key: its commands are
-    // registered in the same pass that makes the active terminal the page's active
-    // element. The page's own focus is no use here, since this window is in the background.
+    // The rows are drawn a moment before the window can take a key, so a test waits
+    // for the active terminal to be the page's active element. `:focus` is no use
+    // for that: it is false while this window is in the background.
     await pollFor(
       'the active terminal to be given the keyboard',
       async () => {

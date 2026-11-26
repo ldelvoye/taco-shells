@@ -11,9 +11,8 @@ const server = serveRuntime(sessions, screens, (report) => {
   parent.postMessage(report)
 })
 
-// The app stops this process with SIGTERM. A shell hears that its terminal has
-// gone only once it has taken the terminal as its own, and one still starting has
-// not: it would wait for ever, belonging to nobody. So each is ended by hand.
+// The app stops this process with SIGTERM. Every shell is ended by hand first: one
+// that is still starting never hears that its terminal has gone, and would be left behind for ever.
 process.on('SIGTERM', () => {
   sessions.closeAll()
   process.exit(0)

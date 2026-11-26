@@ -203,6 +203,18 @@ describe('Screens', () => {
     expect(second.calls).toEqual(['colors #123456'])
   })
 
+  it('keeps the screen a terminal has, and the view following it, when the terminal is opened again', () => {
+    const { screens, request, open, events } = harness()
+    const screen = open('t1')
+    request({ type: 'attach', id: 't1', size: null, attachment: 1 })
+    screen.runAll()
+
+    screens.open('t1', SMALL)
+    screens.output('t1', 'x')
+
+    expect(events).toEqual([attached(''), output('x')])
+  })
+
   it('sends output to a view as it arrives, keeps it in order while the view attaches, and not at all with no view', () => {
     const { screens, request, open, events, shell } = harness()
     const screen = open('t1')
