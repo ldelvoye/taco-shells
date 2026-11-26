@@ -1,0 +1,20 @@
+{
+  // A chord maps to a command id. Set one to null to unbind it: deleting the
+  // line only lets the default through again.
+  "cmd+t": "terminal.new",
+  "cmd+w": "terminal.close",
+  "cmd+shift+]": "terminal.focusNextGroup",
+  "cmd+shift+[": "terminal.focusPreviousGroup",
+  "cmd+c": "terminal.copy",
+  "cmd+v": "terminal.paste",
+  "cmd+k": "terminal.clear",
+  "cmd+backspace": "terminal.killLine",
+  "cmd+left": "terminal.lineStart",
+  "cmd+right": "terminal.lineEnd",
+  "opt+left": "terminal.wordLeft",
+  "opt+right": "terminal.wordRight",
+  "shift+enter": "terminal.insertNewline",
+  "cmd+b": "sidebar.toggle",
+  "cmd+,": "config.openSettings",
+  "cmd+shift+,": "config.openKeybindings"
+}
