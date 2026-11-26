@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -92,6 +93,7 @@ pub struct WindowView {
     /// The workspace's last request to give the keyboard back to the selected terminal.
     refocus: u64,
     done_checks: DoneChecks,
+    home: Option<PathBuf>,
 }
 
 /// What the window does with a reply it asked for.
@@ -172,6 +174,7 @@ impl WindowView {
             attached: Attachable::default(),
             refocus,
             done_checks: DoneChecks::default(),
+            home: std::env::home_dir(),
         }
     }
 
@@ -748,6 +751,7 @@ impl WindowView {
                     mark,
                     look,
                     drawing_checks: &drawing_checks,
+                    home: self.home.as_deref(),
                 };
                 let list = terminal_list(&input, cx);
                 docked(panel, edge, size, list, look, cx)

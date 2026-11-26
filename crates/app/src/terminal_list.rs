@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashSet};
+use std::path::Path;
 use std::time::Duration;
 
 use gpui::{
@@ -16,9 +17,9 @@ use crate::assets::{DONE_ICON, PLUS_ICON, RIPPLE_ICON, TRASH_ICON, WORKING_ICON}
 use crate::done_checks::DRAW_TIME;
 use crate::drive;
 use crate::look::{FONT_FAMILY, Look, MARK_SIZE, ROW_HEIGHT, ROW_RADIUS, TEXT_SIZE, TRAY_RADIUS};
+use crate::row_name::row_name;
 use crate::window::WindowView;
 
-const UNTITLED_ROW: &str = "Terminal";
 const UNNAMED_TAB_GROUP: &str = "Group";
 const NEW_TERMINAL: &str = "New terminal";
 const ROW_GROUP: &str = "row";
@@ -58,6 +59,8 @@ pub struct ListInput<'a> {
     pub look: &'a Look,
     /// The rows whose done check is still drawing itself.
     pub drawing_checks: &'a HashSet<TerminalId>,
+    /// Where a plain shell's folder is named "~".
+    pub home: Option<&'a Path>,
 }
 
 impl Render for DragPreview {
@@ -309,10 +312,11 @@ fn row_element(
     let look = input.look;
     let row = &arrangement.rows[index];
     let selected = index == arrangement.selected;
-    let mut label = row.title.as_str();
-    if label.is_empty() {
-        label = UNTITLED_ROW;
-    }
+    let has_agent = input.drawn.agent_rows.contains_key(&row.terminal);
+    let directory = input.drawn.directories.get(&row.terminal);
+    let folder = directory.map(String::as_str);
+    let shown_name = row_name(&row.title, has_agent, folder, input.home);
+    let label = shown_name.as_str();
     let state = agent_state(&input.drawn.agent_rows, &row.terminal);
     let name = div()
         .flex_1()
