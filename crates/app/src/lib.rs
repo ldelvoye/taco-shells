@@ -12,6 +12,7 @@ mod popups;
 #[cfg(feature = "render")]
 pub mod render;
 pub mod runtime_client;
+pub mod services_host;
 mod stand_in;
 mod strip;
 mod terminal_list;
