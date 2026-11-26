@@ -10,9 +10,8 @@ import type {
 } from '@protocol/arrangement'
 import type { AgentSignalEvent, SessionId } from '@protocol/ipc'
 import type { AgentRows } from '@protocol/rows'
-import type { FocusMove } from '@protocol/workspace'
 import { activeSessionOf, emptyWorkspace } from '@rules/arrangement'
-import { activatePane, focusAfter } from '@rules/focus'
+import { activatePane } from '@rules/focus'
 import { applyDrop } from '@rules/transitions/applyDrop'
 import {
   addGroup,
@@ -55,7 +54,6 @@ export type WorkspaceEvent =
   | { type: 'paneExited'; pane: SessionId }
   | { type: 'paneActivated'; pane: SessionId }
   | { type: 'titleChanged'; pane: SessionId; title: string }
-  | { type: 'focusMoved'; move: FocusMove }
   | { type: 'paneColored'; pane: SessionId; color: RowColor | null }
   | { type: 'activeColorToggled'; color: RowColor }
   | { type: 'dropped'; dragged: Dragged; drop: Drop; newGroup: GroupId }
@@ -240,8 +238,6 @@ function eventApplied(state: WorkspaceState, event: WorkspaceEvent): WorkspaceSt
       return workspaceEdit(state, (workspace) => activatePane(workspace, event.pane))
     case 'titleChanged':
       return titleChanged(state, event.pane, event.title)
-    case 'focusMoved':
-      return workspaceEdit(state, (workspace) => focusAfter(workspace, event.move))
     case 'paneColored':
       return workspaceEdit(state, (workspace) => setPaneColor(workspace, event.pane, event.color))
     case 'activeColorToggled':

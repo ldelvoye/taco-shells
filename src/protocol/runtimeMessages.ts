@@ -7,6 +7,8 @@ export type RuntimeQuery =
   | { kind: 'foregroundCommands'; id: SessionId }
   | { kind: 'terminalForPids'; pids: number[] }
 
+export type RuntimeAnswer = string | string[] | null
+
 /** What the main process sends the runtime. */
 export type RuntimeCommand =
   | { type: 'open'; start: TerminalStart }
@@ -23,7 +25,7 @@ export type RuntimeReport =
   | { type: 'exited'; event: PtyExitEvent }
   | { type: 'titled'; id: SessionId; title: string }
   | { type: 'submitted'; id: SessionId }
-  | { type: 'answer'; ask: number; value: string | string[] | null }
+  | { type: 'answer'; ask: number; value: RuntimeAnswer }
 
 /** What a window asks of a terminal over its connection. `write` and `resize` work with no view attached. */
 export type TerminalRequest =
@@ -42,4 +44,4 @@ export type TerminalEvent =
   | { type: 'output'; id: SessionId; data: string }
   | { type: 'resized'; id: SessionId; size: PtySize }
   | { type: 'cleared'; id: SessionId }
-  | { type: 'end'; id: SessionId; exitCode: number }
+  | { type: 'end'; id: SessionId }

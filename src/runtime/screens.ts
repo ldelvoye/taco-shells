@@ -68,7 +68,12 @@ export class Screens {
     if (this.colors !== null) {
       screen.setColors(this.colors)
     }
+    let reportedTitle: string | null = null
     screen.onTitle((title) => {
+      if (title === reportedTitle) {
+        return
+      }
+      reportedTitle = title
       for (const listener of this.titleListeners) {
         listener(id, title)
       }
@@ -99,14 +104,20 @@ export class Screens {
       terminal.paused = true
       this.shells.pause(id)
     }
-    terminal.screen.write(data, () => {
+    try {
+      terminal.screen.write(data, () => {
+        terminal.unparsed -= data.length
+        this.resumeWhenDrained(id, terminal)
+      })
+    } catch (failure) {
       terminal.unparsed -= data.length
       this.resumeWhenDrained(id, terminal)
-    })
+      throw failure
+    }
     this.send(terminal, { type: 'output', id, data })
   }
 
-  ended(id: SessionId, exitCode: number): void {
+  ended(id: SessionId): void {
     const terminal = this.terminals.get(id)
     if (terminal === undefined || terminal.ending) {
       return
@@ -117,7 +128,7 @@ export class Screens {
       // A view that was attaching has its snapshot by now: its own turn came first.
       const view = terminal.view
       if (view !== null) {
-        view.connection.post({ type: 'end', id, exitCode })
+        view.connection.post({ type: 'end', id })
       }
       terminal.screen.dispose()
       this.terminals.delete(id)

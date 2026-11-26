@@ -286,7 +286,7 @@ describe('RuntimeServer', () => {
     expect(page.events).toEqual([
       { type: 'attached', id: 't1', attachment: 1, size: { cols: 80, rows: 24 }, snapshot: '' },
       { type: 'output', id: 't1', data: 'a' },
-      { type: 'end', id: 't1', exitCode: 2 }
+      { type: 'end', id: 't1' }
     ])
     expect(reports).toContainEqual({ type: 'titled', id: 't1', title: 'Tacos' })
     expect(stubs[0].scrollbacks).toEqual([500])
