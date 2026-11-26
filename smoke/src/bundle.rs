@@ -2,6 +2,8 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+use crate::Smoke;
+
 const DEV_BUNDLE_ID: &str = "com.ldelvoye.tacoshells.dev";
 const EXECUTABLES: [&str; 2] = ["taco-shells", "taco-shells-runtime"];
 
@@ -12,7 +14,8 @@ const STABLE_NAMES: [(&str, &str); 2] = [
 ];
 
 /// A dev build that carried the stable app's id or config directory would read and write the app in daily use.
-pub fn holds_only_dev_names(app: &Path) -> Result<(), String> {
+pub fn holds_only_dev_names(smoke: &Smoke) -> Result<(), String> {
+    let app = &smoke.app;
     let plist = app.join("Contents").join("Info.plist");
     let identifier = plist_value(&plist, "CFBundleIdentifier")?;
     if identifier != DEV_BUNDLE_ID {
