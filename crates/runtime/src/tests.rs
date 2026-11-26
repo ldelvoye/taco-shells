@@ -3,8 +3,8 @@ use std::time::{Duration, Instant};
 
 use taco_ghostty::{Snapshot, Step, Terminal};
 use taco_protocol::{
-    CellSize, Rgb, RuntimeAnswer, RuntimeCommand, RuntimeQuery, RuntimeReport, TerminalColors,
-    TerminalEvent, TerminalId, TerminalRequest, TerminalSize, TerminalStart,
+    CellSize, CursorShape, Rgb, RuntimeAnswer, RuntimeCommand, RuntimeQuery, RuntimeReport,
+    TerminalColors, TerminalEvent, TerminalId, TerminalRequest, TerminalSize, TerminalStart,
 };
 
 use crate::core::{Core, Effect, Input};
@@ -141,6 +141,10 @@ fn apply(events: &[&TerminalEvent], view: &mut Option<Terminal>) {
                 view.as_mut().unwrap().resize(*size, 0, 0).unwrap()
             }
             TerminalEvent::Cleared { .. } => view.as_mut().unwrap().clear().unwrap(),
+            TerminalEvent::CursorDefaults { shape, blink, .. } => {
+                let terminal = view.as_mut().unwrap();
+                terminal.set_cursor_defaults(*shape, *blink).unwrap();
+            }
             TerminalEvent::End { .. } => {}
         }
     }
@@ -162,6 +166,7 @@ fn kind(event: &TerminalEvent) -> &'static str {
         TerminalEvent::Output { .. } => "output",
         TerminalEvent::Resized { .. } => "resized",
         TerminalEvent::Cleared { .. } => "cleared",
+        TerminalEvent::CursorDefaults { .. } => "cursor defaults",
         TerminalEvent::End { .. } => "end",
     }
 }
@@ -629,4 +634,119 @@ fn a_size_report_in_pixels_is_answered_from_the_last_cell_size_a_view_gave() {
         core.shells_mut().resized.is_empty(),
         "nor does the shell hear of it"
     );
+}
+
+fn cursor_of(terminal: &Terminal) -> (taco_ghostty::render::CursorShape, bool) {
+    let mut state = taco_ghostty::render::RenderState::new().unwrap();
+    let frame = state.update(terminal).unwrap();
+    let cursor = frame.cursor().unwrap();
+    (cursor.shape, cursor.blinking)
+}
+
+fn push_cursor_defaults(
+    core: &mut Core<FakeShells>,
+    shape: CursorShape,
+    blink: bool,
+    now: Instant,
+) -> Vec<Effect> {
+    let defaults = RuntimeCommand::CursorDefaults { shape, blink };
+    core.handle(Input::Command(defaults), now)
+}
+
+/// A terminal with the given defaults pushed before it opens, and a view attached to it.
+fn attached_with_defaults(shape: CursorShape) -> (Core<FakeShells>, Instant, Option<Terminal>) {
+    let mut core = Core::new(FakeShells::default());
+    let now = Instant::now();
+    push_cursor_defaults(&mut core, shape, false, now);
+    core.handle(Input::Command(RuntimeCommand::Open(start("a"))), now);
+    let attach = TerminalRequest::Attach {
+        id: id("a"),
+        attachment: 1,
+        size: None,
+        cell: None,
+    };
+    let effects = request(&mut core, attach, now);
+    let mut view = None;
+    apply(&events(&effects), &mut view);
+    (core, now, view)
+}
+
+#[test]
+fn a_shape_a_program_chose_survives_a_restore_a_switch_back_and_a_settings_change() {
+    use taco_ghostty::render::CursorShape as Shown;
+    let (mut core, now, mut view) = attached_with_defaults(CursorShape::Bar);
+    // The program picks a steady block.
+    let chose = output(&mut core, "a", b"\x1b[2 q", now);
+    apply(&events(&chose), &mut view);
+    assert_eq!(cursor_of(view.as_ref().unwrap()).0, Shown::Block);
+
+    let changed = push_cursor_defaults(&mut core, CursorShape::Underline, true, now);
+    let sent = events(&changed);
+    let kinds: Vec<&str> = sent.iter().map(|event| kind(event)).collect();
+    assert_eq!(
+        kinds,
+        ["cursor defaults"],
+        "no reset for a terminal whose program chose"
+    );
+    apply(&sent, &mut view);
+    assert_eq!(cursor_of(view.as_ref().unwrap()).0, Shown::Block);
+    assert_eq!(cursor_of(core.terminal(&id("a")).unwrap()).0, Shown::Block);
+
+    // Switching back: a fresh view from a new snapshot.
+    let again = TerminalRequest::Attach {
+        id: id("a"),
+        attachment: 2,
+        size: None,
+        cell: None,
+    };
+    let reattached = request(&mut core, again, now);
+    let mut fresh = None;
+    apply(&events(&reattached), &mut fresh);
+    assert_eq!(cursor_of(fresh.as_ref().unwrap()).0, Shown::Block);
+}
+
+#[test]
+fn a_terminal_whose_program_chose_no_shape_shows_the_defaults_and_follows_them() {
+    use taco_ghostty::render::CursorShape as Shown;
+    let (mut core, now, mut view) = attached_with_defaults(CursorShape::Bar);
+    assert_eq!(
+        cursor_of(core.terminal(&id("a")).unwrap()),
+        (Shown::Bar, false)
+    );
+    assert_eq!(cursor_of(view.as_ref().unwrap()), (Shown::Bar, false));
+
+    let changed = push_cursor_defaults(&mut core, CursorShape::Underline, true, now);
+    apply(&events(&changed), &mut view);
+    assert_eq!(
+        cursor_of(core.terminal(&id("a")).unwrap()),
+        (Shown::Underline, true)
+    );
+    assert_eq!(cursor_of(view.as_ref().unwrap()), (Shown::Underline, true));
+
+    // A program that chose a shape and gave it back follows the settings again, on both sides.
+    let chose_and_gave_back = output(&mut core, "a", b"\x1b[2 q\x1b[0 q", now);
+    apply(&events(&chose_and_gave_back), &mut view);
+    assert_eq!(cursor_of(view.as_ref().unwrap()).0, Shown::Underline);
+    // Bar again, not the library's own block, so a view that missed the defaults would show.
+    let changed = push_cursor_defaults(&mut core, CursorShape::Bar, false, now);
+    apply(&events(&changed), &mut view);
+    assert_eq!(
+        cursor_of(core.terminal(&id("a")).unwrap()),
+        (Shown::Bar, false)
+    );
+    assert_eq!(cursor_of(view.as_ref().unwrap()), (Shown::Bar, false));
+
+    // A fresh view learns the defaults with its snapshot, so a later reset by the program lands on them.
+    let again = TerminalRequest::Attach {
+        id: id("a"),
+        attachment: 2,
+        size: None,
+        cell: None,
+    };
+    let reattached = request(&mut core, again, now);
+    let mut fresh = None;
+    apply(&events(&reattached), &mut fresh);
+    let chose_and_gave_back = output(&mut core, "a", b"\x1b[4 q\x1b[0 q", now);
+    apply(&events(&chose_and_gave_back), &mut fresh);
+    assert_eq!(cursor_of(fresh.as_ref().unwrap()).0, Shown::Bar);
 }

@@ -114,6 +114,13 @@ impl View {
                 self.end_a_stale_selection()?;
                 Ok(Applied::Changed)
             }
+            TerminalEvent::CursorDefaults { shape, blink, .. } => {
+                let Some(terminal) = self.terminal.as_mut() else {
+                    return Ok(Applied::Ignored);
+                };
+                terminal.set_cursor_defaults(shape, blink)?;
+                Ok(Applied::Changed)
+            }
             TerminalEvent::End { .. } => Ok(Applied::Ended),
         }
     }
