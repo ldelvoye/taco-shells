@@ -16,20 +16,22 @@ use taco_rules::{
 use crate::rows::{
     AgentRows, Signalled, apply_idle_title, apply_on_screen, apply_question, apply_signal,
 };
-use crate::save::{Saved, SavedRow, SavedTabGroup, harness_for, read_saved, saved_text};
+use crate::save::{Saved, SavedRow, SavedTabGroup, read_saved, saved_text};
 use crate::sessions::{AgentSession, AgentSessions};
-use crate::start::{ShellStart, editor_command, fork_start};
+use crate::start::{ShellStart, editor_command, fork_start, resume_start};
 use crate::storage::Storage;
 
 const INITIAL_SIZE: TerminalSize = TerminalSize { cols: 80, rows: 24 };
 /// How long the save waits after a change, so a burst of changes is written once.
 pub const SAVE_DEBOUNCE_MS: u64 = 250;
+const MAX_SAVE_WAIT_MS: u64 = 2_000;
+const SAVE_RETRY_MS: u64 = 1_000;
 
 /// What the workspace is given at launch.
 pub struct Options {
     pub settings_path: String,
     pub keybindings_path: String,
-    /// Mints the id of each new terminal; an id is kept for as long as its row lives, across launches.
+    /// Mints the id of each new terminal; it must never repeat one from an earlier launch, since restored rows keep theirs.
     pub new_terminal_id: Box<dyn FnMut() -> TerminalId + Send>,
     pub storage: Box<dyn Storage>,
     /// The `restoreOnLaunch` setting: when false, the saved terminals are not reopened.
@@ -64,10 +66,11 @@ pub struct Workspace {
     revision: u64,
     published: Option<DrawnState>,
     agents: BTreeMap<HarnessId, AgentLabel>,
-    /// The save's text as the state now is, and when it is due to be written.
-    wanted_save: Option<String>,
+    /// What the save should hold now, and what the file was last written with.
+    wanted_save: Option<Saved>,
+    written_save: Option<Saved>,
     save_due: Option<u64>,
-    written_save: Option<String>,
+    unsaved_since: Option<u64>,
     frozen: bool,
 }
 
@@ -116,8 +119,9 @@ impl Workspace {
             published: None,
             agents: agent_labels(),
             wanted_save: None,
-            save_due: None,
             written_save: None,
+            save_due: None,
+            unsaved_since: None,
             frozen: false,
         }
     }
@@ -143,13 +147,23 @@ impl Workspace {
         out
     }
 
-    /// When `tick` next has something to do.
+    /// When `tick` next has something to do: a save to write, or a restored session to forget.
     pub fn next_deadline(&self) -> Option<u64> {
-        self.save_due
+        let mut expiry = None;
+        if !self.frozen {
+            expiry = self.sessions.next_expiry();
+        }
+        let deadlines = [self.save_due, expiry];
+        deadlines.into_iter().flatten().min()
     }
 
-    /// Writes the save once its debounce has passed.
+    /// Forgets restored sessions whose agent never started again, and writes the save once it is due.
     pub fn tick(&mut self, now_ms: u64) {
+        let expiry = self.sessions.next_expiry();
+        let expired = expiry.is_some_and(|expiry| expiry <= now_ms);
+        if expired && self.sessions.drop_expired(now_ms) {
+            self.schedule_save(now_ms);
+        }
         let due = self.save_due.is_some_and(|due| due <= now_ms);
         if due {
             self.write_save(now_ms);
@@ -241,7 +255,7 @@ impl Workspace {
         out
     }
 
-    /// Closes every terminal and tells the window why; what is saved is frozen first, so a relaunch brings the terminals back.
+    /// Closes every terminal and tells the window why; the save is frozen first.
     pub fn runtime_died(&mut self, reason: &str, now_ms: u64) -> Vec<Outbound> {
         let mut out = Vec::new();
         let before = self.row_count();
@@ -371,13 +385,14 @@ impl Workspace {
                 accepted(None)
             }
             WorkspaceRequest::TabGroupCreated { terminal } => {
-                let id = self.next_tab_group_id();
+                let id = self.peek_tab_group_id();
                 let created = self.change_arrangement(|arrangement| {
                     create_tab_group(arrangement, &terminal, id.clone())
                 });
                 if !created {
                     return accepted(None);
                 }
+                self.next_tab_group += 1;
                 accepted(Some(id))
             }
             WorkspaceRequest::TabGroupRenamed { id, name } => {
@@ -657,7 +672,7 @@ impl Workspace {
         Some(saved)
     }
 
-    // Each change to what is saved pushes the write back, so a burst of changes is written once.
+    // A steady stream of changes still saves at least every MAX_SAVE_WAIT_MS, so a crash never loses more.
     fn schedule_save(&mut self, now_ms: u64) {
         if self.frozen {
             return;
@@ -665,30 +680,37 @@ impl Workspace {
         let Some(saved) = self.saved_now() else {
             return;
         };
-        let text = saved_text(&saved);
-        if self.wanted_save.as_ref() == Some(&text) {
+        if self.wanted_save.as_ref() == Some(&saved) {
             return;
         }
-        self.wanted_save = Some(text);
-        self.save_due = Some(now_ms + SAVE_DEBOUNCE_MS);
+        self.wanted_save = Some(saved);
+        let first_change = *self.unsaved_since.get_or_insert(now_ms);
+        let debounced = now_ms + SAVE_DEBOUNCE_MS;
+        let latest = first_change + MAX_SAVE_WAIT_MS;
+        self.save_due = Some(debounced.min(latest));
     }
 
+    // After the freeze the save stays what it was when the quit began, so only the state from before it is written.
     fn write_save(&mut self, now_ms: u64) {
         self.save_due = None;
-        self.sessions.drop_expired(now_ms);
-        let text = match (self.frozen, self.saved_now()) {
-            (false, Some(saved)) => saved_text(&saved),
-            _ => match &self.wanted_save {
-                Some(text) => text.clone(),
-                None => return,
-            },
+        if !self.frozen {
+            self.sessions.drop_expired(now_ms);
+            self.wanted_save = self.saved_now();
+        }
+        let Some(saved) = &self.wanted_save else {
+            return;
         };
-        if self.written_save.as_ref() == Some(&text) {
+        if self.written_save.as_ref() == Some(saved) {
+            self.unsaved_since = None;
             return;
         }
-        self.options.storage.write_save(&text);
-        self.wanted_save = Some(text.clone());
-        self.written_save = Some(text);
+        let text = saved_text(saved);
+        if !self.options.storage.write_save(&text) {
+            self.save_due = Some(now_ms + SAVE_RETRY_MS);
+            return;
+        }
+        self.written_save = Some(saved.clone());
+        self.unsaved_since = None;
     }
 
     /// Rebuilds the saved terminals under their saved ids and opens each where it was. False when the save holds none.
@@ -735,9 +757,10 @@ impl Workspace {
             rows,
             tab_groups: tab_groups.collect(),
         };
-        let selected = arrangement.rows[arrangement.selected].terminal.clone();
         // the selected row's tab group opens, as selecting it would
-        if let Some(opened) = select_row(&arrangement, &selected) {
+        if let Some(selected) = selected_terminal(Some(&arrangement)).cloned()
+            && let Some(opened) = select_row(&arrangement, &selected)
+        {
             arrangement = opened;
         }
         self.arrangement = Some(arrangement);
@@ -750,7 +773,7 @@ impl Workspace {
         true
     }
 
-    // What a saved row resumes, and where it was, are known before its shell exists: the first save can come before any shell starts.
+    // Seeded before the shell starts, since the first save can come first.
     fn restored_shell(
         &mut self,
         terminal: &TerminalId,
@@ -758,31 +781,28 @@ impl Workspace {
         agent: Option<AgentSession>,
         now_ms: u64,
     ) -> ShellStart {
-        let Some(agent) = agent else {
-            if let Some(directory) = &directory {
-                self.directories.insert(terminal.clone(), directory.clone());
-            }
-            return ShellStart {
+        let shell = match &agent {
+            Some(agent) => resume_start(agent),
+            None => ShellStart {
                 directory,
                 ..ShellStart::default()
-            };
+            },
         };
-        let command = match harness_for(&agent) {
-            Some(harness) => harness.resume_command(&agent.session_id),
-            None => None,
-        };
-        self.directories.insert(terminal.clone(), agent.cwd.clone());
-        let shell = ShellStart {
-            directory: Some(agent.cwd.clone()),
-            directory_of: None,
-            command,
-        };
-        self.sessions.seed(terminal, agent, now_ms);
+        if let Some(directory) = &shell.directory {
+            self.directories.insert(terminal.clone(), directory.clone());
+        }
+        if let Some(agent) = agent {
+            self.sessions.seed(terminal, agent, now_ms);
+        }
         shell
     }
 
+    fn peek_tab_group_id(&self) -> TabGroupId {
+        TabGroupId(format!("tab-group-{}", self.next_tab_group))
+    }
+
     fn next_tab_group_id(&mut self) -> TabGroupId {
-        let id = TabGroupId(format!("tab-group-{}", self.next_tab_group));
+        let id = self.peek_tab_group_id();
         self.next_tab_group += 1;
         id
     }
