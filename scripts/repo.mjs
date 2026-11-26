@@ -63,6 +63,9 @@ export function lastTag(commit = 'HEAD') {
   return tryGit('describe', '--tags', '--abbrev=0', '--match', 'v*', commit)
 }
 
+// The release page ships on its own, so its commits never pick an app version or reach the app's notes.
+const APP_PATHS = ['--', ':(top)', ':(top,exclude)apps/site', ':(top,exclude).github/workflows/site.yml']
+
 function rangeSince(tag) {
   if (tag) {
     return `${tag}..HEAD`
@@ -72,7 +75,7 @@ function rangeSince(tag) {
 
 /** The commit subjects on HEAD since a tag, one per commit, for release notes. */
 export function changesSince(tag) {
-  const log = git('log', '--format=%s', rangeSince(tag))
+  const log = git('log', '--format=%s', rangeSince(tag), ...APP_PATHS)
   const lines = log.split('\n')
   return lines.filter((subject) => subject.length > 0)
 }
@@ -81,7 +84,7 @@ export function changesSince(tag) {
 // a break in a footer, which lives in the body. Separated by NUL because a commit
 // message may contain any other byte, blank lines included.
 export function messagesSince(tag) {
-  const log = git('log', '--format=%B%x00', rangeSince(tag))
+  const log = git('log', '--format=%B%x00', rangeSince(tag), ...APP_PATHS)
   const messages = log.split('\0')
   const trimmed = messages.map((message) => message.trim())
   return trimmed.filter((message) => message.length > 0)
