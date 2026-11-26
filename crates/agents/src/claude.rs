@@ -22,7 +22,7 @@ const MAX_NAME_CHARACTERS: usize = 200;
 
 // A question is pinned above the log, so a longer one is cut rather than carried whole in every published state.
 const MAX_QUESTION_CHARACTERS: usize = 1000;
-// An entry is a line in a narrow panel, kept for a thousand entries, so a prompt or a command is cut to this.
+// A prompt, command or path is cut to this many characters in a log entry.
 const MAX_ENTRY_CHARACTERS: usize = 1000;
 
 const CHANGING_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit"];
@@ -36,6 +36,7 @@ const SUMMARY_FIELDS: &[(&str, &str)] = &[
     ("WebFetch", "/tool_input/url"),
     ("WebSearch", "/tool_input/query"),
     ("Task", "/tool_input/description"),
+    ("Agent", "/tool_input/description"),
 ];
 
 const UUID_LENGTH: usize = 36;
@@ -205,7 +206,6 @@ fn text_at(parsed: &Value, pointer: &str) -> Option<String> {
     Some(cut)
 }
 
-// A summary is one line, so a multi-line command shows its first.
 fn summary_of(tool: &str, parsed: &Value) -> String {
     let mut fields = SUMMARY_FIELDS.iter();
     let Some((_, pointer)) = fields.find(|(name, _)| *name == tool) else {
@@ -222,7 +222,6 @@ fn summary_of(tool: &str, parsed: &Value) -> String {
     }
 }
 
-// What you asked, from a submitted prompt, and what the agent did or changed, from a finished tool call.
 fn entry_of(event: &str, payload: &str) -> Option<ActivityKind> {
     let parsed: Value = serde_json::from_str(payload).ok()?;
     match event {
@@ -235,7 +234,8 @@ fn entry_of(event: &str, payload: &str) -> Option<ActivityKind> {
             let tool = text_at(&parsed, "/tool_name")?;
             let mut paths = CHANGED_PATHS.iter();
             let path = paths.find_map(|pointer| text_at(&parsed, pointer));
-            if let (true, Some(path)) = (CHANGING_TOOLS.contains(&tool.as_str()), path) {
+            let changes_files = CHANGING_TOOLS.contains(&tool.as_str());
+            if changes_files && let Some(path) = path {
                 return Some(ActivityKind::Changed { tool, path });
             }
             let summary = summary_of(&tool, &parsed);
@@ -432,6 +432,22 @@ mod tests {
         assert_eq!(
             entry("PostToolUse", notebook),
             Some(changed("NotebookEdit", "/w/a.ipynb"))
+        );
+        let multi = r#"{"tool_name":"MultiEdit","tool_input":{"file_path":"/w/a.rs","edits":[]}}"#;
+        assert_eq!(
+            entry("PostToolUse", multi),
+            Some(changed("MultiEdit", "/w/a.rs"))
+        );
+        // reading a file names it, but changes nothing
+        let read = r#"{"tool_name":"Read","tool_input":{"file_path":"/w/a.rs"}}"#;
+        assert_eq!(entry("PostToolUse", read), Some(did("Read", "/w/a.rs")));
+        let grep = r#"{"tool_name":"Grep","tool_input":{"pattern":"fn main","path":"/w"}}"#;
+        assert_eq!(entry("PostToolUse", grep), Some(did("Grep", "fn main")));
+        let agent =
+            r#"{"tool_name":"Agent","tool_input":{"description":"Find the bug","prompt":"..."}}"#;
+        assert_eq!(
+            entry("PostToolUse", agent),
+            Some(did("Agent", "Find the bug"))
         );
         let unknown = r#"{"tool_name":"mcp__linear__get_issue","tool_input":{"id":"X-1"}}"#;
         assert_eq!(
