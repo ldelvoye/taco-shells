@@ -4978,6 +4978,7 @@ dependencies = [
 name = "taco-app"
 version = "0.0.0"
 dependencies = [
+ "futures",
  "gpui",
  "gpui_platform",
  "image",

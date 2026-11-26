@@ -1,30 +1,49 @@
-//! `cargo run -p taco-app --features render --example render -- <mixed|quiet|empty> <light|dark> <out.png> [cards|strips] [title|head|foot]`
+//! `cargo run -p taco-app --features render --example render -- <mixed|quiet|empty> <light|dark> <out.png> [choice or gesture]...`
+//!
+//! Choices: `cards`, `strips`, `title`, `head`, `foot`. Gestures, in window points, played in order:
+//! `click:X,Y`, `drag:X,Y:X,Y`, and `hold:X,Y:X,Y` for a drag still under way when the window is drawn.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use gpui::{Pixels, Point, point, px};
+use taco_app::render::{Gesture, render_png};
 use taco_app::{BannerLayout, Fixture, PlusPlace, Trial};
 use taco_settings::Appearance;
 
-const USAGE: &str =
-    "usage: render <mixed|quiet|empty> <light|dark> <out.png> [cards|strips] [title|head|foot]";
+const USAGE: &str = "usage: render <mixed|quiet|empty> <light|dark> <out.png> [cards|strips|title|head|foot|click:X,Y|drag:X,Y:X,Y|hold:X,Y:X,Y]...";
+
+struct Request {
+    fixture: Fixture,
+    appearance: Appearance,
+    out: PathBuf,
+    trial: Trial,
+    gestures: Vec<Gesture>,
+}
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
-    let Some((fixture, appearance, out, trial)) = parsed(&arguments) else {
+    let Some(request) = parsed(&arguments) else {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
     };
-    if let Err(error) = taco_app::render::render_png(fixture, appearance, trial, &out) {
+    let rendered = render_png(
+        request.fixture,
+        request.appearance,
+        request.trial,
+        &request.gestures,
+        &request.out,
+    );
+    if let Err(error) = rendered {
         eprintln!("render failed: {error:#}");
         return ExitCode::FAILURE;
     }
-    println!("{}", out.display());
+    println!("{}", request.out.display());
     ExitCode::SUCCESS
 }
 
-fn parsed(arguments: &[String]) -> Option<(Fixture, Appearance, PathBuf, Trial)> {
-    let [fixture_name, appearance_name, out, choices @ ..] = arguments else {
+fn parsed(arguments: &[String]) -> Option<Request> {
+    let [fixture_name, appearance_name, out, extras @ ..] = arguments else {
         return None;
     };
     let fixture = Fixture::named(fixture_name)?;
@@ -34,15 +53,41 @@ fn parsed(arguments: &[String]) -> Option<(Fixture, Appearance, PathBuf, Trial)>
         _ => return None,
     };
     let mut trial = Trial::default();
-    for choice in choices {
-        match choice.as_str() {
+    let mut gestures = Vec::new();
+    for extra in extras {
+        match extra.as_str() {
             "cards" => trial.banners = BannerLayout::Cards,
             "strips" => trial.banners = BannerLayout::Strips,
             "title" => trial.plus = PlusPlace::Title,
             "head" => trial.plus = PlusPlace::Head,
             "foot" => trial.plus = PlusPlace::Foot,
-            _ => return None,
+            gesture => gestures.push(gesture_from(gesture)?),
         }
     }
-    Some((fixture, appearance, PathBuf::from(out), trial))
+    let request = Request {
+        fixture,
+        appearance,
+        out: PathBuf::from(out),
+        trial,
+        gestures,
+    };
+    Some(request)
+}
+
+fn gesture_from(text: &str) -> Option<Gesture> {
+    let (kind, points) = text.split_once(':')?;
+    let parts: Vec<&str> = points.split(':').collect();
+    match (kind, parts.as_slice()) {
+        ("click", [at]) => Some(Gesture::Click(point_from(at)?)),
+        ("drag", [from, to]) => Some(Gesture::Drag(point_from(from)?, point_from(to)?)),
+        ("hold", [from, to]) => Some(Gesture::Hold(point_from(from)?, point_from(to)?)),
+        _ => None,
+    }
+}
+
+fn point_from(text: &str) -> Option<Point<Pixels>> {
+    let (x, y) = text.split_once(',')?;
+    let x: f32 = x.parse().ok()?;
+    let y: f32 = y.parse().ok()?;
+    Some(point(px(x), px(y)))
 }
