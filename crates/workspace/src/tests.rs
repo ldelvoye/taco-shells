@@ -294,7 +294,8 @@ fn a_close_goes_through_the_runtime_and_the_last_exit_ends_the_app_once() {
         directory: "/elsewhere".into(),
     };
     assert!(workspace.runtime_report(stray, 0).is_empty());
-    assert!(hook(&mut workspace, "t1", HookCall::FocusTab, 0).is_empty());
+    hook(&mut workspace, "t1", HookCall::Attention, 0);
+    assert!(workspace.app_activated(0).is_empty());
     let out = ask(
         &mut workspace,
         WorkspaceRequest::CloseTerminal { terminal: id("t1") },
@@ -327,7 +328,7 @@ fn when_the_runtime_dies_every_terminal_goes_the_window_says_why_and_nothing_reo
 }
 
 #[test]
-fn attention_waits_for_the_app_to_come_back_and_a_hook_can_take_the_keyboard() {
+fn attention_waits_for_the_app_to_come_back() {
     let mut workspace = workspace();
     ask(
         &mut workspace,
@@ -351,9 +352,6 @@ fn attention_waits_for_the_app_to_come_back_and_a_hook_can_take_the_keyboard() {
         workspace.app_activated(0).is_empty(),
         "arriving clears the wait"
     );
-
-    hook(&mut workspace, "t1", HookCall::FocusTab, 0);
-    assert_eq!(workspace.drawn().refocus, refocus + 2);
 }
 
 #[test]
