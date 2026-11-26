@@ -3,6 +3,8 @@
 mod agent_hooks;
 mod agent_record;
 mod agent_setup_state;
+#[cfg(test)]
+mod build_identity;
 mod config_files;
 mod config_store;
 mod hook_listener;
