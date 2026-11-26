@@ -121,11 +121,9 @@ pub fn set_top_level(
     };
 
     let parsed = parse_jsonc(source, label);
-    if let Some(problem) = parsed.problems.into_iter().next() {
+    let first_problem = parsed.problems.into_iter().next();
+    if let Some(problem) = first_problem {
         return Err(problem);
-    }
-    if parsed.value.is_none() {
-        return Err(format!("{label}: the file must hold a JSON object"));
     }
 
     let root = match CstRootNode::parse(source, &JSONC_PARSE_OPTIONS) {
@@ -135,7 +133,7 @@ pub fn set_top_level(
     let object = root.object_value_or_set();
     let matching = properties_named(&object, key);
 
-    // The reader takes the last of two, the edit would change the first, so a write would silently do nothing.
+    // The reader uses the last of two and the edit changes the first, so a write would silently do nothing.
     if matching.len() > 1 {
         return Err(format!("{label} has \"{key}\" twice"));
     }
@@ -156,6 +154,8 @@ mod tests {
     use crate::config::{ConfigTexts, resolve_config};
     use crate::settings::ShellRowName;
     use serde_json::json;
+
+    const MESSY: &str = "{\n\t// my note\n\t\"fontSize\": 12,\n\t\"futureThing\": 1,\n}\n";
 
     #[test]
     fn broken_files_are_refused_whole_with_the_line_named() {
@@ -189,8 +189,6 @@ mod tests {
         let trailing = parse_jsonc("{ \"a\": 1, }", "settings.json");
         assert!(trailing.problems.is_empty());
     }
-
-    const MESSY: &str = "{\n\t// my note\n\t\"fontSize\": 12,\n\t\"futureThing\": 1,\n}\n";
 
     #[test]
     fn replacing_a_value_changes_only_that_value() {
