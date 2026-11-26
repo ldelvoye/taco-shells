@@ -11,11 +11,11 @@ use crate::agent_hooks::{
 };
 use crate::agent_record::{AgentRecord, RECORD_FILE, read_agent_record, write_agent_record};
 use crate::agent_setup_state::{AgentSetupFacts, AgentSetupState, agent_setup_state_of};
+use crate::file_write::{real_file_of, replace_file};
 use crate::identity::CONFIG_DIRECTORY_VARIABLE;
 
 const HOOKS_DIRECTORY_NAME: &str = "hooks";
 const SCRIPT_MODE: u32 = 0o755;
-const MAX_SYMLINK_HOPS: usize = 16;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AgentPaths {
@@ -139,61 +139,6 @@ fn read_settings(path: &Path) -> Result<Option<String>, String> {
             Err(format!("{shown} could not be read: {error}"))
         }
     }
-}
-
-fn link_target(link: &Path, target: PathBuf) -> PathBuf {
-    if target.is_absolute() {
-        return target;
-    }
-    match link.parent() {
-        Some(directory) => directory.join(target),
-        None => target,
-    }
-}
-
-fn real_file_of(path: &Path) -> io::Result<PathBuf> {
-    let mut current = path.to_path_buf();
-    for _ in 0..MAX_SYMLINK_HOPS {
-        let metadata = fs::symlink_metadata(&current);
-        match metadata {
-            Ok(found) if found.file_type().is_symlink() => {}
-            Ok(_) => return Ok(current),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(current),
-            Err(error) => return Err(error),
-        }
-        let target = fs::read_link(&current)?;
-        current = link_target(&current, target);
-    }
-    Err(io::Error::other("too many levels of symbolic links"))
-}
-
-fn write_then_rename(real: &Path, temporary: &Path, text: &str) -> io::Result<()> {
-    fs::write(temporary, text)?;
-    let existing = fs::metadata(real);
-    match existing {
-        Ok(found) => fs::set_permissions(temporary, found.permissions())?,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
-    }
-    fs::rename(temporary, real)
-}
-
-fn replace_file(real: &Path, text: &str) -> io::Result<()> {
-    let Some(name) = real.file_name() else {
-        return Err(io::Error::other("it has no file name"));
-    };
-    let Some(directory) = real.parent() else {
-        return Err(io::Error::other("it has no directory"));
-    };
-    let shown_name = name.to_string_lossy();
-    let process = std::process::id();
-    let temporary_name = format!(".{shown_name}.{process}.taco-tmp");
-    let temporary = directory.join(temporary_name);
-    let replaced = write_then_rename(real, &temporary, text);
-    if replaced.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    replaced
 }
 
 fn write_settings(path: &Path, original: Option<&str>, text: &str) -> Result<(), String> {

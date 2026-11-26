@@ -245,6 +245,7 @@ impl WindowView {
                 }
             }
             ServicesOutput::QuitForUpdate => cx.dispatch_action(&Quit),
+            ServicesOutput::SettingRefused { .. } => {}
         }
         cx.notify();
     }

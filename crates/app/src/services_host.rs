@@ -8,12 +8,14 @@ use std::thread;
 use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
-use taco_protocol::{HarnessId, HookEvent, HookMessage, RuntimeAnswer, RuntimeQuery, TerminalId};
+use taco_protocol::{
+    ConfigFile, HarnessId, HookEvent, HookMessage, RuntimeAnswer, RuntimeQuery, TerminalId,
+};
 use taco_services::{
     AgentMenuAction, AgentSetups, AgentSetupsHost, ConfigStore, HookListener, ListenerEvent,
-    UpdateEvent, Updater, UpdaterHost, focus_port_path,
+    SettingsWriter, UpdateEvent, Updater, UpdaterHost, config_file_path, focus_port_path,
 };
-use taco_settings::Config;
+use taco_settings::{Config, SettingChange};
 
 use crate::link::{ServicesOutput, WindowOutput, WindowSender};
 use crate::runtime_client::RuntimeClient;
@@ -33,7 +35,8 @@ pub struct ServicesHost {
 }
 
 struct Inner {
-    store: Slot<ConfigStore>,
+    store: Arc<Slot<ConfigStore>>,
+    writer: Slot<SettingsWriter>,
     setups: Arc<Slot<AgentSetups>>,
     updater: Arc<Slot<Updater>>,
     listener: Slot<HookListener>,
@@ -154,6 +157,28 @@ fn start_updater(directory: &Path, window: &WindowSender) -> Updater {
     Updater::start(directory, host)
 }
 
+fn start_writer(
+    directory: &Path,
+    store: &Arc<Slot<ConfigStore>>,
+    window: &WindowSender,
+) -> SettingsWriter {
+    let settings_path = config_file_path(directory, ConfigFile::Settings);
+    let written_store = Arc::clone(store);
+    let after_write = move || {
+        let store = locked(&written_store);
+        if let Some(store) = store.as_ref() {
+            // Published at once, not when the watcher notices, so a click redraws straight away; the watcher's later look then finds nothing new.
+            store.refresh_now();
+        }
+    };
+    let refused_window = window.clone();
+    let on_refused = move |key: &'static str, reason: String| {
+        let refused = ServicesOutput::SettingRefused { key, reason };
+        send_to_window(&refused_window, refused);
+    };
+    SettingsWriter::start(settings_path, Box::new(after_write), Box::new(on_refused))
+}
+
 // One message at a time, each waiting for its own answer, so the workspace hears a session's start before its first state.
 fn route_hooks(
     messages: Receiver<HookMessage>,
@@ -223,6 +248,9 @@ impl ServicesHost {
         let seeded = first.settings.manage_agent_hooks;
         managing.store(seeded, Ordering::SeqCst);
 
+        let store: Arc<Slot<ConfigStore>> = Arc::new(Mutex::new(Some(store)));
+        let writer = start_writer(&directory, &store, &window);
+
         let started = start_setups(&directory, &managing, &runtime, &window);
         let hooks_directory = started.hooks_directory();
         *locked(&setups) = Some(started);
@@ -255,7 +283,8 @@ impl ServicesHost {
         }
 
         let inner = Inner {
-            store: Mutex::new(Some(store)),
+            store,
+            writer: Mutex::new(Some(writer)),
             setups,
             updater,
             listener: Mutex::new(Some(listener)),
@@ -281,6 +310,13 @@ impl ServicesHost {
         let store = locked(&self.inner.store);
         if let Some(store) = store.as_ref() {
             store.set_system_dark(dark);
+        }
+    }
+
+    pub fn write_setting(&self, change: SettingChange) {
+        let writer = locked(&self.inner.writer);
+        if let Some(writer) = writer.as_ref() {
+            writer.write(change);
         }
     }
 
@@ -343,6 +379,10 @@ impl ServicesHost {
         let setups = locked(&self.inner.setups).take();
         if let Some(setups) = setups {
             setups.stop();
+        }
+        let writer = locked(&self.inner.writer).take();
+        if let Some(writer) = writer {
+            writer.stop();
         }
         let store = locked(&self.inner.store).take();
         if let Some(store) = store {

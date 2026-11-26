@@ -9,9 +9,11 @@ mod agent_setups;
 mod build_identity;
 mod config_files;
 mod config_store;
+mod file_write;
 mod hook_listener;
 mod identity;
 mod mac;
+mod settings_writer;
 mod sync;
 mod updater;
 
@@ -36,4 +38,5 @@ pub use hook_listener::{FOCUS_PORTS, HookListener, ListenerEvent};
 pub use identity::{
     APPLICATION_NAME, CONFIG_DIRECTORY_NAME, CONFIG_DIRECTORY_VARIABLE, IS_STABLE, config_directory,
 };
+pub use settings_writer::SettingsWriter;
 pub use updater::{UpdateEvent, Updater, UpdaterHost};
