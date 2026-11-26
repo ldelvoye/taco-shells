@@ -69,6 +69,7 @@ module.exports = {
 
   files: [
     '!src',
+    '!apps',
     '!docs',
     '!branding',
     '!scripts',
