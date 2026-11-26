@@ -1,11 +1,14 @@
 const SWITCH_TIMEOUT_MS = 5000
+const CALM_TIMERS = 3
+const CALM_TIMER_MS = 8
 const ECHO_TIMEOUT_MS = 10000
 
 export const PAGE_PROBE = `(() => {
   const bytes = {}
   const dataListeners = new Set()
   const textWaiters = []
-  const state = { loading: false, lastFrame: 0, frameGaps: [], longTasks: 0, observer: null, hidden: false }
+  let attachWaiters = []
+  const state ={ loading: false, lastFrame: 0, frameGaps: [], longTasks: 0, observer: null, hidden: false }
 
   window.tacoShells.pty.onEvent((event) => {
     let data = null
@@ -14,6 +17,11 @@ export const PAGE_PROBE = `(() => {
     }
     if (event.type === 'attached') {
       data = event.snapshot
+      const waiting = attachWaiters
+      attachWaiters = []
+      for (const resolve of waiting) {
+        resolve()
+      }
     }
     if (data === null) {
       return
@@ -81,6 +89,39 @@ export const PAGE_PROBE = `(() => {
   function visibleGroup(area) {
     const groups = [...area.querySelectorAll('.pane-group')]
     return groups.find((group) => !group.classList.contains('is-inactive'))
+  }
+
+  function groupsWithAView(area) {
+    const groups = [...area.querySelectorAll('.pane-group')]
+    const viewed = groups.filter((group) => group.querySelector('.terminal-host') !== null)
+    return new Set(viewed)
+  }
+
+  function nextAttached() {
+    return new Promise((resolve) => {
+      attachWaiters.push(resolve)
+    })
+  }
+
+  function timerDelay() {
+    return new Promise((resolve) => {
+      const asked = performance.now()
+      setTimeout(() => resolve(performance.now() - asked), 0)
+    })
+  }
+
+  // A view takes in a snapshot in slices, with a timer between each, so a timer of
+  // our own comes back late for as long as it is still at it.
+  async function untilLoaded() {
+    let calm = 0
+    while (calm < ${CALM_TIMERS}) {
+      const late = await timerDelay()
+      if (late < ${CALM_TIMER_MS}) {
+        calm += 1
+      } else {
+        calm = 0
+      }
+    }
   }
 
   function tick(now) {
@@ -169,6 +210,8 @@ export const PAGE_PROBE = `(() => {
     armSwitch() {
       const area = document.querySelector('.pane-area')
       const before = visibleGroup(area)
+      const warm = groupsWithAView(area)
+      const attached = nextAttached()
       const keyed = new Promise((resolve) => {
         window.addEventListener('keydown', (event) => {
           resolve(event.timeStamp)
@@ -188,6 +231,11 @@ export const PAGE_PROBE = `(() => {
           watcher.disconnect()
           clearTimeout(timer)
           const keyAt = await keyed
+          // A terminal with no view gets one now, and is not shown until that view has its snapshot.
+          if (!warm.has(now)) {
+            await attached
+            await untilLoaded()
+          }
           await nextFrame()
           await nextFrame()
           resolve(performance.now() - keyAt)
