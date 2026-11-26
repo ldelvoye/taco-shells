@@ -35,8 +35,8 @@ use std::time::Duration;
 use futures::FutureExt;
 
 use gpui::{
-    AnyWindowHandle, App, AppContext, Bounds, Global, TitlebarOptions, WindowAppearance,
-    WindowBounds, WindowOptions, px, size,
+    AnyWindowHandle, App, AppContext, Bounds, Context, Global, IntoElement, PromptLevel, Render,
+    TitlebarOptions, Window, WindowAppearance, WindowBounds, WindowOptions, div, px, size,
 };
 use taco_services::{APPLICATION_NAME, AgentSetupView};
 use taco_settings::{Appearance, Config, palette_for};
@@ -59,6 +59,10 @@ const MIN_WINDOW_WIDTH: f32 = 520.;
 const MIN_WINDOW_HEIGHT: f32 = 320.;
 /// Past the slowest shutdown: 1.5 s for the save, 2 s for the services, 4 s for the runtime, 1.5 s for the save it freed.
 const SHUTDOWN_PATIENCE: Duration = Duration::from_secs(10);
+const START_FAILED: &str = "Taco Shells could not start";
+const QUIT: &str = "Quit";
+const FAILURE_WINDOW_WIDTH: f32 = 480.;
+const FAILURE_WINDOW_HEIGHT: f32 = 200.;
 
 /// What is running behind the window, and whether quitting has begun.
 struct Running {
@@ -67,6 +71,15 @@ struct Running {
 }
 
 impl Global for Running {}
+
+/// The window a start failure is shown on: nothing but the alert.
+struct Blank;
+
+impl Render for Blank {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
+}
 
 /// Runs the app until it quits.
 pub fn run() {
@@ -88,7 +101,7 @@ pub fn run() {
             Ok(started) => started,
             Err(problem) => {
                 eprintln!("{problem}");
-                cx.quit();
+                show_start_failure(problem, background, cx);
                 return;
             }
         };
@@ -134,6 +147,44 @@ pub(crate) fn quit(cx: &mut App) {
         cx.update(|cx| cx.quit());
     });
     quit_once_stopped.detach();
+}
+
+/// Says why the app cannot start, on a window of its own since gpui alerts only on a window, then quits. A hidden launch has no one to tell.
+fn show_start_failure(problem: String, background: bool, cx: &mut App) {
+    if background {
+        cx.quit();
+        return;
+    }
+    let window_size = size(px(FAILURE_WINDOW_WIDTH), px(FAILURE_WINDOW_HEIGHT));
+    let bounds = Bounds::centered(None, window_size, cx);
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        ..Default::default()
+    };
+    let opened = cx.open_window(options, |_, cx| cx.new(|_| Blank));
+    let Ok(window) = opened else {
+        cx.quit();
+        return;
+    };
+    cx.activate(true);
+    let asked = window.update(cx, |_, window, cx| {
+        window.prompt(
+            PromptLevel::Critical,
+            START_FAILED,
+            Some(&problem),
+            &[QUIT],
+            cx,
+        )
+    });
+    let Ok(answered) = asked else {
+        cx.quit();
+        return;
+    };
+    let quit_once_answered = cx.spawn(async move |cx| {
+        let _ = answered.await;
+        cx.update(|cx| cx.quit());
+    });
+    quit_once_answered.detach();
 }
 
 fn install_menu(cx: &mut App) {
