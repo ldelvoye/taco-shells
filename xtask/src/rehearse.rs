@@ -4,6 +4,7 @@ use std::io::{self, BufRead, BufReader, IsTerminal, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{self, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -39,6 +40,12 @@ struct Rehearsal {
     work: PathBuf,
     config: PathBuf,
     feed_url: String,
+}
+
+/// A child process a thread waits on; `exited` hears once it has been reaped.
+struct Reaped {
+    pid: u32,
+    exited: mpsc::Receiver<()>,
 }
 
 pub fn run(options: &Options) -> Result<(), String> {
@@ -305,13 +312,14 @@ fn run_until_ready(electron: &ElectronApp, rehearsal: &Rehearsal) -> Result<(), 
 
 // A person's run: the Electron copy is shown, they click Restart to Update, and the Rust app opens in its place.
 fn run_click_through(electron: &ElectronApp, rehearsal: &Rehearsal) -> Result<(), String> {
-    let mut child = match launch(electron, rehearsal, false) {
+    let child = match launch(electron, rehearsal, false) {
         Ok(child) => child,
         Err(error) => {
             remove_rehearsal_app();
             return Err(error);
         }
     };
+    let electron_copy = reaped_when_it_exits(child);
 
     println!(
         "Taco Shells Rehearsal is open: the Electron Dev build, on {}.",
@@ -331,15 +339,17 @@ fn run_click_through(electron: &ElectronApp, rehearsal: &Rehearsal) -> Result<()
         ));
     }
 
-    let electron_still_running = matches!(child.try_wait(), Ok(None));
-    if electron_still_running {
-        end_child(&mut child);
-    }
+    end_reaped(&electron_copy);
     let became_rust = Path::new(REHEARSAL_APP).join(RUST_EXECUTABLE).exists();
     if became_rust {
         println!("{REHEARSAL_APP} is now the Rust app.");
     } else {
+        let updates = rehearsal.config.join("updates").join(REHEARSAL_VERSION);
         println!("{REHEARSAL_APP} was not replaced: the update did not happen.");
+        println!(
+            "The downloaded app, if any, is in {}. The update script gives up without a word if the old app has not quit within 30 s.",
+            updates.display()
+        );
     }
     let rehearsal_app = Path::new(REHEARSAL_APP);
     match install::is_running(rehearsal_app) {
@@ -348,6 +358,43 @@ fn run_click_through(electron: &ElectronApp, rehearsal: &Rehearsal) -> Result<()
         Err(error) => println!("{error}; delete {REHEARSAL_APP} by hand once it has quit."),
     }
     Ok(())
+}
+
+// The update script waits for the old app's pid to go, and a child nobody has waited on stays a zombie that still
+// answers `kill -0`, so the swap would never happen. A thread waits on it, reaping it the moment it quits.
+fn reaped_when_it_exits(mut child: Child) -> Reaped {
+    let pid = child.id();
+    let (sender, exited) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = child.wait();
+        let _ = sender.send(());
+    });
+    Reaped { pid, exited }
+}
+
+fn has_exited(reaped: &Reaped) -> bool {
+    let news = reaped.exited.try_recv();
+    !matches!(news, Err(TryRecvError::Empty))
+}
+
+// Signals go by pid only while the thread has not reaped it, so they never reach a reused pid.
+fn end_reaped(reaped: &Reaped) {
+    if has_exited(reaped) {
+        return;
+    }
+    signal(reaped.pid, "-TERM");
+    let ended = reaped.exited.recv_timeout(STOP_TIMEOUT);
+    if ended.is_ok() {
+        return;
+    }
+    signal(reaped.pid, "-KILL");
+    let _ = reaped.exited.recv_timeout(STOP_TIMEOUT);
+}
+
+fn signal(pid: u32, which: &str) {
+    let mut kill = Command::new("kill");
+    kill.args([which, &pid.to_string()]);
+    let _ = kill.status();
 }
 
 fn wait_for_ready_app(updates: &Path) -> Option<PathBuf> {
