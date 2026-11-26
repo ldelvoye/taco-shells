@@ -1,9 +1,12 @@
 import type { PtyExitEvent, PtySize, SessionId } from '@protocol/ipc'
 import type { Runtime, TerminalStart, TerminalStarted } from '@protocol/runtime'
-import type { RuntimeCommand, RuntimeQuery, RuntimeReport } from '@protocol/runtimeMessages'
+import type {
+  RuntimeAnswer,
+  RuntimeCommand,
+  RuntimeQuery,
+  RuntimeReport
+} from '@protocol/runtimeMessages'
 import type { TerminalColors } from '@protocol/theme'
-
-type Answer = string | string[] | null
 
 export interface RuntimeProxy extends Runtime {
   receive(report: RuntimeReport): void
@@ -16,11 +19,11 @@ export function createRuntimeProxy(post: (command: RuntimeCommand) => void): Run
   const exitListeners: ((event: PtyExitEvent) => void)[] = []
   const titleListeners: ((id: SessionId, title: string) => void)[] = []
   const submitListeners: ((id: SessionId) => void)[] = []
-  const inFlight = new Map<number, (value: Answer) => void>()
+  const inFlight = new Map<number, (value: RuntimeAnswer) => void>()
   let nextAsk = 1
   let connected = true
 
-  function ask(query: RuntimeQuery, settle: (value: Answer) => void): void {
+  function ask(query: RuntimeQuery, settle: (value: RuntimeAnswer) => void): void {
     if (!connected) {
       settle(null)
       return

@@ -276,6 +276,24 @@ describe('Workspace', () => {
     expect(emptied.count).toBe(1)
   })
 
+  it('ignores a close and an attention request for a terminal that has already gone', () => {
+    const { workspace, runtime } = opened(2)
+    runtime.fireExit('pty-1')
+    const before = workspace.drawn()
+
+    workspace.request({ type: 'closeTerminal', pane: 'pty-1' })
+    expect(runtime.closed).toEqual([])
+
+    workspace.attentionRequested('pty-1')
+    workspace.appActivated()
+    const after = workspace.drawn()
+    expect(after.waiting).toBe(before.waiting)
+    expect(after.refocus).toBe(before.refocus)
+
+    workspace.request({ type: 'closeTerminal', pane: 'pty-2' })
+    expect(runtime.closed).toEqual(['pty-2'])
+  })
+
   it('tells the save file where a shell started', () => {
     const { runtime, startedIn } = opened(1)
 

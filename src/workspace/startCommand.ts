@@ -8,7 +8,7 @@ export interface ForkRequest {
   name: string
 }
 
-export interface PtyCreateOptions {
+export interface ShellRequest {
   cwdFrom?: SessionId
   cwd?: string
   resume?: AgentSession
@@ -23,7 +23,7 @@ export interface ShellStart {
 
 /** Where a new shell starts and what is typed into it; a resume or fork its harness cannot run is a plain shell. */
 export function shellStartFor(
-  options: PtyCreateOptions,
+  options: ShellRequest,
   agentSessionOf: (id: SessionId) => AgentSession | null,
   harnesses: readonly Harness[] = HARNESSES
 ): ShellStart {

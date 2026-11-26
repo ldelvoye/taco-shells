@@ -119,7 +119,7 @@ describe('workspace state', () => {
 
   it('drops a workspace edit but keeps an agent signal and a title before the first terminal', () => {
     const initial = initialWorkspaceState()
-    expect(reduceWorkspaceState(initial, { type: 'focusMoved', move: 'nextPane' })).toBe(initial)
+    expect(reduceWorkspaceState(initial, { type: 'paneActivated', pane: 'p1' })).toBe(initial)
 
     const kept = dispatch(initial, signal('p1', 'start'), {
       type: 'titleChanged',
@@ -151,7 +151,7 @@ describe('workspace state', () => {
     const done = dispatch(twoTerminals(), signal('p1', 'start'), signal('p1', 'working'), signal('p1', 'stopped'))
     expect(done.agentRows.get('p1')?.state).toBe('done')
 
-    const shown = reduceWorkspaceState(done, { type: 'focusMoved', move: 'previousGroup' })
+    const shown = reduceWorkspaceState(done, { type: 'paneActivated', pane: 'p1' })
     expect(shown.agentRows.get('p1')?.state).toBe('idle')
 
     const stoppedOnScreen = dispatch(done, signal('p2', 'start'), signal('p2', 'working'), signal('p2', 'stopped'))

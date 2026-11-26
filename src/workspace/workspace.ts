@@ -20,18 +20,13 @@ import {
   type Snapshot,
   type SnapshotPane
 } from './snapshot/format'
-import { shellStartFor, type PtyCreateOptions, type ShellStart } from './startCommand'
+import { shellStartFor, type ShellRequest, type ShellStart } from './startCommand'
 import { createWorkspaceStore, type WorkspaceStore } from './store'
 import type { WorkspaceEvent } from './workspaceState'
 
 const INITIAL_SIZE: PtySize = { cols: 80, rows: 24 }
 
-const OPENING_REQUESTS: WorkspaceRequest['type'][] = [
-  'openTerminal',
-  'openTerminalIn',
-  'splitTerminal',
-  'forkTerminal'
-]
+const OPENING_REQUESTS: WorkspaceRequest['type'][] = ['openTerminal', 'openTerminalIn']
 
 export interface WorkspaceOptions {
   snapshot: Snapshot | null
@@ -77,7 +72,7 @@ function editorCommand(path: string): string {
   return `\${EDITOR:-vi} '${path}'\n`
 }
 
-function startOptionsOf(pane: SnapshotPane): PtyCreateOptions {
+function startOptionsOf(pane: SnapshotPane): ShellRequest {
   if (pane.agent !== null) {
     return { resume: pane.agent }
   } else if (typeof pane.cwd === 'string') {
@@ -213,6 +208,9 @@ export class Workspace {
   }
 
   attentionRequested(pane: SessionId): void {
+    if (!this.holdsPane(pane)) {
+      return
+    }
     this.dispatch({ type: 'attentionRequested', pane })
   }
 
@@ -258,7 +256,9 @@ export class Workspace {
       case 'forkTerminal':
         return this.fork(request.pane)
       case 'closeTerminal':
-        this.options.runtime.close(request.pane)
+        if (this.holdsPane(request.pane)) {
+          this.options.runtime.close(request.pane)
+        }
         return accepted(null)
       case 'focusReported': {
         // Recorded even when the terminal was already active: the window keeps its own
@@ -288,6 +288,14 @@ export class Workspace {
     }
   }
 
+  private holdsPane(pane: SessionId): boolean {
+    const workspace = this.store.getState().workspace
+    if (workspace === null) {
+      return false
+    }
+    return locatePane(workspace, pane) !== null
+  }
+
   private nextGroupId(): GroupId {
     const id = `group-${this.nextGroupNumber}`
     this.nextGroupNumber += 1
@@ -311,7 +319,7 @@ export class Workspace {
     return id
   }
 
-  private shellStart(options: PtyCreateOptions): ShellStart {
+  private shellStart(options: ShellRequest): ShellStart {
     const agentSessions = this.options.agentSessions
     return shellStartFor(options, (id) => agentSessions.sessionOf(id))
   }

@@ -42,7 +42,7 @@ export function serveRuntime(
   })
 
   sessions.onExit((event) => {
-    screens.ended(event.id, event.exitCode)
+    screens.ended(event.id)
     post({ type: 'exited', event })
   })
 

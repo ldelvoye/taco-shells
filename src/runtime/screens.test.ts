@@ -38,6 +38,7 @@ interface FakeScreen {
   waiting: (() => void)[]
   fireTitle(title: string): void
   fireReply(data: string): void
+  failNextWrite(): void
   runNext(): void
   runAll(): void
 }
@@ -56,6 +57,7 @@ function fakeScreen(options: ScreenOptions): { fake: FakeScreen; screen: Screen 
   const titleListeners: ((title: string) => void)[] = []
   const replyListeners: ((data: string) => void)[] = []
   let text = ''
+  let failWrite = false
 
   function runNext(): void {
     const next = waiting.shift()
@@ -66,6 +68,10 @@ function fakeScreen(options: ScreenOptions): { fake: FakeScreen; screen: Screen 
 
   const screen: Screen = {
     write: (data, parsed) => {
+      if (failWrite) {
+        failWrite = false
+        throw new Error('screen failed')
+      }
       waiting.push(() => {
         text += data
         calls.push(`parsed ${data.length}`)
@@ -111,6 +117,9 @@ function fakeScreen(options: ScreenOptions): { fake: FakeScreen; screen: Screen 
       for (const listener of replyListeners) {
         listener(data)
       }
+    },
+    failNextWrite: () => {
+      failWrite = true
     },
     runNext,
     runAll: () => {
@@ -320,13 +329,13 @@ describe('Screens', () => {
     const { screens, request, screen, events } = attachedAndSettled()
 
     screens.output('t1', 'a')
-    screens.ended('t1', 3)
+    screens.ended('t1')
     request({ type: 'attach', id: 't1', size: null, attachment: 1 })
     expect(events).toEqual([output('a')])
     expect(screen.waiting).toHaveLength(2)
 
     screen.runAll()
-    expect(events).toEqual([output('a'), { type: 'end', id: 't1', exitCode: 3 }])
+    expect(events).toEqual([output('a'), { type: 'end', id: 't1' }])
     expect(screen.calls).toEqual(['parsed 1', 'dispose'])
 
     request({ type: 'attach', id: 't1', size: null, attachment: 1 })
@@ -339,12 +348,12 @@ describe('Screens', () => {
     const unseen = open('t2')
 
     request({ type: 'attach', id: 't1', size: null, attachment: 1 })
-    screens.ended('t1', 1)
-    screens.ended('t2', 0)
+    screens.ended('t1')
+    screens.ended('t2')
     attaching.runAll()
     unseen.runAll()
 
-    expect(events).toEqual([attached(''), { type: 'end', id: 't1', exitCode: 1 }])
+    expect(events).toEqual([attached(''), { type: 'end', id: 't1' }])
     expect(unseen.calls).toEqual(['dispose'])
   })
 
@@ -372,7 +381,7 @@ describe('Screens', () => {
 
     screens.output('t1', half)
     screens.output('t1', half)
-    screens.ended('t1', 0)
+    screens.ended('t1')
     screen.runAll()
 
     expect(shell).toEqual(['pause t1'])
@@ -387,9 +396,26 @@ describe('Screens', () => {
 
     const screen = open('t1')
     screen.fireTitle('Tacos')
+    screen.fireTitle('Tacos')
     screen.fireReply('\x1b[0n')
 
     expect(titles).toEqual([['t1', 'Tacos']])
     expect(shell).toEqual(['write t1 \x1b[0n'])
+
+    screen.fireTitle('Burritos')
+    screen.fireTitle('Tacos')
+    expect(titles).toEqual([['t1', 'Tacos'], ['t1', 'Burritos'], ['t1', 'Tacos']])
+  })
+
+  it('does not leave a shell paused when its screen throws on a write', () => {
+    const { screens, shell, open } = harness()
+    const screen = open('t1')
+    screen.failNextWrite()
+
+    expect(() => {
+      screens.output('t1', 'x'.repeat(FLOOD_LIMIT + 1))
+    }).toThrow('screen failed')
+
+    expect(shell).toEqual(['pause t1', 'resume t1'])
   })
 })
