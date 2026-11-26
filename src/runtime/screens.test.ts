@@ -2,11 +2,35 @@ import { describe, expect, it } from 'vitest'
 
 import type { PtySize, SessionId } from '@protocol/ipc'
 import type { TerminalEvent, TerminalRequest } from '@protocol/runtimeMessages'
+import type { TerminalColors } from '@protocol/theme'
 import type { Screen, ScreenOptions } from './screen'
 import { FLOOD_LIMIT, Screens } from './screens'
 
 const SIZE: PtySize = { cols: 80, rows: 24 }
 const SMALL: PtySize = { cols: 20, rows: 5 }
+const COLORS: TerminalColors = {
+  background: '#123456',
+  foreground: '#010101',
+  cursor: '#020202',
+  cursorAccent: '#030303',
+  selectionBackground: '#040404',
+  black: '#050505',
+  red: '#060606',
+  green: '#070707',
+  yellow: '#080808',
+  blue: '#090909',
+  magenta: '#0a0a0a',
+  cyan: '#0b0b0b',
+  white: '#0c0c0c',
+  brightBlack: '#0d0d0d',
+  brightRed: '#0e0e0e',
+  brightGreen: '#0f0f0f',
+  brightYellow: '#101010',
+  brightBlue: '#111111',
+  brightMagenta: '#121212',
+  brightCyan: '#131313',
+  brightWhite: '#141414'
+}
 
 interface FakeScreen {
   options: ScreenOptions
@@ -59,6 +83,9 @@ function fakeScreen(options: ScreenOptions): { fake: FakeScreen; screen: Screen 
     },
     setScrollback: (lines) => {
       calls.push(`scrollback ${lines}`)
+    },
+    setColors: (colors) => {
+      calls.push(`colors ${colors.background}`)
     },
     snapshot: () => text,
     onTitle: (listener) => {
@@ -153,16 +180,18 @@ function attachedAndSettled(): Harness & { screen: FakeScreen } {
 }
 
 describe('Screens', () => {
-  it('makes a screen with the current scrollback, and a new scrollback reaches the screens that exist', () => {
+  it('makes a screen with the current scrollback and colors, and new ones reach the screens that exist', () => {
     const { screens, open } = harness()
 
     const first = open('t1')
     screens.setScrollback(50)
+    screens.setColors(COLORS)
     const second = open('t2')
 
     expect(first.options).toEqual({ size: SIZE, scrollback: 1000 })
     expect(second.options).toEqual({ size: SIZE, scrollback: 50 })
-    expect(first.calls).toEqual(['scrollback 50'])
+    expect(first.calls).toEqual(['scrollback 50', 'colors #123456'])
+    expect(second.calls).toEqual(['colors #123456'])
   })
 
   it('sends output to a view as it arrives, keeps it in order while the view attaches, and not at all with no view', () => {

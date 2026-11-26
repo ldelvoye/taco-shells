@@ -106,9 +106,11 @@ app.whenReady().then(() => {
     const nextPalette = paletteFor(config.appearance)
     link.setBackgroundColor(nextPalette.chrome.terminalBackground)
     runtime.setScrollback(config.settings.scrollback)
+    runtime.setColors(nextPalette.terminal)
   })
 
   runtime.setScrollback(initialConfig.settings.scrollback)
+  runtime.setColors(palette.terminal)
   // Last, so everything that listens to a shell is in place before the first one starts.
   workspace.start()
 })

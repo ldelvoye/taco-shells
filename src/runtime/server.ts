@@ -73,6 +73,10 @@ export function serveRuntime(
         screens.setScrollback(command.lines)
         return
       }
+      if (command.type === 'colors') {
+        screens.setColors(command.colors)
+        return
+      }
       const number = command.ask
       void answer(command.query).then((value) => {
         post({ type: 'answer', ask: number, value })

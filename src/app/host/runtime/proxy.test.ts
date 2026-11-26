@@ -3,7 +3,32 @@ import { describe, expect, it } from 'vitest'
 import type { PtyExitEvent } from '@protocol/ipc'
 import type { TerminalStart, TerminalStarted } from '@protocol/runtime'
 import type { RuntimeCommand, RuntimeReport } from '@protocol/runtimeMessages'
+import type { TerminalColors } from '@protocol/theme'
 import { createRuntimeProxy, type RuntimeProxy } from './proxy'
+
+const COLORS: TerminalColors = {
+  background: '#123456',
+  foreground: '#010101',
+  cursor: '#020202',
+  cursorAccent: '#030303',
+  selectionBackground: '#040404',
+  black: '#050505',
+  red: '#060606',
+  green: '#070707',
+  yellow: '#080808',
+  blue: '#090909',
+  magenta: '#0a0a0a',
+  cyan: '#0b0b0b',
+  white: '#0c0c0c',
+  brightBlack: '#0d0d0d',
+  brightRed: '#0e0e0e',
+  brightGreen: '#0f0f0f',
+  brightYellow: '#101010',
+  brightBlue: '#111111',
+  brightMagenta: '#121212',
+  brightCyan: '#131313',
+  brightWhite: '#141414'
+}
 
 function roundTrip<Message>(message: Message): Message {
   return JSON.parse(JSON.stringify(message))
@@ -47,6 +72,7 @@ describe('RuntimeProxy', () => {
     proxy.write('t1', 'ls')
     proxy.resize('t1', { cols: 100, rows: 30 })
     proxy.setScrollback(500)
+    proxy.setColors(COLORS)
     proxy.close('t1')
 
     expect(posted).toEqual([
@@ -54,6 +80,7 @@ describe('RuntimeProxy', () => {
       { type: 'write', id: 't1', data: 'ls' },
       { type: 'resize', id: 't1', size: { cols: 100, rows: 30 } },
       { type: 'scrollback', lines: 500 },
+      { type: 'colors', colors: COLORS },
       { type: 'close', id: 't1' }
     ])
   })

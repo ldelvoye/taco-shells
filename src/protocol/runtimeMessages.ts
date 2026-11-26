@@ -1,5 +1,6 @@
 import type { PtyExitEvent, PtySize, SessionId } from './ipc'
 import type { TerminalStart, TerminalStarted } from './runtime'
+import type { TerminalColors } from './theme'
 
 export type RuntimeQuery =
   | { kind: 'directoryOf'; id: SessionId }
@@ -13,6 +14,7 @@ export type RuntimeCommand =
   | { type: 'write'; id: SessionId; data: string }
   | { type: 'resize'; id: SessionId; size: PtySize }
   | { type: 'scrollback'; lines: number }
+  | { type: 'colors'; colors: TerminalColors }
   | { type: 'ask'; ask: number; query: RuntimeQuery }
 
 /** What the runtime sends the main process. */
