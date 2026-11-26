@@ -3,9 +3,45 @@ use taco_protocol::{
     RuntimeReport, TabGroupId, TerminalId, TerminalStart, WorkspaceRequest,
 };
 
-use crate::{Options, Outbound, Workspace};
+use std::sync::{Arc, Mutex};
+
+use crate::{Options, Outbound, Storage, Workspace};
 
 const SESSION: &str = "123e4567-e89b-12d3-a456-426614174000";
+
+/// A save file in memory, shared with the test so it can read what was written and count the writes.
+#[derive(Clone, Default)]
+struct Disk {
+    file: Arc<Mutex<Option<String>>>,
+    writes: Arc<Mutex<usize>>,
+}
+
+impl Disk {
+    fn holding(text: &str) -> Disk {
+        let disk = Disk::default();
+        *disk.file.lock().unwrap() = Some(text.to_string());
+        disk
+    }
+
+    fn text(&self) -> Option<String> {
+        self.file.lock().unwrap().clone()
+    }
+
+    fn writes(&self) -> usize {
+        *self.writes.lock().unwrap()
+    }
+}
+
+impl Storage for Disk {
+    fn read_save(&self) -> Option<String> {
+        self.text()
+    }
+
+    fn write_save(&mut self, text: &str) {
+        *self.file.lock().unwrap() = Some(text.to_string());
+        *self.writes.lock().unwrap() += 1;
+    }
+}
 
 fn id(name: &str) -> TerminalId {
     TerminalId(name.to_string())
@@ -15,17 +51,23 @@ fn claude() -> HarnessId {
     HarnessId("claude".into())
 }
 
-fn workspace() -> Workspace {
-    let mut next = 0;
-    let options = Options {
+fn options_on(disk: &Disk, first_id: usize) -> Options {
+    let mut next = first_id;
+    Options {
         settings_path: "/config/it's/settings.json".into(),
         keybindings_path: "/config/keybindings.json".into(),
         new_terminal_id: Box::new(move || {
             next += 1;
             id(&format!("t{next}"))
         }),
-    };
-    let mut workspace = Workspace::new(options);
+        storage: Box::new(disk.clone()),
+        restore_on_launch: true,
+    }
+}
+
+fn workspace() -> Workspace {
+    let disk = Disk::default();
+    let mut workspace = Workspace::new(options_on(&disk, 0));
     workspace.start(0);
     workspace
 }
@@ -120,9 +162,8 @@ fn row_state(workspace: &Workspace, terminal: &str) -> Option<(RowState, Option<
 #[test]
 fn a_terminal_opens_under_a_minted_id_and_a_config_file_opens_in_the_shells_editor() {
     let mut first = Workspace::new(Options {
-        settings_path: String::new(),
-        keybindings_path: String::new(),
         new_terminal_id: Box::new(|| id("only")),
+        ..options_on(&Disk::default(), 0)
     });
     let out = first.start(0);
     assert_eq!(opened(&out)[0].id, id("only"));
@@ -397,4 +438,154 @@ fn a_question_shows_only_while_its_row_needs_you_and_a_stop_off_screen_is_done()
         },
     );
     assert_eq!(row_state(&workspace, "t1"), Some((RowState::Idle, None)));
+}
+
+const ELECTRON_FILE: &str = include_str!("../tests/fixtures/electron-workspace.json");
+
+fn launched(disk: &Disk) -> (Workspace, Vec<TerminalStart>) {
+    let mut workspace = Workspace::new(options_on(disk, 0));
+    let out = workspace.start(0);
+    (workspace, opened(&out))
+}
+
+#[test]
+fn an_electron_save_reopens_each_pane_as_a_row_where_it_was_and_resumes_its_agent() {
+    let disk = Disk::holding(ELECTRON_FILE);
+    let (workspace, starts) = launched(&disk);
+
+    assert_eq!(listed(&workspace), "t1 [t2] t3 t4");
+    let resume = |session: &str| format!("claude --resume {session}\n");
+    let shells: Vec<(Option<String>, Option<String>)> = starts
+        .iter()
+        .map(|start| (start.directory.clone(), start.command.clone()))
+        .collect();
+    assert_eq!(
+        shells,
+        vec![
+            (Some("/Users/me/code/tacos".into()), Some(resume(SESSION))),
+            (Some("/Users/me/code/tacos/docs".into()), None),
+            (
+                Some("/Users/me/notes".into()),
+                Some(resume("223e4567-e89b-12d3-a456-426614174000"))
+            ),
+            (None, None),
+        ]
+    );
+    // known before any shell has started, so the first save keeps them
+    let drawn = workspace.drawn();
+    assert_eq!(
+        drawn.directories.get(&id("t2")).map(String::as_str),
+        Some("/Users/me/code/tacos/docs")
+    );
+}
+
+#[test]
+fn a_save_brings_back_the_same_rows_ids_groups_and_panels_and_waits_out_its_debounce() {
+    let disk = Disk::default();
+    let mut workspace = Workspace::new(options_on(&disk, 0));
+    workspace.start(0);
+    ask(
+        &mut workspace,
+        WorkspaceRequest::OpenTerminal { file: None },
+    );
+    workspace.request(
+        WorkspaceRequest::TabGroupCreated { terminal: id("t2") },
+        100,
+    );
+    let toggled = WorkspaceRequest::TabGroupToggled {
+        id: TabGroupId("tab-group-1".into()),
+    };
+    workspace.request(toggled, 200);
+    let moved = WorkspaceRequest::PanelMoved {
+        panel: taco_protocol::Panel::AgentActivity,
+        edge: taco_protocol::Edge::Bottom,
+    };
+    workspace.request(moved, 300);
+
+    workspace.tick(549);
+    assert_eq!(disk.writes(), 0, "each change pushes the write back");
+    assert_eq!(workspace.next_deadline(), Some(550));
+    workspace.tick(550);
+    assert_eq!(disk.writes(), 1);
+    workspace.tick(10_000);
+    assert_eq!(disk.writes(), 1);
+
+    let (reopened, starts) = launched(&disk);
+    let ids: Vec<TerminalId> = starts.iter().map(|start| start.id.clone()).collect();
+    assert_eq!(ids, vec![id("t1"), id("t2")]);
+    assert_eq!(listed(&reopened), "[t1] t2");
+    let drawn = reopened.drawn();
+    let arrangement = drawn.arrangement.unwrap();
+    assert!(arrangement.tab_groups[0].collapsed);
+    assert_eq!(
+        drawn.panels.agent_activity.edge,
+        taco_protocol::Edge::Bottom
+    );
+}
+
+#[test]
+fn quitting_or_losing_the_runtime_keeps_the_open_terminals_in_the_save() {
+    let disk = Disk::default();
+    let mut workspace = Workspace::new(options_on(&disk, 0));
+    workspace.start(0);
+    ask(
+        &mut workspace,
+        WorkspaceRequest::OpenTerminal { file: None },
+    );
+
+    workspace.freeze();
+    exited(&mut workspace, "t1");
+    exited(&mut workspace, "t2");
+    workspace.flush(1_000);
+    let (reopened, _) = launched(&disk);
+    assert_eq!(listed(&reopened), "t1 [t2]");
+
+    let died = Disk::default();
+    let mut workspace = Workspace::new(options_on(&died, 0));
+    workspace.start(0);
+    workspace.runtime_died("killed", 10);
+    workspace.flush(1_000);
+    let (reopened, _) = launched(&died);
+    assert_eq!(listed(&reopened), "[t1]");
+
+    // closing every terminal before a quit saves none, and the next launch opens one fresh
+    let emptied = Disk::default();
+    let mut workspace = Workspace::new(options_on(&emptied, 0));
+    workspace.start(0);
+    exited(&mut workspace, "t1");
+    workspace.flush(1_000);
+    let (reopened, starts) = launched(&emptied);
+    assert_eq!((listed(&reopened), starts.len()), ("[t1]".to_string(), 1));
+    assert!(emptied.text().unwrap().contains("\"rows\":[]"));
+}
+
+#[test]
+fn a_restored_agent_that_never_starts_again_is_forgotten_and_one_that_does_is_kept() {
+    let disk = Disk::holding(ELECTRON_FILE);
+    let (mut workspace, _) = launched(&disk);
+    agent_starts(&mut workspace, "t1");
+    workspace.tick(crate::PROVISIONAL_MS + 1_000);
+
+    let saved = disk.text().unwrap();
+    assert!(saved.contains(SESSION), "confirmed by its start");
+    assert!(!saved.contains("223e4567"), "never started again");
+}
+
+#[test]
+fn a_file_that_cannot_be_restored_or_a_restore_turned_off_opens_one_fresh_terminal() {
+    for text in ["not json", r#"{"version":2,"rows":[]}"#, r#"{"version":9}"#] {
+        let (workspace, starts) = launched(&Disk::holding(text));
+        assert_eq!(
+            (listed(&workspace), starts.len()),
+            ("[t1]".to_string(), 1),
+            "{text}"
+        );
+    }
+    let disk = Disk::holding(ELECTRON_FILE);
+    let mut workspace = Workspace::new(Options {
+        restore_on_launch: false,
+        ..options_on(&disk, 0)
+    });
+    let starts = opened(&workspace.start(0));
+    assert_eq!(starts.len(), 1);
 }
