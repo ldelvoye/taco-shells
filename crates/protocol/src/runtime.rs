@@ -9,6 +9,13 @@ pub struct TerminalSize {
     pub rows: u16,
 }
 
+/// The size of one cell in the window's font, which a program's size reports (CSI 14, 16 and 18 t) answer from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CellSize {
+    pub width_px: u32,
+    pub height_px: u32,
+}
+
 /// A terminal to open: the workspace has already named it and placed it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TerminalStart {

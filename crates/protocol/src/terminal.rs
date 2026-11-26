@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::ids::TerminalId;
-use crate::runtime::TerminalSize;
+use crate::runtime::{CellSize, TerminalSize};
 
 /// What a window asks of a terminal over the terminal channel. `Write` and `Resize` work with no view attached.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -11,6 +11,8 @@ pub enum TerminalRequest {
         id: TerminalId,
         attachment: u64,
         size: Option<TerminalSize>,
+        /// None until the window's font is measured; the runtime keeps the last one it was given.
+        cell: Option<CellSize>,
     },
     Detach {
         id: TerminalId,
@@ -22,6 +24,7 @@ pub enum TerminalRequest {
     Resize {
         id: TerminalId,
         size: TerminalSize,
+        cell: CellSize,
     },
     Clear {
         id: TerminalId,
