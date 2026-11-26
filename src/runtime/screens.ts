@@ -64,6 +64,10 @@ export class Screens {
   }
 
   open(id: SessionId, size: PtySize): void {
+    // The shells refuse a known id too: a second screen would replace the one a view is following.
+    if (this.terminals.has(id)) {
+      return
+    }
     const screen = this.makeScreen({ size, scrollback: this.scrollback })
     if (this.colors !== null) {
       screen.setColors(this.colors)
@@ -110,6 +114,7 @@ export class Screens {
         this.resumeWhenDrained(id, terminal)
       })
     } catch (failure) {
+      // A write that throws took nothing in and will never call back, so its characters are not waiting.
       terminal.unparsed -= data.length
       this.resumeWhenDrained(id, terminal)
       throw failure

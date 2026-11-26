@@ -26,6 +26,8 @@ import type { WorkspaceEvent } from './workspaceState'
 
 const INITIAL_SIZE: PtySize = { cols: 80, rows: 24 }
 
+// The requests that would start a shell with no terminal to start from. A split or a
+// fork needs a terminal that is there, and once the runtime has died none is.
 const OPENING_REQUESTS: WorkspaceRequest['type'][] = ['openTerminal', 'openTerminalIn']
 
 export interface WorkspaceOptions {

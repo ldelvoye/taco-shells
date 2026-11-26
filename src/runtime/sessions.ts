@@ -54,6 +54,7 @@ export class PtySessions {
   }
 
   open(start: TerminalStart): void {
+    // An id names one terminal for good. Opening it again would start a second shell under it.
     const known = this.opening.has(start.id) || this.sessions.has(start.id)
     if (known) {
       return
@@ -205,10 +206,17 @@ export class PtySessions {
     for (const opening of this.opening.values()) {
       opening.closed = true
     }
-    const live = [...this.sessions.keys()]
-    for (const id of live) {
-      this.close(id)
+    // Output still waiting is not passed on: nothing is left to read it, and
+    // nothing here may stop the next shell from being ended.
+    for (const session of this.sessions.values()) {
+      this.clearFlushTimer(session)
+      try {
+        session.pty.kill()
+      } catch {
+        continue
+      }
     }
+    this.sessions.clear()
   }
 
   onData(listener: DataListener): void {

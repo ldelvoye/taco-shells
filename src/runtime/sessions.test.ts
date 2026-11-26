@@ -189,12 +189,14 @@ describe('PtySessions', () => {
     sessions.open(startOf('pty-2'))
     await started
     sessions.open(startOf('pty-3', { directoryOf: 'pty-1' }))
+    const stillOpeningGone = nextExits(sessions, 1)
 
     sessions.closeAll()
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    const exits = await stillOpeningGone
 
     expect(killed.count).toBe(2)
     expect(spawned).toHaveLength(2)
+    expect(exits.map((event) => event.id)).toEqual(['pty-3'])
   })
 
   it('reports an exit for a shell that cannot start', async () => {
