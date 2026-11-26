@@ -42,7 +42,7 @@ pub struct View {
     rows: Vec<Row>,
     /// Remembers the last cell it reported, so it belongs to one terminal.
     mouse: MouseEncoder,
-    /// The text selected when the selection was made. Output that changes it, scrolling the rows away or writing over them, ends the selection.
+    /// The text selected when the selection was made. Output that changes it, by pruning its rows from the scrollback or writing over them, ends the selection.
     selected_text: Option<String>,
     config: ViewConfig,
 }
@@ -171,7 +171,9 @@ impl View {
         };
         let bytes = keys.encode(terminal, press)?;
         // Typing brings the view back to the newest output.
-        terminal.scroll(Scroll::Bottom)?;
+        if !bytes.is_empty() {
+            terminal.scroll(Scroll::Bottom)?;
+        }
         Ok(bytes)
     }
 
@@ -180,8 +182,14 @@ impl View {
             return Ok(Vec::new());
         };
         let bytes = terminal.paste_bytes(text)?;
-        terminal.scroll(Scroll::Bottom)?;
+        if !bytes.is_empty() {
+            terminal.scroll(Scroll::Bottom)?;
+        }
         Ok(bytes)
+    }
+
+    pub fn is_attached(&self) -> bool {
+        self.terminal.is_some()
     }
 
     pub fn focus_report(&self, focused: bool) -> Result<Option<Vec<u8>>, Error> {
@@ -474,11 +482,45 @@ mod tests {
         view.apply(output("one\r\ntwo\r\nthree\r\n")).unwrap();
         assert_eq!(view.selection().as_deref(), Some("hello"));
 
-        // Once the line is pruned from a full scrollback the selection would point at other text, so it ends.
+        // Once the line is pruned from the scrollback (1,000 lines here) the selection would point at other text, so it ends.
         let flood = "filler line\r\n".repeat(5_000);
         view.apply(output(&flood)).unwrap();
         assert_eq!(view.selection(), None);
         let terminal = view.terminal.as_ref().unwrap();
         assert_eq!(terminal.selection_text().unwrap(), None);
+
+        // Clear drops the rows above the cursor, and a selection on them with it.
+        view.apply(output("kept\r\nprompt")).unwrap();
+        view.select(CellPoint { x: 0, y: 2 }, CellPoint { x: 3, y: 2 })
+            .unwrap();
+        assert_eq!(view.selection().as_deref(), Some("kept"));
+        view.apply(TerminalEvent::Cleared { id: id() }).unwrap();
+        assert_eq!(view.selection(), None);
+    }
+
+    #[test]
+    fn typing_brings_a_scrolled_back_view_to_the_newest_output() {
+        let source = Terminal::new(SIZE).unwrap();
+        let mut view = View::new(1, config()).unwrap();
+        let (event, _) = attached(1, &source);
+        view.apply(event).unwrap();
+        let lines: String = (0..50).map(|line| format!("line {line}\r\n")).collect();
+        view.apply(output(&lines)).unwrap();
+        view.scroll(Scroll::Lines(-20)).unwrap();
+        assert_eq!(texts(&mut view)[0], "line 27");
+
+        let mut keys = KeyEncoder::new().unwrap();
+        let press = KeyPress {
+            key: taco_ghostty::input::Key::Char('a'),
+            mods: taco_ghostty::input::Mods {
+                ctrl: true,
+                ..Default::default()
+            },
+            text: "a",
+            repeat: false,
+        };
+        let sent = view.key(&mut keys, &press).unwrap();
+        assert_eq!(sent, b"\x01");
+        assert_eq!(texts(&mut view)[0], "line 47");
     }
 }

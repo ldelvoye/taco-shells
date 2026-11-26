@@ -7,7 +7,7 @@ use std::os::unix::net::UnixStream;
 use futures::StreamExt as _;
 use gpui::{
     App, Bounds, Context, ElementInputHandler, EntityInputHandler, EventEmitter, FocusHandle,
-    InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
+    InteractiveElement as _, IntoElement, KeyDownEvent, Modifiers, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point, Render, ScrollDelta,
     ScrollEvent, Styled as _, Task, TextAlign, TextRun, UTF16Selection, UnderlineStyle, Window,
     canvas, div, fill, font, point, px, size,
@@ -16,7 +16,7 @@ use taco_ghostty::input::{
     CellPoint, Grid, Key, KeyEncoder, KeyPress, Mods, MouseAction, MouseButton as GridButton,
     MouseInput, Scroll,
 };
-use taco_protocol::{TerminalColors, TerminalId};
+use taco_protocol::{TerminalColors, TerminalId, TerminalSize};
 use taco_settings::Settings;
 
 use crate::connection::{Requests, connect};
@@ -43,16 +43,20 @@ pub struct Terminals {
     views: Views,
     keys: KeyEncoder,
     focus: FocusHandle,
-    /// The focus last reported to the program on screen, so each change is reported once.
+    /// The focus last reported to a program, so each change is reported once and a terminal switched away from hears it lost focus.
     reported_focus: Option<(TerminalId, bool)>,
     /// What an input method is composing, drawn at the cursor until it is committed.
     marked_text: Option<String>,
-    /// Where the grid was last drawn and its size in cells, for turning a pointer position into a cell.
+    /// Where the grid was last drawn, in window pixels, and how many cells it holds.
     grid_bounds: Option<Bounds<Pixels>>,
+    grid_size: Option<TerminalSize>,
     cursor_cell: Option<(u16, u16)>,
-    /// Where a drag that selects began.
+    /// The cell a drag that selects began on.
     anchor: Option<CellPoint>,
+    /// The left button is down after a press the view took, for selecting or for the program.
     button_held: bool,
+    /// The press was reported to a program tracking the mouse, so its release is reported too.
+    reported_press: bool,
     /// Wheel movement too small for a line yet.
     scroll_remainder: f32,
     scroll_sensitivity: f32,
@@ -70,6 +74,14 @@ struct Prepared {
     cell: CellMetrics,
     family: String,
     font_size: f32,
+}
+
+/// Where the pointer is: the cell under it, and its position in the grid's pixels.
+#[derive(Clone, Copy)]
+struct Pointer {
+    cell: CellPoint,
+    x: f32,
+    y: f32,
 }
 
 impl EventEmitter<TerminalsEvent> for Terminals {}
@@ -114,9 +126,11 @@ impl Terminals {
             reported_focus: None,
             marked_text: None,
             grid_bounds: None,
+            grid_size: None,
             cursor_cell: None,
             anchor: None,
             button_held: false,
+            reported_press: false,
             scroll_remainder: 0.0,
             scroll_sensitivity: settings.scroll_sensitivity as f32,
             family,
@@ -136,8 +150,12 @@ impl Terminals {
     ) {
         let switched = self.views.on_screen() != on_screen;
         if switched {
+            // A gesture or a composition belongs to the terminal it started on.
             self.anchor = None;
             self.marked_text = None;
+            self.button_held = false;
+            self.reported_press = false;
+            self.scroll_remainder = 0.0;
         }
         self.views.show(open, on_screen);
         self.send_requests();
@@ -190,10 +208,11 @@ impl Terminals {
 
     /// The frame for the terminal on screen, after the work every frame does first.
     fn before_paint(&mut self, bounds: Bounds<Pixels>, window: &mut Window) -> Option<Prepared> {
-        self.grid_bounds = Some(bounds);
         let width = f32::from(bounds.size.width);
         let height = f32::from(bounds.size.height);
         let fits = grid_that_fits(width, height, self.cell);
+        self.grid_bounds = Some(bounds);
+        self.grid_size = Some(fits);
         self.views.fit(Fit {
             size: fits,
             cell: self.cell.size_px(),
@@ -209,25 +228,39 @@ impl Terminals {
         prepared
     }
 
-    /// Tells the program on screen it gained or lost focus, when it asked to hear (mode 1004) and it changed.
+    /// Tells programs that asked (mode 1004) when the terminal on screen gains or loses focus, and the one switched away from that it lost it.
     fn report_focus(&mut self, focused: bool) {
         let Some(id) = self.views.on_screen().cloned() else {
             return;
         };
-        let current = Some((id.clone(), focused));
-        if self.reported_focus == current {
+        let current = (id.clone(), focused);
+        if self.reported_focus.as_ref() == Some(&current) {
             return;
         }
-        let Some(view) = self.views.view(&id) else {
+        let attached = self.views.view(&id).is_some_and(|view| view.is_attached());
+        if !attached {
+            return;
+        }
+        if let Some((previous, true)) = self.reported_focus.clone()
+            && previous != id
+        {
+            self.send_focus(&previous, false);
+        }
+        self.send_focus(&id, focused);
+        self.reported_focus = Some(current);
+    }
+
+    fn send_focus(&mut self, id: &TerminalId, focused: bool) {
+        let Some(view) = self.views.view(id) else {
             return;
         };
         if let Ok(Some(report)) = view.focus_report(focused) {
-            self.views.write(id, report);
+            self.views.write(id.clone(), report);
         }
-        self.reported_focus = current;
     }
 
     fn draw_on_screen(&mut self) -> Option<Prepared> {
+        self.cursor_cell = None;
         let id = self.views.on_screen().cloned()?;
         let selection = self.config.colors.selection;
         let view = self.views.view(&id)?;
@@ -239,11 +272,9 @@ impl Terminals {
                 return None;
             }
         };
-        let mut cursor_cell = None;
         if let Some(cursor) = drawn.painting.cursor {
-            cursor_cell = Some((cursor.column, cursor.row));
+            self.cursor_cell = Some((cursor.column, cursor.row));
         }
-        self.cursor_cell = cursor_cell;
         Some(Prepared {
             drawn,
             marked_text: self.marked_text.clone(),
@@ -280,6 +311,46 @@ impl Terminals {
         self.send_requests();
     }
 
+    /// Whether the program on screen tracks the mouse, so the pointer is reported to it instead of selecting.
+    fn program_tracks_mouse(&mut self) -> bool {
+        let Some(view) = self.views.on_screen_view() else {
+            return false;
+        };
+        let tracking = view.tracks_mouse();
+        matches!(tracking, Ok(true))
+    }
+
+    /// Reports a pointer event to the program on screen.
+    fn send_mouse(
+        &mut self,
+        action: MouseAction,
+        button: Option<GridButton>,
+        held: bool,
+        modifiers: Modifiers,
+        pointer: Pointer,
+    ) {
+        let grid = self.grid();
+        let Some(id) = self.views.on_screen().cloned() else {
+            return;
+        };
+        let Some(view) = self.views.view(&id) else {
+            return;
+        };
+        let input = MouseInput {
+            action,
+            button,
+            mods: mods_of(modifiers),
+            x: pointer.x,
+            y: pointer.y,
+            any_pressed: held,
+            grid,
+        };
+        if let Ok(bytes) = view.mouse(&input) {
+            self.views.write(id, bytes);
+        }
+        self.send_requests();
+    }
+
     fn mouse_down(
         &mut self,
         event: &MouseDownEvent,
@@ -294,47 +365,47 @@ impl Terminals {
         if !was_focused {
             cx.emit(TerminalsEvent::Focused(id.clone()));
         }
-        let Some((cell, x, y)) = self.cell_at(event.position) else {
-            return;
-        };
-        let grid = self.grid();
-        let Some(view) = self.views.view(&id) else {
+        let Some(pointer) = self.pointer_at(event.position) else {
             return;
         };
 
         if event.modifiers.platform {
-            if let Ok(Some(url)) = view.link_at(cell) {
+            let Some(view) = self.views.view(&id) else {
+                return;
+            };
+            if let Ok(Some(url)) = view.link_at(pointer.cell) {
                 cx.emit(TerminalsEvent::LinkClicked(url));
             }
             return;
         }
-        if let Ok(true) = view.tracks_mouse() {
-            let input = MouseInput {
-                action: MouseAction::Press,
-                button: Some(GridButton::Left),
-                mods: mods_of(event.modifiers),
-                x,
-                y,
-                any_pressed: true,
-                grid,
-            };
-            if let Ok(bytes) = view.mouse(&input) {
-                self.views.write(id, bytes);
-            }
-            self.button_held = true;
-            self.send_requests();
+        self.button_held = true;
+        if self.program_tracks_mouse() {
+            self.reported_press = true;
+            self.send_mouse(
+                MouseAction::Press,
+                Some(GridButton::Left),
+                true,
+                event.modifiers,
+                pointer,
+            );
             return;
         }
 
-        let _ = match event.click_count {
+        let Some(view) = self.views.view(&id) else {
+            return;
+        };
+        let selected = match event.click_count {
             1 => {
-                self.anchor = Some(cell);
+                self.anchor = Some(pointer.cell);
                 view.clear_selection()
             }
-            2 => view.select_word(cell),
-            _ => view.select_line(cell),
+            2 => view.select_word(pointer.cell),
+            _ => view.select_line(pointer.cell),
         };
-        self.button_held = true;
+        if selected.is_err() {
+            self.views.start_over(id);
+            self.send_requests();
+        }
         cx.notify();
     }
 
@@ -344,42 +415,29 @@ impl Terminals {
         _window: &mut Window,
         cx: &mut Context<Terminals>,
     ) {
-        let Some(id) = self.views.on_screen().cloned() else {
+        let Some(pointer) = self.pointer_at(event.position) else {
             return;
         };
-        let Some((cell, x, y)) = self.cell_at(event.position) else {
-            return;
-        };
-        let grid = self.grid();
         let held = self.button_held && event.pressed_button == Some(MouseButton::Left);
-        let anchor = self.anchor;
-        let Some(view) = self.views.view(&id) else {
-            return;
-        };
-        if let Ok(true) = view.tracks_mouse() {
+        if self.program_tracks_mouse() {
             let mut button = None;
             if held {
                 button = Some(GridButton::Left);
             }
-            let input = MouseInput {
-                action: MouseAction::Motion,
-                button,
-                mods: mods_of(event.modifiers),
-                x,
-                y,
-                any_pressed: held,
-                grid,
-            };
-            if let Ok(bytes) = view.mouse(&input) {
-                self.views.write(id, bytes);
-            }
-            self.send_requests();
+            self.send_mouse(MouseAction::Motion, button, held, event.modifiers, pointer);
             return;
         }
-        if held && let Some(start) = anchor {
-            let _ = view.select(start, cell);
-            cx.notify();
+        let Some(start) = self.anchor else {
+            return;
+        };
+        if !held {
+            return;
         }
+        let Some(view) = self.views.on_screen_view() else {
+            return;
+        };
+        let _ = view.select(start, pointer.cell);
+        cx.notify();
     }
 
     fn mouse_up(
@@ -388,33 +446,28 @@ impl Terminals {
         _window: &mut Window,
         _cx: &mut Context<Terminals>,
     ) {
+        self.release(event);
+    }
+
+    /// The end of a press, wherever the pointer is: a release outside the grid ends a drag all the same.
+    fn release(&mut self, event: &MouseUpEvent) {
+        let reported = self.reported_press;
         self.button_held = false;
+        self.reported_press = false;
         self.anchor = None;
-        let Some(id) = self.views.on_screen().cloned() else {
+        if !reported {
             return;
-        };
-        let Some((_, x, y)) = self.cell_at(event.position) else {
-            return;
-        };
-        let grid = self.grid();
-        let Some(view) = self.views.view(&id) else {
-            return;
-        };
-        if let Ok(true) = view.tracks_mouse() {
-            let input = MouseInput {
-                action: MouseAction::Release,
-                button: Some(GridButton::Left),
-                mods: mods_of(event.modifiers),
-                x,
-                y,
-                any_pressed: false,
-                grid,
-            };
-            if let Ok(bytes) = view.mouse(&input) {
-                self.views.write(id, bytes);
-            }
-            self.send_requests();
         }
+        let Some(pointer) = self.pointer_at(event.position) else {
+            return;
+        };
+        self.send_mouse(
+            MouseAction::Release,
+            Some(GridButton::Left),
+            false,
+            event.modifiers,
+            pointer,
+        );
     }
 
     fn scroll_wheel(
@@ -433,44 +486,32 @@ impl Terminals {
             return;
         }
         self.scroll_remainder -= whole;
-        // Positive moves toward older lines.
         let count = whole.abs() as usize;
+        // A positive wheel delta moves toward older lines.
         let toward_older = whole > 0.0;
+        let Some(pointer) = self.pointer_at(event.position) else {
+            return;
+        };
 
-        let Some(id) = self.views.on_screen().cloned() else {
-            return;
-        };
-        let Some((_, x, y)) = self.cell_at(event.position) else {
-            return;
-        };
-        let grid = self.grid();
-        let Some(view) = self.views.view(&id) else {
-            return;
-        };
-        if let Ok(true) = view.tracks_mouse() {
+        if self.program_tracks_mouse() {
             let mut button = GridButton::WheelDown;
             if toward_older {
                 button = GridButton::WheelUp;
             }
-            let input = MouseInput {
-                action: MouseAction::Press,
-                button: Some(button),
-                mods: mods_of(event.modifiers),
-                x,
-                y,
-                any_pressed: false,
-                grid,
-            };
-            let mut reports = Vec::new();
             for _ in 0..count {
-                if let Ok(bytes) = view.mouse(&input) {
-                    reports.extend(bytes);
-                }
+                self.send_mouse(
+                    MouseAction::Press,
+                    Some(button),
+                    false,
+                    event.modifiers,
+                    pointer,
+                );
             }
-            self.views.write(id, reports);
-            self.send_requests();
             return;
         }
+        let Some(view) = self.views.on_screen_view() else {
+            return;
+        };
         if let Ok(true) = view.wheel_sends_arrows() {
             let mut key = Key::Down;
             if toward_older {
@@ -485,24 +526,33 @@ impl Terminals {
             for _ in 0..count {
                 self.send_key(&press);
             }
+            cx.notify();
             return;
         }
-        let mut delta = count as isize;
+        // The viewport counts toward older lines as negative.
+        let mut lines = count as isize;
         if toward_older {
-            delta = -delta;
+            lines = -lines;
         }
-        let _ = view.scroll(Scroll::Lines(delta));
+        let _ = view.scroll(Scroll::Lines(lines));
         cx.notify();
     }
 
-    /// The cell under `position` and the position in the grid's pixels, when the grid has been laid out.
-    fn cell_at(&self, position: Point<Pixels>) -> Option<(CellPoint, f32, f32)> {
+    /// The pointer at `position`, kept inside the grid so a drag past its edge keeps selecting up to it.
+    fn pointer_at(&self, position: Point<Pixels>) -> Option<Pointer> {
         let bounds = self.grid_bounds?;
+        let size = self.grid_size?;
         let x = f32::from(position.x - bounds.origin.x).max(0.0);
         let y = f32::from(position.y - bounds.origin.y).max(0.0);
         let column = (x / self.cell.width).floor() as u16;
         let row = (y / self.cell.height).floor() as u16;
-        Some((CellPoint { x: column, y: row }, x, y))
+        let last_column = size.cols.saturating_sub(1);
+        let last_row = size.rows.saturating_sub(1);
+        let cell = CellPoint {
+            x: column.min(last_column),
+            y: row.min(last_row),
+        };
+        Some(Pointer { cell, x, y })
     }
 
     fn grid(&self) -> Grid {
@@ -522,6 +572,7 @@ impl Terminals {
     }
 }
 
+// The view answers an input method with an empty, caret-only text field: the shell owns the line being edited.
 impl EntityInputHandler for Terminals {
     fn text_for_range(
         &mut self,
@@ -601,12 +652,13 @@ impl EntityInputHandler for Terminals {
         _cx: &mut Context<Terminals>,
     ) -> Option<Bounds<Pixels>> {
         let (column, row) = self.cursor_cell?;
-        let x = element_bounds.origin.x + px(self.cell.width) * f32::from(column);
-        let y = element_bounds.origin.y + px(self.cell.height) * f32::from(row);
-        Some(Bounds::new(
-            point(x, y),
-            size(px(self.cell.width), px(self.cell.height)),
-        ))
+        let width = px(self.cell.width);
+        let height = px(self.cell.height);
+        let x = element_bounds.origin.x + width * f32::from(column);
+        let y = element_bounds.origin.y + height * f32::from(row);
+        let top_left = point(x, y);
+        let cell_size = size(width, height);
+        Some(Bounds::new(top_left, cell_size))
     }
 
     fn character_index_for_point(
@@ -621,10 +673,36 @@ impl EntityInputHandler for Terminals {
 
 impl Render for Terminals {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Terminals>) -> impl IntoElement {
-        let entity = cx.entity();
+        let before_paint_entity = cx.entity();
+        let input_entity = cx.entity();
+        let release_entity = cx.entity();
         let focus = self.focus.clone();
         // The theme's background until a view draws; a program can change its own, which the frame then paints.
         let background = hsla(self.config.colors.background);
+        let terminal = canvas(
+            move |bounds, window, cx| {
+                before_paint_entity
+                    .update(cx, |terminals, _| terminals.before_paint(bounds, window))
+            },
+            move |bounds, prepared: Option<Prepared>, window, cx| {
+                let handler = ElementInputHandler::new(bounds, input_entity.clone());
+                window.handle_input(&focus, handler, cx);
+                let Some(prepared) = prepared else {
+                    return;
+                };
+                window.paint_quad(fill(bounds, hsla(prepared.drawn.background)));
+                paint(
+                    &prepared.drawn.painting,
+                    bounds.origin,
+                    prepared.cell,
+                    &prepared.family,
+                    px(prepared.font_size),
+                    window,
+                    cx,
+                );
+                paint_marked_text(&prepared, bounds.origin, window, cx);
+            },
+        );
         div()
             .size_full()
             .bg(background)
@@ -633,36 +711,11 @@ impl Render for Terminals {
             .on_mouse_down(MouseButton::Left, cx.listener(Terminals::mouse_down))
             .on_mouse_move(cx.listener(Terminals::mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Terminals::mouse_up))
+            .on_mouse_up_out(MouseButton::Left, move |event, _window, cx| {
+                release_entity.update(cx, |terminals, _| terminals.release(event));
+            })
             .on_scroll(cx.listener(Terminals::scroll_wheel))
-            .child(
-                canvas(
-                    {
-                        let entity = entity.clone();
-                        move |bounds, window, cx| {
-                            entity.update(cx, |terminals, _| terminals.before_paint(bounds, window))
-                        }
-                    },
-                    move |bounds, prepared: Option<Prepared>, window, cx| {
-                        let handler = ElementInputHandler::new(bounds, entity.clone());
-                        window.handle_input(&focus, handler, cx);
-                        let Some(prepared) = prepared else {
-                            return;
-                        };
-                        window.paint_quad(fill(bounds, hsla(prepared.drawn.background)));
-                        paint(
-                            &prepared.drawn.painting,
-                            bounds.origin,
-                            prepared.cell,
-                            &prepared.family,
-                            px(prepared.font_size),
-                            window,
-                            cx,
-                        );
-                        paint_marked_text(&prepared, bounds.origin, window, cx);
-                    },
-                )
-                .size_full(),
-            )
+            .child(terminal.size_full())
     }
 }
 
@@ -680,14 +733,11 @@ fn paint_marked_text(
         return;
     };
     let cell = prepared.cell;
-    let x = origin.x + px(cell.width) * f32::from(cursor.column);
-    let y = origin.y + px(cell.height) * f32::from(cursor.row);
-    let width = px(cell.width) * marked.chars().count() as f32;
-    let background = hsla(prepared.drawn.background);
-    window.paint_quad(fill(
-        Bounds::new(point(x, y), size(width, px(cell.height))),
-        background,
-    ));
+    let cell_width = px(cell.width);
+    let cell_height = px(cell.height);
+    let x = origin.x + cell_width * f32::from(cursor.column);
+    let y = origin.y + cell_height * f32::from(cursor.row);
+    let top_left = point(x, y);
     let color = cursor.color;
     let run = TextRun {
         len: marked.len(),
@@ -701,23 +751,18 @@ fn paint_marked_text(
         }),
         strikethrough: None,
     };
-    let shaped = window.text_system().shape_line(
-        marked.clone().into(),
-        px(prepared.font_size),
-        &[run],
-        None,
-    );
-    let _ = shaped.paint(
-        point(x, y),
-        px(cell.height),
-        TextAlign::Left,
-        None,
-        window,
-        cx,
-    );
+    let font_size = px(prepared.font_size);
+    let shaped = window
+        .text_system()
+        .shape_line(marked.clone().into(), font_size, &[run], None);
+    // Covered at its own width, which counts a wide character as two cells.
+    let cover = Bounds::new(top_left, size(shaped.width, cell_height));
+    let background = hsla(prepared.drawn.background);
+    window.paint_quad(fill(cover, background));
+    let _ = shaped.paint(top_left, cell_height, TextAlign::Left, None, window, cx);
 }
 
-fn mods_of(modifiers: gpui::Modifiers) -> Mods {
+fn mods_of(modifiers: Modifiers) -> Mods {
     Mods {
         shift: modifiers.shift,
         ctrl: modifiers.control,

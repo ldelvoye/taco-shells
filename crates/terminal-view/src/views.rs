@@ -14,18 +14,18 @@ pub struct Fit {
     pub cell: CellSize,
 }
 
-/// Every attach waits in the runtime as a whole snapshot until its `Attached` is read, so the attaches outstanding are bounded:
-/// one per terminal, and no more in all than the views kept.
+/// The views kept and their attaches. An attach waits in the runtime as a whole snapshot until its `Attached` is read,
+/// so at most one is outstanding per terminal and `KEPT_VIEWS` in all.
 pub struct Views {
     views: HashMap<TerminalId, View>,
     open: HashSet<TerminalId>,
-    /// Their shell exited while they are still in the arrangement: the runtime holds nothing more for them.
+    /// Terminals whose shell exited while they are still in the arrangement: the runtime holds nothing more for them.
     ended: HashSet<TerminalId>,
-    /// Their view failed since the arrangement last changed, and was attached again once.
-    failed: HashSet<TerminalId>,
-    /// Their view failed twice since the arrangement last changed; they get none until it changes.
+    /// Terminals whose view failed since the arrangement last changed, and which were attached again once.
+    retried: HashSet<TerminalId>,
+    /// Terminals whose view failed twice since the arrangement last changed; they get none until it changes.
     given_up: HashSet<TerminalId>,
-    /// An attach was sent and its `Attached` has not been read yet, view or no view.
+    /// Terminals with an attach sent whose `Attached` has not been read yet, view or no view.
     awaiting: HashSet<TerminalId>,
     recency: Vec<TerminalId>,
     on_screen: Option<TerminalId>,
@@ -46,7 +46,7 @@ impl Views {
             views: HashMap::new(),
             open: HashSet::new(),
             ended: HashSet::new(),
-            failed: HashSet::new(),
+            retried: HashSet::new(),
             given_up: HashSet::new(),
             awaiting: HashSet::new(),
             recency: Vec::new(),
@@ -83,7 +83,7 @@ impl Views {
         self.recency = after_showing(&self.recency, on_screen, &self.open);
         let wanted = viewed(&self.recency);
 
-        // Views are let go before new ones are made.
+        // Views are let go before new ones are made, so no more than `KEPT_VIEWS` are ever held.
         let held: Vec<TerminalId> = self.views.keys().cloned().collect();
         for id in held {
             if !wanted.contains(&id) {
@@ -94,7 +94,7 @@ impl Views {
         self.ended.retain(|id| open_now.contains(id));
         self.asked.retain(|id, _| open_now.contains(id));
         self.awaiting.retain(|id| open_now.contains(id));
-        self.failed.clear();
+        self.retried.clear();
         self.given_up.clear();
         self.on_screen = on_screen.cloned();
         self.fill();
@@ -119,19 +119,27 @@ impl Views {
         });
     }
 
-    /// True when the terminal on screen changed or the views kept did.
+    /// True when the window should draw again: the terminal on screen changed, or a view ended or started over.
     pub fn receive(&mut self, event: TerminalEvent) -> bool {
         let id = event_terminal(&event).clone();
-        let is_attached = matches!(event, TerminalEvent::Attached { .. });
-        if is_attached {
-            // One attach per terminal is ever outstanding, so this answers it.
+        // One attach per terminal is ever outstanding: an `Attached` answers it, and after `End` none will come.
+        let settles_attach = matches!(
+            event,
+            TerminalEvent::Attached { .. } | TerminalEvent::End { .. }
+        );
+        if settles_attach {
             self.awaiting.remove(&id);
         }
+        let redraw = self.apply_to_view(id, event);
+        if settles_attach {
+            self.fill();
+        }
+        redraw
+    }
+
+    fn apply_to_view(&mut self, id: TerminalId, event: TerminalEvent) -> bool {
         let on_screen = self.on_screen.as_ref() == Some(&id);
         let Some(view) = self.views.get_mut(&id) else {
-            if is_attached {
-                self.fill();
-            }
             return false;
         };
         let applied = view.apply(event);
@@ -189,7 +197,7 @@ impl Views {
     /// A view that could not apply what it was sent starts over from a fresh snapshot, once per change to the arrangement.
     pub fn start_over(&mut self, id: TerminalId) {
         self.let_go(&id);
-        let first_failure = self.failed.insert(id.clone());
+        let first_failure = self.retried.insert(id.clone());
         if !first_failure {
             self.given_up.insert(id);
         }
@@ -215,7 +223,7 @@ impl Views {
     fn attach(&mut self, id: TerminalId) {
         self.attachments += 1;
         let Ok(view) = View::new(self.attachments, self.config.clone()) else {
-            self.failed.insert(id);
+            self.given_up.insert(id);
             return;
         };
         let mut size = None;
@@ -354,13 +362,66 @@ mod tests {
         let a = id("a");
         assert!(sent.contains(&(a.clone(), 1)));
 
-        // a lost its view while its snapshot was still coming; showing it again sends nothing yet.
+        // Snapshots read for b to h free their places, and i and j, held back, are attached.
+        let mut freed = Vec::new();
+        for (index, name) in ["b", "c", "d", "e", "f", "g", "h"].iter().enumerate() {
+            let attachment = index as u64 + 2;
+            views.receive(attached(&id(name), attachment, real_screen()));
+            freed.extend(attaches(views.take_requests()));
+        }
+        assert_eq!(freed, vec![(id("j"), 9), (id("i"), 10)]);
+
+        // `a` lost its view while its snapshot was still coming. Places are free, but it is not attached again yet.
         views.show(&all, Some(&a));
         assert_eq!(attaches(views.take_requests()), vec![]);
 
-        // Once that snapshot is read, a is attached afresh.
+        // Once that snapshot is read, `a` is attached afresh.
         views.receive(attached(&a, 1, real_screen()));
-        let after = attaches(views.take_requests());
-        assert_eq!(after, vec![(a, 9)]);
+        assert_eq!(attaches(views.take_requests()), vec![(a, 11)]);
+    }
+
+    #[test]
+    fn the_middle_size_is_asked_once_and_given_to_new_views() {
+        let mut views = views();
+        let a = id("a");
+        let b = id("b");
+        let open = [a.clone(), b.clone()];
+        let fit = Fit {
+            size: TerminalSize {
+                cols: 100,
+                rows: 30,
+            },
+            cell: CELL,
+        };
+        views.fit(fit);
+        views.show(&open, Some(&a));
+        let first = views.take_requests();
+        let asked_for = matches!(
+            first.as_slice(),
+            [TerminalRequest::Attach { size: Some(size), .. }] if *size == fit.size
+        );
+        assert!(asked_for, "{first:?}");
+
+        // The same size again asks nothing; a new one is asked once.
+        views.fit(fit);
+        assert_eq!(views.take_requests(), vec![]);
+        let wider = Fit {
+            size: TerminalSize {
+                cols: 120,
+                rows: 30,
+            },
+            cell: CELL,
+        };
+        views.fit(wider);
+        views.fit(wider);
+        let resizes = views.take_requests();
+        assert_eq!(
+            resizes,
+            vec![TerminalRequest::Resize {
+                id: a,
+                size: wider.size,
+                cell: CELL
+            }]
+        );
     }
 }
