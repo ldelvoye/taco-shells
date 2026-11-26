@@ -1,7 +1,7 @@
 import type { WallConfig } from './check'
 
 // What each part of the app may import. A line added here widens a wall for good: prefer a hole in holes.ts, which has to name the milestone that closes it.
-// An area is a package's folder or a part of one, and a file belongs to the area with the longest folder that holds it. app and window have no alias: nothing outside them may import them.
+// An area is a package's folder or a part of one, and a file belongs to the area with the longest folder that holds it. app and window have no alias, so nothing outside them may import them; the one exception is the window's terminal engine, which the conformance suite reads.
 export const WALLS: WallConfig = {
   root: 'src/',
   aliases: {
@@ -11,7 +11,8 @@ export const WALLS: WallConfig = {
     '@agents/': 'src/agents/',
     '@runtime/': 'src/runtime/',
     '@workspace/': 'src/workspace/',
-    '@testing/': 'src/testing/'
+    '@testing/': 'src/testing/',
+    '@window-engine/': 'src/window/terminal/engine/'
   },
   areas: [
     { name: 'protocol', folders: ['src/protocol/'], mayImport: [], modules: [] },
@@ -32,8 +33,14 @@ export const WALLS: WallConfig = {
     {
       name: 'runtime',
       folders: ['src/runtime/'],
-      mayImport: ['protocol'],
+      mayImport: ['protocol', 'runtime/engine'],
       modules: ['node:', 'node-pty']
+    },
+    {
+      name: 'runtime/engine',
+      folders: ['src/runtime/engine/'],
+      mayImport: ['protocol', 'runtime'],
+      modules: ['@xterm/headless', '@xterm/addon-serialize']
     },
     {
       name: 'workspace',
@@ -68,8 +75,21 @@ export const WALLS: WallConfig = {
     {
       name: 'window',
       folders: ['src/window/'],
-      mayImport: ['protocol', 'rules', 'settings'],
+      mayImport: ['protocol', 'rules', 'settings', 'window/terminal/engine'],
       modules: ['react', 'react-dom', '@xterm/']
+    },
+    {
+      name: 'window/terminal/engine',
+      folders: ['src/window/terminal/engine/'],
+      mayImport: ['protocol', 'rules', 'settings', 'window'],
+      modules: ['@xterm/']
+    },
+    {
+      name: 'conformance',
+      folders: ['src/conformance/'],
+      mayImport: ['protocol', 'runtime', 'runtime/engine', 'window/terminal/engine'],
+      // The one area that may see both engine halves: its test defines the seam between them.
+      modules: ['@xterm/headless']
     },
     { name: 'testing', folders: ['src/testing/'], mayImport: [], modules: ['node:'] }
   ],

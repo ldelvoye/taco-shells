@@ -24,7 +24,9 @@
       "@agents/*": ["./src/agents/*"],
       "@runtime/*": ["./src/runtime/*"],
       "@workspace/*": ["./src/workspace/*"],
-      "@testing/*": ["./src/testing/*"]
+      "@testing/*": ["./src/testing/*"],
+      "@window-engine/*": ["./src/window/terminal/engine/*"],
+      "@xterm/addon-serialize": ["./src/runtime/engine/serializeAddon"]
     }
   }
 }
