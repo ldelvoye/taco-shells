@@ -140,6 +140,10 @@ impl PtyShells {
                 if libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
                     return Err(io::Error::last_os_error());
                 }
+                // The runtime blocks SIGTERM, and a mask survives exec: without this, no one could SIGTERM what they run.
+                let mut nothing_blocked: libc::sigset_t = std::mem::zeroed();
+                libc::sigemptyset(&mut nothing_blocked);
+                libc::pthread_sigmask(libc::SIG_SETMASK, &nothing_blocked, std::ptr::null_mut());
                 // The shell gets the limit it would have had in any other terminal.
                 if let Some(limit) = open_file_limit {
                     libc::setrlimit(libc::RLIMIT_NOFILE, &limit);
@@ -542,6 +546,8 @@ mod tests {
     const SIZE: TerminalSize = TerminalSize { cols: 80, rows: 24 };
     /// Only a safety net: every wait below ends on output the shell prints.
     const PATIENCE: Duration = Duration::from_secs(20);
+    /// Prints whether SIGTERM is blocked in the process running it.
+    const REPORT_MASK: &str = r#"my $old = POSIX::SigSet->new; sigprocmask(SIG_BLOCK, POSIX::SigSet->new, $old); print "sigterm blocked: ", ($old->ismember(SIGTERM) ? 1 : 0), "\n""#;
 
     /// Reads the shell's output until `ready` says enough has come, and gives back its exit if it came first.
     fn read_until(
@@ -635,5 +641,50 @@ mod tests {
         let code = read_until(&received, &id, |_| false);
         assert_eq!(code, Some(3));
         std::fs::remove_dir_all(&scratch).unwrap();
+    }
+
+    /// The runtime blocks SIGTERM before its threads start; a shell must not inherit that, or `kill` would stop working in it.
+    /// zsh happens to clear its own mask, and macOS's `ps` does not show one, so a program that leaves it alone reports it.
+    #[test]
+    fn a_shell_starts_with_no_signal_blocked_though_the_runtime_blocks_sigterm() {
+        let mut blocked: libc::sigset_t = unsafe { std::mem::zeroed() };
+        let mut previous: libc::sigset_t = unsafe { std::mem::zeroed() };
+        unsafe {
+            libc::sigemptyset(&mut blocked);
+            libc::sigaddset(&mut blocked, libc::SIGTERM);
+            libc::pthread_sigmask(libc::SIG_BLOCK, &blocked, &mut previous);
+        }
+
+        let (inputs, received) = mpsc::channel();
+        let program = ShellProgram {
+            path: "/usr/bin/perl".into(),
+            arguments: vec!["-MPOSIX".into(), "-e".into(), REPORT_MASK.into()],
+            home: "/".into(),
+            open_file_limit: None,
+        };
+        let mut shells = PtyShells::new(program, inputs, Arc::new(Budgets::default()));
+        let id = TerminalId("signals".into());
+        shells.start(&id, None, SIZE);
+        unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, &previous, std::ptr::null_mut()) };
+
+        let reported = text_until(&received, &id, "\r\n");
+        assert_eq!(reported.trim(), "sigterm blocked: 0");
+    }
+
+    /// The shell's output up to the first `marker`.
+    fn text_until(received: &Receiver<Input>, watched: &TerminalId, marker: &str) -> String {
+        let mut seen = String::new();
+        while !seen.contains(marker) {
+            let input = received
+                .recv_timeout(PATIENCE)
+                .expect("the shell went quiet");
+            if let Input::Output { id, data } = input
+                && id == *watched
+            {
+                let text = String::from_utf8_lossy(&data);
+                seen.push_str(&text);
+            }
+        }
+        seen
     }
 }
