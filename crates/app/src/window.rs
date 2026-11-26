@@ -287,6 +287,7 @@ impl WindowView {
                 self.refused.insert(key, reason);
                 self.refresh_fields(cx);
             }
+            ServicesOutput::KeymapRefused { .. } => {}
         }
         cx.notify();
     }

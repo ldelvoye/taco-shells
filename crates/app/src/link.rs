@@ -11,7 +11,7 @@ use taco_protocol::{
 };
 use taco_rules::{locate_row, select_row};
 use taco_services::{AgentMenuAction, AgentSetupView};
-use taco_settings::{Config, SettingChange};
+use taco_settings::{CommandId, Config, SettingChange};
 use taco_terminal_view::Terminals;
 
 pub type WindowSender = UnboundedSender<WindowOutput>;
@@ -60,6 +60,11 @@ pub enum ServicesOutput {
     /// A setting the page asked to write that was not written, named as in `settings.json`, with a reason the page can show.
     SettingRefused {
         key: &'static str,
+        reason: String,
+    },
+    /// A shortcut change the page asked for that was not written, with a reason the page can show.
+    KeymapRefused {
+        command: CommandId,
         reason: String,
     },
 }
