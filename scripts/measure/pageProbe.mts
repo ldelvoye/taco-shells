@@ -8,7 +8,7 @@ export const PAGE_PROBE = `(() => {
   const dataListeners = new Set()
   const textWaiters = []
   let attachWaiters = []
-  const state ={ loading: false, lastFrame: 0, frameGaps: [], longTasks: 0, observer: null, hidden: false }
+  const state = { loading: false, lastFrame: 0, frameGaps: [], longTasks: 0, observer: null, hidden: false }
 
   window.tacoShells.pty.onEvent((event) => {
     let data = null
