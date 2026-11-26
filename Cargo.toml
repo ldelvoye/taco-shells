@@ -24,6 +24,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 jsonc-parser = { version = "0.34", features = ["serde"] }
 postcard = { version = "1", default-features = false, features = ["use-std"] }
+notify = "9"
+tempfile = "3"
 
 # Debug info is most of a gpui build's size and link time; line tables keep backtraces readable.
 [profile.dev]
