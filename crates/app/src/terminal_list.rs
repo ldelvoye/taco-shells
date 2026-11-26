@@ -12,6 +12,7 @@ use taco_protocol::{
     AgentRow, Arrangement, Dragged, DrawnState, Row, RowState, TabGroup, TabGroupId, TerminalId,
 };
 use taco_rules::{DropMark, DropPoint, MarkEdge, MarkTarget, summary_state};
+use taco_settings::ShellRowName;
 
 use crate::assets::{DONE_ICON, PLUS_ICON, RIPPLE_ICON, TRASH_ICON, WORKING_ICON};
 use crate::done_checks::DRAW_TIME;
@@ -65,6 +66,7 @@ pub struct ListInput<'a> {
     pub drawing_checks: &'a HashSet<TerminalId>,
     /// Where a plain shell's folder is named "~".
     pub home: Option<&'a Path>,
+    pub shell_row_name: ShellRowName,
     /// The slot opening where a dragged row or group will land.
     pub slot: Option<Slot>,
 }
@@ -348,7 +350,13 @@ fn row_element(
     let has_agent = input.drawn.agent_rows.contains_key(&row.terminal);
     let directory = input.drawn.directories.get(&row.terminal);
     let folder = directory.map(String::as_str);
-    let shown_name = row_name(&row.title, has_agent, folder, input.home);
+    let shown_name = row_name(
+        &row.title,
+        has_agent,
+        folder,
+        input.home,
+        input.shell_row_name,
+    );
     let label = shown_name.as_str();
     let state = agent_state(&input.drawn.agent_rows, &row.terminal);
     let name = div()
