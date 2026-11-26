@@ -6,11 +6,8 @@ name: main
 on:
   push:
     branches: [main]
-    # The release page is not part of the app: a push touching only it must not cut a version.
     paths-ignore:
-      - "apps/site/**"
-      - ".github/workflows/site.yml"
-      # The Rust app under crates/ is not this app either.
+      # The Rust app under crates/ is not this app: a push touching only it must not cut a version.
       - "crates/**"
       - "Cargo.toml"
       - "Cargo.lock"

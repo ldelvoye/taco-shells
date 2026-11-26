@@ -22,7 +22,6 @@ walls/          the import checker and the table of what each package may import
 hooks/          the scripts an agent's hooks run, shipped beside the app as files
 e2e/            drives the real app over the Chrome DevTools protocol
 scripts/        build, install and release commands
-apps/site/      the release page for tacoshells.dev, a package of its own (see "The release page")
 crates/         the Rust app that will replace this one: a Cargo workspace, one crate per layer
 ```
 
@@ -111,22 +110,6 @@ TACO_SHELLS_CONFIG_DIR=/tmp/ts-try/app CLAUDE_CONFIG_DIR=/tmp/ts-try/claude "/Ap
 **A dev build cannot recognise the stable app's entries.** It must not hold the stable config directory's name (`e2e/bundle.test.ts`), so entries pointing into `~/.taco-shells/hooks/` read there as "Set up by hand".
 
 **The settings file is edited in place, one path at a time.** `hookSettings.ts` goes through `jsonc-parser`'s `modify` so the rest of the file keeps its bytes, and `flow.ts` writes with a plain `writeFileSync` because a rename would replace a `settings.json` that is a symlink into someone's dotfiles.
-
-## The release page
-
-`apps/site/` is the page for `tacoshells.dev`: a small Hono server on Node that serves `public/` and redirects `/install.sh` to the copy attached to the latest stable release. It has its own `package.json` and lockfile and shares nothing with the app, so run its commands inside it:
-
-```sh
-cd apps/site
-npm install
-npm run dev          # http://localhost:8080, restarts on a change to src/
-npm test
-npm run typecheck
-```
-
-The page is one HTML file, one stylesheet and one script, with no build step; reload the browser after editing them. Light and dark follow the system setting through `prefers-color-scheme`.
-
-**It is not deployed.** Nothing connects the Railway project `taco-shells` to this repo. `.github/workflows/site.yml` checks the site on its own. `main.yml` skips a push that touches only the site, and the release scripts leave site-only commits out of the version and the notes, so the page never cuts an app version.
 
 ## Landing
 
