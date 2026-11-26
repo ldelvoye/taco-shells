@@ -55,6 +55,10 @@ pub enum ServicesOutput {
     Problem(String),
     /// The downloaded update is waiting for this app to quit, which goes the way `cmd+q` does.
     QuitForUpdate,
+    SettingRefused {
+        key: &'static str,
+        reason: String,
+    },
 }
 
 /// Everything sent to the window's thread, in the order it is applied.

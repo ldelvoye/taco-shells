@@ -204,6 +204,10 @@ impl ConfigStore {
         refresh(&self.shared);
     }
 
+    pub fn refresh_now(&self) {
+        refresh(&self.shared);
+    }
+
     pub fn stop(mut self) {
         self.shut_down();
     }
