@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use gpui::{
@@ -19,6 +19,7 @@ use taco_terminal_view::{Terminals, TerminalsEvent};
 
 use crate::activity::{ActivityInput, ActivityLog, activity_panel, now_ms};
 use crate::banners::{Dismissal, Notices, banner_cards, banners_of};
+use crate::done_checks::DoneChecks;
 use crate::drive::mark;
 use crate::keys::chord_of;
 use crate::link::{
@@ -90,6 +91,7 @@ pub struct WindowView {
     attached: Attachable,
     /// The workspace's last request to give the keyboard back to the selected terminal.
     refocus: u64,
+    done_checks: DoneChecks,
 }
 
 /// What the window does with a reply it asked for.
@@ -169,6 +171,7 @@ impl WindowView {
             terminals,
             attached: Attachable::default(),
             refocus,
+            done_checks: DoneChecks::default(),
         }
     }
 
@@ -600,6 +603,8 @@ impl WindowView {
         if state.revision <= self.shown.drawn.revision {
             return;
         }
+        let now = Instant::now();
+        self.done_checks.note(&self.shown.drawn, &state, now);
         self.shown.drawn = state;
         cx.notify();
     }
@@ -736,7 +741,14 @@ impl WindowView {
         }
         match panel {
             Panel::Terminals => {
-                let input = ListInput { drawn, mark, look };
+                let now = Instant::now();
+                let drawing_checks = self.done_checks.drawing(now);
+                let input = ListInput {
+                    drawn,
+                    mark,
+                    look,
+                    drawing_checks: &drawing_checks,
+                };
                 let list = terminal_list(&input, cx);
                 docked(panel, edge, size, list, look, cx)
             }
