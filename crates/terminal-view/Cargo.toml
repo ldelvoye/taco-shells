@@ -8,5 +8,7 @@ publish.workspace = true
 [dependencies]
 taco-protocol.workspace = true
 taco-settings.workspace = true
+taco-ghostty.workspace = true
+taco-wire.workspace = true
+futures.workspace = true
 gpui.workspace = true
-gpui_platform.workspace = true
