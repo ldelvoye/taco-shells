@@ -20,6 +20,9 @@
   // Reopen the terminals you had, each in its directory, when the app starts.
   "restoreOnLaunch": true,
 
+  // How a plain shell's row is named: "folder" (the directory's name) or "path" (a short path like ~/code/taco-shells).
+  "shellRowName": "folder",
+
   // Let the app offer and keep up the hooks coding agents need. Turn off to wire them by hand.
   "manageAgentHooks": true
 }

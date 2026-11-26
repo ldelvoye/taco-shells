@@ -17,12 +17,20 @@ pub struct ConfigTexts {
     pub keybindings: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UnreadSettings {
+    None,
+    Keys(Vec<&'static str>),
+    Whole,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Config {
     pub settings: Settings,
     pub appearance: Appearance,
     pub bindings: Vec<Binding>,
     pub problems: Vec<String>,
+    pub unread_settings: UnreadSettings,
 }
 
 fn appearance_for(theme: ThemeChoice, system_is_dark: bool) -> Appearance {
@@ -50,14 +58,21 @@ pub fn resolve_config(texts: &ConfigTexts, system_is_dark: bool) -> Config {
     };
 
     let mut settings = Settings::default();
+    let mut unread_settings = UnreadSettings::None;
     if let Some(settings_text) = &texts.settings {
         let user_result = parse_jsonc(settings_text, SETTINGS_LABEL);
         problems.extend(user_result.problems);
 
-        if let Some(user_settings) = user_result.value {
-            let layer = apply_settings_layer(&settings, &user_settings, SETTINGS_LABEL);
-            settings = layer.settings;
-            problems.extend(layer.problems);
+        match user_result.value {
+            Some(user_settings) => {
+                let layer = apply_settings_layer(&settings, &user_settings, SETTINGS_LABEL);
+                settings = layer.settings;
+                problems.extend(layer.problems);
+                if !layer.rejected.is_empty() {
+                    unread_settings = UnreadSettings::Keys(layer.rejected);
+                }
+            }
+            None => unread_settings = UnreadSettings::Whole,
         }
     }
 
@@ -78,6 +93,7 @@ pub fn resolve_config(texts: &ConfigTexts, system_is_dark: bool) -> Config {
         appearance,
         bindings: resolution.bindings,
         problems,
+        unread_settings,
     }
 }
 
@@ -112,6 +128,25 @@ mod tests {
         assert!(config.problems[0].starts_with("settings.json: "));
         assert_eq!(bound_to(&config, "cmd+c"), Some(CommandId::TerminalCopy));
         assert_eq!(bound_to(&config, "cmd+k"), None);
+    }
+
+    #[test]
+    fn unread_settings_names_the_refused_keys_or_the_whole_file() {
+        let partly = texts(Some(
+            "{ \"fontSize\": 0, \"colour\": 1, \"cursorStyle\": \"beam\", \"theme\": \"dark\" }",
+        ));
+        let config = resolve_config(&partly, false);
+        let keys = UnreadSettings::Keys(vec!["fontSize", "cursorStyle"]);
+        assert_eq!(config.unread_settings, keys);
+
+        let broken = resolve_config(&texts(Some("{ broken")), false);
+        assert_eq!(broken.unread_settings, UnreadSettings::Whole);
+
+        let missing = resolve_config(&texts(None), false);
+        assert_eq!(missing.unread_settings, UnreadSettings::None);
+
+        let clean = resolve_config(&texts(Some("{ \"fontSize\": 14 }")), false);
+        assert_eq!(clean.unread_settings, UnreadSettings::None);
     }
 
     #[test]
