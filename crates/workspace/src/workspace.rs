@@ -7,9 +7,9 @@ use taco_protocol::{
     TerminalSize, TerminalStart, WorkspaceRequest,
 };
 use taco_rules::{
-    add_row, add_row_to, apply_drop, close_panel, close_row, create_tab_group, default_panels,
-    empty_arrangement, fork_name_for, fork_row, locate_row, move_panel, open_panel, rename_row,
-    rename_tab_group, resize_panel, select_row, selected_terminal, toggle_tab_group,
+    add_row, add_row_to, apply_drop, can_fork, close_panel, close_row, create_tab_group,
+    default_panels, empty_arrangement, fork_name_for, fork_row, locate_row, move_panel, open_panel,
+    rename_row, rename_tab_group, resize_panel, select_row, selected_terminal, toggle_tab_group,
     ungroup_tab_group,
 };
 
@@ -391,7 +391,11 @@ impl Workspace {
         self.open(terminal, shell, out);
     }
 
+    // Refused by the same rule the window greys Fork out with, so a stale click opens nothing rather than something that is not a fork.
     fn fork(&mut self, source: &TerminalId, out: &mut Vec<Outbound>) -> (bool, Option<TabGroupId>) {
+        if !can_fork(&self.rows, &self.agents, source) {
+            return refused();
+        }
         let Some(arrangement) = &self.arrangement else {
             return refused();
         };
@@ -404,9 +408,11 @@ impl Workspace {
             .map(|row| row.title.as_str())
             .collect();
         let name = fork_name_for(&arrangement.rows[index].title, &titles);
+        let Some(shell) = fork_start(&self.sessions, source, &name) else {
+            return refused();
+        };
 
         let terminal = (self.options.new_terminal_id)();
-        let shell = fork_start(&self.sessions, source, &name);
         self.change_arrangement(|arrangement| fork_row(arrangement, source, terminal.clone()));
         self.open(terminal, shell, out);
         accepted(None)

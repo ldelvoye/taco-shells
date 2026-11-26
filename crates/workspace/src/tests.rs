@@ -157,7 +157,7 @@ fn a_terminal_opens_under_a_minted_id_and_a_config_file_opens_in_the_shells_edit
 }
 
 #[test]
-fn a_fork_opens_under_its_source_with_the_agents_fork_line_or_as_a_plain_shell_beside_it() {
+fn a_fork_opens_under_its_source_with_the_agents_fork_line_and_nothing_else_is_forked() {
     let mut workspace = workspace();
     ask(
         &mut workspace,
@@ -176,36 +176,36 @@ fn a_fork_opens_under_its_source_with_the_agents_fork_line_or_as_a_plain_shell_b
     let expected = format!("claude --resume {SESSION} --fork-session --name '⑂ Tacos'\n");
     assert_eq!(fork.command.as_deref(), Some(expected.as_str()));
 
-    let out = ask(
-        &mut workspace,
-        WorkspaceRequest::ForkTerminal { terminal: id("t2") },
+    // a fork that cannot be one is refused, publishes nothing and asks the runtime for nothing
+    let refused = |workspace: &mut Workspace, terminal: &str| {
+        let fork = WorkspaceRequest::ForkTerminal {
+            terminal: id(terminal),
+        };
+        let (reply, out) = workspace.request(fork, 0);
+        !reply.ok && out.is_empty()
+    };
+    assert!(refused(&mut workspace, "t2"), "a plain shell");
+    let fresh = HookCall::AgentStart {
+        harness: claude(),
+        session_id: SESSION.into(),
+        cwd: "/work".into(),
+        has_conversation: false,
+    };
+    hook(&mut workspace, "t2", fresh, 0);
+    assert!(
+        refused(&mut workspace, "t2"),
+        "a session with no conversation yet"
     );
-    let plain = &opened(&out)[0];
-    assert_eq!(
-        (plain.directory_of.clone(), plain.command.clone()),
-        (Some(id("t2")), None)
-    );
-
     let ends = HookCall::AgentEnd {
         harness: claude(),
         session_id: SESSION.into(),
     };
     hook(&mut workspace, "t1", ends, 0);
-    let out = ask(
-        &mut workspace,
-        WorkspaceRequest::ForkTerminal { terminal: id("t1") },
+    assert!(refused(&mut workspace, "t1"), "a session that has ended");
+    assert!(
+        refused(&mut workspace, "gone"),
+        "a terminal that is not open"
     );
-    let after_end = &opened(&out)[0];
-    assert_eq!(after_end.command, None, "an ended session is not forked");
-
-    let (reply, out) = workspace.request(
-        WorkspaceRequest::ForkTerminal {
-            terminal: id("gone"),
-        },
-        0,
-    );
-    assert!(!reply.ok);
-    assert!(opened(&out).is_empty());
 }
 
 #[test]
