@@ -6,9 +6,11 @@ import { describe, expect, it } from 'vitest'
 const MAIN_BUNDLE = resolve(import.meta.dirname, '../out/main/index.js')
 const RUNTIME_BUNDLE = resolve(import.meta.dirname, '../out/main/runtime.js')
 
-const NODE_PTY_REQUIRE = /require\(["']node-pty["']\)/
-// The terminal process has no `electron` module to load: requiring it there fails at startup.
-const ELECTRON_REQUIRE = /require\(["']electron["']\)/
+const REQUIRE = /require\(["']([^"']+)["']\)/g
+const NODE_BUILT_IN = 'node:'
+// The terminal process has no `electron` module to load, and no page for the
+// browser build of xterm: requiring either there fails at startup.
+const RUNTIME_PACKAGES = ['@xterm/addon-serialize', '@xterm/headless', 'node-pty']
 
 // Quoted, because `.taco-shells` is a prefix of `.taco-shells-dev` and the stable
 // name appears inside the dev name and inside user-facing messages.
@@ -27,10 +29,12 @@ describe('the dev build cannot reach the stable config', () => {
 })
 
 describe('the terminal process stands alone', () => {
-  it('its bundle loads nothing from Electron', () => {
+  it('its bundle loads the shells and the headless terminal, and nothing else from outside Node', () => {
     const bundle = readFileSync(RUNTIME_BUNDLE, 'utf8')
+    const required = [...bundle.matchAll(REQUIRE)].map((match) => match[1])
+    const packages = required.filter((name) => !name.startsWith(NODE_BUILT_IN))
+    const distinct = [...new Set(packages)].sort()
 
-    expect(bundle).toMatch(NODE_PTY_REQUIRE)
-    expect(bundle).not.toMatch(ELECTRON_REQUIRE)
+    expect(distinct).toEqual(RUNTIME_PACKAGES)
   })
 })
