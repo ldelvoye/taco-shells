@@ -72,6 +72,12 @@ pub fn run() {
     let assets = Assets::for_this_build();
     let application = gpui_platform::application().with_assets(assets);
     let background = platform::is_background_window();
+    // Only a reopen (the Dock icon, or opening the running app) jumps to the terminal that asked for attention; switching desktops or apps does not.
+    application.on_reopen(|cx| {
+        if let Some(running) = cx.try_global::<Running>() {
+            running.hosts.workspace.app_activated();
+        }
+    });
     application.run(move |cx: &mut App| {
         if background {
             platform::keep_out_of_the_dock(cx);
@@ -205,7 +211,7 @@ fn open_window(started: Started, background: bool, cx: &mut App) -> Option<AnyWi
             terminals = Some(made);
         }
         let services = hosts.services.clone();
-        let activated = hosts.clone();
+        let activated = hosts.services.clone();
         let terminal_settings = hosts.terminal_settings.clone();
         let config_changed = move |config: &Config| {
             let _ = terminal_settings.send(config.clone());
@@ -231,9 +237,8 @@ fn open_window(started: Started, background: bool, cx: &mut App) -> Option<AnyWi
                     if !window.is_window_active() {
                         return;
                     }
-                    activated.workspace.app_activated();
                     // The setups re-read the agents' config files, which gpui's thread must not wait on.
-                    let services = activated.services.clone();
+                    let services = activated.clone();
                     let refreshed = cx.background_spawn(async move { services.app_activated() });
                     refreshed.detach();
                 });
