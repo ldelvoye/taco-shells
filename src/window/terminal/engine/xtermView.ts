@@ -8,6 +8,7 @@ import type { TerminalColors } from '@protocol/theme'
 import type { MakeTerminalView, TerminalView, TerminalViewOptions } from '../view'
 import { clearInOrder, leaveAnswersToTheRuntime, loadSnapshot, resizeInOrder } from './stream'
 
+// The width xterm keeps for its scrollbar, which it draws unless there is no scrollback.
 const SCROLLBAR_WIDTH = 14
 const MINIMUM_COLS = 2
 const MINIMUM_ROWS = 1
@@ -54,10 +55,11 @@ function loadWebglRenderer(term: Terminal): void {
 
 function pixels(style: CSSStyleDeclaration, property: string): number {
   const value = style.getPropertyValue(property)
-  return parseInt(value)
+  return parseInt(value, 10)
 }
 
-// The fit add-on's arithmetic, for any box: a pane with no view of its own is sized from a view that has one.
+// The grid that fits `box`, from this view's cell size: what is left of the box after the
+// view's padding and scrollbar, in whole cells. A pane with no view of its own is sized by a view that has drawn.
 function sizeThatFitsBox(term: Terminal, box: HTMLElement): PtySize | null {
   const element = term.element
   if (!element) {
@@ -98,7 +100,7 @@ function sizeThatFitsBox(term: Terminal, box: HTMLElement): PtySize | null {
   const paddingHorizontal =
     pixels(elementStyle, 'padding-left') + pixels(elementStyle, 'padding-right')
   const availableHeight = boxHeight - paddingVertical
-  const availableWidth = Math.max(0, boxWidth) - paddingHorizontal - scrollbarWidth
+  const availableWidth = boxWidth - paddingHorizontal - scrollbarWidth
 
   const cols = Math.max(MINIMUM_COLS, Math.floor(availableWidth / cellWidth))
   const rows = Math.max(MINIMUM_ROWS, Math.floor(availableHeight / cellHeight))

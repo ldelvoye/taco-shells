@@ -3,7 +3,6 @@ import type { PtySize } from '@protocol/ipc'
 // Every question xterm answers from its parser: device attributes, device status
 // and cursor position, and mode reports. Read from InputHandler.ts at xterm 6.0.0;
 // one missing here is answered twice, by the runtime's screen and by the view.
-// Color queries are left to the runtime as well, but only when the sequence asks, since the same sequence with a color sets it.
 const QUESTIONS: SequenceId[] = [
   { final: 'c' },
   { prefix: '>', final: 'c' },
@@ -41,9 +40,12 @@ function answeredElsewhere(): boolean {
   return true
 }
 
+// A color sequence asks when a color is `?`, and sets one otherwise. The runtime answers
+// the asking, so a view takes only those away from xterm and still acts on a color being set.
 export function holdsColorQuery(sequence: 4 | 10 | 11 | 12, data: string): boolean {
   const parts = data.split(';')
   if (sequence === 4) {
+    // The palette sequence comes in `index;color` pairs.
     const specs = parts.filter((_part, position) => position % 2 === 1)
     return specs.includes(COLOR_QUERY)
   }

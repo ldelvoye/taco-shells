@@ -601,8 +601,8 @@ body {
   padding: 6px 8px;
 }
 
-/* visibility, not display: a hidden group keeps its layout box, so its terminals
-   stay measurable and reflow with the window while they are off screen. */
+/* visibility, not display: a hidden group keeps its layout box, so each of its
+   panes still has a size to give its shell while it is off screen. */
 .pane-group.is-inactive {
   visibility: hidden;
 }

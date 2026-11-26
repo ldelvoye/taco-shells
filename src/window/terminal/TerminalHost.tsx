@@ -7,8 +7,8 @@ interface TerminalHostProps {
   width: number
 }
 
-// Sessions in a hidden group stay mounted rather than unmounting. A view's
-// element changes host only when its pane moves to another split.
+// A pane in a hidden group stays mounted, so its terminal keeps a host to be
+// sized by. Whether that host holds a view is the registry's business.
 export function TerminalHost({ sessionId, width }: TerminalHostProps): JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
 

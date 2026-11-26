@@ -25,6 +25,8 @@ const THEME_SIXTEEN: (keyof TerminalColors)[] = [
   'brightCyan',
   'brightWhite'
 ]
+// Past the theme's sixteen, the 256-color palette is the same in every terminal:
+// a 6 by 6 by 6 color cube, then 24 grays.
 const FIRST_CUBE = 16
 const FIRST_GRAY = 232
 const LAST_INDEX = 255
@@ -60,6 +62,7 @@ function paletteColor(index: number, colors: TerminalColors): Rgb | null {
   return [gray, gray, gray]
 }
 
+// An answer gives each channel in sixteen bits, which for an eight-bit color is its two hex digits twice.
 function channel(value: number): string {
   const digits = value.toString(16).padStart(2, '0')
   return digits + digits

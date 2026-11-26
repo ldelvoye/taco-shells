@@ -46,6 +46,7 @@ it('gives a view to what is on screen and the most recent others, up to the warm
 
   const closed = new Set(ids.filter((id) => id !== 't9'))
   expect(viewed(recency, ['t8'], closed).has('t9')).toBe(false)
+  expect(viewed(recency, ['t9'], closed).has('t9')).toBe(false)
 
   const nine = names(9)
   const everyone = viewed(afterShowing(recency, nine), nine, new Set(ids))
