@@ -4,7 +4,7 @@ import type { SessionId } from '@protocol/ipc'
 import type { AgentRows } from '@protocol/rows'
 import type { AgentLabel } from '@protocol/workspace'
 import { activeSessionOf } from '@rules/arrangement'
-import { disposeSessionsNotIn, focusSession } from '../terminal/registry'
+import { focusSession, showSessions } from '../terminal/registry'
 import { createWorkspaceLink, type WorkspaceLink } from './link'
 import { createWorkspaceOperations, type WorkspaceOperations } from './operations'
 
@@ -53,14 +53,21 @@ export function useWorkspace(): WorkspaceView {
 
   useEffect(() => {
     const open = new Set<SessionId>()
+    const onScreen: SessionId[] = []
     if (workspace !== null) {
       for (const group of workspace.groups) {
         for (const pane of group.panes) {
           open.add(pane.id)
         }
       }
+      const visibleGroup = workspace.groups[workspace.activeGroup]
+      if (visibleGroup) {
+        for (const pane of visibleGroup.panes) {
+          onScreen.push(pane.id)
+        }
+      }
     }
-    disposeSessionsNotIn(open)
+    showSessions(onScreen, open)
   }, [workspace])
 
   useEffect(() => {

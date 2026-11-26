@@ -185,11 +185,11 @@ export class Screens {
       return
     }
     if (request.type === 'attach') {
-      this.attach(connection, request.id, request.size)
+      this.attach(connection, request.id, request.size, request.view)
     }
   }
 
-  private attach(connection: Connection, id: SessionId, size: PtySize | null): void {
+  private attach(connection: Connection, id: SessionId, size: PtySize | null, number: number): void {
     const terminal = this.terminals.get(id)
     if (terminal === undefined || terminal.ending) {
       return
@@ -210,7 +210,7 @@ export class Screens {
         return
       }
       const snapshot = terminal.screen.snapshot()
-      connection.post({ type: 'attached', id, size: terminal.shownSize, snapshot })
+      connection.post({ type: 'attached', id, view: number, size: terminal.shownSize, snapshot })
       view.attached = true
       const kept = view.kept
       view.kept = []
