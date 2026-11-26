@@ -15,6 +15,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
+      - ".cargo/**"
       - ".github/workflows/rust.yml"
   workflow_dispatch:
 

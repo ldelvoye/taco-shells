@@ -12,6 +12,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
+      - ".cargo/**"
       - ".github/workflows/rust.yml"
   push:
     branches: [main]
