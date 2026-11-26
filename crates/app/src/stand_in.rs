@@ -1,37 +1,87 @@
 //! What the window runs on until the workspace is wired to it: the list's requests applied with `rules`, and the result published as the workspace would.
 
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use futures::channel::mpsc::unbounded;
 use taco_protocol::{
-    ActivityRequest, Arrangement, DrawnState, Panels, RequestReply, TabGroupId, TerminalId,
-    WorkspaceRequest,
+    ActivityEntry, ActivityEvent, ActivityRequest, Arrangement, DrawnState, HarnessId, Panels,
+    RequestReply, TabGroupId, TerminalId, WorkspaceRequest,
 };
 use taco_rules::{
     add_row_to, apply_drop, close_panel, close_row, create_tab_group, fork_row, move_panel,
     open_panel, rename_tab_group, resize_panel, select_row, toggle_tab_group, ungroup_tab_group,
 };
+use taco_services::{AgentMenuAction, AgentSetupNoticeKind, AgentSetupView};
 
-use crate::link::{WindowOutput, WindowReceiver, WindowSender, WorkspacePort};
+use crate::link::{
+    ServicesOutput, ServicesPort, WindowOutput, WindowReceiver, WindowSender, WorkspacePort,
+};
+use crate::window::Shown;
+
+const LOG_PAGE: usize = 6;
+const SET_UP_TEXT: &str = "Claude Code is set up. Its activity shows here from its next session.";
 
 pub struct StandIn {
     state: RefCell<DrawnState>,
+    setups: RefCell<AgentSetupView>,
+    logs: BTreeMap<TerminalId, Vec<ActivityEntry>>,
     window: WindowSender,
     opened: Cell<u64>,
 }
 
+/// The ports the window sends to, and what it is sent back.
+pub struct StandInPorts {
+    pub workspace: Rc<dyn WorkspacePort>,
+    pub services: Rc<dyn ServicesPort>,
+    pub outputs: WindowReceiver,
+}
+
 impl StandIn {
-    /// The port the window sends to, and what it is sent back.
-    pub fn start(state: DrawnState) -> (Rc<dyn WorkspacePort>, WindowReceiver) {
+    pub fn start(shown: &Shown, logs: BTreeMap<TerminalId, Vec<ActivityEntry>>) -> StandInPorts {
         let (window, outputs) = unbounded();
-        let stand_in = Self {
-            state: RefCell::new(state),
+        let stand_in = Rc::new(Self {
+            state: RefCell::new(shown.drawn.clone()),
+            setups: RefCell::new(shown.setups.clone()),
+            logs,
             window,
             opened: Cell::new(0),
+        });
+        let workspace: Rc<dyn WorkspacePort> = stand_in.clone();
+        let services: Rc<dyn ServicesPort> = stand_in;
+        StandInPorts {
+            workspace,
+            services,
+            outputs,
+        }
+    }
+
+    /// The newest page of a terminal's log before `before`, and whether nothing older is left.
+    fn log_page(&self, terminal: &TerminalId, before: Option<u64>) -> (Vec<ActivityEntry>, bool) {
+        let Some(log) = self.logs.get(terminal) else {
+            return (Vec::new(), true);
         };
-        let port: Rc<dyn WorkspacePort> = Rc::new(stand_in);
-        (port, outputs)
+        let mut kept = Vec::new();
+        for entry in log {
+            let older = match before {
+                Some(before) => entry.seq < before,
+                None => true,
+            };
+            if older {
+                kept.push(entry.clone());
+            }
+        }
+        let start = kept.len().saturating_sub(LOG_PAGE);
+        let page = kept.split_off(start);
+        let complete = kept.is_empty();
+        (page, complete)
+    }
+
+    fn publish_setups(&self) {
+        let view = self.setups.borrow().clone();
+        let output = ServicesOutput::Setups(view);
+        self.publish(WindowOutput::Services(output));
     }
 
     fn new_terminal(&self) -> TerminalId {
@@ -141,7 +191,54 @@ impl WorkspacePort for StandIn {
         self.publish(WindowOutput::Replied { token, reply });
     }
 
-    fn activity(&self, _request: ActivityRequest) {}
+    fn activity(&self, request: ActivityRequest) {
+        let event = match request {
+            ActivityRequest::Watch { terminal: None } => return,
+            ActivityRequest::Watch {
+                terminal: Some(terminal),
+            } => {
+                let (entries, complete) = self.log_page(&terminal, None);
+                ActivityEvent::Loaded {
+                    terminal,
+                    entries,
+                    complete,
+                }
+            }
+            ActivityRequest::Older { terminal, before } => {
+                let (entries, complete) = self.log_page(&terminal, Some(before));
+                ActivityEvent::Older {
+                    terminal,
+                    entries,
+                    complete,
+                }
+            }
+        };
+        self.publish(WindowOutput::Activity(event));
+    }
+}
+
+impl ServicesPort for StandIn {
+    fn agent_action(&self, harness: &HarnessId, action: AgentMenuAction) {
+        if action != AgentMenuAction::SetUp {
+            return;
+        }
+        let mut setups = self.setups.borrow_mut();
+        for notice in &mut setups.notices {
+            if &notice.harness == harness && notice.kind == AgentSetupNoticeKind::Offer {
+                notice.kind = AgentSetupNoticeKind::Done;
+                notice.text = SET_UP_TEXT.to_string();
+            }
+        }
+        drop(setups);
+        self.publish_setups();
+    }
+
+    fn dismiss_notice(&self, harness: &HarnessId) {
+        let mut setups = self.setups.borrow_mut();
+        setups.notices.retain(|notice| &notice.harness != harness);
+        drop(setups);
+        self.publish_setups();
+    }
 }
 
 fn rearrange(

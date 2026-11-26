@@ -5064,6 +5064,7 @@ dependencies = [
 name = "taco-app"
 version = "0.0.0"
 dependencies = [
+ "chrono",
  "crossbeam-channel",
  "futures",
  "gpui",

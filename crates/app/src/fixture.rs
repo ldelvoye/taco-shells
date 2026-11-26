@@ -4,17 +4,20 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use taco_protocol::{
-    AgentLabel, AgentRow, Arrangement, DrawnState, HarnessId, Row, RowState, TabGroup, TabGroupId,
-    TerminalId,
+    ActivityEntry, ActivityKind, AgentLabel, AgentRow, Arrangement, DrawnState, HarnessId, Row,
+    RowState, TabGroup, TabGroupId, TerminalId,
 };
 use taco_rules::default_panels;
+use taco_services::{AgentSetupNotice, AgentSetupNoticeKind, AgentSetupView};
 
+use crate::activity::now_ms;
 use crate::banners::Banner;
 use crate::window::Shown;
 
 const CLAUDE: &str = "claude";
-// Fixed so two images of one fixture are the same.
-const SOME_MOMENT_MS: u64 = 1_764_100_000_000;
+const STATE_MINUTES_AGO: u64 = 52;
+const OFFER_TEXT: &str =
+    "Claude Code is running here but isn't set up, so its activity can't show.";
 
 const PLACEHOLDER_SCREEN: [&str; 8] = [
     "~/code/getsentry % claude",
@@ -72,6 +75,35 @@ const MIXED_ROWS: [FixtureRow; 7] = [
     },
 ];
 
+const ASKED: &str = "asked";
+const CHANGED: &str = "changed";
+const MS_PER_MINUTE: u64 = 60_000;
+
+const WORKING_LOG: [FixtureEntry; 10] = [
+    entry(42, ASKED, "rework the billing platform lock"),
+    entry(41, "Grep", "acquire_lock"),
+    entry(40, "Read", "billing/platform/lock.py"),
+    entry(40, "Read", "billing/platform/models.py"),
+    entry(39, "Read", "billing/tests/test_lock.py"),
+    entry(31, CHANGED, "billing/platform/lock.py"),
+    entry(30, CHANGED, "billing/tests/test_lock.py"),
+    entry(22, "Bash", "pytest billing/tests"),
+    entry(4, ASKED, "now rebase it onto master"),
+    entry(3, "Bash", "git rebase master"),
+];
+
+const NEEDS_LOG: [FixtureEntry; 3] = [
+    entry(18, ASKED, "address the review comments on the PR"),
+    entry(12, CHANGED, "src/sentry/api/endpoints/project_details.py"),
+    entry(9, "Bash", "git rebase origin/master"),
+];
+
+const DONE_LOG: [FixtureEntry; 3] = [
+    entry(75, ASKED, "find why test_flaky_retry fails on CI"),
+    entry(70, "Glob", "tests/**/test_retry*.py"),
+    entry(52, CHANGED, "tests/sentry/test_retry.py"),
+];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fixture {
     /// A tab group, agents in each state, plain shells, and two banners.
@@ -87,6 +119,13 @@ struct FixtureRow {
     tab_group: Option<&'static str>,
     state: Option<RowState>,
     directory: &'static str,
+}
+
+/// One log entry: `tool` is a tool's name, or `ASKED` or `CHANGED`.
+struct FixtureEntry {
+    minutes_ago: u64,
+    tool: &'static str,
+    text: &'static str,
 }
 
 impl Fixture {
@@ -106,6 +145,56 @@ impl Fixture {
             Self::Empty => empty(),
         }
     }
+
+    /// The agent logs the stand-in answers from, by terminal.
+    pub(crate) fn logs(self) -> BTreeMap<TerminalId, Vec<ActivityEntry>> {
+        if self == Self::Empty {
+            return BTreeMap::new();
+        }
+        let working = log_of(&WORKING_LOG);
+        let needs = log_of(&NEEDS_LOG);
+        let done = log_of(&DONE_LOG);
+        BTreeMap::from([
+            (TerminalId("t0".to_string()), working),
+            (TerminalId("t2".to_string()), needs),
+            (TerminalId("t3".to_string()), done),
+        ])
+    }
+}
+
+const fn entry(minutes_ago: u64, tool: &'static str, text: &'static str) -> FixtureEntry {
+    FixtureEntry {
+        minutes_ago,
+        tool,
+        text,
+    }
+}
+
+fn log_of(lines: &[FixtureEntry]) -> Vec<ActivityEntry> {
+    let now = now_ms();
+    let mut entries = Vec::new();
+    let numbered = (1..).zip(lines);
+    for (seq, line) in numbered {
+        let ago = line.minutes_ago * MS_PER_MINUTE;
+        let text = line.text.to_string();
+        let kind = match line.tool {
+            ASKED => ActivityKind::Asked { text },
+            CHANGED => ActivityKind::Changed {
+                tool: "Edit".to_string(),
+                path: text,
+            },
+            tool => ActivityKind::Did {
+                tool: tool.to_string(),
+                summary: text,
+            },
+        };
+        entries.push(ActivityEntry {
+            seq,
+            at_ms: now.saturating_sub(ago),
+            kind,
+        });
+    }
+    entries
 }
 
 fn mixed() -> Shown {
@@ -151,6 +240,7 @@ fn mixed() -> Shown {
         drawn,
         banners: vec![update, problem],
         placeholder_screen: screen.collect(),
+        setups: offered_setup(),
     }
 }
 
@@ -165,6 +255,7 @@ fn empty() -> Shown {
         drawn: empty_drawn(),
         banners: Vec::new(),
         placeholder_screen: Vec::new(),
+        setups: AgentSetupView::default(),
     }
 }
 
@@ -197,9 +288,22 @@ fn agent_row(index: usize, state: RowState) -> AgentRow {
         harness: HarnessId(CLAUDE.to_string()),
         session_id: format!("session-{index}"),
         state,
-        state_since_ms: SOME_MOMENT_MS,
+        state_since_ms: now_ms().saturating_sub(STATE_MINUTES_AGO * MS_PER_MINUTE),
         has_conversation: true,
         question,
+    }
+}
+
+fn offered_setup() -> AgentSetupView {
+    let notice = AgentSetupNotice {
+        harness: HarnessId(CLAUDE.to_string()),
+        kind: AgentSetupNoticeKind::Offer,
+        text: OFFER_TEXT.to_string(),
+        terminals: vec![TerminalId("t4".to_string())],
+    };
+    AgentSetupView {
+        menus: Vec::new(),
+        notices: vec![notice],
     }
 }
 

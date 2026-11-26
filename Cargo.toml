@@ -36,6 +36,7 @@ libc = "0.2"
 crossbeam-channel = "0.5"
 uuid = { version = "1", features = ["v4"] }
 unicode-segmentation = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 # gpui has no release newer than 2025-10, so both crates pin one zed revision; move them together.
 gpui = { git = "https://github.com/zed-industries/zed", rev = "a3ce8d5e88e35697b2ba1cf9cb3c6816089b8281" }
