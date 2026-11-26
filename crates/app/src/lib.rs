@@ -10,6 +10,7 @@ mod panels;
 mod platform;
 #[cfg(feature = "render")]
 pub mod render;
+pub mod runtime_client;
 mod stand_in;
 mod strip;
 mod terminal_list;

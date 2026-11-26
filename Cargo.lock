@@ -4992,6 +4992,7 @@ dependencies = [
  "gpui",
  "gpui_platform",
  "image",
+ "libc",
  "serde_json",
  "taco-agents",
  "taco-drive",
@@ -5000,6 +5001,7 @@ dependencies = [
  "taco-services",
  "taco-settings",
  "taco-terminal-view",
+ "taco-wire",
  "taco-workspace",
  "uuid",
 ]
