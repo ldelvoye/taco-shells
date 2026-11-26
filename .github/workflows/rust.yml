@@ -1,0 +1,59 @@
+# Checks the Rust app on every pull request that touches it, and on main so the
+# build cache pull requests read from stays current. It releases nothing: until
+# the Rust app replaces the Electron one, versions are the Electron app's.
+name: rust
+
+on:
+  pull_request:
+    paths: &rust-paths
+      - "crates/**"
+      - "xtask/**"
+      - "smoke/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/rust.yml"
+  push:
+    branches: [main]
+    paths: *rust-paths
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    # macOS because the app is macOS-only.
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Installs the version rust-toolchain.toml pins.
+      - run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo fmt --all --check
+
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - run: cargo test --workspace --locked --no-run
+
+      # TASKS.md holds the whole run under about 10 s once compiled. Twice that
+      # fails, which catches a test that sleeps or starts something, not a slow runner.
+      - name: cargo test, within 20 s
+        run: |
+          started=$(date +%s)
+          cargo test --workspace --locked
+          elapsed=$(( $(date +%s) - started ))
+          echo "cargo test took ${elapsed} s once compiled." >> "$GITHUB_STEP_SUMMARY"
+          if [ "$elapsed" -gt 20 ]; then
+            echo "::error::cargo test took ${elapsed} s once compiled, over the 20 s budget."
+            exit 1
+          fi

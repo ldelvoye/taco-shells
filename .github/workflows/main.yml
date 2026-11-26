@@ -7,10 +7,15 @@ on:
   push:
     branches: [main]
     paths-ignore:
-      # The Rust app under crates/ is not this app: a push touching only it must not cut a version.
+      # The Rust app is not this app: a push touching only it must not cut a version.
+      # The same paths as OUTSIDE_THE_RUST_APP in scripts/repo.mjs.
       - "crates/**"
+      - "xtask/**"
+      - "smoke/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/rust.yml"
   workflow_dispatch:
 
 permissions:
