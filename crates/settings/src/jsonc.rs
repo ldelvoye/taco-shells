@@ -2,7 +2,7 @@ use jsonc_parser::errors::{ParseError, ParseErrorKind};
 use jsonc_parser::{ParseOptions, parse_to_serde_value};
 use serde_json::{Map, Value};
 
-const PARSE_OPTIONS: ParseOptions = ParseOptions {
+pub const JSONC_PARSE_OPTIONS: ParseOptions = ParseOptions {
     allow_comments: true,
     allow_loose_object_property_names: false,
     allow_trailing_commas: true,
@@ -55,7 +55,8 @@ fn accepted(map: Map<String, Value>) -> JsoncResult {
 }
 
 pub fn parse_jsonc(text: &str, label: &str) -> JsoncResult {
-    let parsed: Result<Option<Value>, ParseError> = parse_to_serde_value(text, &PARSE_OPTIONS);
+    let parsed: Result<Option<Value>, ParseError> =
+        parse_to_serde_value(text, &JSONC_PARSE_OPTIONS);
 
     let value = match parsed {
         Ok(value) => value,

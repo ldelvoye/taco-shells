@@ -11,7 +11,7 @@ pub use commands::{CommandId, RETIRED_COMMAND_IDS, is_retired};
 pub use config::{
     Config, ConfigTexts, DEFAULT_KEYBINDINGS_TEXT, DEFAULT_SETTINGS_TEXT, resolve_config,
 };
-pub use jsonc::{JsoncResult, parse_jsonc};
+pub use jsonc::{JSONC_PARSE_OPTIONS, JsoncResult, parse_jsonc};
 pub use keys::{
     Binding, Chord, KeymapResolution, command_for, format_chord, parse_chord, resolve_keymap,
 };
