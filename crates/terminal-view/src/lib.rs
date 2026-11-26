@@ -5,6 +5,7 @@ mod draw;
 mod grid;
 mod keys;
 mod links;
+mod shapes;
 mod shown;
 mod terminals;
 mod view;

@@ -1,6 +1,6 @@
-//! Draws a terminal of sample output, in the light and the dark theme, to PNG files with no window on screen.
+//! Draws a terminal of sample output, or of the bytes in a file, in the light and the dark theme, to PNG files with no window on screen.
 //!
-//! `cargo run -p taco-terminal-view --features capture --example look -- <directory>`
+//! `cargo run -p taco-terminal-view --features capture --example look -- <directory> [bytes file]`
 
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -30,23 +30,35 @@ const SAMPLE: &str = concat!(
     " \x1b[9mstruck\x1b[0m \x1b[2mfaint\x1b[0m \x1b[7minverse\x1b[0m\r\n",
     " 日本語のテキスト and https://tacoshells.dev\r\n",
     "\r\n",
+    " ╭──┬──╮ ┏━━┳━━┓ ▀▄█▌▐ ░▒▓ ▖▗▘▙▚▛▜▝▞▟\r\n",
+    " │  ├──┤ ┃  ┣━━┫ ▁▂▃▄▅▆▇█ ▏▎▍▌▋▊▉█\r\n",
+    " ╰──┴──╯ ┗━━┻━━┛ ═║┄╱ from the font\r\n",
+    "\r\n",
     "\x1b[32m➜\x1b[0m  \x1b[36mtaco-shells\x1b[0m \x1b[34mgit:(\x1b[31mmain\x1b[34m)\x1b[0m ",
 );
 
 fn main() {
     let directory = std::env::args().nth(1).unwrap_or_else(|| ".".to_string());
     let directory = PathBuf::from(directory);
+    let mut output = SAMPLE.as_bytes().to_vec();
+    let mut stem = "terminal".to_string();
+    if let Some(file) = std::env::args().nth(2) {
+        let file = PathBuf::from(file);
+        output = std::fs::read(&file).expect("the bytes file");
+        let name = file.file_stem().expect("a file name");
+        stem = name.to_string_lossy().into_owned();
+    }
     for (appearance, name) in [(Appearance::Light, "light"), (Appearance::Dark, "dark")] {
         let colors = palette_for(appearance).terminal;
-        let path = directory.join(format!("terminal-{name}.png"));
-        draw(&colors, &path);
+        let path = directory.join(format!("{stem}-{name}.png"));
+        draw(&colors, &output, &path);
         println!("saved {}", path.display());
     }
 }
 
-fn draw(colors: &TerminalColors, path: &Path) {
+fn draw(colors: &TerminalColors, output: &[u8], path: &Path) {
     let (ours, runtime) = UnixStream::pair().expect("a socket pair");
-    stand_in_runtime(runtime, colors.clone());
+    stand_in_runtime(runtime, colors.clone(), output.to_vec());
 
     let platform = gpui_platform::current_platform(true);
     let text_system = platform.text_system();
@@ -88,8 +100,8 @@ fn sample_id() -> TerminalId {
     TerminalId("sample".to_string())
 }
 
-/// Answers the view's attach with a snapshot of the sample, as the runtime would.
-fn stand_in_runtime(mut stream: UnixStream, colors: TerminalColors) {
+/// Answers the view's attach with a snapshot of `output`, as the runtime would.
+fn stand_in_runtime(mut stream: UnixStream, colors: TerminalColors, output: Vec<u8>) {
     std::thread::spawn(move || {
         while let Ok(Some(request)) = taco_wire::read_frame::<TerminalRequest>(&mut stream) {
             let TerminalRequest::Attach {
@@ -106,7 +118,7 @@ fn stand_in_runtime(mut stream: UnixStream, colors: TerminalColors) {
             };
             let mut terminal = Terminal::new(size).expect("a terminal");
             terminal.set_colors(&colors).expect("colors");
-            terminal.write(SAMPLE.as_bytes());
+            terminal.write(&output);
             let snapshot = Snapshot::take(&terminal).expect("a snapshot");
             let attached = TerminalEvent::Attached {
                 id: id.clone(),

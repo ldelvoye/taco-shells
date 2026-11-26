@@ -9,6 +9,7 @@ use taco_ghostty::render::{Cell, CursorShape, FrameColors, FrameCursor, Row, Und
 use taco_protocol::Rgb;
 
 use crate::grid::CellMetrics;
+use crate::shapes::{Shape, cell_bounds, paint_shape, shape_of};
 
 const FAINT_TEXT_ALPHA: f32 = 0.6;
 /// A block cursor lets the character under it show through.
@@ -59,10 +60,20 @@ pub struct CursorMark {
     pub blinking: bool,
 }
 
+/// A block element or box-drawing character, drawn as shapes rather than from the font.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CellShape {
+    pub column: u16,
+    pub row: u16,
+    pub shape: Shape,
+    pub color: Hsla,
+}
+
 /// Everything one frame draws, in grid coordinates.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Painting {
     pub backgrounds: Vec<Background>,
+    pub shapes: Vec<CellShape>,
     pub runs: Vec<Run>,
     pub cursor: Option<CursorMark>,
 }
@@ -162,6 +173,18 @@ fn lay_out_row(row: &Row, y: u16, colors: &FrameColors, selection: Rgb, painting
         if cell.faint {
             color.a *= FAINT_TEXT_ALPHA;
         }
+        if columns == 1
+            && let Some(shape) = cell_shape(text)
+        {
+            let drawn = CellShape {
+                column,
+                row: y,
+                shape,
+                color,
+            };
+            painting.shapes.push(drawn);
+            continue;
+        }
         let mut strikethrough = None;
         if cell.strikethrough {
             strikethrough = Some(color);
@@ -181,6 +204,15 @@ fn lay_out_row(row: &Row, y: u16, colors: &FrameColors, selection: Rgb, painting
         };
         add_run(&mut painting.runs, run);
     }
+}
+
+fn cell_shape(text: &str) -> Option<Shape> {
+    let mut chars = text.chars();
+    let glyph = chars.next()?;
+    if chars.next().is_some() {
+        return None;
+    }
+    shape_of(glyph)
 }
 
 /// The colors a cell is drawn in: inverse swaps them, and a selected cell takes the selection background.
@@ -274,6 +306,19 @@ pub fn paint(
             size(width, cell_height),
         );
         window.paint_quad(fill(bounds, background.color));
+    }
+
+    let scale = window.scale_factor();
+    for drawn in &painting.shapes {
+        let bounds = cell_bounds(
+            origin,
+            cell.width,
+            cell.height,
+            drawn.column,
+            drawn.row,
+            scale,
+        );
+        paint_shape(drawn.shape, bounds, drawn.color, font_size, scale, window);
     }
 
     for run in &painting.runs {
@@ -479,6 +524,51 @@ mod tests {
         terminal.write(b"\x1b[?25l");
         let (hidden, _) = painting_of(&terminal);
         assert_eq!(hidden.cursor, None);
+    }
+
+    #[test]
+    fn block_and_box_characters_are_shapes_in_their_cells_colors_not_text() {
+        let mut terminal = Terminal::new(TerminalSize { cols: 20, rows: 1 }).unwrap();
+        // Claude Code's logo paints blocks over a black background; a box corner, a line, and a dashed line the font keeps.
+        terminal.write("a\x1b[38;2;215;119;87;48;2;0;0;0m▛█\x1b[0m\x1b[2m╭─\x1b[0m┄b".as_bytes());
+        let (painting, _) = painting_of(&terminal);
+
+        let text: Vec<(&str, u16)> = painting
+            .runs
+            .iter()
+            .map(|run| (run.text.as_str(), run.column))
+            .collect();
+        assert_eq!(text, vec![("a", 0), ("┄b", 5)]);
+        let shapes: Vec<(u16, Shape)> = painting
+            .shapes
+            .iter()
+            .map(|drawn| (drawn.column, drawn.shape))
+            .collect();
+        assert_eq!(shapes.len(), 4);
+        assert_eq!(shapes[0], (1, shape_of('▛').unwrap()));
+        assert_eq!(
+            shapes[2],
+            (
+                3,
+                Shape::Arc {
+                    down: true,
+                    right: true
+                }
+            )
+        );
+        let clawd = Rgb {
+            r: 215,
+            g: 119,
+            b: 87,
+        };
+        assert_eq!(painting.shapes[0].color, hsla(clawd));
+        // The black behind the block still fills the cell, to show through the quadrant ▛ leaves empty.
+        let behind = painting.backgrounds[0];
+        assert_eq!((behind.column, behind.columns), (1, 2));
+        assert!(
+            painting.shapes[3].color.a < 1.0,
+            "faint applies to shapes too"
+        );
     }
 
     #[test]
