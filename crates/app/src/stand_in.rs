@@ -16,9 +16,7 @@ use taco_rules::{
 };
 use taco_services::{AgentMenuAction, AgentSetupNoticeKind, AgentSetupView};
 
-use crate::link::{
-    ServicesOutput, ServicesPort, WindowOutput, WindowReceiver, WindowSender, WorkspacePort,
-};
+use crate::link::{Ports, ServicesOutput, ServicesPort, WindowOutput, WindowSender, WorkspacePort};
 use crate::window::Shown;
 
 const LOG_PAGE: usize = 6;
@@ -33,15 +31,8 @@ pub struct StandIn {
     opened: Cell<u64>,
 }
 
-/// The ports the window sends to, and what it is sent back.
-pub struct StandInPorts {
-    pub workspace: Rc<dyn WorkspacePort>,
-    pub services: Rc<dyn ServicesPort>,
-    pub outputs: WindowReceiver,
-}
-
 impl StandIn {
-    pub fn start(shown: &Shown, logs: BTreeMap<TerminalId, Vec<ActivityEntry>>) -> StandInPorts {
+    pub fn start(shown: &Shown, logs: BTreeMap<TerminalId, Vec<ActivityEntry>>) -> Ports {
         let (window, outputs) = unbounded();
         let stand_in = Rc::new(Self {
             state: RefCell::new(shown.drawn.clone()),
@@ -52,10 +43,11 @@ impl StandIn {
         });
         let workspace: Rc<dyn WorkspacePort> = stand_in.clone();
         let services: Rc<dyn ServicesPort> = stand_in;
-        StandInPorts {
+        Ports {
             workspace,
             services,
             outputs,
+            config_changed: Box::new(|_| {}),
         }
     }
 

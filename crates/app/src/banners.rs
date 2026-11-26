@@ -29,8 +29,11 @@ pub enum Dismissal {
     /// Every config problem, as one text.
     Config(String),
     Problem(String),
-    /// The ready update's version.
-    Update(String),
+    /// The ready update's version, and why it could not be applied, if it could not.
+    Update {
+        version: String,
+        problem: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,10 +99,14 @@ fn update_banner(version: &str, problem: Option<&str>) -> Banner {
         lines.push(problem.to_string());
         action = None;
     }
+    let dismissal = Dismissal::Update {
+        version: version.to_string(),
+        problem: problem.map(str::to_string),
+    };
     Banner {
         lines,
         action,
-        dismissal: Some(Dismissal::Update(version.to_string())),
+        dismissal: Some(dismissal),
     }
 }
 
@@ -199,7 +206,10 @@ mod tests {
         let dismissed = HashSet::from([
             Dismissal::Config("settings.json: line 4".to_string()),
             Dismissal::Problem("Every focus port is taken.".to_string()),
-            Dismissal::Update("0.27.0".to_string()),
+            Dismissal::Update {
+                version: "0.27.0".to_string(),
+                problem: None,
+            },
         ]);
         let all_gone = banners_of(&notices, Some("The runtime stopped."), &dismissed);
         let kept: Vec<_> = all_gone.iter().map(|banner| banner.lines.clone()).collect();
@@ -221,6 +231,18 @@ mod tests {
         ];
         assert_eq!(update.lines, expected_lines);
         assert_eq!(update.action, None);
+
+        let failed = Notices {
+            update_problem: Some("The update could not be applied.".to_string()),
+            ..notices.clone()
+        };
+        let reason_shown = banners_of(&failed, None, &dismissed);
+        let shown_lines: Vec<_> = reason_shown.iter().map(|banner| &banner.lines).collect();
+        let ready_and_why = [
+            "Taco Shells 0.27.0 is ready.",
+            "The update could not be applied.",
+        ];
+        assert_eq!(shown_lines, [&ready_and_why]);
 
         let fresh = banners_of(&notices, None, &HashSet::new());
         let last = fresh.last().unwrap();

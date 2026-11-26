@@ -35,7 +35,7 @@ pub struct AgentMenuClicked {
 
 /// The app's own actions, which run with or without a window, and the keys macOS gives them.
 pub fn install(cx: &mut App) {
-    cx.on_action(|_: &Quit, cx| cx.quit());
+    cx.on_action(|_: &Quit, cx| crate::quit(cx));
     cx.on_action(|_: &Hide, cx| cx.hide());
     cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
     cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
