@@ -544,10 +544,6 @@ impl Workspace {
 
     fn apply_hook(&mut self, terminal: &TerminalId, call: HookCall, now_ms: u64) {
         match call {
-            HookCall::FocusTab => {
-                self.change_arrangement(|arrangement| select_row(arrangement, terminal));
-                self.refocus += 1;
-            }
             HookCall::Attention => {
                 // asking while you are already in that terminal is not a request to go anywhere
                 let selected = selected_terminal(self.arrangement.as_ref());

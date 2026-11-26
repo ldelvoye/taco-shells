@@ -19,7 +19,6 @@ pub struct HookEvent {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum HookCall {
-    FocusTab,
     Attention,
     AgentStart {
         harness: HarnessId,
