@@ -85,7 +85,7 @@ pub fn apply_on_screen(rows: &mut AgentRows, on_screen: Option<&TerminalId>, now
     }
 }
 
-// Stop does not fire when a turn is interrupted, so an idle title is the fallback that ends working and needs.
+/// The fallback for an interrupted turn, which sends no Stop: an idle title ends working and needs.
 pub fn apply_idle_title(rows: &mut AgentRows, terminal: &TerminalId, now_ms: u64) {
     let Some(row) = rows.get_mut(terminal) else {
         return;
@@ -95,7 +95,7 @@ pub fn apply_idle_title(rows: &mut AgentRows, terminal: &TerminalId, now_ms: u64
     }
 }
 
-/// Keeps a question from the row's current session; it is shown only while the row needs you, and goes when it stops.
+/// Keeps the question of the row's current session; it is cleared when the row stops needing you.
 pub fn apply_question(
     rows: &mut AgentRows,
     terminal: &TerminalId,

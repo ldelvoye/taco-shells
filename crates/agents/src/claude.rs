@@ -2,7 +2,9 @@ use taco_protocol::AgentSignal;
 
 use crate::harness::{AgentTitle, Harness, HarnessSetup, HookEntry};
 
-const NEEDS_TOOLS: &[&str] = &["AskUserQuestion", "ExitPlanMode"];
+const ASKING_TOOL: &str = "AskUserQuestion";
+// ExitPlanMode needs you too, but asks no question in words: the window says a plan waits.
+const NEEDS_TOOLS: &[&str] = &[ASKING_TOOL, "ExitPlanMode"];
 const NEEDS_NOTIFICATIONS: &[&str] = &[
     "permission_prompt",
     "elicitation_dialog",
@@ -17,6 +19,7 @@ const IDLE_GLYPH: char = '✳';
 // closing quote. 200 characters stay under that at four bytes each.
 const MAX_NAME_CHARACTERS: usize = 200;
 
+// A question is pinned above the log, so a longer one is cut rather than carried whole in every published state.
 const MAX_QUESTION_CHARACTERS: usize = 1000;
 
 const UUID_LENGTH: usize = 36;
@@ -154,7 +157,7 @@ fn question_of(event: &str, payload: &str) -> Option<String> {
         }
         "PreToolUse" => {
             let tool = parsed.pointer("/tool_name")?.as_str()?;
-            if tool != "AskUserQuestion" {
+            if tool != ASKING_TOOL {
                 return None;
             }
             "/tool_input/questions/0/question"
@@ -297,8 +300,11 @@ mod tests {
         let permission = r#"{"hook_event_name":"Notification","notification_type":"permission_prompt","message":"Claude needs your permission to use Bash"}"#;
         let idle =
             r#"{"notification_type":"idle_prompt","message":"Claude is waiting for your input"}"#;
-        let asked = r#"{"tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which branch?","options":[]}]}}"#;
-        let other_tool = r#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#;
+        let asked = r#"{"tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"  Which branch?\n","options":[]}]}}"#;
+        let blank =
+            r#"{"tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":" \n "}]}}"#;
+        let other_tool =
+            r#"{"tool_name":"Task","tool_input":{"questions":[{"question":"Not for you"}]}}"#;
         let long = format!(
             r#"{{"tool_name":"AskUserQuestion","tool_input":{{"questions":[{{"question":"{}"}}]}}}}"#,
             "a".repeat(5000)
@@ -313,6 +319,7 @@ mod tests {
             question_of("PreToolUse", asked).as_deref(),
             Some("Which branch?")
         );
+        assert_eq!(question_of("PreToolUse", blank), None);
         assert_eq!(question_of("PreToolUse", other_tool), None);
         assert_eq!(question_of("PostToolUse", asked), None);
         assert_eq!(question_of("PreToolUse", "not json"), None);

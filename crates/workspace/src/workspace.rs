@@ -38,7 +38,7 @@ pub enum Outbound {
     Emptied,
 }
 
-/// The owner of the arrangement: it applies what the window asks for and what the runtime and the hooks report, and says what to send.
+/// The owner of the arrangement: it applies what the window asks for and what the runtime and the hooks report.
 pub struct Workspace {
     options: Options,
     arrangement: Option<Arrangement>,
@@ -195,9 +195,10 @@ impl Workspace {
         out
     }
 
-    /// Every terminal goes, the window is told why, and nothing reopens. What is saved is frozen first.
+    /// Closes every terminal and tells the window why; what is saved is frozen first, so a relaunch brings the terminals back.
     pub fn runtime_died(&mut self, reason: &str, now_ms: u64) -> Vec<Outbound> {
         let mut out = Vec::new();
+        let before = self.row_count();
         self.freeze();
         self.runtime_gone = true;
         self.problem = Some(runtime_problem(reason));
@@ -205,7 +206,7 @@ impl Workspace {
         for terminal in &open {
             self.terminal_exited(terminal);
         }
-        self.finish(0, now_ms, &mut out);
+        self.finish(before, now_ms, &mut out);
         out
     }
 
@@ -221,7 +222,6 @@ impl Workspace {
         }
     }
 
-    // Null before the first terminal is not the same as a list whose last terminal just closed, so a new row starts from an empty one.
     fn base_arrangement(&self) -> Arrangement {
         match &self.arrangement {
             Some(arrangement) => arrangement.clone(),
@@ -309,7 +309,7 @@ impl Workspace {
                 accepted(None)
             }
             WorkspaceRequest::FocusReported { terminal, count } => {
-                // recorded even when the terminal was already selected: the window keeps its own move on screen until this count reaches it
+                // always recorded: the window holds its own selection until this count catches up
                 if count > self.focus_count {
                     self.focus_count = count;
                 }
@@ -367,7 +367,7 @@ impl Workspace {
         }
     }
 
-    fn open(&mut self, terminal: TerminalId, shell: ShellStart, out: &mut Vec<Outbound>) {
+    fn open(&self, terminal: TerminalId, shell: ShellStart, out: &mut Vec<Outbound>) {
         let start = TerminalStart {
             id: terminal,
             directory: shell.directory,
@@ -431,13 +431,16 @@ impl Workspace {
         self.read_title(terminal, now_ms);
     }
 
-    // A title is read by the row's agent, so it is read again when an agent starts in the terminal.
+    // A title can arrive before the agent's start, so the last one is read again when an agent starts.
     fn read_title(&mut self, terminal: &TerminalId, now_ms: u64) {
         let Some(raw) = self.raw_titles.get(terminal).cloned() else {
             return;
         };
-        let row = self.rows.get(terminal);
-        let Some(harness) = row.and_then(|row| harness_of(&row.harness.0)) else {
+        let agent = match self.rows.get(terminal) {
+            Some(row) => harness_of(&row.harness.0),
+            None => None,
+        };
+        let Some(harness) = agent else {
             self.change_arrangement(|arrangement| rename_row(arrangement, terminal, &raw));
             return;
         };
@@ -533,7 +536,7 @@ impl Workspace {
         }
     }
 
-    /// Settles what follows from the selection, says when the last terminal went, and publishes a state that changed.
+    // Every input ends here: what follows from the selection, the last terminal going, and a publish only when the state changed.
     fn finish(&mut self, rows_before: usize, now_ms: u64, out: &mut Vec<Outbound>) {
         let selected = selected_terminal(self.arrangement.as_ref()).cloned();
         apply_on_screen(&mut self.rows, selected.as_ref(), now_ms);
@@ -547,17 +550,13 @@ impl Workspace {
             out.push(Outbound::Emptied);
         }
 
-        let candidate = self.drawn();
-        let unchanged = self.published.as_ref().is_some_and(|published| {
-            let mut same_revision = candidate.clone();
-            same_revision.revision = published.revision;
-            same_revision == *published
-        });
-        if unchanged {
+        // drawn() carries the current revision, which is the published one's, so equal means unchanged
+        let mut state = self.drawn();
+        if self.published.as_ref() == Some(&state) {
             return;
         }
         self.revision += 1;
-        let state = self.drawn();
+        state.revision = self.revision;
         self.published = Some(state.clone());
         out.push(Outbound::State(state));
     }
