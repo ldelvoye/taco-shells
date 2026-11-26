@@ -242,6 +242,13 @@ impl Terminals {
         view.selection()
     }
 
+    /// The terminal's rows as shown, top to bottom, without trailing blanks. None while it has no attached view.
+    pub fn visible_lines(&mut self, id: &TerminalId) -> Option<Vec<String>> {
+        let view = self.views.view(id)?;
+        let lines = view.visible_lines();
+        lines.ok().flatten()
+    }
+
     /// Pastes `text`, bracketed when the program asked for it, so a multi-line paste is not run line by line.
     pub fn paste(&mut self, id: &TerminalId, text: &str, cx: &mut Context<Terminals>) {
         let Some(view) = self.views.view(id) else {
