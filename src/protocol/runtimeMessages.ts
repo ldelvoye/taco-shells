@@ -27,15 +27,18 @@ export type RuntimeReport =
 
 /** What a window asks of a terminal over its connection. `write` and `resize` work with no view attached. */
 export type TerminalRequest =
-  | { type: 'attach'; id: SessionId; size: PtySize | null }
+  | { type: 'attach'; id: SessionId; size: PtySize | null; view: number }
   | { type: 'detach'; id: SessionId }
   | { type: 'write'; id: SessionId; data: string }
   | { type: 'resize'; id: SessionId; size: PtySize }
   | { type: 'clear'; id: SessionId }
 
-/** What an attached view is sent, in the order it has to apply it. */
+/**
+ * What an attached view is sent, in the order it has to apply it. `attached` carries the
+ * number its `attach` gave, so a window can tell it from one still on its way to a view it has let go of.
+ */
 export type TerminalEvent =
-  | { type: 'attached'; id: SessionId; size: PtySize; snapshot: string }
+  | { type: 'attached'; id: SessionId; view: number; size: PtySize; snapshot: string }
   | { type: 'output'; id: SessionId; data: string }
   | { type: 'resized'; id: SessionId; size: PtySize }
   | { type: 'cleared'; id: SessionId }

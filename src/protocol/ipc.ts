@@ -74,7 +74,7 @@ export interface TacoShellsApi extends HostApi {
   pty: {
     write(id: SessionId, data: string): void
     resize(id: SessionId, size: PtySize): void
-    attach(id: SessionId, size: PtySize | null): void
+    attach(id: SessionId, size: PtySize | null, view: number): void
     detach(id: SessionId): void
     clear(id: SessionId): void
     onEvent(listener: (event: TerminalEvent) => void): () => void

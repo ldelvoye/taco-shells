@@ -11,8 +11,8 @@ export interface TerminalView {
   /** Both take effect after the output written so far. */
   resize(size: PtySize): void
   clear(): void
-  /** The grid that fits the element now, or null when it has no layout. */
-  fittingSize(): PtySize | null
+  /** The grid that fits inside `box`, or null until this view has drawn and knows its cell size. */
+  sizeThatFits(box: HTMLElement): PtySize | null
   focus(): void
   selection(): string
   paste(text: string): void

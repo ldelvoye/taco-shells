@@ -162,8 +162,8 @@ function harness(): Harness {
   }
 }
 
-function attached(snapshot: string, size: PtySize = SIZE): TerminalEvent {
-  return { type: 'attached', id: 't1', size, snapshot }
+function attached(snapshot: string, size: PtySize = SIZE, view = 1): TerminalEvent {
+  return { type: 'attached', id: 't1', view, size, snapshot }
 }
 
 function output(data: string): TerminalEvent {
@@ -173,7 +173,7 @@ function output(data: string): TerminalEvent {
 function attachedAndSettled(): Harness & { screen: FakeScreen } {
   const subject = harness()
   const screen = subject.open('t1')
-  subject.request({ type: 'attach', id: 't1', size: null })
+  subject.request({ type: 'attach', id: 't1', size: null, view: 1 })
   screen.runAll()
   subject.events.length = 0
   return { ...subject, screen }
@@ -199,7 +199,7 @@ describe('Screens', () => {
     const screen = open('t1')
 
     screens.output('t1', 'a')
-    request({ type: 'attach', id: 't1', size: null })
+    request({ type: 'attach', id: 't1', size: null, view: 1 })
     screens.output('t1', 'b')
     screens.output('t1', 'c')
     expect(events).toEqual([])
@@ -225,35 +225,35 @@ describe('Screens', () => {
     const screen = open('t1')
     const wider: PtySize = { cols: 100, rows: 30 }
 
-    request({ type: 'attach', id: 't1', size: wider })
+    request({ type: 'attach', id: 't1', size: wider, view: 1 })
     screen.runAll()
-    request({ type: 'attach', id: 't1', size: wider })
+    request({ type: 'attach', id: 't1', size: wider, view: 1 })
     screen.runAll()
 
     expect(shell).toEqual(['resize t1 100x30'])
     expect(screen.calls).toEqual(['resize 100x30'])
     expect(events).toEqual([attached('', wider), attached('', wider)])
 
-    request({ type: 'attach', id: 't1', size: SMALL })
+    request({ type: 'attach', id: 't1', size: SMALL, view: 2 })
     screen.runAll()
-    expect(events).toEqual([attached('', wider), attached('', wider), attached('', SMALL)])
+    expect(events).toEqual([attached('', wider), attached('', wider), attached('', SMALL, 2)])
   })
 
   it('posts nothing for an attach cancelled by a detach, a second attach or a new connection', () => {
     const { screens, request, open, events, shell } = harness()
     const screen = open('t1')
 
-    request({ type: 'attach', id: 't1', size: null })
+    request({ type: 'attach', id: 't1', size: null, view: 1 })
     request({ type: 'detach', id: 't1' })
     screen.runAll()
     expect(events).toEqual([])
 
-    request({ type: 'attach', id: 't1', size: null })
-    request({ type: 'attach', id: 't1', size: null })
+    request({ type: 'attach', id: 't1', size: null, view: 1 })
+    request({ type: 'attach', id: 't1', size: null, view: 1 })
     screen.runAll()
     expect(events).toEqual([attached('')])
 
-    request({ type: 'attach', id: 't1', size: null })
+    request({ type: 'attach', id: 't1', size: null, view: 1 })
     const newer: TerminalEvent[] = []
     const newerRequest = screens.connect((event) => {
       newer.push(event)
@@ -264,11 +264,11 @@ describe('Screens', () => {
     expect(newer).toEqual([])
     expect(shell).toEqual([])
 
-    newerRequest({ type: 'attach', id: 't1', size: null })
+    newerRequest({ type: 'attach', id: 't1', size: null, view: 1 })
     screen.runAll()
     expect(newer).toEqual([attached('')])
 
-    newerRequest({ type: 'attach', id: 'gone', size: null })
+    newerRequest({ type: 'attach', id: 'gone', size: null, view: 1 })
     expect(newer).toHaveLength(1)
   })
 
@@ -297,7 +297,7 @@ describe('Screens', () => {
     const screen = open('t1')
 
     screens.output('t1', 'a')
-    request({ type: 'attach', id: 't1', size: null })
+    request({ type: 'attach', id: 't1', size: null, view: 1 })
     request({ type: 'resize', id: 't1', size: SMALL })
     screen.runAll()
 
@@ -321,7 +321,7 @@ describe('Screens', () => {
 
     screens.output('t1', 'a')
     screens.ended('t1', 3)
-    request({ type: 'attach', id: 't1', size: null })
+    request({ type: 'attach', id: 't1', size: null, view: 1 })
     expect(events).toEqual([output('a')])
     expect(screen.waiting).toHaveLength(2)
 
@@ -329,7 +329,7 @@ describe('Screens', () => {
     expect(events).toEqual([output('a'), { type: 'end', id: 't1', exitCode: 3 }])
     expect(screen.calls).toEqual(['parsed 1', 'dispose'])
 
-    request({ type: 'attach', id: 't1', size: null })
+    request({ type: 'attach', id: 't1', size: null, view: 1 })
     expect(screen.waiting).toEqual([])
   })
 
@@ -338,7 +338,7 @@ describe('Screens', () => {
     const attaching = open('t1')
     const unseen = open('t2')
 
-    request({ type: 'attach', id: 't1', size: null })
+    request({ type: 'attach', id: 't1', size: null, view: 1 })
     screens.ended('t1', 1)
     screens.ended('t2', 0)
     attaching.runAll()

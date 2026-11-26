@@ -5,21 +5,29 @@ import type { TerminalColors } from '@protocol/theme'
 import { DEFAULT_SETTINGS } from '@settings/settings'
 import { DARK_PALETTE } from '@settings/theme'
 import { makeXtermView } from './engine/xtermView'
+import { afterShowing, viewed, type Recency } from './shown'
 import type { TerminalView } from './view'
 
-interface TerminalHandle {
+interface TerminalEntry {
   id: SessionId
-  view: TerminalView
+  host: HTMLElement | null
+  view: TerminalView | null
+  /** The number of this view's attach. Until `attached` comes back with it, what arrives was meant for a view that is gone. */
+  awaiting: number | null
   observer: ResizeObserver | null
   /** The size last asked of the runtime, so the same one is not asked for twice. Null until one is known. */
   asked: PtySize | null
-  attachSent: boolean
+  ended: boolean
 }
 
 // Views live here rather than in React state. React owns the chrome around a
 // terminal; if a re-render ever owned the view itself, unmounting would throw it
 // away and the next mount would load the whole terminal again.
-const handles = new Map<SessionId, TerminalHandle>()
+const terminals = new Map<SessionId, TerminalEntry>()
+
+let recency: Recency = []
+
+let attaches = 0
 
 // The session focusSession has just moved focus to. It is set there and consumed
 // by the focusin listener below, which is the only pair that reads it.
@@ -37,44 +45,70 @@ const focusListeners = new Set<FocusListener>()
 window.tacoShells.pty.onEvent(handleEvent)
 
 function handleEvent(event: TerminalEvent): void {
-  const handle = handles.get(event.id)
-  if (!handle) {
+  const entry = terminals.get(event.id)
+  if (!entry) {
+    return
+  }
+
+  if (event.type === 'end') {
+    entry.ended = true
+    disposeView(entry)
+    return
+  }
+
+  const view = entry.view
+  if (view === null) {
     return
   }
 
   if (event.type === 'attached') {
-    handle.view.load(event.snapshot, event.size)
-    if (handle.asked === null) {
-      handle.asked = event.size
+    if (event.view !== entry.awaiting) {
+      return
     }
+    entry.awaiting = null
+    view.load(event.snapshot, event.size)
+    if (entry.asked === null) {
+      entry.asked = event.size
+    }
+    fitHosts()
+    return
+  }
+  if (entry.awaiting !== null) {
     return
   }
   if (event.type === 'output') {
-    handle.view.write(event.data)
+    view.write(event.data)
     return
   }
   if (event.type === 'resized') {
-    handle.view.resize(event.size)
+    view.resize(event.size)
     return
   }
   if (event.type === 'cleared') {
-    handle.view.clear()
-    return
-  }
-  if (event.type === 'end') {
-    disposeSession(event.id)
+    view.clear()
   }
 }
 
-function handleFor(id: SessionId): TerminalHandle {
-  const existing = handles.get(id)
+function entryFor(id: SessionId): TerminalEntry {
+  const existing = terminals.get(id)
   if (existing) {
     return existing
   }
-  return createHandle(id)
+
+  const entry: TerminalEntry = {
+    id,
+    host: null,
+    view: null,
+    awaiting: null,
+    observer: null,
+    asked: null,
+    ended: false
+  }
+  terminals.set(id, entry)
+  return entry
 }
 
-function createHandle(id: SessionId): TerminalHandle {
+function createView(id: SessionId): TerminalView {
   const view = makeXtermView({
     settings: currentSettings,
     colors: currentColors,
@@ -97,105 +131,146 @@ function createHandle(id: SessionId): TerminalHandle {
     emitFocus(id)
   })
 
-  const handle: TerminalHandle = { id, view, observer: null, asked: null, attachSent: false }
-  handles.set(id, handle)
+  return view
+}
 
-  return handle
+function giveView(entry: TerminalEntry): void {
+  const view = createView(entry.id)
+  entry.view = view
+
+  const host = entry.host
+  if (host !== null) {
+    host.appendChild(view.element)
+    view.mount()
+  }
+
+  // Null when the host has no layout yet: the runtime then keeps the size the terminal has.
+  const size = measure(entry)
+  if (size !== null) {
+    entry.asked = size
+  }
+  attaches += 1
+  entry.awaiting = attaches
+  window.tacoShells.pty.attach(entry.id, size, attaches)
+}
+
+function disposeView(entry: TerminalEntry): void {
+  const view = entry.view
+  if (view === null) {
+    return
+  }
+
+  view.element.remove()
+  view.dispose()
+  entry.view = null
+  entry.awaiting = null
+}
+
+function stopObserving(entry: TerminalEntry): void {
+  if (entry.observer) {
+    entry.observer.disconnect()
+    entry.observer = null
+  }
 }
 
 export function applyTerminalConfig(settings: Settings, colors: TerminalColors): void {
   currentSettings = settings
   currentColors = colors
 
-  for (const handle of handles.values()) {
-    handle.view.apply(settings, colors)
-    fitToHost(handle)
+  for (const entry of terminals.values()) {
+    if (entry.view !== null) {
+      entry.view.apply(settings, colors)
+    }
   }
+  fitHosts()
 }
 
 export function attachSession(id: SessionId, host: HTMLElement): void {
-  const handle = handleFor(id)
+  const entry = entryFor(id)
 
   // Attaching twice would strand the first ResizeObserver, still connected and
   // still asking for the size of a host the view has left.
   detachSession(id)
-  host.appendChild(handle.view.element)
-  handle.view.mount()
-
-  const observer = new ResizeObserver(() => {
-    fitToHost(handle)
-  })
-  observer.observe(host)
-  handle.observer = observer
-
-  if (!handle.attachSent) {
-    // Null when the host has no layout yet: the runtime then keeps the size the terminal has.
-    const size = handle.view.fittingSize()
-    handle.attachSent = true
-    handle.asked = size
-    window.tacoShells.pty.attach(id, size)
+  entry.host = host
+  if (entry.view !== null) {
+    host.appendChild(entry.view.element)
+    entry.view.mount()
   }
 
-  fitToHost(handle)
+  const observer = new ResizeObserver(() => {
+    fitHost(entry)
+  })
+  observer.observe(host)
+  entry.observer = observer
+
+  fitHost(entry)
   // No focus here: every session attaches on mount, active or not, so focusing
   // on attach would let a background terminal steal the keyboard.
 }
 
 export function detachSession(id: SessionId): void {
-  const handle = handles.get(id)
-  if (!handle) {
+  const entry = terminals.get(id)
+  if (!entry) {
     return
   }
 
-  if (handle.observer) {
-    handle.observer.disconnect()
-    handle.observer = null
+  stopObserving(entry)
+  entry.host = null
+  if (entry.view !== null) {
+    entry.view.element.remove()
   }
-
-  handle.view.element.remove()
-}
-
-export function disposeSession(id: SessionId): void {
-  const handle = handles.get(id)
-  if (!handle) {
-    return
-  }
-
-  detachSession(id)
-  handle.view.dispose()
-  handles.delete(id)
 }
 
 // A terminal's end mark and its pane leaving the workspace arrive in either order,
 // and a terminal that ended before its view attached sends no end mark at all.
-export function disposeSessionsNotIn(open: ReadonlySet<SessionId>): void {
-  const held = [...handles.keys()]
-  for (const id of held) {
-    if (!open.has(id)) {
-      disposeSession(id)
+export function showSessions(onScreen: SessionId[], open: ReadonlySet<SessionId>): void {
+  const shown = afterShowing(recency, onScreen)
+  recency = shown.filter((id) => open.has(id))
+  const wanted = viewed(recency, onScreen, open)
+
+  const held = [...terminals.values()]
+  for (const entry of held) {
+    if (!open.has(entry.id)) {
+      stopObserving(entry)
+      disposeView(entry)
+      terminals.delete(entry.id)
+      continue
+    }
+    if (entry.view !== null && !wanted.has(entry.id)) {
+      window.tacoShells.pty.detach(entry.id)
+      disposeView(entry)
     }
   }
+
+  for (const id of wanted) {
+    const entry = entryFor(id)
+    if (entry.view === null && !entry.ended) {
+      giveView(entry)
+    }
+  }
+
+  fitHosts()
 }
 
 export function focusSession(id: SessionId): void {
-  const handle = handles.get(id)
-  if (!handle) {
+  const entry = terminals.get(id)
+  if (!entry || entry.view === null) {
     return
   }
 
-  const alreadyFocused = handle.view.element.contains(document.activeElement)
+  const alreadyFocused = entry.view.element.contains(document.activeElement)
   if (!alreadyFocused) {
     expectedFocus = id
   }
-  handle.view.focus()
+  entry.view.focus()
 }
 
 export function sessionView(id: SessionId): TerminalView | null {
-  const handle = handles.get(id)
-  if (!handle) {
+  const entry = terminals.get(id)
+  if (!entry) {
     return null
   }
-  return handle.view
+  return entry.view
 }
 
 export function onSessionFocus(listener: FocusListener): () => void {
@@ -227,15 +302,46 @@ function sameSize(first: PtySize | null, second: PtySize): boolean {
   return first.cols === second.cols && first.rows === second.rows
 }
 
-function fitToHost(handle: TerminalHandle): void {
-  const proposed = handle.view.fittingSize()
+function measure(entry: TerminalEntry): PtySize | null {
+  const host = entry.host
+  if (host === null) {
+    return null
+  }
+
+  if (entry.view !== null) {
+    const own = entry.view.sizeThatFits(host)
+    if (own !== null) {
+      return own
+    }
+  }
+
+  for (const other of terminals.values()) {
+    if (other === entry || other.view === null) {
+      continue
+    }
+    const size = other.view.sizeThatFits(host)
+    if (size !== null) {
+      return size
+    }
+  }
+  return null
+}
+
+function fitHost(entry: TerminalEntry): void {
+  const proposed = measure(entry)
   if (!proposed) {
     return
   }
-  if (sameSize(handle.asked, proposed)) {
+  if (sameSize(entry.asked, proposed)) {
     return
   }
 
-  handle.asked = proposed
-  window.tacoShells.pty.resize(handle.id, proposed)
+  entry.asked = proposed
+  window.tacoShells.pty.resize(entry.id, proposed)
+}
+
+function fitHosts(): void {
+  for (const entry of terminals.values()) {
+    fitHost(entry)
+  }
 }
