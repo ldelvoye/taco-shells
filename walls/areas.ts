@@ -84,7 +84,7 @@ export const WALLS: WallConfig = {
       name: 'window/terminal/engine',
       folders: ['src/window/terminal/engine/'],
       mayImport: ['protocol', 'window'],
-      modules: ['@xterm/xterm','@xterm/addon-web-links', '@xterm/addon-webgl']
+      modules: ['@xterm/xterm', '@xterm/addon-web-links', '@xterm/addon-webgl']
     },
     {
       name: 'conformance',

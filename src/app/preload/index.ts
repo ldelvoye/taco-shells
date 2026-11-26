@@ -62,8 +62,8 @@ const api: TacoShellsApi = {
     resize: (id: SessionId, size: PtySize) => {
       sendRequest({ type: 'resize', id, size })
     },
-    attach: (id: SessionId, size: PtySize | null, view: number) => {
-      sendRequest({ type: 'attach', id, size, view })
+    attach: (id: SessionId, size: PtySize | null, attachment: number) => {
+      sendRequest({ type: 'attach', id, size, attachment })
     },
     detach: (id: SessionId) => {
       sendRequest({ type: 'detach', id })

@@ -10,7 +10,7 @@ export interface Screen {
   resize(size: PtySize): void
   clear(): void
   setScrollback(lines: number): void
-  /** The colors a color query is answered from. None is answered until this is called. */
+  /** The colors a color query is answered from. No color query is answered until this is called. */
   setColors(colors: TerminalColors): void
   /** What a fresh view needs to show what this screen shows. Opaque outside the engine pair. */
   snapshot(): string

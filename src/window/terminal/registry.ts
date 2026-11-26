@@ -10,7 +10,9 @@ import type { TerminalView } from './view'
 
 interface TerminalEntry {
   id: SessionId
+  /** The element its pane gives it, there for as long as the pane is mounted. */
   host: HTMLElement | null
+  /** Only while the terminal is on screen or was shown lately. */
   view: TerminalView | null
   /** The number of this view's attach. Until `attached` comes back with it, what arrives was meant for a view that is gone. */
   awaiting: number | null
@@ -20,14 +22,15 @@ interface TerminalEntry {
   ended: boolean
 }
 
-// Views live here rather than in React state. React owns the chrome around a
-// terminal; if a re-render ever owned the view itself, unmounting would throw it
-// away and the next mount would load the whole terminal again.
+// A terminal's host and view live here rather than in React state. React owns the
+// chrome around a terminal; if a re-render ever owned the view itself, unmounting
+// would throw it away and the next mount would load the whole terminal again.
 const terminals = new Map<SessionId, TerminalEntry>()
 
 let recency: Recency = []
 
-let attaches = 0
+// Counts every attach this window has sent, so each has a number of its own.
+let attachments = 0
 
 // The session focusSession has just moved focus to. It is set there and consumed
 // by the focusin listener below, which is the only pair that reads it.
@@ -62,7 +65,7 @@ function handleEvent(event: TerminalEvent): void {
   }
 
   if (event.type === 'attached') {
-    if (event.view !== entry.awaiting) {
+    if (event.attachment !== entry.awaiting) {
       return
     }
     entry.awaiting = null
@@ -70,9 +73,11 @@ function handleEvent(event: TerminalEvent): void {
     if (entry.asked === null) {
       entry.asked = event.size
     }
+    // A view that has just drawn may be the first that can measure the other hosts.
     fitHosts()
     return
   }
+  // The runtime sends a view nothing before its snapshot, so this was meant for the view before it.
   if (entry.awaiting !== null) {
     return
   }
@@ -149,9 +154,9 @@ function giveView(entry: TerminalEntry): void {
   if (size !== null) {
     entry.asked = size
   }
-  attaches += 1
-  entry.awaiting = attaches
-  window.tacoShells.pty.attach(entry.id, size, attaches)
+  attachments += 1
+  entry.awaiting = attachments
+  window.tacoShells.pty.attach(entry.id, size, attachments)
 }
 
 function disposeView(entry: TerminalEntry): void {
@@ -204,8 +209,8 @@ export function attachSession(id: SessionId, host: HTMLElement): void {
   entry.observer = observer
 
   fitHost(entry)
-  // No focus here: every session attaches on mount, active or not, so focusing
-  // on attach would let a background terminal steal the keyboard.
+  // No focus here: every pane mounts, active or not, so focusing on mount would
+  // let a background terminal steal the keyboard.
 }
 
 export function detachSession(id: SessionId): void {
@@ -221,15 +226,20 @@ export function detachSession(id: SessionId): void {
   }
 }
 
-// A terminal's end mark and its pane leaving the workspace arrive in either order,
-// and a terminal that ended before its view attached sends no end mark at all.
+// Gives a view to the terminals on screen and the ones shown most recently, and
+// takes it from the rest. Views are taken before they are given, so the window
+// never holds more graphics contexts than it will end with.
 export function showSessions(onScreen: SessionId[], open: ReadonlySet<SessionId>): void {
   const shown = afterShowing(recency, onScreen)
   recency = shown.filter((id) => open.has(id))
   const wanted = viewed(recency, onScreen, open)
 
+  let viewsChanged = false
   const held = [...terminals.values()]
   for (const entry of held) {
+    // A terminal's end mark and its pane leaving the workspace arrive in either order,
+    // and a terminal that ended before its view attached sends no end mark at all.
+    // Its screen is gone from the runtime already, so there is nothing to detach from.
     if (!open.has(entry.id)) {
       stopObserving(entry)
       disposeView(entry)
@@ -239,17 +249,24 @@ export function showSessions(onScreen: SessionId[], open: ReadonlySet<SessionId>
     if (entry.view !== null && !wanted.has(entry.id)) {
       window.tacoShells.pty.detach(entry.id)
       disposeView(entry)
+      viewsChanged = true
     }
   }
 
   for (const id of wanted) {
     const entry = entryFor(id)
+    // An ended terminal can still be in the arrangement for a moment: the runtime has nothing left to show for it.
     if (entry.view === null && !entry.ended) {
       giveView(entry)
+      viewsChanged = true
     }
   }
 
-  fitHosts()
+  // This runs on every change to the arrangement, a title included. A host is measured
+  // again only when the view that measures it may have changed; its own resizes are observed.
+  if (viewsChanged) {
+    fitHosts()
+  }
 }
 
 export function focusSession(id: SessionId): void {
@@ -302,6 +319,9 @@ function sameSize(first: PtySize | null, second: PtySize): boolean {
   return first.cols === second.cols && first.rows === second.rows
 }
 
+// The grid that fits a terminal's host. Its own view answers when it has drawn;
+// before that, and for a terminal with no view, any view that has drawn does,
+// since they all share one cell size.
 function measure(entry: TerminalEntry): PtySize | null {
   const host = entry.host
   if (host === null) {

@@ -276,7 +276,7 @@ describe('RuntimeServer', () => {
 
     send({ type: 'open', start: startOf('t1') })
     await nextReports(1)
-    page.send({ type: 'attach', id: 't1', size: null, view: 1 })
+    page.send({ type: 'attach', id: 't1', size: null, attachment: 1 })
     ptys[0].fireData('a')
     stubs[0].fireTitle('Tacos')
     send({ type: 'scrollback', lines: 500 })
@@ -284,7 +284,7 @@ describe('RuntimeServer', () => {
     ptys[0].fireExit(2)
 
     expect(page.events).toEqual([
-      { type: 'attached', id: 't1', view: 1, size: { cols: 80, rows: 24 }, snapshot: '' },
+      { type: 'attached', id: 't1', attachment: 1, size: { cols: 80, rows: 24 }, snapshot: '' },
       { type: 'output', id: 't1', data: 'a' },
       { type: 'end', id: 't1', exitCode: 2 }
     ])

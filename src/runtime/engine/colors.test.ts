@@ -48,6 +48,13 @@ describe('colorAnswers', () => {
     expect(colorAnswers(4, '16;?', COLORS)).toEqual([reply('4;16', '0000/0000/0000')])
     expect(colorAnswers(4, '231;?', COLORS)).toEqual([reply('4;231', 'ffff/ffff/ffff')])
     expect(colorAnswers(4, '232;?', COLORS)).toEqual([reply('4;232', '0808/0808/0808')])
-    expect(colorAnswers(4, '300;?', COLORS)).toEqual([])
+    expect(colorAnswers(4, '255;?', COLORS)).toEqual([reply('4;255', 'eeee/eeee/eeee')])
+    expect(colorAnswers(4, '256;?', COLORS)).toEqual([])
+  })
+
+  it('answers nothing for what is not quite a query', () => {
+    expect(colorAnswers(11, '?x', COLORS)).toEqual([])
+    expect(colorAnswers(4, 'x;?', COLORS)).toEqual([])
+    expect(colorAnswers(4, '1;2;?', COLORS)).toEqual([])
   })
 })
