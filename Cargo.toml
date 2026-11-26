@@ -18,6 +18,7 @@ taco-services = { path = "crates/services" }
 taco-terminal-view = { path = "crates/terminal-view" }
 taco-wire = { path = "crates/wire" }
 taco-drive = { path = "crates/drive" }
+taco-ghostty = { path = "crates/ghostty" }
 
 serde = { version = "1", features = ["derive"] }
 # preserve_order: key bindings layer, and problems are listed, in the order the user's file has them.
@@ -26,6 +27,7 @@ jsonc-parser = { version = "0.34", features = ["serde"] }
 postcard = { version = "1", default-features = false, features = ["use-std"] }
 notify = "9"
 tempfile = "3"
+bindgen = "0.72"
 
 # Debug info is most of a gpui build's size and link time; line tables keep backtraces readable.
 [profile.dev]
