@@ -1,4 +1,4 @@
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::Read;
 use std::path::Path;
 use std::thread;
@@ -41,6 +41,10 @@ const LEAKED_COMMAND: &str = "echo leaked-$((5+5))";
 const LEAKED_ANSWER: &str = "leaked-10";
 const RETURNED_COMMAND: &str = "echo returned-$((4*4))";
 const RETURNED_ANSWER: &str = "returned-16";
+const SCROLLBACK_PART: &str = "settings:scrollback";
+const SETTINGS_FILE: &str = "settings.json";
+const TYPED_SCROLLBACK: &str = "5000";
+const WRITTEN_SCROLLBACK: &str = "\"scrollback\":5000";
 const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
 const PNG_HEADER_LENGTH: usize = 24;
 
@@ -199,6 +203,39 @@ pub fn the_settings_page_keeps_and_returns_the_keyboard(
     Ok(())
 }
 
+/// A number typed into the page's Scrollback field and entered is written to settings.json.
+pub fn a_typed_scrollback_is_written_to_the_settings_file(
+    smoke: &Smoke,
+    driver: &mut Driver,
+) -> Result<(), String> {
+    driver.keys(&[OPEN_SETTINGS])?;
+    let field = settled_bounds(driver, SCROLLBACK_PART)?;
+    let inside = center(&field);
+    driver.drag(inside, inside)?;
+    driver.keys(&["cmd-a"])?;
+    driver.text(TYPED_SCROLLBACK)?;
+    driver.keys(&["enter"])?;
+    let settings = smoke.config.join(SETTINGS_FILE);
+    let started = Instant::now();
+    loop {
+        let text = fs::read_to_string(&settings)
+            .map_err(|error| format!("could not read {}: {error}", settings.display()))?;
+        let compact: String = text.split_whitespace().collect();
+        if compact.contains(WRITTEN_SCROLLBACK) {
+            break;
+        }
+        if started.elapsed() >= SETTLE_DEADLINE {
+            return Err(format!(
+                "settings.json never gained {WRITTEN_SCROLLBACK}: {text}"
+            ));
+        }
+        thread::sleep(SETTLE_POLL);
+    }
+    // The first Esc leaves the field, the second closes the page.
+    driver.keys(&["escape", "escape"])?;
+    Ok(())
+}
+
 /// A bound chord runs its command once and types nothing; an unbound one reaches the shell. If either bracket chord
 /// leaked its character, or ctrl-u never arrived, the shell would not answer `chord-6` on a line of its own.
 pub fn chords_reach_their_command_or_the_shell(
@@ -275,6 +312,19 @@ fn terminals_of(state: &DrawnState) -> Vec<TerminalId> {
 fn row_terminals(driver: &mut Driver) -> Result<Vec<TerminalId>, String> {
     let state = drawn(driver)?;
     Ok(terminals_of(&state))
+}
+
+fn settled_bounds(driver: &mut Driver, part: &str) -> Result<Rect, String> {
+    let started = Instant::now();
+    loop {
+        if let Some(rect) = driver.bounds(part)? {
+            return Ok(rect);
+        }
+        if started.elapsed() >= SETTLE_DEADLINE {
+            return Err(format!("{part} was never drawn"));
+        }
+        thread::sleep(SETTLE_POLL);
+    }
 }
 
 fn required(driver: &mut Driver, part: &str) -> Result<Rect, String> {

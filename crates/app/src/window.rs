@@ -7,7 +7,7 @@ use futures::StreamExt;
 use gpui::{
     AnyElement, App, AppContext, Bounds, ClipboardItem, Context, Div, DragMoveEvent, Entity,
     FocusHandle, Focusable, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Pixels,
-    Point, Render, Size, Styled, Task, Window, div, point, px, size,
+    Point, Render, Size, Styled, Subscription, Task, Window, div, point, px, size,
 };
 use taco_protocol::{
     ActivityRequest, ConfigFile, Dragged, DrawnState, DropPlace, Edge, FocusMove, HarnessId, Panel,
@@ -38,8 +38,11 @@ use crate::panels::{
     size_for_pointer,
 };
 use crate::platform::TrafficLights;
-use crate::popups::{Popup, popup_layer};
-use crate::settings_page::{OverPage, Page, SettingsInput, over_page, settings_page};
+use crate::popups::{Popup, RenameStep, popup_layer, rename_step};
+use crate::settings_page::{
+    OverPage, Page, SettingsFields, SettingsInput, Typed, TypedSetting, over_page, published_text,
+    settings_page, typed,
+};
 use crate::slot::{Slot, SlotLine, opened_height, slot_line_for};
 use crate::strip::strip;
 use crate::terminal_list::{ListDrag, ListInput, terminal_list};
@@ -51,6 +54,8 @@ const PLACEHOLDER_FONT: &str = "Menlo";
 const PLACEHOLDER_TEXT_SIZE: f32 = 12.;
 const CLOCK_TICK: Duration = Duration::from_secs(30);
 const ESCAPE: &str = "escape";
+const NOT_WHOLE: &str = "Scrollback must be a whole number.";
+const TYPED_SETTINGS: [TypedSetting; 2] = [TypedSetting::Font, TypedSetting::Scrollback];
 const TERMINAL_INSET_SIDE: f32 = 8.;
 const TERMINAL_INSET_TOP: f32 = 6.;
 
@@ -71,6 +76,11 @@ pub struct Shown {
 pub struct WindowView {
     shown: Shown,
     look: Look,
+    fields: SettingsFields,
+    /// The typed setting whose field has the keyboard; a new config leaves its text alone.
+    editing: Option<TypedSetting>,
+    /// Watches the fields' focus, set up on the first frame since it needs the window.
+    field_focus: Vec<Subscription>,
     traffic_lights: TrafficLights,
     port: Rc<dyn WorkspacePort>,
     services: Rc<dyn ServicesPort>,
@@ -172,9 +182,13 @@ impl WindowView {
                 }
             }
         });
+        let fields = settings_fields(&shown.settings, &look, cx);
         Self {
             shown,
             look,
+            fields,
+            editing: None,
+            field_focus: Vec::new(),
             traffic_lights,
             port,
             services,
@@ -254,6 +268,7 @@ impl WindowView {
                 self.shown.settings = config.settings;
                 self.shown.unread = config.unread_settings;
                 notices.config_problems = config.problems;
+                self.refresh_fields(cx);
             }
             ServicesOutput::UpdateReady { version } => {
                 notices.update = Some(version);
@@ -269,6 +284,7 @@ impl WindowView {
             ServicesOutput::QuitForUpdate => cx.dispatch_action(&Quit),
             ServicesOutput::SettingRefused { key, reason } => {
                 self.refused.insert(key, reason);
+                self.refresh_fields(cx);
             }
         }
         cx.notify();
@@ -398,13 +414,18 @@ impl WindowView {
         let look = self.look.clone();
         let field = cx.new(|cx| TextField::new(&name, look, cx));
         let renamed = tab_group.clone();
-        let edits = cx.subscribe(
-            &field,
-            move |view, _, event: &TextFieldEvent, cx| match event {
-                TextFieldEvent::Edited(text) => view.rename(&renamed, text),
-                TextFieldEvent::Submitted => view.close_popup(cx),
-            },
-        );
+        let opening_name = name.clone();
+        let edits = cx.subscribe(&field, move |view, _, event: &TextFieldEvent, cx| {
+            let step = rename_step(event, &opening_name);
+            match step {
+                RenameStep::Rename(text) => view.rename(&renamed, &text),
+                RenameStep::Close => view.close_popup(cx),
+                RenameStep::RenameAndClose(text) => {
+                    view.rename(&renamed, &text);
+                    view.close_popup(cx);
+                }
+            }
+        });
         self.popup = Some(Popup::Group {
             tab_group,
             at,
@@ -542,6 +563,100 @@ impl WindowView {
         let key = change.key();
         self.refused.remove(key);
         self.services.write_setting(change);
+    }
+
+    fn field(&self, setting: TypedSetting) -> &Entity<TextField> {
+        match setting {
+            TypedSetting::Font => &self.fields.font,
+            TypedSetting::Scrollback => &self.fields.scrollback,
+        }
+    }
+
+    fn field_said(
+        &mut self,
+        setting: TypedSetting,
+        event: &TextFieldEvent,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            TextFieldEvent::Edited(_) => {}
+            TextFieldEvent::Submitted => {
+                self.send_typed(setting, cx);
+            }
+            TextFieldEvent::Cancelled => {
+                self.show_published(setting, cx);
+                self.page_wants_keyboard = true;
+                cx.notify();
+            }
+        }
+    }
+
+    // Left by a click elsewhere or the page closing, the value is written as if Enter had been pressed; Esc has already put back the published one.
+    fn left_field(&mut self, setting: TypedSetting, cx: &mut Context<Self>) {
+        if self.editing == Some(setting) {
+            self.editing = None;
+        }
+        let sent = self.send_typed(setting, cx);
+        if !sent {
+            self.show_published(setting, cx);
+        }
+    }
+
+    /// Writes what the field holds when it is a new, valid value; says whether it did.
+    fn send_typed(&mut self, setting: TypedSetting, cx: &mut Context<Self>) -> bool {
+        let text = self.field(setting).read(cx).text().to_string();
+        let key = setting.key();
+        let result = typed(setting, &text, &self.shown.settings);
+        cx.notify();
+        match result {
+            Typed::Change(change) => {
+                self.change_setting(change);
+                true
+            }
+            Typed::Unchanged => {
+                self.refused.remove(key);
+                false
+            }
+            Typed::NotWhole => {
+                self.refused.insert(key, NOT_WHOLE.to_string());
+                false
+            }
+        }
+    }
+
+    fn show_published(&self, setting: TypedSetting, cx: &mut Context<Self>) {
+        let text = published_text(setting, &self.shown.settings);
+        let field = self.field(setting);
+        field.update(cx, |field, cx| field.set_text(&text, cx));
+    }
+
+    /// Shows the published values and the look in every field but the one being typed in.
+    fn refresh_fields(&self, cx: &mut Context<Self>) {
+        for setting in TYPED_SETTINGS {
+            let look = self.look.clone();
+            let field = self.field(setting);
+            field.update(cx, |field, cx| field.set_look(look, cx));
+            if self.editing != Some(setting) {
+                self.show_published(setting, cx);
+            }
+        }
+    }
+
+    fn watch_field_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.field_focus.is_empty() {
+            return;
+        }
+        for setting in TYPED_SETTINGS {
+            let handle = self.field(setting).focus_handle(cx);
+            let entered = cx.on_focus(&handle, window, move |view, _, _| {
+                view.editing = Some(setting);
+            });
+            let left = cx.on_blur(&handle, window, move |view, _, cx| {
+                view.left_field(setting, cx);
+            });
+            self.field_focus.push(entered);
+            self.field_focus.push(left);
+        }
     }
 
     /// Runs the command a key-down's chord is bound to; false when the window has nothing to run for it, so the key goes on to the terminal.
@@ -967,6 +1082,7 @@ impl WindowView {
                     problems: &self.shown.notices.config_problems,
                     unread: &self.shown.unread,
                     refused: &self.refused,
+                    fields: &self.fields,
                     look,
                 };
                 let shown_page = settings_page(&input, cx).track_focus(&self.page_focus);
@@ -1056,6 +1172,7 @@ impl WindowView {
 
 impl Render for WindowView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.watch_field_focus(window, cx);
         self.viewport = window.viewport_size();
         let (drawn, kept) = drawn_with(&self.shown.drawn, self.ahead.as_ref());
         self.ahead = kept;
@@ -1154,4 +1271,30 @@ impl Render for WindowView {
         }
         root
     }
+}
+
+fn settings_fields(
+    settings: &Settings,
+    look: &Look,
+    cx: &mut Context<WindowView>,
+) -> SettingsFields {
+    let font = typed_field_for(TypedSetting::Font, settings, look, cx);
+    let scrollback = typed_field_for(TypedSetting::Scrollback, settings, look, cx);
+    SettingsFields { font, scrollback }
+}
+
+fn typed_field_for(
+    setting: TypedSetting,
+    settings: &Settings,
+    look: &Look,
+    cx: &mut Context<WindowView>,
+) -> Entity<TextField> {
+    let text = published_text(setting, settings);
+    let look = look.clone();
+    let field = cx.new(|cx| TextField::new(&text, look, cx));
+    let heard = cx.subscribe(&field, move |view, _, event: &TextFieldEvent, cx| {
+        view.field_said(setting, event, cx);
+    });
+    heard.detach();
+    field
 }

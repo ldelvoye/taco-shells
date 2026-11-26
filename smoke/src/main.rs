@@ -19,7 +19,7 @@ const BEFORE_LAUNCH: [Check; 1] = [Check {
     run: bundle::holds_only_dev_names,
 }];
 
-const LAUNCHED: [LaunchedCheck; 8] = [
+const LAUNCHED: [LaunchedCheck; 9] = [
     LaunchedCheck {
         name: "the window draws rows",
         run: window::draws_rows,
@@ -35,6 +35,10 @@ const LAUNCHED: [LaunchedCheck; 8] = [
     LaunchedCheck {
         name: "the settings page keeps what is typed on it and gives the keyboard back to the terminal",
         run: window::the_settings_page_keeps_and_returns_the_keyboard,
+    },
+    LaunchedCheck {
+        name: "a scrollback typed on the settings page is written to settings.json",
+        run: window::a_typed_scrollback_is_written_to_the_settings_file,
     },
     LaunchedCheck {
         name: "every marked part of the window has bounds, and nothing else does",
