@@ -5025,6 +5025,7 @@ dependencies = [
 name = "taco-runtime"
 version = "0.0.0"
 dependencies = [
+ "libc",
  "taco-ghostty",
  "taco-protocol",
  "taco-wire",
