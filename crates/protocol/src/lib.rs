@@ -7,6 +7,8 @@ mod hooks;
 mod ids;
 mod panels;
 mod rows;
+mod runtime;
+mod terminal;
 mod workspace;
 
 pub use activity::*;
@@ -16,4 +18,6 @@ pub use hooks::*;
 pub use ids::*;
 pub use panels::*;
 pub use rows::*;
+pub use runtime::*;
+pub use terminal::*;
 pub use workspace::*;
