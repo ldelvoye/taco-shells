@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::build::{self, APP_EXECUTABLE, Channel, Profile, RUNTIME_EXECUTABLE};
+use crate::build::{self, APP_EXECUTABLE, Build, Channel, Profile, RUNTIME_EXECUTABLE};
 use crate::identity::{DEVELOPMENT, Identity, STABLE};
 use crate::repo;
 use crate::version::{self, BundleVersion};
@@ -15,6 +15,7 @@ pub struct Options {
     pub zip: bool,
     pub icon: bool,
     pub drive: bool,
+    pub config_dir: Option<PathBuf>,
 }
 
 pub struct Bundled {
@@ -38,7 +39,13 @@ pub fn create(options: &Options) -> Result<Bundled, String> {
         Channel::Development => &DEVELOPMENT,
     };
 
-    let binaries = build::binaries(options.profile, options.channel, options.drive)?;
+    let build = Build {
+        profile: options.profile,
+        channel: options.channel,
+        drive: options.drive,
+        config_dir: options.config_dir.as_deref(),
+    };
+    let binaries = build::binaries(&build)?;
 
     let target = repo::target_dir()?;
     // Spotlight skips a folder ending in .noindex, so the build is not listed as a second copy of the app.

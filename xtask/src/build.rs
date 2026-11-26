@@ -10,6 +10,7 @@ pub const RUNTIME_EXECUTABLE: &str = "taco-shells-runtime";
 const APP_PACKAGE: &str = "taco-app";
 const RUNTIME_PACKAGE: &str = "taco-runtime";
 const DRIVE_FEATURE: &str = "taco-app/drive";
+const DEV_CONFIG_DIR_VARIABLE: &str = "TACO_SHELLS_DEV_CONFIG_DIR";
 
 #[derive(Clone, Copy)]
 pub enum Profile {
@@ -32,48 +33,62 @@ pub enum Channel {
     Stable,
 }
 
-pub fn binaries(profile: Profile, channel: Channel, drive: bool) -> Result<PathBuf, String> {
-    if drive && matches!(channel, Channel::Stable) {
+/// What the two programs are built as. `config_dir` is compiled into a development build as its config directory.
+pub struct Build<'a> {
+    pub profile: Profile,
+    pub channel: Channel,
+    pub drive: bool,
+    pub config_dir: Option<&'a Path>,
+}
+
+pub fn binaries(build: &Build) -> Result<PathBuf, String> {
+    let stable = matches!(build.channel, Channel::Stable);
+    if stable && build.drive {
         return Err("the test driver is never built into the stable app".to_string());
+    }
+    if stable && build.config_dir.is_some() {
+        return Err("the stable app always uses its own config directory".to_string());
     }
     let repo_root = repo::root()?;
     let target = repo::target_dir()?;
     let program = repo::cargo_program();
 
-    let mut cargo = cargo_command(program, profile, channel, drive, &target);
+    let mut cargo = cargo_command(program, build, &target);
     cargo.current_dir(&repo_root);
     repo::run(&mut cargo)?;
 
-    Ok(target.join(profile.directory()))
+    Ok(target.join(build.profile.directory()))
 }
 
-fn cargo_command(
-    program: OsString,
-    profile: Profile,
-    channel: Channel,
-    drive: bool,
-    target_dir: &Path,
-) -> Command {
+fn cargo_command(program: OsString, build: &Build, target_dir: &Path) -> Command {
     let mut cargo = Command::new(program);
     cargo.args(["build", "-p", APP_PACKAGE, "-p", RUNTIME_PACKAGE]);
-    if drive {
+    if build.drive {
         cargo.args(["--features", DRIVE_FEATURE]);
     }
     cargo.arg("--target-dir");
     cargo.arg(target_dir);
-    match profile {
+    match build.profile {
         Profile::Release => {
             cargo.arg("--release");
         }
         Profile::Debug => {}
     }
-    match channel {
+    // Each is set only when asked for, so a variable left in someone's shell cannot change what is built.
+    match build.channel {
         Channel::Stable => {
             cargo.env(CHANNEL_VARIABLE, STABLE_CHANNEL);
         }
         Channel::Development => {
-            // So a variable left in someone's shell cannot produce the stable app.
             cargo.env_remove(CHANNEL_VARIABLE);
+        }
+    }
+    match build.config_dir {
+        Some(directory) => {
+            cargo.env(DEV_CONFIG_DIR_VARIABLE, directory);
+        }
+        None => {
+            cargo.env_remove(DEV_CONFIG_DIR_VARIABLE);
         }
     }
     cargo
@@ -84,38 +99,43 @@ mod tests {
     use super::*;
     use std::ffi::OsStr;
 
-    fn channel_entry(command: &Command) -> Option<Option<OsString>> {
-        let variable = OsStr::new(CHANNEL_VARIABLE);
+    fn entry(command: &Command, variable: &str) -> Option<Option<OsString>> {
+        let wanted = OsStr::new(variable);
         for (name, value) in command.get_envs() {
-            if name == variable {
+            if name == wanted {
                 return Some(value.map(OsString::from));
             }
         }
         None
     }
 
-    #[test]
-    fn only_a_stable_build_carries_the_channel() {
-        let target = Path::new("target");
-        let development = cargo_command(
-            OsString::from("cargo"),
-            Profile::Debug,
-            Channel::Development,
-            false,
-            target,
-        );
-        let stable = cargo_command(
-            OsString::from("cargo"),
-            Profile::Debug,
-            Channel::Stable,
-            false,
-            target,
-        );
+    fn command_for(channel: Channel, config_dir: Option<&Path>) -> Command {
+        let build = Build {
+            profile: Profile::Debug,
+            channel,
+            drive: false,
+            config_dir,
+        };
+        cargo_command(OsString::from("cargo"), &build, Path::new("target"))
+    }
 
-        assert_eq!(channel_entry(&development), Some(None));
+    #[test]
+    fn a_build_carries_only_the_identity_it_was_asked_for() {
+        let baked = Path::new("/tmp/rehearsal/config");
+        let development = command_for(Channel::Development, None);
+        let rehearsal = command_for(Channel::Development, Some(baked));
+        let stable = command_for(Channel::Stable, None);
+
+        assert_eq!(entry(&development, CHANNEL_VARIABLE), Some(None));
+        assert_eq!(entry(&development, DEV_CONFIG_DIR_VARIABLE), Some(None));
         assert_eq!(
-            channel_entry(&stable),
+            entry(&rehearsal, DEV_CONFIG_DIR_VARIABLE),
+            Some(Some(OsString::from(baked)))
+        );
+        assert_eq!(
+            entry(&stable, CHANNEL_VARIABLE),
             Some(Some(OsString::from(STABLE_CHANNEL)))
         );
+        assert_eq!(entry(&stable, DEV_CONFIG_DIR_VARIABLE), Some(None));
     }
 }

@@ -17,7 +17,7 @@ use std::process::ExitCode;
 use build::{Channel, Profile};
 use bundle::Options;
 
-const USAGE: &str = "usage: cargo xtask <run [-- <app args>] | bundle [--release] [--stable] [--zip] | install | rehearse-update [--electron <app>] [--until-ready] | smoke | measure [--terminals=N ...] | ghostty-bindings>";
+const USAGE: &str = "usage: cargo xtask <run [-- <app args>] | bundle [--release] [--stable] [--zip] [--config-dir <absolute path>] | install | rehearse-update [--electron <app>] [--until-ready] | smoke | measure [--terminals=N ...] | ghostty-bindings>";
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = env::args().skip(1).collect();
@@ -93,12 +93,21 @@ fn bundle_options(rest: &[String]) -> Option<Options> {
         zip: false,
         icon: true,
         drive: false,
+        config_dir: None,
     };
-    for argument in rest {
+    let mut remaining = rest.iter();
+    while let Some(argument) = remaining.next() {
         match argument.as_str() {
             "--release" => options.profile = Profile::Release,
             "--stable" => options.channel = Channel::Stable,
             "--zip" => options.zip = true,
+            "--config-dir" => {
+                let directory = PathBuf::from(remaining.next()?);
+                if !directory.is_absolute() {
+                    return None;
+                }
+                options.config_dir = Some(directory);
+            }
             _ => return None,
         }
     }

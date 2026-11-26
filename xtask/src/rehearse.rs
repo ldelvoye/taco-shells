@@ -142,6 +142,7 @@ fn build_zip(work: &Path) -> Result<PathBuf, String> {
         zip: false,
         icon: false,
         drive: false,
+        config_dir: None,
     };
     let bundled = bundle::create(&options)?;
     let zip = work.join(zip_name());

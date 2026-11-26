@@ -32,6 +32,7 @@ pub fn run() -> Result<(), String> {
         zip: false,
         icon: true,
         drive: false,
+        config_dir: None,
     };
     let bundled = bundle::create(&options)?;
 
