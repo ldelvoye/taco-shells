@@ -43,6 +43,10 @@ class FakeRuntime implements Runtime {
     return
   }
 
+  setColors(): void {
+    return
+  }
+
   onStarted(listener: (event: TerminalStarted) => void): void {
     this.startedListeners.push(listener)
   }

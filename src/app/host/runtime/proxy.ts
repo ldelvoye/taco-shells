@@ -1,6 +1,7 @@
 import type { PtyExitEvent, PtySize, SessionId } from '@protocol/ipc'
 import type { Runtime, TerminalStart, TerminalStarted } from '@protocol/runtime'
 import type { RuntimeCommand, RuntimeQuery, RuntimeReport } from '@protocol/runtimeMessages'
+import type { TerminalColors } from '@protocol/theme'
 
 type Answer = string | string[] | null
 
@@ -69,6 +70,9 @@ export function createRuntimeProxy(post: (command: RuntimeCommand) => void): Run
     },
     setScrollback(lines: number): void {
       post({ type: 'scrollback', lines })
+    },
+    setColors(colors: TerminalColors): void {
+      post({ type: 'colors', colors })
     },
     onStarted(listener): void {
       startedListeners.push(listener)

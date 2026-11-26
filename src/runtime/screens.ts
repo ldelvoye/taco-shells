@@ -1,5 +1,6 @@
 import type { PtySize, SessionId } from '@protocol/ipc'
 import type { TerminalEvent, TerminalRequest } from '@protocol/runtimeMessages'
+import type { TerminalColors } from '@protocol/theme'
 import type { MakeScreen, Screen } from './screen'
 import type { PtySessions } from './sessions'
 
@@ -54,6 +55,7 @@ export class Screens {
   private readonly makeScreen: MakeScreen
   private readonly shells: ScreensOptions['shells']
   private scrollback = DEFAULT_SCROLLBACK
+  private colors: TerminalColors | null = null
   private current: Connection | null = null
 
   constructor(options: ScreensOptions) {
@@ -63,6 +65,9 @@ export class Screens {
 
   open(id: SessionId, size: PtySize): void {
     const screen = this.makeScreen({ size, scrollback: this.scrollback })
+    if (this.colors !== null) {
+      screen.setColors(this.colors)
+    }
     screen.onTitle((title) => {
       for (const listener of this.titleListeners) {
         listener(id, title)
@@ -131,6 +136,13 @@ export class Screens {
     this.scrollback = lines
     for (const terminal of this.terminals.values()) {
       terminal.screen.setScrollback(lines)
+    }
+  }
+
+  setColors(colors: TerminalColors): void {
+    this.colors = colors
+    for (const terminal of this.terminals.values()) {
+      terminal.screen.setColors(colors)
     }
   }
 

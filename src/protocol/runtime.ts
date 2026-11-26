@@ -1,4 +1,5 @@
 import type { PtyExitEvent, PtySize, SessionId } from './ipc'
+import type { TerminalColors } from './theme'
 
 /** A terminal to open: the workspace has already named it and placed it. */
 export interface TerminalStart {
@@ -25,6 +26,7 @@ export interface Runtime {
   write(id: SessionId, data: string): void
   resize(id: SessionId, size: PtySize): void
   setScrollback(lines: number): void
+  setColors(colors: TerminalColors): void
   onStarted(listener: (event: TerminalStarted) => void): void
   onExit(listener: (event: PtyExitEvent) => void): void
   onTitle(listener: (id: SessionId, title: string) => void): void

@@ -8,10 +8,35 @@ import type {
   TerminalEvent,
   TerminalRequest
 } from '@protocol/runtimeMessages'
+import type { TerminalColors } from '@protocol/theme'
 import type { Screen } from './screen'
 import { Screens } from './screens'
 import { serveRuntime, type RuntimeServer } from './server'
 import { PtySessions, type SpawnedPty, type SpawnPty } from './sessions'
+
+const COLORS: TerminalColors = {
+  background: '#123456',
+  foreground: '#010101',
+  cursor: '#020202',
+  cursorAccent: '#030303',
+  selectionBackground: '#040404',
+  black: '#050505',
+  red: '#060606',
+  green: '#070707',
+  yellow: '#080808',
+  blue: '#090909',
+  magenta: '#0a0a0a',
+  cyan: '#0b0b0b',
+  white: '#0c0c0c',
+  brightBlack: '#0d0d0d',
+  brightRed: '#0e0e0e',
+  brightGreen: '#0f0f0f',
+  brightYellow: '#101010',
+  brightBlue: '#111111',
+  brightMagenta: '#121212',
+  brightCyan: '#131313',
+  brightWhite: '#141414'
+}
 
 type DataListener = Parameters<SpawnedPty['onData']>[0]
 type ExitListener = Parameters<SpawnedPty['onExit']>[0]
@@ -75,11 +100,13 @@ function fakePty(): FakePty {
 interface StubScreen {
   screen: Screen
   scrollbacks: number[]
+  colors: TerminalColors[]
   fireTitle(title: string): void
 }
 
 function stubScreen(): StubScreen {
   const scrollbacks: number[] = []
+  const colors: TerminalColors[] = []
   const titleListeners: ((title: string) => void)[] = []
   const screen: Screen = {
     write: (_data, parsed) => {
@@ -93,6 +120,9 @@ function stubScreen(): StubScreen {
     setScrollback: (lines) => {
       scrollbacks.push(lines)
     },
+    setColors: (next) => {
+      colors.push(next)
+    },
     snapshot: () => '',
     onTitle: (listener) => {
       titleListeners.push(listener)
@@ -103,6 +133,7 @@ function stubScreen(): StubScreen {
   return {
     screen,
     scrollbacks,
+    colors,
     fireTitle(title) {
       for (const listener of titleListeners) {
         listener(title)
@@ -239,7 +270,7 @@ describe('RuntimeServer', () => {
     expect(answers).toContainEqual({ type: 'answer', ask: 9, value: 't1' })
   })
 
-  it("feeds a shell's output and exit to its screen, and reports its titles and scrollback", async () => {
+  it("feeds a shell's output and exit to its screen, and reports its titles, scrollback and colors", async () => {
     const { send, server, ptys, stubs, reports, nextReports } = served()
     const page = windowOf(server)
 
@@ -249,6 +280,7 @@ describe('RuntimeServer', () => {
     ptys[0].fireData('a')
     stubs[0].fireTitle('Tacos')
     send({ type: 'scrollback', lines: 500 })
+    send({ type: 'colors', colors: COLORS })
     ptys[0].fireExit(2)
 
     expect(page.events).toEqual([
@@ -258,6 +290,7 @@ describe('RuntimeServer', () => {
     ])
     expect(reports).toContainEqual({ type: 'titled', id: 't1', title: 'Tacos' })
     expect(stubs[0].scrollbacks).toEqual([500])
+    expect(stubs[0].colors).toEqual([COLORS])
   })
 
   it('takes typing and a new size from the window', async () => {

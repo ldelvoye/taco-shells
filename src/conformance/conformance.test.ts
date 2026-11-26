@@ -1,6 +1,7 @@
 import { Terminal } from '@xterm/headless'
 import { describe, expect, it } from 'vitest'
 
+import type { TerminalColors } from '@protocol/theme'
 import { makeXtermScreen } from '@runtime/engine/xtermScreen'
 import { trackCursorHidden } from '@runtime/engine/cursor'
 import type { Screen } from '@runtime/screen'
@@ -17,6 +18,29 @@ import { describeTerminal } from './describe'
 
 const SIZE = { cols: 80, rows: 24 }
 const SCROLLBACK = 1000
+const COLORS: TerminalColors = {
+  background: '#123456',
+  foreground: '#a1a2a3',
+  cursor: '#b1b2b3',
+  cursorAccent: '#000001',
+  selectionBackground: '#000002',
+  black: '#c1c2c3',
+  red: '#c4c5c6',
+  green: '#c7c8c9',
+  yellow: '#cacbcc',
+  blue: '#cdcecf',
+  magenta: '#d1d2d3',
+  cyan: '#d4d5d6',
+  white: '#d7d8d9',
+  brightBlack: '#dadbdc',
+  brightRed: '#dddedf',
+  brightGreen: '#e1e2e3',
+  brightYellow: '#e4e5e6',
+  brightBlue: '#e7e8e9',
+  brightMagenta: '#eaebec',
+  brightCyan: '#edeeef',
+  brightWhite: '#f1f2f3'
+}
 
 function makeScreen(): Screen {
   return makeXtermScreen({ size: SIZE, scrollback: SCROLLBACK })
@@ -168,6 +192,33 @@ describe('the runtime screen', () => {
       expect(answers, JSON.stringify(question)).toHaveLength(1)
       expect(fromTheView, JSON.stringify(question)).toEqual([])
     }
+
+    const colorQuery = '\x1b]11;?\x07'
+    const unset = makeScreen()
+    const unsetAnswers: string[] = []
+    unset.onReply((data) => {
+      unsetAnswers.push(data)
+    })
+    await parsed(unset, colorQuery)
+    expect(unsetAnswers).toEqual([])
+
+    const colored = makeScreen()
+    const coloredAnswers: string[] = []
+    colored.onReply((data) => {
+      coloredAnswers.push(data)
+    })
+    colored.setColors(COLORS)
+    await parsed(colored, colorQuery)
+    expect(coloredAnswers).toEqual(['\x1b]11;rgb:1212/3434/5656\x1b\\'])
+
+    const colorView = makeTerminal()
+    const fromTheColorView: string[] = []
+    leaveAnswersToTheRuntime(colorView.term)
+    colorView.term.onData((data) => {
+      fromTheColorView.push(data)
+    })
+    await written(colorView.term, colorQuery)
+    expect(fromTheColorView).toEqual([])
   })
 
   it('reports the title a program sets, the last one winning', async () => {
