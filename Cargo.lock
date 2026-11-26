@@ -179,6 +179,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "taco-drive"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "taco-protocol",
+]
+
+[[package]]
 name = "taco-protocol"
 version = "0.0.0"
 dependencies = [
