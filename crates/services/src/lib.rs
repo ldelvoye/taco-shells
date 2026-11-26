@@ -2,12 +2,14 @@
 
 mod config_files;
 mod config_store;
+mod hook_listener;
 mod identity;
 
 pub use config_files::{
     config_file_path, focus_port_path, read_config_texts, seed_config_files, unreadable_problems,
 };
 pub use config_store::ConfigStore;
+pub use hook_listener::{FOCUS_PORTS, HookListener, ListenerEvent};
 pub use identity::{
     APPLICATION_NAME, CONFIG_DIRECTORY_NAME, CONFIG_DIRECTORY_VARIABLE, IS_STABLE, config_directory,
 };

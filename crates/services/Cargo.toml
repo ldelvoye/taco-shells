@@ -10,6 +10,7 @@ taco-protocol.workspace = true
 taco-settings.workspace = true
 taco-agents.workspace = true
 notify.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -4612,6 +4612,7 @@ name = "taco-services"
 version = "0.0.0"
 dependencies = [
  "notify",
+ "serde_json",
  "taco-agents",
  "taco-protocol",
  "taco-settings",
