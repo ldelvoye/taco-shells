@@ -15,7 +15,9 @@ use taco_protocol::{
 };
 use taco_rules::{DropMark, DropPoint, drop_for, drop_mark_for, focus_target, selected_terminal};
 use taco_services::{AgentMenuAction, AgentSetupView};
-use taco_settings::{Binding, CommandId, Config, command_for, palette_for};
+use taco_settings::{
+    Binding, CommandId, Config, SettingChange, Settings, UnreadSettings, command_for, palette_for,
+};
 use taco_terminal_view::{Terminals, TerminalsEvent};
 
 use crate::activity::{ActivityInput, ActivityLog, activity_panel, now_ms};
@@ -37,6 +39,7 @@ use crate::panels::{
 };
 use crate::platform::TrafficLights;
 use crate::popups::{Popup, popup_layer};
+use crate::settings_page::{OverPage, Page, SettingsInput, over_page, settings_page};
 use crate::slot::{Slot, SlotLine, opened_height, slot_line_for};
 use crate::strip::strip;
 use crate::terminal_list::{ListDrag, ListInput, terminal_list};
@@ -47,6 +50,7 @@ const MIDDLE_MARK: &str = "middle";
 const PLACEHOLDER_FONT: &str = "Menlo";
 const PLACEHOLDER_TEXT_SIZE: f32 = 12.;
 const CLOCK_TICK: Duration = Duration::from_secs(30);
+const ESCAPE: &str = "escape";
 const TERMINAL_INSET_SIDE: f32 = 8.;
 const TERMINAL_INSET_TOP: f32 = 6.;
 
@@ -59,6 +63,8 @@ pub struct Shown {
     pub placeholder_screen: Vec<String>,
     pub setups: AgentSetupView,
     pub bindings: Vec<Binding>,
+    pub settings: Settings,
+    pub unread: UnreadSettings,
 }
 
 /// The one window's root view.
@@ -102,6 +108,15 @@ pub struct WindowView {
     slot_opened: Option<(SlotLine, Instant)>,
     /// The slot as drawn this frame.
     slot: Option<Slot>,
+    /// The pages over the middle, the top one drawn; empty when the terminal shows.
+    pages: Vec<Page>,
+    page_focus: FocusHandle,
+    /// A page has just opened and takes the keyboard on the next frame.
+    page_wants_keyboard: bool,
+    /// The last page has just closed and the terminal on screen takes the keyboard back.
+    terminal_wants_keyboard: bool,
+    /// Why each setting's last write was refused, by its name in settings.json, until it is written again.
+    refused: HashMap<&'static str, String>,
 }
 
 /// What the window does with a reply it asked for.
@@ -186,6 +201,11 @@ impl WindowView {
             viewport: Size::default(),
             slot_opened: None,
             slot: None,
+            pages: Vec::new(),
+            page_focus: cx.focus_handle(),
+            page_wants_keyboard: false,
+            terminal_wants_keyboard: false,
+            refused: HashMap::new(),
         }
     }
 
@@ -231,6 +251,8 @@ impl WindowView {
                 }
                 self.look = Look::new(config.appearance);
                 self.shown.bindings = config.bindings;
+                self.shown.settings = config.settings;
+                self.shown.unread = config.unread_settings;
                 notices.config_problems = config.problems;
             }
             ServicesOutput::UpdateReady { version } => {
@@ -245,7 +267,9 @@ impl WindowView {
                 }
             }
             ServicesOutput::QuitForUpdate => cx.dispatch_action(&Quit),
-            ServicesOutput::SettingRefused { .. } => {}
+            ServicesOutput::SettingRefused { key, reason } => {
+                self.refused.insert(key, reason);
+            }
         }
         cx.notify();
     }
@@ -474,10 +498,6 @@ impl WindowView {
         self.port.send(request, None);
     }
 
-    pub(crate) fn open_settings(&self) {
-        self.open_file(ConfigFile::Settings);
-    }
-
     fn open_file(&self, file: ConfigFile) {
         let request = WorkspaceRequest::OpenTerminal { file: Some(file) };
         self.port.send(request, None);
@@ -489,10 +509,19 @@ impl WindowView {
         if self.popup.is_some() {
             return false;
         }
+        let page_open = !self.pages.is_empty();
+        let escaped = event.keystroke.key == ESCAPE && !event.keystroke.modifiers.modified();
+        if page_open && escaped {
+            self.close_page(cx);
+            return true;
+        }
         let chord = chord_of(&event.keystroke);
         let Some(command) = command_for(&self.shown.bindings, &chord) else {
             return false;
         };
+        if page_open {
+            return self.run_over_page(command, event.is_held, cx);
+        }
         if !self.runs(command) {
             return false;
         }
@@ -503,6 +532,24 @@ impl WindowView {
         );
         if !event.is_held || repeats {
             self.run(command, cx);
+        }
+        true
+    }
+
+    /// A command while a page covers the terminal: nothing closes a terminal nobody can see, and anything that shows one closes the page first. The terminal's own commands do not run, so a field on the page keeps its keys.
+    fn run_over_page(&mut self, command: CommandId, held: bool, cx: &mut Context<Self>) -> bool {
+        if held {
+            return false;
+        }
+        match over_page(command) {
+            OverPage::ClosePage => self.close_page(cx),
+            OverPage::ToggleSettings => self.toggle_settings(cx),
+            OverPage::ShowTerminal => {
+                self.close_pages(cx);
+                self.run(command, cx);
+            }
+            OverPage::Run => self.run(command, cx),
+            OverPage::PassOn => return false,
         }
         true
     }
@@ -575,7 +622,7 @@ impl WindowView {
             CommandId::TerminalFocusNextGroup => self.move_focus(FocusMove::NextRow, cx),
             CommandId::TerminalFocusPreviousGroup => self.move_focus(FocusMove::PreviousRow, cx),
             CommandId::SidebarToggle => self.toggle_panel(Panel::Terminals),
-            CommandId::ConfigOpenSettings => self.open_file(ConfigFile::Settings),
+            CommandId::ConfigOpenSettings => self.toggle_settings(cx),
             CommandId::ConfigOpenKeybindings => self.open_file(ConfigFile::Keybindings),
             _ => self.run_in_terminal(command, cx),
         }
@@ -680,6 +727,7 @@ impl WindowView {
 
     // Drawn at once, ahead of the workspace, so a key typed straight after a selection reaches the new terminal.
     pub(crate) fn select(&mut self, terminal: &TerminalId, cx: &mut Context<Self>) {
+        self.close_pages(cx);
         let drawn = self.drawn();
         let current = selected_terminal(drawn.arrangement.as_ref());
         if current == Some(terminal) {
@@ -713,7 +761,12 @@ impl WindowView {
         self.port.send(request, None);
     }
 
-    pub(crate) fn open_terminal_in(&self, tab_group: Option<TabGroupId>) {
+    pub(crate) fn open_terminal_in(
+        &mut self,
+        tab_group: Option<TabGroupId>,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_pages(cx);
         let request = WorkspaceRequest::OpenTerminalIn { tab_group };
         self.port.send(request, None);
     }
@@ -771,7 +824,8 @@ impl WindowView {
             center = center.child(self.panel(panel, place, drawn, mark, cx));
         }
 
-        let side_strip = strip(&drawn.panels, look, cx);
+        let settings_open = self.pages.contains(&Page::Settings);
+        let side_strip = strip(&drawn.panels, settings_open, look, cx);
         let mut body = div().relative().flex().flex_1().min_h_0().child(side_strip);
         if let Some((panel, place)) = open_on(&drawn.panels, Edge::Left) {
             body = body.child(self.panel(panel, place, drawn, mark, cx));
@@ -846,14 +900,47 @@ impl WindowView {
     fn middle(&self, drawn: &DrawnState, cx: &mut Context<Self>) -> Div {
         let look = &self.look;
         let workspace_problem = drawn.problem.as_deref();
-        let banners = banners_of(&self.shown.notices, workspace_problem, &self.dismissed);
+        let page = self.pages.last().copied();
+        let mut notices = self.shown.notices.clone();
+        let mut banners_below = 0.;
+        if page.is_some() {
+            // The page's own card shows the config problems.
+            notices.config_problems.clear();
+            banners_below = TITLE_BAR_HEIGHT;
+        }
+        let banners = banners_of(&notices, workspace_problem, &self.dismissed);
         let mut terminal = div()
             .relative()
             .flex_1()
             .min_h_0()
             .overflow_hidden()
             .bg(look.terminal_background);
-        match &self.terminals {
+        match page {
+            Some(Page::Settings) => {
+                let input = SettingsInput {
+                    settings: &self.shown.settings,
+                    problems: &self.shown.notices.config_problems,
+                    depth: self.pages.len(),
+                    unread: &self.shown.unread,
+                    refused: &self.refused,
+                    look,
+                };
+                let shown_page = settings_page(&input, cx).track_focus(&self.page_focus);
+                terminal = terminal.child(shown_page);
+            }
+            None => terminal = self.terminal_or_placeholder(terminal, &self.terminals),
+        }
+        if !banners.is_empty() {
+            let cards = banner_cards(&banners, banners_below, look, cx);
+            terminal = terminal.child(cards);
+        }
+        terminal = mark(terminal, MIDDLE_MARK);
+        div().flex().flex_col().flex_1().min_h_0().child(terminal)
+    }
+
+    fn terminal_or_placeholder(&self, terminal: Div, terminals: &Option<Entity<Terminals>>) -> Div {
+        let mut terminal = terminal;
+        match terminals {
             Some(terminals) => {
                 // The grid is laid out inside the inset, so the size the view reports shrinks with it.
                 let inset = div()
@@ -866,12 +953,7 @@ impl WindowView {
             }
             None => terminal = terminal.child(self.placeholder()),
         }
-        if !banners.is_empty() {
-            let cards = banner_cards(&banners, look, cx);
-            terminal = terminal.child(cards);
-        }
-        terminal = mark(terminal, MIDDLE_MARK);
-        div().flex().flex_col().flex_1().min_h_0().child(terminal)
+        terminal
     }
 
     /// Tells the terminal view what changed, and keeps the keyboard in the terminal on screen.
@@ -892,7 +974,17 @@ impl WindowView {
         // A key pressed with nothing focused reaches no listener, so the keyboard goes back to the terminal, or the window.
         let focused = window.focused(cx);
         let unfocused = focused.is_none();
-        if !switched && !unfocused {
+        // While a page covers the terminal, the keyboard is the page's.
+        if !self.pages.is_empty() {
+            if self.page_wants_keyboard || unfocused {
+                self.page_wants_keyboard = false;
+                window.focus(&self.page_focus, cx);
+            }
+            return;
+        }
+        let page_closed = self.terminal_wants_keyboard;
+        self.terminal_wants_keyboard = false;
+        if !switched && !unfocused && !page_closed {
             return;
         }
         let on_screen = self.attached.on_screen.clone();
@@ -1021,5 +1113,47 @@ impl Render for WindowView {
             root = root.child(popup_layer(popup, &drawn, look, cx));
         }
         root
+    }
+}
+
+impl WindowView {
+    /// Opens the settings page, or closes it when it is the page on top.
+    pub(crate) fn toggle_settings(&mut self, cx: &mut Context<Self>) {
+        if self.pages.last() == Some(&Page::Settings) {
+            self.close_page(cx);
+            return;
+        }
+        self.pages.push(Page::Settings);
+        self.page_wants_keyboard = true;
+        cx.notify();
+    }
+
+    pub(crate) fn close_page(&mut self, cx: &mut Context<Self>) {
+        if self.pages.pop().is_none() {
+            return;
+        }
+        self.page_wants_keyboard = !self.pages.is_empty();
+        self.terminal_wants_keyboard = self.pages.is_empty();
+        cx.notify();
+    }
+
+    /// Closes every page, for an action that means to show a terminal.
+    fn close_pages(&mut self, cx: &mut Context<Self>) {
+        if self.pages.is_empty() {
+            return;
+        }
+        self.pages.clear();
+        self.terminal_wants_keyboard = true;
+        cx.notify();
+    }
+
+    pub(crate) fn change_setting(&mut self, change: SettingChange) {
+        let key = change.key();
+        self.refused.remove(key);
+        self.services.write_setting(change);
+    }
+
+    pub(crate) fn open_settings_file(&self) {
+        self.open_file(ConfigFile::Settings);
     }
 }

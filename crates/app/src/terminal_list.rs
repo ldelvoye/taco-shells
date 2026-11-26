@@ -332,7 +332,7 @@ fn open_in_group_button(
         .on_click(cx.listener(move |view, _, _, cx| {
             // The header behind it collapses on a click.
             cx.stop_propagation();
-            view.open_terminal_in(Some(opened_in.clone()));
+            view.open_terminal_in(Some(opened_in.clone()), cx);
         }))
 }
 
@@ -600,5 +600,5 @@ fn new_terminal_row(look: &Look, cx: &mut Context<WindowView>) -> Stateful<Div> 
         .hover(|style| style.bg(look.veil))
         .child(plus)
         .child(NEW_TERMINAL)
-        .on_click(cx.listener(|view, _, _, _| view.open_terminal_in(None)))
+        .on_click(cx.listener(|view, _, _, cx| view.open_terminal_in(None, cx)))
 }

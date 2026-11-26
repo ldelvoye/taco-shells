@@ -23,14 +23,19 @@ pub fn icon_of(panel: Panel) -> &'static str {
 }
 
 /// The strip of icons down the left edge: the panels in a fixed order, then Settings at the foot.
-pub fn strip(panels: &Panels, look: &Look, cx: &mut Context<WindowView>) -> Div {
+pub fn strip(
+    panels: &Panels,
+    settings_open: bool,
+    look: &Look,
+    cx: &mut Context<WindowView>,
+) -> Div {
     let terminals = panel_button(Panel::Terminals, &panels.terminals, look, cx);
     let agent_activity = panel_button(Panel::AgentActivity, &panels.agent_activity, look, cx);
-    let settings_button = button(SETTINGS_ICON, false, look);
+    let settings_button = button(SETTINGS_ICON, settings_open, look);
     let marked = mark(settings_button, SETTINGS_MARK);
     let settings = marked
         .id(SETTINGS_ID)
-        .on_click(cx.listener(|view, _, _, _| view.open_settings()));
+        .on_click(cx.listener(|view, _, _, cx| view.toggle_settings(cx)));
     div()
         .flex()
         .flex_col()

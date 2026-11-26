@@ -9,7 +9,7 @@ use taco_protocol::{
 };
 use taco_rules::default_panels;
 use taco_services::{AgentSetupNotice, AgentSetupNoticeKind, AgentSetupView};
-use taco_settings::{Binding, ConfigTexts, resolve_config};
+use taco_settings::{Binding, ConfigTexts, Settings, UnreadSettings, resolve_config};
 
 use crate::activity::{MS_PER_MINUTE, now_ms};
 use crate::banners::Notices;
@@ -17,6 +17,8 @@ use crate::window::Shown;
 
 const CLAUDE: &str = "claude";
 const STATE_MINUTES_AGO: u64 = 52;
+const FONT_SIZE_KEY: &str = "fontSize";
+const UNREAD_FONT_SIZE: &str = "settings.json: \"fontSize\" must be a number between 1 and 72";
 const OFFER_TEXT: &str =
     "Claude Code is running here but isn't set up, so its activity can't show.";
 
@@ -112,6 +114,8 @@ pub enum Fixture {
     Quiet,
     /// No terminals and no banners.
     Empty,
+    /// The quiet one with a settings file whose font size could not be read.
+    Broken,
 }
 
 struct FixtureRow {
@@ -134,6 +138,7 @@ impl Fixture {
             "mixed" => Some(Self::Mixed),
             "quiet" => Some(Self::Quiet),
             "empty" => Some(Self::Empty),
+            "broken" => Some(Self::Broken),
             _ => None,
         }
     }
@@ -143,6 +148,7 @@ impl Fixture {
             Self::Mixed => mixed(),
             Self::Quiet => quiet(),
             Self::Empty => empty(),
+            Self::Broken => broken(),
         }
     }
 
@@ -240,12 +246,21 @@ fn mixed() -> Shown {
         placeholder_screen: screen.collect(),
         setups: offered_setup(),
         bindings: default_bindings(),
+        settings: Settings::default(),
+        unread: UnreadSettings::None,
     }
 }
 
 fn quiet() -> Shown {
     let mut shown = mixed();
     shown.notices = Notices::default();
+    shown
+}
+
+fn broken() -> Shown {
+    let mut shown = quiet();
+    shown.notices.config_problems = vec![UNREAD_FONT_SIZE.to_string()];
+    shown.unread = UnreadSettings::Keys(vec![FONT_SIZE_KEY]);
     shown
 }
 
@@ -256,6 +271,8 @@ fn empty() -> Shown {
         placeholder_screen: Vec::new(),
         setups: AgentSetupView::default(),
         bindings: default_bindings(),
+        settings: Settings::default(),
+        unread: UnreadSettings::None,
     }
 }
 
