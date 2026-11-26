@@ -1,4 +1,4 @@
-use taco_protocol::{AgentSignal, HarnessId};
+use taco_protocol::{ActivityKind, AgentSignal, HarnessId};
 
 /// A terminal title read as a row name, and whether the agent said it is idle.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,6 +40,7 @@ pub struct Harness {
     pub(crate) resume_line: fn(&str) -> Option<String>,
     pub(crate) fork_line: Option<fn(&str, &str) -> Option<String>>,
     pub(crate) question_reader: Option<fn(&str, &str) -> Option<String>>,
+    pub(crate) entry_reader: Option<fn(&str, &str) -> Option<ActivityKind>>,
     pub(crate) setup: Option<&'static HarnessSetup>,
 }
 
@@ -94,6 +95,12 @@ impl Harness {
     /// The question a hook's payload asks the user, or none when the payload asks nothing.
     pub fn question_of(&self, event: &str, payload: &str) -> Option<String> {
         let reader = self.question_reader?;
+        reader(event, payload)
+    }
+
+    /// The Agent Activity entry a hook's payload makes, or none when it makes none.
+    pub fn entry_of(&self, event: &str, payload: &str) -> Option<ActivityKind> {
+        let reader = self.entry_reader?;
         reader(event, payload)
     }
 
