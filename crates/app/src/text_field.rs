@@ -6,17 +6,20 @@ use gpui::{
     GlobalElementId, InteractiveElement, IntoElement, KeyBinding, LayoutId, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, ParentElement, Pixels, Point, Render,
     ShapedLine, Style, Styled, TextAlign, TextRun, UTF16Selection, UnderlineStyle, Window, actions,
-    div, fill, point, px, relative, size,
+    div, fill, point, px, relative, size, transparent_black,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::look::Look;
+use crate::shell::shell_outline;
 
 const KEY_CONTEXT: &str = "TextField";
 const FIELD_HEIGHT: f32 = 24.;
 const FIELD_PADDING: f32 = 6.;
 const FIELD_RADIUS: f32 = 6.;
 const CARET_WIDTH: f32 = 1.;
+const SHELL_RING: f32 = 1.5;
+const SHELL_RING_ANGLE: f32 = 90.;
 
 actions!(
     text_field,
@@ -60,6 +63,8 @@ pub struct TextField {
     is_selecting: bool,
     /// How far the line is drawn left of the field's edge, so the caret stays in view.
     scroll: f32,
+    /// Whether the field holding the keyboard is ringed in the shell's colours.
+    shell_focus: bool,
 }
 
 struct TextElement {
@@ -91,7 +96,13 @@ impl TextField {
             last_bounds: None,
             is_selecting: false,
             scroll: 0.,
+            shell_focus: false,
         }
+    }
+
+    pub fn with_shell_focus(mut self) -> Self {
+        self.shell_focus = true;
+        self
     }
 
     /// Replaces the text, all of it selected, without telling the owner it was edited.
@@ -719,12 +730,20 @@ impl Focusable for TextField {
 }
 
 impl Render for TextField {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let background = self.look.selected_card;
-        let border = self.look.hairline;
+        let mut border = self.look.hairline;
         let focus_handle = self.focus_handle.clone();
         let line = TextElement { field: cx.entity() };
-        div()
+        let focused = focus_handle.is_focused(window);
+        let shell_ring = self.shell_focus && focused;
+        let mut field = div();
+        if shell_ring {
+            border = transparent_black();
+            let ring = shell_outline(SHELL_RING, FIELD_RADIUS, SHELL_RING_ANGLE);
+            field = field.relative().child(ring);
+        }
+        field
             .key_context(KEY_CONTEXT)
             .track_focus(&focus_handle)
             .cursor(CursorStyle::IBeam)

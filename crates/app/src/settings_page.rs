@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use gpui::{
-    Context, Div, ElementId, Entity, FontWeight, Hsla, InteractiveElement, ParentElement,
-    SharedString, Stateful, StatefulInteractiveElement, Styled, div, px, transparent_black,
+    Background, Context, Div, ElementId, Entity, FontWeight, Hsla, InteractiveElement,
+    ParentElement, SharedString, Stateful, StatefulInteractiveElement, Styled, div, px,
+    transparent_black, white,
 };
 use taco_settings::{
     CommandId, CursorStyle, FONT_SIZE_MAX, FONT_SIZE_MIN, SettingChange, Settings, ShellRowName,
@@ -11,11 +12,14 @@ use taco_settings::{
 
 use crate::drive::mark;
 use crate::look::{FONT_FAMILY, Look, SMALL_TEXT_SIZE, TEXT_SIZE, TITLE_BAR_HEIGHT};
+use crate::shell::{shell_gradient, shell_outline};
 use crate::text_field::TextField;
 use crate::window::WindowView;
 
 const SCROLL_ID: &str = "settings-scroll";
 const SCROLLBACK_MARK: &str = "settings:scrollback";
+const SHELL_ANGLE: f32 = 90.;
+const SHELL_OUTLINE: f32 = 1.5;
 const TITLE: &str = "Settings";
 const OPEN_FILE_LABEL: &str = "Open settings.json";
 const FOOT_TEXT: &str = "Changes are written to settings.json and apply at once.";
@@ -527,12 +531,14 @@ fn segmented(segments: Vec<Segment>, look: &Look, cx: &mut Context<WindowView>) 
             .text_color(look.secondary_text)
             .child(segment.label);
         if segment.chosen {
+            let outline = shell_outline(SHELL_OUTLINE, SEGMENT_RADIUS, SHELL_ANGLE);
             shown = shown
+                .relative()
                 .bg(look.selected_card)
-                .border_color(look.card_edge())
                 .shadow(look.card_shadow())
                 .text_color(look.text)
-                .font_weight(FontWeight::SEMIBOLD);
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(outline);
         } else {
             let change = segment.change;
             shown = shown
@@ -553,14 +559,14 @@ fn switch(
     look: &Look,
     cx: &mut Context<WindowView>,
 ) -> Div {
-    let mut track_color = look.strong_veil;
+    let mut track_color: Background = look.strong_veil.into();
     let mut border_color = look.hairline;
     let mut knob_color = look.secondary_text;
     let mut knob_left = KNOB_LEFT_OFF;
     if on {
-        track_color = look.text;
-        border_color = look.text;
-        knob_color = look.panels;
+        track_color = shell_gradient(SHELL_ANGLE);
+        border_color = transparent_black();
+        knob_color = white();
         knob_left = KNOB_LEFT_ON;
     }
     let knob = div()

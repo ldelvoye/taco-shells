@@ -1,7 +1,7 @@
 //! The taco shell's yellow and orange, which mark where a drag will land.
 
 use gpui::{
-    Bounds, Canvas, Hsla, Path, PathBuilder, Pixels, Styled, canvas, linear_color_stop,
+    Background, Bounds, Canvas, Hsla, Path, PathBuilder, Pixels, Styled, canvas, linear_color_stop,
     linear_gradient, point, px, rgb,
 };
 
@@ -18,15 +18,20 @@ fn shell_yellow() -> Hsla {
     yellow.into()
 }
 
+/// The shell's yellow running to orange along `angle` (degrees, 0 pointing up), as a fill.
+pub fn shell_gradient(angle: f32) -> Background {
+    let from = linear_color_stop(shell_yellow(), 0.);
+    let to = linear_color_stop(shell_orange(), 1.);
+    linear_gradient(angle, from, to)
+}
+
 /// A rounded outline over its parent, yellow running to orange along `angle` (degrees, 0 pointing up), with nothing painted inside it.
 pub fn shell_outline(width: f32, radius: f32, angle: f32) -> Canvas<()> {
     let paint = move |bounds: Bounds<Pixels>, (), window: &mut gpui::Window, _: &mut gpui::App| {
         let Some(path) = rounded_outline(bounds, width, radius) else {
             return;
         };
-        let from = linear_color_stop(shell_yellow(), 0.);
-        let to = linear_color_stop(shell_orange(), 1.);
-        let shell = linear_gradient(angle, from, to);
+        let shell = shell_gradient(angle);
         window.paint_path(path, shell);
     };
     canvas(|_, _, _| (), paint)
