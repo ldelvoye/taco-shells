@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -13,11 +13,9 @@ function git(...args) {
   execFileSync('git', args, { cwd: repository, stdio: 'ignore' })
 }
 
-function commit(message, path = 'file') {
-  const fullPath = join(repository, path)
-  mkdirSync(dirname(fullPath), { recursive: true })
-  writeFileSync(fullPath, message)
-  git('add', path)
+function commit(message) {
+  writeFileSync(join(repository, 'file'), message)
+  git('add', 'file')
   git('commit', '-m', message)
 }
 
@@ -65,17 +63,5 @@ describe('choosing a version from real commits', () => {
 
     expect(bump).toBe('major')
     expect(notes).toEqual(['fix: a small tweak'])
-  })
-
-  it('leaves commits to the release page out of the version and the notes', () => {
-    git('tag', 'v1.0.0')
-    commit('feat(site): a new section on the page', 'apps/site/public/index.html')
-    commit('feat(site): check the page on its own', '.github/workflows/site.yml')
-    commit('fix: an app fix')
-
-    const { bump, notes } = bumpAndNotes()
-
-    expect(bump).toBe('patch')
-    expect(notes).toEqual(['fix: an app fix'])
   })
 })

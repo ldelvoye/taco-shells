@@ -69,7 +69,6 @@ module.exports = {
 
   files: [
     '!src',
-    '!apps',
     '!crates',
     '!target',
     '!Cargo.toml',
