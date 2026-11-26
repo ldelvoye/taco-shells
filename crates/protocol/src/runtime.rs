@@ -9,6 +9,13 @@ pub struct TerminalSize {
     pub rows: u16,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CursorShape {
+    Block,
+    Bar,
+    Underline,
+}
+
 /// The size of one cell in the window's font, which a program's size reports (CSI 14, 16 and 18 t) answer from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CellSize {
@@ -41,6 +48,11 @@ pub enum RuntimeCommand {
         lines: u32,
     },
     Colors(TerminalColors),
+    /// The cursor a terminal shows when its program has not chosen one, or has given its choice back.
+    CursorDefaults {
+        shape: CursorShape,
+        blink: bool,
+    },
     /// A question, answered by a `RuntimeReport::Answer` carrying the same `ask`.
     Ask {
         ask: u64,

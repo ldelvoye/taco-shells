@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::ids::TerminalId;
-use crate::runtime::{CellSize, TerminalSize};
+use crate::runtime::{CellSize, CursorShape, TerminalSize};
 
 /// What a window asks of a terminal over the terminal channel. `Write` and `Resize` work with no view attached.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -58,6 +58,12 @@ pub enum TerminalEvent {
     },
     Cleared {
         id: TerminalId,
+    },
+    /// New cursor defaults, sent to a live view when they change. A snapshot already carries the ones in force.
+    CursorDefaults {
+        id: TerminalId,
+        shape: CursorShape,
+        blink: bool,
     },
     End {
         id: TerminalId,
