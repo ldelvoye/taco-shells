@@ -56,7 +56,7 @@ const WINDOW_WIDTH: f32 = 1100.;
 const WINDOW_HEIGHT: f32 = 720.;
 const MIN_WINDOW_WIDTH: f32 = 520.;
 const MIN_WINDOW_HEIGHT: f32 = 320.;
-/// Past the slowest shutdown: 1.5 s for the save, 2 s for the services, 4 s for the runtime.
+/// Past the slowest shutdown: 1.5 s for the save, 2 s for the services, 4 s for the runtime, 1.5 s for the save it freed.
 const SHUTDOWN_PATIENCE: Duration = Duration::from_secs(10);
 
 /// What is running behind the window, and whether quitting has begun.
