@@ -1,8 +1,9 @@
-//! A stand-in for the workspace, so a fixture can be clicked through: it applies the list's requests with `rules` and publishes the result.
+//! What the window runs on until the workspace is wired to it: the list's requests applied with `rules`, and the result published as the workspace would.
 
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
-use futures::channel::mpsc::UnboundedSender;
+use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use taco_protocol::{Arrangement, DrawnState, TerminalId, WorkspaceRequest};
 use taco_rules::{add_row_to, apply_drop, close_row, select_row, toggle_tab_group};
 
@@ -10,17 +11,21 @@ use crate::link::WorkspacePort;
 
 pub struct StandIn {
     state: RefCell<DrawnState>,
-    published: UnboundedSender<DrawnState>,
+    publisher: UnboundedSender<DrawnState>,
     opened: Cell<u64>,
 }
 
 impl StandIn {
-    pub fn new(state: DrawnState, published: UnboundedSender<DrawnState>) -> Self {
-        Self {
+    /// The port the window sends to, and the states it is published back.
+    pub fn start(state: DrawnState) -> (Rc<dyn WorkspacePort>, UnboundedReceiver<DrawnState>) {
+        let (publisher, published) = unbounded();
+        let stand_in = Self {
             state: RefCell::new(state),
-            published,
+            publisher,
             opened: Cell::new(0),
-        }
+        };
+        let port: Rc<dyn WorkspacePort> = Rc::new(stand_in);
+        (port, published)
     }
 
     fn new_terminal(&self) -> TerminalId {
@@ -39,12 +44,16 @@ impl WorkspacePort for StandIn {
                     state.focus_count = count;
                 }
                 rearrange(&mut state, |before| select_row(before, &terminal));
+                // Published even when the selection stood still: the window waits on the focus count.
                 true
             }
             WorkspaceRequest::CloseTerminal { terminal } => {
-                state.agent_rows.remove(&terminal);
-                state.directories.remove(&terminal);
-                rearrange(&mut state, |before| close_row(before, &terminal))
+                let closed = rearrange(&mut state, |before| close_row(before, &terminal));
+                if closed {
+                    state.agent_rows.remove(&terminal);
+                    state.directories.remove(&terminal);
+                }
+                closed
             }
             WorkspaceRequest::TabGroupToggled { id } => {
                 rearrange(&mut state, |before| toggle_tab_group(before, &id))
@@ -56,6 +65,7 @@ impl WorkspacePort for StandIn {
             WorkspaceRequest::Dropped { dragged, place } => {
                 rearrange(&mut state, |before| apply_drop(before, &dragged, &place))
             }
+            // The stand-in answers only what the list sends.
             _ => false,
         };
         if !changed {
@@ -64,7 +74,7 @@ impl WorkspacePort for StandIn {
         state.revision += 1;
         let snapshot = state.clone();
         // A send fails only once the window is gone, when there is nothing left to draw.
-        let _ = self.published.unbounded_send(snapshot);
+        let _ = self.publisher.unbounded_send(snapshot);
     }
 }
 
