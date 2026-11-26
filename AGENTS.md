@@ -18,14 +18,14 @@ src/workspace/  the arrangement and its reducer, opening and closing terminals, 
 src/app/        the Electron side: services, the window host, and the preload bridge
 src/window/     React: the sidebar, panes, and the terminal views
 src/testing/    helpers for tests
-walls/          the import checker and the list of imports that cross a wall today
+walls/          the import checker and the table of what each package may import
 hooks/          the scripts an agent's hooks run, shipped beside the app as files
 e2e/            drives the real app over the Chrome DevTools protocol
 scripts/        build, install and release commands
 apps/site/      the release page for tacoshells.dev, a package of its own (see "The release page")
 ```
 
-A package may import only what `walls/areas.ts` allows, and `npm test` fails on anything else. Imports across packages use the package's alias; imports inside one are relative. The crossings that exist today are in `walls/holes.ts`, each with the milestone that closes it; that list only shrinks.
+A package may import only what `walls/areas.ts` allows, and `npm test` fails on anything else. Imports across packages use the package's alias; imports inside one are relative. There is no list of exceptions: an import that crosses a wall fails the test, and the only way through is a line in the table.
 
 **The arrangement of terminals is not the window's to change.** It lives in `src/workspace/` in the main process; the window sends a `WorkspaceRequest` for each thing the user does and draws the `DrawnState` it is sent. Keyboard focus is the one thing the window moves first: `src/window/workspace/link.ts` lays its own focus move over the workspace's state until the workspace has applied it.
 
@@ -34,6 +34,25 @@ A package may import only what `walls/areas.ts` allows, and `npm test` fails on 
 **The shells run in their own process.** `out/main/runtime.js` is started with `utilityProcess`; the main process talks to it through `Runtime` (`src/app/host/runtime/proxy.ts`), and the window's keystrokes and output go to it directly over a message port the preload asks for. If it dies, the terminals go and the window says why; nothing restarts.
 
 **The runtime holds every terminal's screen, and the window's view follows it.** Each terminal has a headless xterm screen in the runtime (`src/runtime/screens.ts`), fed by the shell's output, and the window draws it with an xterm view. Each half keeps the engine in one folder: `src/runtime/engine/` (`@xterm/headless` and its serialize add-on) behind the `Screen` interface, and `src/window/terminal/engine/` (`@xterm/xterm`) behind the `TerminalView` interface in `src/window/terminal/view.ts`. One place in each half picks the engine (`src/runtime/main.ts`, and the registry), and everything else works through the interface. The window keeps a view for every terminal on screen, and for the most recently shown others until there are eight (`src/window/terminal/shown.ts`); showing another attaches a fresh view, which loads the runtime's snapshot, and one that falls out of that set is detached and disposed. A fresh view starts scrolled to the bottom with nothing selected; what the snapshot carries beyond the text is the hidden cursor and any colors the program set. A pane with no view still has a host, and its size is worked out by a view that has drawn, so every terminal keeps the size of its pane. The window attaches to a terminal over the channel, loads its view from a snapshot of the runtime's screen, and then follows the output, resize and clear events in the order they are sent. The size and Clear are the runtime's: the window asks (`pty.resize`, `pty.clear`) and the view changes only when the answer comes back. When a program asks the terminal something (its cursor position, what kind of terminal it is), the runtime's screen answers, since a view is not always there; the view is told to stay silent on those so the shell does not get two answers (`leaveAnswersToTheRuntime`). That includes a program asking for a color: the host pushes the terminal's colors to the runtime, as it pushes the scrollback setting, and the screen answers from them. Focus is the exception: only a view knows whether it has it, so only a view reports it. `src/conformance/` is the test that holds the two engine halves to the same result.
+
+## The three contracts
+
+The app is three layers with a wall between each pair, and every wall is a set of plain-data messages in `src/protocol/`. A window is built against the first and the third, and could be replaced without the other two layers knowing. A type in `src/protocol/plain.ts` fails the type check for a message that is not plain data.
+
+**Window and workspace** (`src/protocol/workspace.ts`). The window sends a `WorkspaceRequest` for each thing the user does and gets a `RequestReply`. The workspace publishes the whole `DrawnState` each time it changes, with a revision number, and the window draws it. The window stores nothing. Keyboard focus is the exception to "the window changes nothing": it moves focus at once and reports it, and keeps its own move on screen until the published `focusCount` has caught up.
+
+**Workspace and runtime** (`src/protocol/runtime.ts`, with its messages in `runtimeMessages.ts`). The workspace opens and closes terminals and hears them start, exit, get a title, and have a line submitted. It can ask a terminal's directory and what runs in it. The host pushes two settings the same way: the scrollback length and the terminal's colors. Agent status does not cross this wall: hook scripts call the app, which asks the runtime only which terminal the calling process belongs to.
+
+**Window and runtime, the terminal channel** (`TerminalRequest` and `TerminalEvent` in `runtimeMessages.ts`). It runs over a message port, so its payloads do not pass through the main process. The window attaches to a terminal and is sent `attached`, with the terminal's size and a snapshot, then `output`, with `resized` and `cleared` at their place in the output, and `end`. Nothing is sent to a view before its snapshot. Each attach carries a number that comes back in `attached`, because a message for a view the window has let go of can still be on its way when the next view is made. `write` and `resize` are addressed by terminal and work with no view attached.
+
+**What the terminal engine does not do yet.** These are known and none is a bug to chase without reading this first.
+
+- A snapshot does not carry the scroll region, origin mode, the saved cursor, the line-drawing character set, tab stops, the cursor's shape or hyperlinks. The first five are cases in `src/conformance/cases.ts` marked `known`, which run as expected failures. A full-screen program that is running when its terminal is brought back repaints itself; one that relies on a scroll region it set earlier can draw in the wrong place until it does.
+- Bringing back a terminal that has no view costs as much as its scrollback is long: about 20 ms for a short one and over half a second for a full 100,000 lines. The runtime writes the snapshot out in one go and sends nothing else while it does.
+- A terminal brought back starts scrolled to the bottom with nothing selected.
+- A color a program has set and then asks for is answered from the theme, not from what it set. The color itself is kept and shown.
+- The window's memory creeps up as views are made and disposed, by about 90 MB over 480 of them in one measured run. What a disposed view leaves behind has not been found.
+- A shell that is still starting when the app is killed outright can be left behind for ever, as a `spawn-helper` process with no parent: node-pty's helper waits to open a terminal whose other end is gone. When the app is asked to stop, the runtime ends its shells itself (`src/runtime/main.ts`), so this is left only for a kill the app cannot see. It shows up under load, when a helper takes long enough to start.
 
 ## Commands
 
