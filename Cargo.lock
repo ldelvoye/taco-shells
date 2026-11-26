@@ -353,6 +353,7 @@ dependencies = [
 name = "taco-agents"
 version = "0.0.0"
 dependencies = [
+ "serde_json",
  "taco-protocol",
 ]
 

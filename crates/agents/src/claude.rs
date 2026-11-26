@@ -17,6 +17,8 @@ const IDLE_GLYPH: char = '✳';
 // closing quote. 200 characters stay under that at four bytes each.
 const MAX_NAME_CHARACTERS: usize = 200;
 
+const MAX_QUESTION_CHARACTERS: usize = 1000;
+
 const UUID_LENGTH: usize = 36;
 const UUID_HYPHENS: [usize; 4] = [8, 13, 18, 23];
 
@@ -51,6 +53,7 @@ pub static CLAUDE: Harness = Harness {
     title_reader: Some(title_of),
     resume_line: resume_command,
     fork_line: Some(fork_command),
+    question_reader: Some(question_of),
     setup: Some(&SETUP),
 };
 
@@ -136,6 +139,36 @@ fn title_of(title: &str) -> AgentTitle {
         name: name.to_string(),
         idle: glyph == IDLE_GLYPH,
     }
+}
+
+// The text of a permission prompt or of the first question the agent asks with AskUserQuestion.
+fn question_of(event: &str, payload: &str) -> Option<String> {
+    let parsed: serde_json::Value = serde_json::from_str(payload).ok()?;
+    let pointer = match event {
+        "Notification" => {
+            let kind = parsed.pointer("/notification_type")?.as_str()?;
+            if !NEEDS_NOTIFICATIONS.contains(&kind) {
+                return None;
+            }
+            "/message"
+        }
+        "PreToolUse" => {
+            let tool = parsed.pointer("/tool_name")?.as_str()?;
+            if tool != "AskUserQuestion" {
+                return None;
+            }
+            "/tool_input/questions/0/question"
+        }
+        _ => return None,
+    };
+
+    let text = parsed.pointer(pointer)?.as_str()?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let kept = trimmed.chars().take(MAX_QUESTION_CHARACTERS);
+    Some(kept.collect())
 }
 
 fn resume_command(session_id: &str) -> Option<String> {
@@ -257,5 +290,33 @@ mod tests {
         assert_eq!(read("INFRENG-714"), ("INFRENG-714".to_string(), false));
         assert_eq!(read("✳INFRENG-714"), ("✳INFRENG-714".to_string(), false));
         assert_eq!(read("✳ "), (String::new(), true));
+    }
+
+    #[test]
+    fn a_question_comes_from_a_permission_prompt_or_ask_user_question_and_nothing_else() {
+        let permission = r#"{"hook_event_name":"Notification","notification_type":"permission_prompt","message":"Claude needs your permission to use Bash"}"#;
+        let idle =
+            r#"{"notification_type":"idle_prompt","message":"Claude is waiting for your input"}"#;
+        let asked = r#"{"tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which branch?","options":[]}]}}"#;
+        let other_tool = r#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#;
+        let long = format!(
+            r#"{{"tool_name":"AskUserQuestion","tool_input":{{"questions":[{{"question":"{}"}}]}}}}"#,
+            "a".repeat(5000)
+        );
+
+        assert_eq!(
+            question_of("Notification", permission).as_deref(),
+            Some("Claude needs your permission to use Bash")
+        );
+        assert_eq!(question_of("Notification", idle), None);
+        assert_eq!(
+            question_of("PreToolUse", asked).as_deref(),
+            Some("Which branch?")
+        );
+        assert_eq!(question_of("PreToolUse", other_tool), None);
+        assert_eq!(question_of("PostToolUse", asked), None);
+        assert_eq!(question_of("PreToolUse", "not json"), None);
+        let cut = question_of("PreToolUse", &long).unwrap();
+        assert_eq!(cut.chars().count(), MAX_QUESTION_CHARACTERS);
     }
 }
