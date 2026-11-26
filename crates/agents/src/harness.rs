@@ -39,6 +39,7 @@ pub struct Harness {
     pub(crate) title_reader: Option<fn(&str) -> AgentTitle>,
     pub(crate) resume_line: fn(&str) -> Option<String>,
     pub(crate) fork_line: Option<fn(&str, &str) -> Option<String>>,
+    pub(crate) question_reader: Option<fn(&str, &str) -> Option<String>>,
     pub(crate) setup: Option<&'static HarnessSetup>,
 }
 
@@ -88,6 +89,12 @@ impl Harness {
     pub fn fork_command(&self, session_id: &str, name: &str) -> Option<String> {
         let line = self.fork_line?;
         line(session_id, name)
+    }
+
+    /// The question a hook's payload asks the user, or none when the payload asks nothing.
+    pub fn question_of(&self, event: &str, payload: &str) -> Option<String> {
+        let reader = self.question_reader?;
+        reader(event, payload)
     }
 
     /// The hooks the app can wire; an agent without them has no Agents menu entry and no setup line.
