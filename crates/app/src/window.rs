@@ -5,9 +5,9 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use gpui::{
-    AnyElement, AppContext, ClipboardItem, Context, Div, DragMoveEvent, Entity, FocusHandle,
-    Focusable, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Pixels, Point, Render,
-    Size, Styled, Task, Window, div, px,
+    AnyElement, AppContext, Bounds, ClipboardItem, Context, Div, DragMoveEvent, Entity,
+    FocusHandle, Focusable, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Pixels,
+    Point, Render, Size, Styled, Task, Window, div, point, px, size,
 };
 use taco_protocol::{
     ActivityRequest, ConfigFile, Dragged, DrawnState, DropPlace, Edge, FocusMove, HarnessId, Panel,
@@ -26,13 +26,14 @@ use crate::keys::chord_of;
 use crate::link::{
     Ahead, Ports, ServicesOutput, ServicesPort, WindowOutput, WorkspacePort, drawn_with, next_move,
 };
-use crate::look::{FONT_FAMILY, Look, TEXT_SIZE};
+use crate::look::{FONT_FAMILY, Look, STRIP_WIDTH, TEXT_SIZE, TITLE_BAR_HEIGHT};
 use crate::menu::{
     AgentMenuClicked, Minimize, Quit, RestartToUpdate, ShowHookScripts, Zoom, set_menus,
 };
 use crate::middle::{Attachable, attachable, line_editing_bytes, opens_link};
 use crate::panels::{
-    PanelDrag, ResizeDrag, bounded_size, docked, drop_bands, open_on, place_of, size_for_pointer,
+    PanelDrag, ResizeDrag, bounded_size, docked, edge_near, landing_preview, open_on, place_of,
+    size_for_pointer,
 };
 use crate::platform::TrafficLights;
 use crate::popups::{Popup, popup_layer};
@@ -77,8 +78,8 @@ pub struct WindowView {
     popup: Option<Popup>,
     /// A panel being resized, and the size it is drawn at until the release sends it.
     resizing: Option<(Panel, f32)>,
-    /// Whether a panel is being moved by its title, which shows where it can go.
-    panel_dragging: bool,
+    /// A panel being moved by its title, and the edge it would go to with the pointer where it is.
+    panel_target: Option<(Panel, Edge)>,
     last_token: u64,
     awaiting: HashMap<u64, Awaited>,
     _following: Task<()>,
@@ -165,7 +166,7 @@ impl WindowView {
             drop_place: None,
             popup: None,
             resizing: None,
-            panel_dragging: false,
+            panel_target: None,
             last_token: 0,
             awaiting: HashMap::new(),
             _following: following,
@@ -410,9 +411,33 @@ impl WindowView {
         self.port.send(request, None);
     }
 
-    pub(crate) fn move_panel(&mut self, panel: Panel, edge: Edge, cx: &mut Context<Self>) {
-        self.panel_dragging = false;
+    /// Notes the edge a dragged panel would go to with the pointer here; true when it changed.
+    fn aim_panel(&mut self, panel: Panel, pointer: Point<Pixels>, window: Size<Pixels>) -> bool {
+        let origin = point(px(STRIP_WIDTH), px(TITLE_BAR_HEIGHT));
+        let width = window.width - px(STRIP_WIDTH);
+        let height = window.height - px(TITLE_BAR_HEIGHT);
+        let area = Bounds::new(origin, size(width, height));
+        let edge = edge_near(pointer, area);
+        let mut target = None;
+        if let Some(edge) = edge {
+            target = Some((panel, edge));
+        }
+        if target == self.panel_target {
+            return false;
+        }
+        self.panel_target = target;
+        true
+    }
+
+    fn drop_panel(&mut self, drag: &PanelDrag, cx: &mut Context<Self>) {
+        let target = self.panel_target.take();
         cx.notify();
+        let Some((panel, edge)) = target else {
+            return;
+        };
+        if panel != drag.panel {
+            return;
+        }
         let request = WorkspaceRequest::PanelMoved { panel, edge };
         self.port.send(request, None);
     }
@@ -723,8 +748,11 @@ impl WindowView {
         if let Some((panel, place)) = open_on(&drawn.panels, Edge::Right) {
             body = body.child(self.panel(panel, place, drawn, mark, cx));
         }
-        if self.panel_dragging {
-            body = body.child(drop_bands(look, cx));
+        if let Some((panel, edge)) = self.panel_target {
+            let place = place_of(&drawn.panels, panel);
+            let size = bounded_size(edge, place.size, self.viewport);
+            let preview = landing_preview(panel, edge, size, look);
+            body = body.child(preview);
         }
         body
     }
@@ -871,7 +899,7 @@ impl Render for WindowView {
         // Once no drag is under way, there is nothing to mark and no panel on the move.
         if !cx.has_active_drag() {
             self.drop_place = None;
-            self.panel_dragging = false;
+            self.panel_target = None;
             self.resizing = None;
         }
         let mut mark = None;
@@ -927,12 +955,17 @@ impl Render for WindowView {
                     cx.stop_propagation();
                 }
             }))
-            .on_drag_move(cx.listener(|view, _: &DragMoveEvent<PanelDrag>, _, cx| {
-                if !view.panel_dragging {
-                    view.panel_dragging = true;
-                    cx.notify();
-                }
-            }))
+            .on_drag_move(
+                cx.listener(|view, event: &DragMoveEvent<PanelDrag>, _, cx| {
+                    let panel = event.drag(cx).panel;
+                    let pointer = event.event.position;
+                    let window_size = event.bounds.size;
+                    if view.aim_panel(panel, pointer, window_size) {
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_drop(cx.listener(|view, drag: &PanelDrag, _, cx| view.drop_panel(drag, cx)))
             .on_drag_move(
                 cx.listener(|view, event: &DragMoveEvent<ResizeDrag>, _, cx| {
                     let drag = *event.drag(cx);
