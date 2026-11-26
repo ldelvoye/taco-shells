@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use jsonc_parser::cst::{CstInputValue, CstRootNode};
+use jsonc_parser::cst::{CstInputValue, CstNode, CstObject, CstRootNode};
 use jsonc_parser::parse_to_serde_value;
 use serde_json::{Map, Value};
 use taco_agents::{HarnessSetup, HookEntry};
@@ -194,39 +194,75 @@ fn insert_groups(source: &str, missing: &[(&HookEntry, String)]) -> Option<Strin
 }
 
 // The narrowest removal that leaves no empty group, event list or "hooks" object behind.
+fn properties_named(object: &CstObject, name: &str) -> usize {
+    let properties = object.properties();
+    let mut count = 0;
+    for property in properties {
+        let decoded = property.decoded_name();
+        if decoded.as_deref() == Some(name) {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn command_of(hook_node: &CstNode) -> Option<String> {
+    let hook = hook_node.as_object()?;
+    let command_prop = hook.get("command")?;
+    let command_value = command_prop.value()?;
+    let command_text = command_value.as_string_lit()?;
+    command_text.decoded_value().ok()
+}
+
+// The indexes come from serde's reading and are applied to the CST's, which can differ (a duplicate key), so the hook is checked before anything goes.
 fn remove_hook(text: &str, hook_ref: &HookRef, event_count: usize) -> Option<String> {
     let root = CstRootNode::parse(text, &JSONC_PARSE_OPTIONS).ok()?;
     let object = root.object_value()?;
+    let hooks_keys = properties_named(&object, HOOKS_KEY);
+    if hooks_keys != 1 {
+        return None;
+    }
     let hooks_prop = object.get(HOOKS_KEY)?;
-    let group_has_one_hook = hook_ref.hooks_in_group <= 1;
-    let event_has_one_group = hook_ref.groups_in_event <= 1;
-    let hooks_has_one_event = event_count <= 1;
-
-    if group_has_one_hook && event_has_one_group && hooks_has_one_event {
-        hooks_prop.remove();
-        return Some(root.to_string());
-    }
-
     let hooks = hooks_prop.object_value()?;
-    let event_prop = hooks.get(&hook_ref.event)?;
-    if group_has_one_hook && event_has_one_group {
-        event_prop.remove();
-        return Some(root.to_string());
+    let events = hooks.properties();
+    if events.len() != event_count {
+        return None;
     }
-
+    let event_keys = properties_named(&hooks, &hook_ref.event);
+    if event_keys != 1 {
+        return None;
+    }
+    let event_prop = hooks.get(&hook_ref.event)?;
     let groups = event_prop.array_value()?;
     let group_nodes = groups.elements();
-    let group_node = group_nodes.get(hook_ref.group_index)?;
-    if group_has_one_hook {
-        group_node.clone().remove();
-        return Some(root.to_string());
+    if group_nodes.len() != hook_ref.groups_in_event {
+        return None;
     }
-
+    let group_node = group_nodes.get(hook_ref.group_index)?;
     let group = group_node.as_object()?;
     let group_hooks = group.array_value(HOOKS_KEY)?;
     let hook_nodes = group_hooks.elements();
+    if hook_nodes.len() != hook_ref.hooks_in_group {
+        return None;
+    }
     let hook_node = hook_nodes.get(hook_ref.hook_index)?;
-    hook_node.clone().remove();
+    let command = command_of(hook_node)?;
+    if command != hook_ref.command {
+        return None;
+    }
+
+    let group_has_one_hook = hook_ref.hooks_in_group <= 1;
+    let event_has_one_group = hook_ref.groups_in_event <= 1;
+    let hooks_has_one_event = event_count <= 1;
+    if group_has_one_hook && event_has_one_group && hooks_has_one_event {
+        hooks_prop.remove();
+    } else if group_has_one_hook && event_has_one_group {
+        event_prop.remove();
+    } else if group_has_one_hook {
+        group_node.clone().remove();
+    } else {
+        hook_node.clone().remove();
+    }
     Some(root.to_string())
 }
 
@@ -606,5 +642,26 @@ mod tests {
         let both = changed_text(both_edit);
         let both_wiring = hook_wiring_of(Some(&both), setup(), &directory);
         assert_eq!(both_wiring, HookWiring::ByHand);
+    }
+
+    #[test]
+    fn a_removal_that_would_hit_another_hook_is_refused() {
+        let directory = hooks_directory();
+        let ours = directory.join("taco-shells-attention.sh");
+        let ours_text = ours.display().to_string();
+        let two_hooks_keys = format!(
+            r#"{{
+  "hooks": {{"Stop": [{{"hooks": [{{"type": "command", "command": "/some/user/script.sh"}}]}}]}},
+  "hooks": {{"Stop": [{{"hooks": [{{"type": "command", "command": "{ours_text}"}}]}}]}}
+}}"#
+        );
+
+        let removal = remove_managed_entries(&two_hooks_keys, &directory, LABEL);
+
+        let HookEdit::Refused(problem) = removal else {
+            panic!("expected a refusal, got {removal:?}");
+        };
+        let expected = uneditable_problem(LABEL);
+        assert_eq!(problem, expected);
     }
 }
