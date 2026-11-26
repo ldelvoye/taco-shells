@@ -28,6 +28,7 @@ postcard = { version = "1", default-features = false, features = ["use-std"] }
 notify = "9"
 tempfile = "3"
 bindgen = "0.72"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 # gpui has no release newer than 2025-10, so both crates pin one zed revision; move them together.
 gpui = { git = "https://github.com/zed-industries/zed", rev = "a3ce8d5e88e35697b2ba1cf9cb3c6816089b8281" }

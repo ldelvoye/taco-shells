@@ -9,6 +9,14 @@ publish.workspace = true
 name = "taco-shells"
 path = "src/main.rs"
 
+[[example]]
+name = "render"
+required-features = ["render"]
+
+[features]
+# Drawing the window to an image needs gpui's test support, which a shipped build never carries.
+render = ["gpui/test-support", "gpui_platform/test-support", "dep:image"]
+
 [dependencies]
 taco-protocol.workspace = true
 taco-rules.workspace = true
@@ -17,3 +25,6 @@ taco-workspace.workspace = true
 taco-settings.workspace = true
 taco-services.workspace = true
 taco-terminal-view.workspace = true
+gpui.workspace = true
+gpui_platform.workspace = true
+image = { workspace = true, optional = true }
