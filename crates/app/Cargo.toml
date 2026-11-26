@@ -16,6 +16,14 @@ required-features = ["render"]
 [features]
 # Drawing the window to an image needs gpui's test support, which a shipped build never carries.
 render = ["gpui/test-support", "gpui_platform/test-support", "dep:image"]
+# The smoke tests' way into the running window. xtask never builds it into the stable app.
+drive = [
+    "gpui/test-support",
+    "gpui_platform/test-support",
+    "dep:image",
+    "dep:taco-drive",
+    "dep:serde_json",
+]
 
 [dependencies]
 taco-protocol.workspace = true
@@ -29,3 +37,5 @@ gpui.workspace = true
 gpui_platform.workspace = true
 futures.workspace = true
 image = { workspace = true, optional = true }
+taco-drive = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
