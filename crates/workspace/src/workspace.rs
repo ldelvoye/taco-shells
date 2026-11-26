@@ -2,9 +2,10 @@ use std::collections::BTreeMap;
 
 use taco_agents::{HARNESSES, default_harness, harness_of};
 use taco_protocol::{
-    AgentLabel, AgentSignal, Arrangement, ConfigFile, DrawnState, HarnessId, HookCall, HookEvent,
-    Panels, RequestReply, Row, RowState, RuntimeCommand, RuntimeReport, TabGroup, TabGroupId,
-    TerminalId, TerminalSize, TerminalStart, WorkspaceRequest,
+    ActivityEvent, ActivityKind, ActivityRequest, AgentLabel, AgentSignal, Arrangement, ConfigFile,
+    DrawnState, HarnessId, HookCall, HookEvent, Panels, RequestReply, Row, RowState,
+    RuntimeCommand, RuntimeReport, TabGroup, TabGroupId, TerminalId, TerminalSize, TerminalStart,
+    WorkspaceRequest,
 };
 use taco_rules::{
     add_row, add_row_to, apply_drop, can_fork, close_panel, close_row, create_tab_group,
@@ -13,6 +14,7 @@ use taco_rules::{
     ungroup_tab_group,
 };
 
+use crate::log::{Log, line_of};
 use crate::rows::{
     AgentRows, Signalled, apply_idle_title, apply_on_screen, apply_question, apply_signal,
 };
@@ -45,6 +47,8 @@ pub enum Outbound {
     State(DrawnState),
     /// The last terminal has gone, which ends the app.
     Emptied,
+    /// For Agent Activity, on its own stream rather than in the state published whole.
+    Activity(ActivityEvent),
 }
 
 /// The owner of the arrangement: it applies what the window asks for and what the runtime and the hooks report.
@@ -72,6 +76,9 @@ pub struct Workspace {
     save_due: Option<u64>,
     unsaved_since: Option<u64>,
     frozen: bool,
+    logs: BTreeMap<TerminalId, Log>,
+    /// The terminal Agent Activity shows, which is sent each entry as it is logged.
+    watched: Option<TerminalId>,
 }
 
 fn agent_labels() -> BTreeMap<HarnessId, AgentLabel> {
@@ -123,6 +130,8 @@ impl Workspace {
             save_due: None,
             unsaved_since: None,
             frozen: false,
+            logs: BTreeMap::new(),
+            watched: None,
         }
     }
 
@@ -140,7 +149,9 @@ impl Workspace {
             Some(saved) => self.restore(saved, now_ms, &mut out),
             None => false,
         };
-        if !restored {
+        if restored {
+            self.drop_orphan_logs();
+        } else {
             self.open_fresh(None, &mut out);
         }
         self.finish(before, now_ms, &mut out);
@@ -237,10 +248,43 @@ impl Workspace {
         let mut out = Vec::new();
         let before = self.row_count();
         if self.holds(&event.terminal) {
-            self.apply_hook(&event.terminal, event.call, now_ms);
+            self.apply_hook(&event.terminal, event.call, now_ms, &mut out);
         }
         self.finish(before, now_ms, &mut out);
         out
+    }
+
+    /// What the window asks of Agent Activity: the terminal it shows, and older entries of it.
+    pub fn activity(&mut self, request: ActivityRequest) -> Vec<Outbound> {
+        let event = match request {
+            ActivityRequest::Watch { terminal } => {
+                self.watched = terminal.clone();
+                let Some(terminal) = terminal else {
+                    return Vec::new();
+                };
+                if !self.holds(&terminal) {
+                    return Vec::new();
+                }
+                let page = self.log_of(&terminal).newest();
+                ActivityEvent::Loaded {
+                    terminal,
+                    entries: page.entries,
+                    complete: page.complete,
+                }
+            }
+            ActivityRequest::Older { terminal, before } => {
+                if !self.holds(&terminal) {
+                    return Vec::new();
+                }
+                let page = self.log_of(&terminal).older_than(before);
+                ActivityEvent::Older {
+                    terminal,
+                    entries: page.entries,
+                    complete: page.complete,
+                }
+            }
+        };
+        vec![Outbound::Activity(event)]
     }
 
     /// The app came to the front: jump to the terminal that last asked for attention.
@@ -479,7 +523,12 @@ impl Workspace {
         accepted(None)
     }
 
+    // After a freeze, a quit or the runtime dying, the terminals going keep their logs, since the next launch reopens them.
     fn terminal_exited(&mut self, terminal: &TerminalId) {
+        if !self.frozen {
+            self.logs.remove(terminal);
+            self.options.storage.delete_log(terminal);
+        }
         self.sessions.forget(terminal);
         self.directories.remove(terminal);
         self.raw_titles.remove(terminal);
@@ -542,7 +591,13 @@ impl Workspace {
         }
     }
 
-    fn apply_hook(&mut self, terminal: &TerminalId, call: HookCall, now_ms: u64) {
+    fn apply_hook(
+        &mut self,
+        terminal: &TerminalId,
+        call: HookCall,
+        now_ms: u64,
+        out: &mut Vec<Outbound>,
+    ) {
         match call {
             HookCall::Attention => {
                 // asking while you are already in that terminal is not a request to go anywhere
@@ -595,6 +650,61 @@ impl Workspace {
                 if let Some(question) = agent.question_of(&event, &payload) {
                     apply_question(&mut self.rows, terminal, &session_id, question);
                 }
+                if let Some(kind) = agent.entry_of(&event, &payload) {
+                    self.log_entry(terminal, kind, now_ms, out);
+                }
+            }
+        }
+    }
+
+    // A terminal's log is read from storage the first time it is needed, and tidied then if its file holds lines it no longer keeps.
+    fn log_of(&mut self, terminal: &TerminalId) -> &mut Log {
+        if !self.logs.contains_key(terminal) {
+            let lines = self.options.storage.read_log(terminal);
+            let (mut log, needs_rewrite) = Log::from_lines(&lines);
+            if needs_rewrite {
+                let kept = log.rewritten();
+                self.options.storage.rewrite_log(terminal, &kept);
+            }
+            self.logs.insert(terminal.clone(), log);
+        }
+        self.logs.entry(terminal.clone()).or_default()
+    }
+
+    // The log belongs to the terminal, not to one session of its agent, so every session in it appends to the same one.
+    fn log_entry(
+        &mut self,
+        terminal: &TerminalId,
+        kind: ActivityKind,
+        now_ms: u64,
+        out: &mut Vec<Outbound>,
+    ) {
+        let log = self.log_of(terminal);
+        let (entry, needs_rewrite) = log.append(kind, now_ms);
+        let mut rewrite = None;
+        if needs_rewrite {
+            rewrite = Some(log.rewritten());
+        }
+        match (rewrite, line_of(&entry)) {
+            (Some(lines), _) => self.options.storage.rewrite_log(terminal, &lines),
+            (None, Some(line)) => self.options.storage.append_log(terminal, &line),
+            (None, None) => {}
+        }
+        if self.watched.as_ref() == Some(terminal) {
+            let appended = ActivityEvent::Appended {
+                terminal: terminal.clone(),
+                entry,
+            };
+            out.push(Outbound::Activity(appended));
+        }
+    }
+
+    /// Forgets the logs of terminals that are no longer open, once a restore has said which are.
+    fn drop_orphan_logs(&mut self) {
+        let stored = self.options.storage.logs();
+        for terminal in stored {
+            if !self.holds(&terminal) {
+                self.options.storage.delete_log(&terminal);
             }
         }
     }

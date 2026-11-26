@@ -1,4 +1,5 @@
-use taco_protocol::AgentSignal;
+use serde_json::Value;
+use taco_protocol::{ActivityKind, AgentSignal};
 
 use crate::harness::{AgentTitle, Harness, HarnessSetup, HookEntry};
 
@@ -21,6 +22,21 @@ const MAX_NAME_CHARACTERS: usize = 200;
 
 // A question is pinned above the log, so a longer one is cut rather than carried whole in every published state.
 const MAX_QUESTION_CHARACTERS: usize = 1000;
+// An entry is a line in a narrow panel, kept for a thousand entries, so a prompt or a command is cut to this.
+const MAX_ENTRY_CHARACTERS: usize = 1000;
+
+const CHANGING_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit"];
+const CHANGED_PATHS: &[&str] = &["/tool_input/file_path", "/tool_input/notebook_path"];
+/// The input field that says, in one line, what each tool did.
+const SUMMARY_FIELDS: &[(&str, &str)] = &[
+    ("Bash", "/tool_input/command"),
+    ("Read", "/tool_input/file_path"),
+    ("Grep", "/tool_input/pattern"),
+    ("Glob", "/tool_input/pattern"),
+    ("WebFetch", "/tool_input/url"),
+    ("WebSearch", "/tool_input/query"),
+    ("Task", "/tool_input/description"),
+];
 
 const UUID_LENGTH: usize = 36;
 const UUID_HYPHENS: [usize; 4] = [8, 13, 18, 23];
@@ -57,6 +73,7 @@ pub static CLAUDE: Harness = Harness {
     resume_line: resume_command,
     fork_line: Some(fork_command),
     question_reader: Some(question_of),
+    entry_reader: Some(entry_of),
     setup: Some(&SETUP),
 };
 
@@ -172,6 +189,60 @@ fn question_of(event: &str, payload: &str) -> Option<String> {
     }
     let kept = trimmed.chars().take(MAX_QUESTION_CHARACTERS);
     Some(kept.collect())
+}
+
+fn cut_to(text: &str, limit: usize) -> String {
+    let kept = text.trim().chars().take(limit);
+    kept.collect()
+}
+
+fn text_at(parsed: &Value, pointer: &str) -> Option<String> {
+    let text = parsed.pointer(pointer)?.as_str()?;
+    let cut = cut_to(text, MAX_ENTRY_CHARACTERS);
+    if cut.is_empty() {
+        return None;
+    }
+    Some(cut)
+}
+
+// A summary is one line, so a multi-line command shows its first.
+fn summary_of(tool: &str, parsed: &Value) -> String {
+    let mut fields = SUMMARY_FIELDS.iter();
+    let Some((_, pointer)) = fields.find(|(name, _)| *name == tool) else {
+        return String::new();
+    };
+    let Some(text) = text_at(parsed, pointer) else {
+        return String::new();
+    };
+    let mut lines = text.lines();
+    let first = lines.next();
+    match first {
+        Some(line) => line.to_string(),
+        None => String::new(),
+    }
+}
+
+// What you asked, from a submitted prompt, and what the agent did or changed, from a finished tool call.
+fn entry_of(event: &str, payload: &str) -> Option<ActivityKind> {
+    let parsed: Value = serde_json::from_str(payload).ok()?;
+    match event {
+        "UserPromptSubmit" => {
+            let text = text_at(&parsed, "/prompt")?;
+            Some(ActivityKind::Asked { text })
+        }
+        // logged once a tool has run, so one the user refused never shows as done
+        "PostToolUse" => {
+            let tool = text_at(&parsed, "/tool_name")?;
+            let mut paths = CHANGED_PATHS.iter();
+            let path = paths.find_map(|pointer| text_at(&parsed, pointer));
+            if let (true, Some(path)) = (CHANGING_TOOLS.contains(&tool.as_str()), path) {
+                return Some(ActivityKind::Changed { tool, path });
+            }
+            let summary = summary_of(&tool, &parsed);
+            Some(ActivityKind::Did { tool, summary })
+        }
+        _ => None,
+    }
 }
 
 fn resume_command(session_id: &str) -> Option<String> {
@@ -325,5 +396,66 @@ mod tests {
         assert_eq!(question_of("PreToolUse", "not json"), None);
         let cut = question_of("PreToolUse", &long).unwrap();
         assert_eq!(cut.chars().count(), MAX_QUESTION_CHARACTERS);
+    }
+
+    #[test]
+    fn a_prompt_a_finished_tool_and_a_changed_file_each_make_an_entry_and_nothing_else_does() {
+        let entry = |event: &str, payload: &str| entry_of(event, payload);
+        let did = |tool: &str, summary: &str| ActivityKind::Did {
+            tool: tool.into(),
+            summary: summary.into(),
+        };
+        let changed = |tool: &str, path: &str| ActivityKind::Changed {
+            tool: tool.into(),
+            path: path.into(),
+        };
+
+        let prompt =
+            r#"{"hook_event_name":"UserPromptSubmit","prompt":"  Fix the tacos\nplease  "}"#;
+        let asked = ActivityKind::Asked {
+            text: "Fix the tacos\nplease".into(),
+        };
+        assert_eq!(entry("UserPromptSubmit", prompt), Some(asked));
+        assert_eq!(entry("UserPromptSubmit", r#"{"prompt":"  "}"#), None);
+
+        let bash = r#"{"tool_name":"Bash","tool_input":{"command":"cargo test\n--locked"}}"#;
+        assert_eq!(entry("PostToolUse", bash), Some(did("Bash", "cargo test")));
+        assert_eq!(entry("PreToolUse", bash), None, "only a tool that ran");
+        let edit =
+            r#"{"tool_name":"Edit","tool_input":{"file_path":"/w/src/main.rs","old_string":"a"}}"#;
+        assert_eq!(
+            entry("PostToolUse", edit),
+            Some(changed("Edit", "/w/src/main.rs"))
+        );
+        let notebook =
+            r#"{"tool_name":"NotebookEdit","tool_input":{"notebook_path":"/w/a.ipynb"}}"#;
+        assert_eq!(
+            entry("PostToolUse", notebook),
+            Some(changed("NotebookEdit", "/w/a.ipynb"))
+        );
+        let unknown = r#"{"tool_name":"mcp__linear__get_issue","tool_input":{"id":"X-1"}}"#;
+        assert_eq!(
+            entry("PostToolUse", unknown),
+            Some(did("mcp__linear__get_issue", ""))
+        );
+        assert_eq!(entry("Stop", prompt), None);
+        assert_eq!(entry("PostToolUse", "{"), None);
+
+        let huge = format!(
+            r#"{{"tool_name":"Write","tool_input":{{"file_path":"/w/big","content":"{}"}}}}"#,
+            "x".repeat(100_000)
+        );
+        assert_eq!(
+            entry("PostToolUse", &huge),
+            Some(changed("Write", "/w/big"))
+        );
+        let long_command = format!(
+            r#"{{"tool_name":"Bash","tool_input":{{"command":"{}"}}}}"#,
+            "y".repeat(5_000)
+        );
+        let Some(ActivityKind::Did { summary, .. }) = entry("PostToolUse", &long_command) else {
+            panic!("a command makes an entry");
+        };
+        assert_eq!(summary.chars().count(), MAX_ENTRY_CHARACTERS);
     }
 }

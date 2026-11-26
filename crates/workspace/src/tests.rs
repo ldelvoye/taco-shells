@@ -1,8 +1,10 @@
 use taco_protocol::{
-    AgentSignal, ConfigFile, DrawnState, HarnessId, HookCall, HookEvent, RowState, RuntimeCommand,
-    RuntimeReport, TabGroupId, TerminalId, TerminalStart, WorkspaceRequest,
+    ActivityEvent, ActivityKind, ActivityRequest, AgentSignal, ConfigFile, DrawnState, HarnessId,
+    HookCall, HookEvent, RowState, RuntimeCommand, RuntimeReport, TabGroupId, TerminalId,
+    TerminalStart, WorkspaceRequest,
 };
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use crate::sessions::PROVISIONAL_MS;
@@ -16,6 +18,7 @@ struct Disk {
     file: Arc<Mutex<Option<String>>>,
     writes: Arc<Mutex<usize>>,
     failing: Arc<Mutex<bool>>,
+    logs: Arc<Mutex<BTreeMap<TerminalId, Vec<String>>>>,
 }
 
 impl Disk {
@@ -50,6 +53,34 @@ impl Storage for Disk {
         *self.file.lock().unwrap() = Some(text.to_string());
         *self.writes.lock().unwrap() += 1;
         true
+    }
+
+    fn read_log(&self, terminal: &TerminalId) -> Vec<String> {
+        let logs = self.logs.lock().unwrap();
+        match logs.get(terminal) {
+            Some(lines) => lines.clone(),
+            None => Vec::new(),
+        }
+    }
+
+    fn append_log(&mut self, terminal: &TerminalId, line: &str) {
+        let mut logs = self.logs.lock().unwrap();
+        let lines = logs.entry(terminal.clone()).or_default();
+        lines.push(line.to_string());
+    }
+
+    fn rewrite_log(&mut self, terminal: &TerminalId, lines: &[String]) {
+        let mut logs = self.logs.lock().unwrap();
+        logs.insert(terminal.clone(), lines.to_vec());
+    }
+
+    fn delete_log(&mut self, terminal: &TerminalId) {
+        self.logs.lock().unwrap().remove(terminal);
+    }
+
+    fn logs(&self) -> Vec<TerminalId> {
+        let logs = self.logs.lock().unwrap();
+        logs.keys().cloned().collect()
     }
 }
 
@@ -643,4 +674,132 @@ fn a_file_that_cannot_be_restored_or_a_restore_turned_off_opens_one_fresh_termin
     });
     let starts = opened(&workspace.start(0));
     assert_eq!(starts.len(), 1);
+}
+
+fn prompted(
+    workspace: &mut Workspace,
+    terminal: &str,
+    session_id: &str,
+    prompt: &str,
+) -> Vec<Outbound> {
+    let payload = serde_json::json!({ "prompt": prompt }).to_string();
+    let call = HookCall::AgentHook {
+        harness: claude(),
+        session_id: session_id.into(),
+        event: "UserPromptSubmit".into(),
+        payload,
+    };
+    hook(workspace, terminal, call, 0)
+}
+
+fn activity(out: &[Outbound]) -> Vec<ActivityEvent> {
+    let events = out.iter().filter_map(|outbound| match outbound {
+        Outbound::Activity(event) => Some(event.clone()),
+        _ => None,
+    });
+    events.collect()
+}
+
+/// The texts a terminal's log shows when the window watches it, oldest first.
+fn logged(workspace: &mut Workspace, terminal: &str) -> Vec<String> {
+    let watch = ActivityRequest::Watch {
+        terminal: Some(id(terminal)),
+    };
+    let out = workspace.activity(watch);
+    let Some(ActivityEvent::Loaded { entries, .. }) = activity(&out).pop() else {
+        return Vec::new();
+    };
+    let texts = entries.into_iter().map(|entry| match entry.kind {
+        ActivityKind::Asked { text } => text,
+        other => format!("{other:?}"),
+    });
+    texts.collect()
+}
+
+#[test]
+fn a_log_belongs_to_its_terminal_across_sessions_and_only_the_watched_one_is_streamed() {
+    let mut workspace = workspace();
+    ask(
+        &mut workspace,
+        WorkspaceRequest::OpenTerminal { file: None },
+    );
+
+    prompted(&mut workspace, "t1", SESSION, "first");
+    // a /clear, a compaction or a new agent in the same terminal starts another session
+    let other_session = "223e4567-e89b-12d3-a456-426614174000";
+    prompted(&mut workspace, "t1", other_session, "second");
+    assert_eq!(logged(&mut workspace, "t1"), vec!["first", "second"]);
+
+    let streamed = prompted(&mut workspace, "t1", other_session, "third");
+    let appended = activity(&streamed);
+    assert!(matches!(&appended[..], [ActivityEvent::Appended { entry, .. }] if entry.seq == 2));
+    let unwatched = prompted(&mut workspace, "t2", SESSION, "elsewhere");
+    assert!(activity(&unwatched).is_empty());
+    assert_eq!(logged(&mut workspace, "t2"), vec!["elsewhere"]);
+
+    let nothing = ActivityRequest::Watch { terminal: None };
+    assert!(workspace.activity(nothing).is_empty());
+    let quiet = prompted(&mut workspace, "t1", SESSION, "fourth");
+    assert!(
+        activity(&quiet).is_empty(),
+        "nothing is streamed once no terminal is watched"
+    );
+}
+
+#[test]
+fn quitting_with_terminals_open_keeps_their_logs_and_closing_a_terminal_deletes_its_own() {
+    let disk = Disk::default();
+    let mut workspace = Workspace::new(options_on(&disk, 0));
+    workspace.start(0);
+    ask(
+        &mut workspace,
+        WorkspaceRequest::OpenTerminal { file: None },
+    );
+    prompted(&mut workspace, "t1", SESSION, "kept through a quit");
+    prompted(&mut workspace, "t2", SESSION, "kept too");
+
+    // the quit: frozen first, then every shell goes as the runtime stops
+    workspace.freeze();
+    exited(&mut workspace, "t1");
+    exited(&mut workspace, "t2");
+    workspace.flush(1_000);
+
+    let (mut reopened, _) = launched(&disk);
+    assert_eq!(logged(&mut reopened, "t1"), vec!["kept through a quit"]);
+    assert_eq!(logged(&mut reopened, "t2"), vec!["kept too"]);
+
+    exited(&mut reopened, "t2");
+    assert!(
+        !disk.logs().contains(&id("t2")),
+        "a terminal that closes takes its log with it"
+    );
+    assert!(disk.logs().contains(&id("t1")));
+
+    reopened.runtime_died("killed", 2_000);
+    reopened.flush(3_000);
+    let (mut after_crash, _) = launched(&disk);
+    assert_eq!(logged(&mut after_crash, "t1"), vec!["kept through a quit"]);
+}
+
+#[test]
+fn a_log_whose_terminal_is_gone_at_launch_is_removed_once_the_restore_has_succeeded() {
+    let disk = Disk::default();
+    let mut workspace = Workspace::new(options_on(&disk, 0));
+    workspace.start(0);
+    prompted(&mut workspace, "t1", SESSION, "open");
+    workspace.flush(1_000);
+    let mut stray = disk.clone();
+    stray.append_log(&id("closed-while-crashing"), "{}");
+
+    let unreadable = Disk::holding("not a save");
+    let mut kept = unreadable.clone();
+    kept.append_log(&id("t9"), "{}");
+    launched(&unreadable);
+    assert!(
+        unreadable.logs().contains(&id("t9")),
+        "no restore, so nothing is known to be gone"
+    );
+
+    launched(&disk);
+    assert_eq!(disk.logs(), vec![id("t1")]);
 }
