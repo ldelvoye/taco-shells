@@ -1,10 +1,12 @@
 //! One terminal's view: a silent copy of the runtime's terminal, fed in the order the terminal channel sends.
 
+use taco_ghostty::input::{CellPoint, KeyEncoder, KeyPress, MouseEncoder, MouseInput, Scroll};
 use taco_ghostty::render::{Dirty, RenderState, Row};
 use taco_ghostty::{Error, Step, Terminal};
 use taco_protocol::{Rgb, TerminalColors, TerminalEvent};
 
 use crate::draw::{Painting, lay_out};
+use crate::links::url_at;
 
 /// What every view's terminal is set to.
 #[derive(Debug, Clone, PartialEq)]
@@ -38,18 +40,25 @@ pub struct View {
     render: RenderState,
     /// The viewport as last read, refreshed a dirty row at a time.
     rows: Vec<Row>,
+    /// Remembers the last cell it reported, so it belongs to one terminal.
+    mouse: MouseEncoder,
+    /// The text selected when the selection was made. Output that changes it, scrolling the rows away or writing over them, ends the selection.
+    selected_text: Option<String>,
     config: ViewConfig,
 }
 
 impl View {
     pub fn new(attachment: u64, config: ViewConfig) -> Result<View, Error> {
         let render = RenderState::new()?;
+        let mouse = MouseEncoder::new()?;
         Ok(View {
             attachment,
             terminal: None,
             history_pending: false,
             render,
             rows: Vec::new(),
+            mouse,
+            selected_text: None,
             config,
         })
     }
@@ -87,6 +96,7 @@ impl View {
                     return Ok(Applied::Ignored);
                 };
                 terminal.write(&data);
+                self.end_a_stale_selection()?;
                 Ok(Applied::Changed)
             }
             TerminalEvent::Resized { size, .. } => {
@@ -95,6 +105,7 @@ impl View {
                 };
                 // Pixel sizes matter only for answering size reports, which the runtime does.
                 terminal.resize(size, 0, 0)?;
+                self.end_a_stale_selection()?;
                 Ok(Applied::Changed)
             }
             TerminalEvent::Cleared { .. } => {
@@ -102,6 +113,7 @@ impl View {
                     return Ok(Applied::Ignored);
                 };
                 terminal.clear()?;
+                self.end_a_stale_selection()?;
                 Ok(Applied::Changed)
             }
             TerminalEvent::End { .. } => Ok(Applied::Ended),
@@ -150,6 +162,141 @@ impl View {
             painting,
             background: colors.background,
         }))
+    }
+
+    /// What `press` sends to the program, under its current modes. Empty before `Attached`.
+    pub fn key(&mut self, keys: &mut KeyEncoder, press: &KeyPress) -> Result<Vec<u8>, Error> {
+        let Some(terminal) = self.terminal.as_mut() else {
+            return Ok(Vec::new());
+        };
+        let bytes = keys.encode(terminal, press)?;
+        // Typing brings the view back to the newest output.
+        terminal.scroll(Scroll::Bottom)?;
+        Ok(bytes)
+    }
+
+    pub fn paste_bytes(&mut self, text: &str) -> Result<Vec<u8>, Error> {
+        let Some(terminal) = self.terminal.as_mut() else {
+            return Ok(Vec::new());
+        };
+        let bytes = terminal.paste_bytes(text)?;
+        terminal.scroll(Scroll::Bottom)?;
+        Ok(bytes)
+    }
+
+    pub fn focus_report(&self, focused: bool) -> Result<Option<Vec<u8>>, Error> {
+        let Some(terminal) = self.terminal.as_ref() else {
+            return Ok(None);
+        };
+        terminal.focus_report(focused)
+    }
+
+    pub fn tracks_mouse(&self) -> Result<bool, Error> {
+        let Some(terminal) = self.terminal.as_ref() else {
+            return Ok(false);
+        };
+        terminal.mouse_tracking()
+    }
+
+    pub fn wheel_sends_arrows(&self) -> Result<bool, Error> {
+        let Some(terminal) = self.terminal.as_ref() else {
+            return Ok(false);
+        };
+        terminal.wheel_sends_arrows()
+    }
+
+    pub fn mouse(&mut self, input: &MouseInput) -> Result<Vec<u8>, Error> {
+        let Some(terminal) = self.terminal.as_ref() else {
+            return Ok(Vec::new());
+        };
+        self.mouse.encode(terminal, input)
+    }
+
+    pub fn scroll(&mut self, scroll: Scroll) -> Result<(), Error> {
+        let Some(terminal) = self.terminal.as_mut() else {
+            return Ok(());
+        };
+        terminal.scroll(scroll)
+    }
+
+    pub fn select(&mut self, from: CellPoint, to: CellPoint) -> Result<(), Error> {
+        let Some(terminal) = self.terminal.as_mut() else {
+            return Ok(());
+        };
+        terminal.select(from, to)?;
+        self.remember_selection()
+    }
+
+    pub fn select_word(&mut self, at: CellPoint) -> Result<(), Error> {
+        let Some(terminal) = self.terminal.as_mut() else {
+            return Ok(());
+        };
+        terminal.select_word(at)?;
+        self.remember_selection()
+    }
+
+    pub fn select_line(&mut self, at: CellPoint) -> Result<(), Error> {
+        let Some(terminal) = self.terminal.as_mut() else {
+            return Ok(());
+        };
+        terminal.select_line(at)?;
+        self.remember_selection()
+    }
+
+    pub fn clear_selection(&mut self) -> Result<(), Error> {
+        self.selected_text = None;
+        let Some(terminal) = self.terminal.as_mut() else {
+            return Ok(());
+        };
+        terminal.clear_selection()
+    }
+
+    /// The selected text, as it is copied.
+    pub fn selection(&self) -> Option<String> {
+        let selected = self.selected_text.as_ref()?;
+        let empty = selected.is_empty();
+        if empty {
+            return None;
+        }
+        Some(selected.clone())
+    }
+
+    /// The link at a cell: one a program attached to it, or else a URL written across it.
+    pub fn link_at(&self, at: CellPoint) -> Result<Option<String>, Error> {
+        let Some(terminal) = self.terminal.as_ref() else {
+            return Ok(None);
+        };
+        let attached = terminal.hyperlink_at(at)?;
+        if attached.is_some() {
+            return Ok(attached);
+        }
+        let Some(row) = self.rows.get(usize::from(at.y)) else {
+            return Ok(None);
+        };
+        Ok(url_at(row, at.x))
+    }
+
+    fn remember_selection(&mut self) -> Result<(), Error> {
+        let Some(terminal) = self.terminal.as_ref() else {
+            return Ok(());
+        };
+        self.selected_text = terminal.selection_text()?;
+        Ok(())
+    }
+
+    fn end_a_stale_selection(&mut self) -> Result<(), Error> {
+        let Some(remembered) = self.selected_text.as_ref() else {
+            return Ok(());
+        };
+        let Some(terminal) = self.terminal.as_mut() else {
+            return Ok(());
+        };
+        let now = terminal.selection_text()?;
+        if now.as_ref() != Some(remembered) {
+            terminal.clear_selection()?;
+            self.selected_text = None;
+        }
+        Ok(())
     }
 
     fn terminal_for(&mut self, attachment: u64) -> Option<&mut Terminal> {
@@ -310,5 +457,28 @@ mod tests {
         view.apply(output("\x1b[c\x1b[6n\x1b]10;?\x07")).unwrap();
         let terminal = view.terminal.as_mut().unwrap();
         assert!(terminal.take_replies().is_empty());
+    }
+
+    #[test]
+    fn a_selection_ends_when_output_changes_the_text_it_covered() {
+        let source = Terminal::new(SIZE).unwrap();
+        let mut view = View::new(1, config()).unwrap();
+        let (event, _) = attached(1, &source);
+        view.apply(event).unwrap();
+        view.apply(output("hello world\r\n")).unwrap();
+        view.select(CellPoint { x: 0, y: 0 }, CellPoint { x: 4, y: 0 })
+            .unwrap();
+        assert_eq!(view.selection().as_deref(), Some("hello"));
+
+        // Output that only scrolls the selected line up keeps it.
+        view.apply(output("one\r\ntwo\r\nthree\r\n")).unwrap();
+        assert_eq!(view.selection().as_deref(), Some("hello"));
+
+        // Once the line is pruned from a full scrollback the selection would point at other text, so it ends.
+        let flood = "filler line\r\n".repeat(5_000);
+        view.apply(output(&flood)).unwrap();
+        assert_eq!(view.selection(), None);
+        let terminal = view.terminal.as_ref().unwrap();
+        assert_eq!(terminal.selection_text().unwrap(), None);
     }
 }
