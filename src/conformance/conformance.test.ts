@@ -4,7 +4,12 @@ import { describe, expect, it } from 'vitest'
 import { makeXtermScreen } from '@runtime/engine/xtermScreen'
 import { trackCursorHidden } from '@runtime/engine/cursor'
 import type { Screen } from '@runtime/screen'
-import { clearInOrder, loadSnapshot, resizeInOrder } from '@window-engine/stream'
+import {
+  clearInOrder,
+  leaveAnswersToTheRuntime,
+  loadSnapshot,
+  resizeInOrder
+} from '@window-engine/stream'
 
 import { CASES } from './cases'
 import type { Case } from './cases'
@@ -131,6 +136,38 @@ describe('the runtime screen', () => {
     await written(view.term, '')
     expect(describeTerminal(view.term, false)).toEqual(describeTerminal(fresh, false))
     expect(view.term.cols).toBe(20)
+  })
+
+  it('answers what a program asks the terminal, and a view leaves each of those to it', async () => {
+    const questions = [
+      '\x1b[c',
+      '\x1b[>c',
+      '\x1b[5n',
+      '\x1b[6n',
+      '\x1b[?6n',
+      '\x1b[4$p',
+      '\x1b[?25$p',
+      '\x1bP$qr\x1b\\'
+    ]
+    for (const question of questions) {
+      const screen = makeScreen()
+      const answers: string[] = []
+      screen.onReply((data) => {
+        answers.push(data)
+      })
+      await parsed(screen, question)
+
+      const view = makeTerminal()
+      const fromTheView: string[] = []
+      leaveAnswersToTheRuntime(view.term)
+      view.term.onData((data) => {
+        fromTheView.push(data)
+      })
+      await written(view.term, question)
+
+      expect(answers, JSON.stringify(question)).toHaveLength(1)
+      expect(fromTheView, JSON.stringify(question)).toEqual([])
+    }
   })
 
   it('reports the title a program sets, the last one winning', async () => {

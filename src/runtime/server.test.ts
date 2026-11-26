@@ -1,14 +1,15 @@
 import { homedir, tmpdir } from 'node:os'
 import { describe, expect, it } from 'vitest'
 
-import type { PtyDataEvent } from '@protocol/ipc'
 import type { TerminalStart } from '@protocol/runtime'
 import type {
   RuntimeCommand,
   RuntimeReport,
-  TerminalInput,
-  TerminalOutput
+  TerminalEvent,
+  TerminalRequest
 } from '@protocol/runtimeMessages'
+import type { Screen } from './screen'
+import { Screens } from './screens'
 import { serveRuntime, type RuntimeServer } from './server'
 import { PtySessions, type SpawnedPty, type SpawnPty } from './sessions'
 
@@ -53,6 +54,8 @@ function fakePty(): FakePty {
       resize: (cols, rows) => {
         fake.resized.push([cols, rows])
       },
+      pause: () => undefined,
+      resume: () => undefined,
       kill: () => {
         fake.killed = true
       },
@@ -67,6 +70,45 @@ function fakePty(): FakePty {
     }
   }
   return fake
+}
+
+interface StubScreen {
+  screen: Screen
+  scrollbacks: number[]
+  fireTitle(title: string): void
+}
+
+function stubScreen(): StubScreen {
+  const scrollbacks: number[] = []
+  const titleListeners: ((title: string) => void)[] = []
+  const screen: Screen = {
+    write: (_data, parsed) => {
+      parsed()
+    },
+    afterParsed: (then) => {
+      then()
+    },
+    resize: () => undefined,
+    clear: () => undefined,
+    setScrollback: (lines) => {
+      scrollbacks.push(lines)
+    },
+    snapshot: () => '',
+    onTitle: (listener) => {
+      titleListeners.push(listener)
+    },
+    onReply: () => undefined,
+    dispose: () => undefined
+  }
+  return {
+    screen,
+    scrollbacks,
+    fireTitle(title) {
+      for (const listener of titleListeners) {
+        listener(title)
+      }
+    }
+  }
 }
 
 function startOf(id: string, overrides: Partial<TerminalStart> = {}): TerminalStart {
@@ -84,11 +126,13 @@ function served(): {
   sessions: PtySessions
   server: RuntimeServer
   ptys: FakePty[]
+  stubs: StubScreen[]
   reports: RuntimeReport[]
   send(command: RuntimeCommand): void
   nextReports(count: number): Promise<RuntimeReport[]>
 } {
   const ptys: FakePty[] = []
+  const stubs: StubScreen[] = []
   const spawn: SpawnPty = () => {
     const fake = fakePty()
     ptys.push(fake)
@@ -97,7 +141,15 @@ function served(): {
   const sessions = new PtySessions(spawn)
   const reports: RuntimeReport[] = []
   const waiters: (() => void)[] = []
-  const server = serveRuntime(sessions, (report) => {
+  const screens = new Screens({
+    makeScreen: () => {
+      const stub = stubScreen()
+      stubs.push(stub)
+      return stub.screen
+    },
+    shells: sessions
+  })
+  const server = serveRuntime(sessions, screens, (report) => {
     reports.push(roundTrip(report))
     for (const waiter of waiters) {
       waiter()
@@ -107,6 +159,7 @@ function served(): {
     sessions,
     server,
     ptys,
+    stubs,
     reports,
     send: (command) => {
       server.receive(roundTrip(command))
@@ -125,23 +178,15 @@ function served(): {
   }
 }
 
-function nextData(sessions: PtySessions): Promise<PtyDataEvent> {
-  return new Promise((resolve) => {
-    sessions.onData((event) => {
-      resolve(event)
-    })
-  })
-}
-
-function windowOf(server: RuntimeServer): { outputs: TerminalOutput[]; send(input: TerminalInput): void } {
-  const outputs: TerminalOutput[] = []
-  const input = server.connectWindow((output) => {
-    outputs.push(roundTrip(output))
+function windowOf(server: RuntimeServer): { events: TerminalEvent[]; send(request: TerminalRequest): void } {
+  const events: TerminalEvent[] = []
+  const request = server.connectWindow((event) => {
+    events.push(roundTrip(event))
   })
   return {
-    outputs,
+    events,
     send: (message) => {
-      input(roundTrip(message))
+      request(roundTrip(message))
     }
   }
 }
@@ -194,35 +239,25 @@ describe('RuntimeServer', () => {
     expect(answers).toContainEqual({ type: 'answer', ask: 9, value: 't1' })
   })
 
-  it('holds output until the window is listening, then sends it in order, the exit last', async () => {
-    const { send, sessions, server, ptys, nextReports } = served()
+  it("feeds a shell's output and exit to its screen, and reports its titles and scrollback", async () => {
+    const { send, server, ptys, stubs, reports, nextReports } = served()
+    const page = windowOf(server)
 
     send({ type: 'open', start: startOf('t1') })
-    send({ type: 'open', start: startOf('t2') })
-    await nextReports(2)
-
-    const firstData = nextData(sessions)
+    await nextReports(1)
+    page.send({ type: 'attach', id: 't1', size: null })
     ptys[0].fireData('a')
-    await firstData
-    const output = windowOf(server)
-    const secondData = nextData(sessions)
-    ptys[1].fireData('b')
-    await secondData
-    ptys[0].fireExit(0)
+    stubs[0].fireTitle('Tacos')
+    send({ type: 'scrollback', lines: 500 })
+    ptys[0].fireExit(2)
 
-    expect(output.outputs).toEqual([])
-
-    output.send({ type: 'listening' })
-    expect(output.outputs).toEqual([
-      { type: 'data', event: { id: 't1', data: 'a' } },
-      { type: 'data', event: { id: 't2', data: 'b' } },
-      { type: 'exit', event: { id: 't1', exitCode: 0 } }
+    expect(page.events).toEqual([
+      { type: 'attached', id: 't1', size: { cols: 80, rows: 24 }, snapshot: '' },
+      { type: 'output', id: 't1', data: 'a' },
+      { type: 'end', id: 't1', exitCode: 2 }
     ])
-
-    const thirdData = nextData(sessions)
-    ptys[1].fireData('c')
-    await thirdData
-    expect(output.outputs[3]).toEqual({ type: 'data', event: { id: 't2', data: 'c' } })
+    expect(reports).toContainEqual({ type: 'titled', id: 't1', title: 'Tacos' })
+    expect(stubs[0].scrollbacks).toEqual([500])
   })
 
   it('takes typing and a new size from the window', async () => {
@@ -236,29 +271,5 @@ describe('RuntimeServer', () => {
 
     expect(ptys[0].written).toEqual(['ls'])
     expect(ptys[0].resized).toEqual([[100, 30]])
-  })
-
-  it('a second window connection replaces the first, and starts by holding output again', async () => {
-    const { send, sessions, server, ptys, nextReports } = served()
-    const older = windowOf(server)
-
-    send({ type: 'open', start: startOf('t1') })
-    await nextReports(1)
-    older.send({ type: 'listening' })
-    const newer = windowOf(server)
-
-    const data = nextData(sessions)
-    ptys[0].fireData('x')
-    await data
-    older.send({ type: 'listening' })
-    older.send({ type: 'write', id: 't1', data: 'stale' })
-
-    expect(older.outputs).toEqual([])
-    expect(newer.outputs).toEqual([])
-    expect(ptys[0].written).toEqual([])
-
-    newer.send({ type: 'listening' })
-    expect(older.outputs).toEqual([])
-    expect(newer.outputs).toEqual([{ type: 'data', event: { id: 't1', data: 'x' } }])
   })
 })

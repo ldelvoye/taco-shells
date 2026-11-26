@@ -1,31 +1,24 @@
-import type { RuntimeCommand, RuntimeQuery, RuntimeReport, TerminalInput, TerminalOutput } from '@protocol/runtimeMessages'
+import type {
+  RuntimeCommand,
+  RuntimeQuery,
+  RuntimeReport,
+  TerminalEvent,
+  TerminalRequest
+} from '@protocol/runtimeMessages'
+import type { Screens } from './screens'
 import type { PtySessions } from './sessions'
-
-type Connection = (output: TerminalOutput) => void
 
 export interface RuntimeServer {
   receive(command: RuntimeCommand): void
-  /** The window's connection: its input, and where output goes. A second call replaces the first. */
-  connectWindow(post: (output: TerminalOutput) => void): (input: TerminalInput) => void
+  /** The window's connection: its requests, and where its events go. A second call replaces the first. */
+  connectWindow(post: (event: TerminalEvent) => void): (request: TerminalRequest) => void
 }
 
-export function serveRuntime(sessions: PtySessions, post: (report: RuntimeReport) => void): RuntimeServer {
-  // The shells start before the page has loaded, and a message to a page that is
-  // not listening yet is dropped: the first prompt would be lost. So output is
-  // kept here until the window says it is listening; null means it is.
-  let held: TerminalOutput[] | null = []
-  let current: Connection | null = null
-
-  function deliver(output: TerminalOutput): void {
-    if (held !== null) {
-      held.push(output)
-      return
-    }
-    if (current !== null) {
-      current(output)
-    }
-  }
-
+export function serveRuntime(
+  sessions: PtySessions,
+  screens: Screens,
+  post: (report: RuntimeReport) => void
+): RuntimeServer {
   async function answer(query: RuntimeQuery): Promise<string | string[] | null> {
     if (query.kind === 'directoryOf') {
       return sessions.directoryOf(query.id)
@@ -45,17 +38,22 @@ export function serveRuntime(sessions: PtySessions, post: (report: RuntimeReport
   })
 
   sessions.onData((event) => {
-    deliver({ type: 'data', event })
+    screens.output(event.id, event.data)
   })
 
   sessions.onExit((event) => {
-    deliver({ type: 'exit', event })
+    screens.ended(event.id, event.exitCode)
     post({ type: 'exited', event })
+  })
+
+  screens.onTitle((id, title) => {
+    post({ type: 'titled', id, title })
   })
 
   return {
     receive(command: RuntimeCommand): void {
       if (command.type === 'open') {
+        screens.open(command.start.id, command.start.size)
         sessions.open(command.start)
         return
       }
@@ -68,7 +66,11 @@ export function serveRuntime(sessions: PtySessions, post: (report: RuntimeReport
         return
       }
       if (command.type === 'resize') {
-        sessions.resize(command.id, command.size)
+        screens.resize(command.id, command.size)
+        return
+      }
+      if (command.type === 'scrollback') {
+        screens.setScrollback(command.lines)
         return
       }
       const number = command.ask
@@ -76,35 +78,8 @@ export function serveRuntime(sessions: PtySessions, post: (report: RuntimeReport
         post({ type: 'answer', ask: number, value })
       })
     },
-    connectWindow(connection: Connection): (input: TerminalInput) => void {
-      current = connection
-      // A page that has just loaded is not listening yet either.
-      if (held === null) {
-        held = []
-      }
-
-      return (input) => {
-        // A replaced connection belongs to a page that is gone.
-        if (current !== connection) {
-          return
-        }
-        if (input.type === 'write') {
-          sessions.write(input.id, input.data)
-          return
-        }
-        if (input.type === 'resize') {
-          sessions.resize(input.id, input.size)
-          return
-        }
-        const backlog = held
-        held = null
-        if (backlog === null) {
-          return
-        }
-        for (const output of backlog) {
-          connection(output)
-        }
-      }
+    connectWindow(connection: (event: TerminalEvent) => void): (request: TerminalRequest) => void {
+      return screens.connect(connection)
     }
   }
 }

@@ -1,6 +1,7 @@
 import type { AgentBanner } from './agentSetup'
 import type { Config, ConfigFile } from './config'
 import type { AgentSignal } from './rows'
+import type { TerminalEvent } from './runtimeMessages'
 import type { DrawnState, RequestReply, WorkspaceRequest } from './workspace'
 
 export type SessionId = string
@@ -73,9 +74,10 @@ export interface TacoShellsApi extends HostApi {
   pty: {
     write(id: SessionId, data: string): void
     resize(id: SessionId, size: PtySize): void
-    listening(): void
-    onData(listener: (event: PtyDataEvent) => void): () => void
-    onExit(listener: (event: PtyExitEvent) => void): () => void
+    attach(id: SessionId, size: PtySize | null): void
+    detach(id: SessionId): void
+    clear(id: SessionId): void
+    onEvent(listener: (event: TerminalEvent) => void): () => void
   }
   config: {
     initial: Config

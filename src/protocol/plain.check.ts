@@ -7,8 +7,8 @@ import type {
   RuntimeCommand,
   RuntimeQuery,
   RuntimeReport,
-  TerminalInput,
-  TerminalOutput
+  TerminalEvent,
+  TerminalRequest
 } from './runtimeMessages'
 import type { DrawnState, RequestReply, WorkspaceRequest } from './workspace'
 
@@ -38,8 +38,8 @@ export type PlainCases = [
   Assert<IsPlain<RuntimeQuery>>,
   Assert<IsPlain<RuntimeCommand>>,
   Assert<IsPlain<RuntimeReport>>,
-  Assert<IsPlain<TerminalInput>>,
-  Assert<IsPlain<TerminalOutput>>
+  Assert<IsPlain<TerminalRequest>>,
+  Assert<IsPlain<TerminalEvent>>
 ]
 
 export type NotPlainCases = [

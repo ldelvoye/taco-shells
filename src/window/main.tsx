@@ -1,7 +1,6 @@
 import { createRoot } from 'react-dom/client'
 import { TITLEBAR_HEIGHT, TRAFFIC_LIGHT_INSET, TRAFFIC_LIGHTS_WIDTH } from '@settings/chrome'
 import { paletteFor } from '@settings/theme'
-import '@xterm/xterm/css/xterm.css'
 import './app.css'
 import { App } from './App'
 import { applyChromePalette } from './config/palette'

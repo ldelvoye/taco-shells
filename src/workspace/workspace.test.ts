@@ -20,6 +20,7 @@ class FakeRuntime implements Runtime {
   onOpen: (start: TerminalStart) => void = () => undefined
   private readonly exitListeners: ((event: PtyExitEvent) => void)[] = []
   private readonly startedListeners: ((event: TerminalStarted) => void)[] = []
+  private readonly titleListeners: ((id: SessionId, title: string) => void)[] = []
 
   open(start: TerminalStart): void {
     this.onOpen(start)
@@ -38,12 +39,20 @@ class FakeRuntime implements Runtime {
     return
   }
 
+  setScrollback(): void {
+    return
+  }
+
   onStarted(listener: (event: TerminalStarted) => void): void {
     this.startedListeners.push(listener)
   }
 
   onExit(listener: (event: PtyExitEvent) => void): void {
     this.exitListeners.push(listener)
+  }
+
+  onTitle(listener: (id: SessionId, title: string) => void): void {
+    this.titleListeners.push(listener)
   }
 
   onSubmit(): void {
@@ -65,6 +74,12 @@ class FakeRuntime implements Runtime {
   fireExit(id: SessionId): void {
     for (const listener of this.exitListeners) {
       listener({ id, exitCode: 0 })
+    }
+  }
+
+  fireTitle(id: SessionId, title: string): void {
+    for (const listener of this.titleListeners) {
+      listener(id, title)
     }
   }
 
@@ -212,10 +227,10 @@ describe('Workspace', () => {
     const { workspace, runtime, agentSessions } = opened(1)
     const session: AgentSession = { harness: 'claude', sessionId: SESSION, cwd: '/work' }
     agentSessions.recordStart('pty-1', session)
-    workspace.request({ type: 'titleChanged', pane: 'pty-1', title: 'Tacos' })
+    runtime.fireTitle('pty-1', 'Tacos')
 
     workspace.request({ type: 'forkTerminal', pane: 'pty-1' })
-    workspace.request({ type: 'titleChanged', pane: 'pty-2', title: '⑂ Tacos' })
+    runtime.fireTitle('pty-2', '⑂ Tacos')
     workspace.request({ type: 'forkTerminal', pane: 'pty-1' })
 
     expect(runtime.opened[1]).toMatchObject({
@@ -454,10 +469,13 @@ describe('Workspace', () => {
   })
 
   it('reports the arrangement to save only when it changed', () => {
-    const { workspace, arrangements } = opened(1)
+    const { workspace, runtime, arrangements } = opened(1)
     const savesBefore = arrangements.length
 
-    workspace.request({ type: 'titleChanged', pane: 'pty-1', title: 'renamed' })
+    runtime.fireTitle('pty-1', 'renamed')
+    expect(arrangements.length).toBe(savesBefore + 1)
+
+    runtime.fireTitle('gone', 'renamed')
     expect(arrangements.length).toBe(savesBefore + 1)
 
     workspace.agentSignalled({ id: 'pty-1', harness: 'claude', sessionId: SESSION, signal: 'start' })

@@ -2,12 +2,12 @@ import { statSync, type Stats } from 'node:fs'
 import { homedir } from 'node:os'
 import { spawn, type IPty } from 'node-pty'
 import type { PtyDataEvent, PtyExitEvent, PtySize, SessionId } from '@protocol/ipc'
-import type { Runtime, TerminalStart, TerminalStarted } from '@protocol/runtime'
+import type { TerminalStart, TerminalStarted } from '@protocol/runtime'
 import { processCwd } from './cwd'
 import { foregroundCommands } from './foreground'
 import { shellArguments, shellEnvironment, shellPath } from './shell'
 
-export type SpawnedPty = Pick<IPty, 'pid' | 'write' | 'resize' | 'kill' | 'onData' | 'onExit'>
+export type SpawnedPty = Pick<IPty, 'pid' | 'write' | 'resize' | 'pause' | 'resume' | 'kill' | 'onData' | 'onExit'>
 export type SpawnPty = (...args: Parameters<typeof spawn>) => SpawnedPty
 
 type DataListener = (event: PtyDataEvent) => void
@@ -40,7 +40,7 @@ interface Opening {
 const FLUSH_INTERVAL_MS = 5
 const CARRIAGE_RETURN = '\r'
 
-export class PtySessions implements Runtime {
+export class PtySessions {
   private readonly sessions = new Map<SessionId, Session>()
   private readonly opening = new Map<SessionId, Opening>()
   private readonly dataListeners = new Set<DataListener>()
@@ -159,6 +159,22 @@ export class PtySessions implements Runtime {
     } catch {
       return
     }
+  }
+
+  pause(id: SessionId): void {
+    const session = this.sessions.get(id)
+    if (!session) {
+      return
+    }
+    session.pty.pause()
+  }
+
+  resume(id: SessionId): void {
+    const session = this.sessions.get(id)
+    if (!session) {
+      return
+    }
+    session.pty.resume()
   }
 
   close(id: SessionId): void {

@@ -1,6 +1,6 @@
 import type { JSX } from 'react'
 import type { Group } from '@protocol/arrangement'
-import { TerminalView } from '../terminal/TerminalView'
+import { TerminalHost } from '../terminal/TerminalHost'
 import { PaneDivider } from './PaneDivider'
 
 interface PaneGroupProps {
@@ -14,7 +14,7 @@ function PaneGroup({ group, active, onResize }: PaneGroupProps): JSX.Element {
   const contents: JSX.Element[] = []
 
   group.panes.forEach((pane, paneIndex) => {
-    contents.push(<TerminalView key={pane.id} sessionId={pane.id} width={pane.width} />)
+    contents.push(<TerminalHost key={pane.id} sessionId={pane.id} width={pane.width} />)
 
     if (paneIndex < lastIndex) {
       contents.push(

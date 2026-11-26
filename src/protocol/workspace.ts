@@ -12,7 +12,6 @@ export type WorkspaceRequest =
   | { type: 'splitTerminal'; pane: SessionId }
   | { type: 'forkTerminal'; pane: SessionId }
   | { type: 'closeTerminal'; pane: SessionId }
-  | { type: 'titleChanged'; pane: SessionId; title: string }
   | { type: 'focusReported'; pane: SessionId; count: number }
   | { type: 'paneColored'; pane: SessionId; color: RowColor | null }
   | { type: 'activeColorToggled'; color: RowColor }

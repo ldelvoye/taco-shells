@@ -1,7 +1,7 @@
-import type { Terminal } from '@xterm/xterm'
 import type { CommandId } from '@protocol/commands'
 import type { SessionId } from '@protocol/ipc'
-import { sessionTerminal } from '../terminal/registry'
+import { sessionView } from '../terminal/registry'
+import type { TerminalView } from '../terminal/view'
 import type { CommandRegistry } from './registry'
 
 // A terminal's usual key for delete line.
@@ -32,12 +32,12 @@ export function registerTerminalCommands(
   activeSession: () => SessionId | null
 ): void {
   registry.register('terminal.copy', () => {
-    const term = activeTerminal(activeSession)
-    if (!term) {
+    const view = activeView(activeSession)
+    if (!view) {
       return
     }
 
-    const selection = term.getSelection()
+    const selection = view.selection()
     if (!selection) {
       return
     }
@@ -49,8 +49,8 @@ export function registerTerminalCommands(
   // text in the bracketed-paste markers, without which the shell runs every line
   // of a multi-line paste the moment it arrives.
   registry.register('terminal.paste', async () => {
-    const term = activeTerminal(activeSession)
-    if (!term) {
+    const view = activeView(activeSession)
+    if (!view) {
       return
     }
 
@@ -59,34 +59,34 @@ export function registerTerminalCommands(
       return
     }
 
-    term.paste(text)
+    view.paste(text)
   })
 
   registry.register('terminal.clear', () => {
-    const term = activeTerminal(activeSession)
-    if (!term) {
+    const sessionId = activeSession()
+    if (sessionId === null) {
       return
     }
 
-    term.clear()
+    window.tacoShells.pty.clear(sessionId)
   })
 
   for (const [commandId, keys] of LINE_EDITING_KEYS) {
     registry.register(commandId, () => {
-      const term = activeTerminal(activeSession)
-      if (!term) {
+      const view = activeView(activeSession)
+      if (!view) {
         return
       }
 
-      term.input(keys)
+      view.type(keys)
     })
   }
 }
 
-function activeTerminal(activeSession: () => SessionId | null): Terminal | null {
+function activeView(activeSession: () => SessionId | null): TerminalView | null {
   const sessionId = activeSession()
   if (sessionId === null) {
     return null
   }
-  return sessionTerminal(sessionId)
+  return sessionView(sessionId)
 }

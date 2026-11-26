@@ -1,41 +1,27 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type { AgentBanner } from '@protocol/agentSetup'
 import type { Config, ConfigFile } from '@protocol/config'
-import {
-  CHANNEL,
-  type PtyDataEvent,
-  type PtyExitEvent,
-  type PtySize,
-  type SessionId,
-  type TacoShellsApi
-} from '@protocol/ipc'
-import type { TerminalInput, TerminalOutput } from '@protocol/runtimeMessages'
+import { CHANNEL, type PtySize, type SessionId, type TacoShellsApi } from '@protocol/ipc'
+import type { TerminalEvent, TerminalRequest } from '@protocol/runtimeMessages'
 import type { DrawnState, WorkspaceRequest } from '@protocol/workspace'
 
-const dataListeners = new Set<(event: PtyDataEvent) => void>()
-const exitListeners = new Set<(event: PtyExitEvent) => void>()
-const queuedInput: TerminalInput[] = []
+const eventListeners = new Set<(event: TerminalEvent) => void>()
+const queuedRequests: TerminalRequest[] = []
 let runtimePort: MessagePort | null = null
 
-function sendInput(input: TerminalInput): void {
+function sendRequest(request: TerminalRequest): void {
   if (runtimePort === null) {
-    queuedInput.push(input)
+    queuedRequests.push(request)
     return
   }
-  runtimePort.postMessage(input)
+  runtimePort.postMessage(request)
 }
 
 function listenOn(port: MessagePort): void {
   port.onmessage = (message) => {
-    const output: TerminalOutput = message.data
-    if (output.type === 'data') {
-      for (const listener of dataListeners) {
-        listener(output.event)
-      }
-      return
-    }
-    for (const listener of exitListeners) {
-      listener(output.event)
+    const event: TerminalEvent = message.data
+    for (const listener of eventListeners) {
+      listener(event)
     }
   }
 }
@@ -51,10 +37,10 @@ ipcRenderer.on(CHANNEL.runtimePort, (event) => {
   const port = event.ports[0]
   runtimePort = port
   listenOn(port)
-  for (const input of queuedInput) {
-    port.postMessage(input)
+  for (const request of queuedRequests) {
+    port.postMessage(request)
   }
-  queuedInput.length = 0
+  queuedRequests.length = 0
 })
 ipcRenderer.send(CHANNEL.runtimeConnect)
 
@@ -71,16 +57,21 @@ function subscribe<T>(channel: string, listener: (payload: T) => void): () => vo
 const api: TacoShellsApi = {
   pty: {
     write: (id: SessionId, data: string) => {
-      sendInput({ type: 'write', id, data })
+      sendRequest({ type: 'write', id, data })
     },
     resize: (id: SessionId, size: PtySize) => {
-      sendInput({ type: 'resize', id, size })
+      sendRequest({ type: 'resize', id, size })
     },
-    listening: () => {
-      sendInput({ type: 'listening' })
+    attach: (id: SessionId, size: PtySize | null) => {
+      sendRequest({ type: 'attach', id, size })
     },
-    onData: (listener: (event: PtyDataEvent) => void) => addListener(dataListeners, listener),
-    onExit: (listener: (event: PtyExitEvent) => void) => addListener(exitListeners, listener)
+    detach: (id: SessionId) => {
+      sendRequest({ type: 'detach', id })
+    },
+    clear: (id: SessionId) => {
+      sendRequest({ type: 'clear', id })
+    },
+    onEvent: (listener: (event: TerminalEvent) => void) => addListener(eventListeners, listener)
   },
   clipboard: {
     read: () => ipcRenderer.invoke(CHANNEL.clipboardRead),

@@ -46,30 +46,36 @@ describe('RuntimeProxy', () => {
     proxy.open(START)
     proxy.write('t1', 'ls')
     proxy.resize('t1', { cols: 100, rows: 30 })
+    proxy.setScrollback(500)
     proxy.close('t1')
 
     expect(posted).toEqual([
       { type: 'open', start: START },
       { type: 'write', id: 't1', data: 'ls' },
       { type: 'resize', id: 't1', size: { cols: 100, rows: 30 } },
+      { type: 'scrollback', lines: 500 },
       { type: 'close', id: 't1' }
     ])
   })
 
-  it('turns a started shell, a submitted line and an exit into events', () => {
+  it('turns a started shell, a title, a submitted line and an exit into events', () => {
     const { proxy } = recordingProxy()
     const started: TerminalStarted[] = []
+    const titles: string[][] = []
     const submitted: string[] = []
     const exits: PtyExitEvent[] = []
     proxy.onStarted((event) => started.push(event))
+    proxy.onTitle((id, title) => titles.push([id, title]))
     proxy.onSubmit((id) => submitted.push(id))
     proxy.onExit((event) => exits.push(event))
 
     feed(proxy, { type: 'started', event: { id: 't1', directory: '/tmp' } })
+    feed(proxy, { type: 'titled', id: 't1', title: 'Tacos' })
     feed(proxy, { type: 'submitted', id: 't1' })
     feed(proxy, { type: 'exited', event: { id: 't1', exitCode: 3 } })
 
     expect(started).toEqual([{ id: 't1', directory: '/tmp' }])
+    expect(titles).toEqual([['t1', 'Tacos']])
     expect(submitted).toEqual(['t1'])
     expect(exits).toEqual([{ id: 't1', exitCode: 3 }])
   })

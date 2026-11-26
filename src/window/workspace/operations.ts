@@ -3,12 +3,7 @@ import type { SessionId } from '@protocol/ipc'
 import type { FocusMove, WorkspaceRequest } from '@protocol/workspace'
 import { activeSessionOf, canSplitPane } from '@rules/arrangement'
 import { focusAfter } from '@rules/focus'
-import {
-  disposeSession,
-  focusSession,
-  onSessionFocus,
-  onSessionTitle
-} from '../terminal/registry'
+import { focusSession, onSessionFocus } from '../terminal/registry'
 import type { WorkspaceLink } from './link'
 
 export interface WorkspaceOperations {
@@ -173,17 +168,6 @@ export function createWorkspaceOperations(link: WorkspaceLink): WorkspaceOperati
   }
 
   function listen(): () => void {
-    // A pane leaves the workspace when its pty exits or the runtime process dies, so
-    // typing `exit` and closing the terminal from the app take one path. The main
-    // process takes the pane out on that exit; the window only lets go of its terminal.
-    const stopExit = window.tacoShells.pty.onExit((event) => {
-      disposeSession(event.id)
-    })
-
-    const stopTitle = onSessionTitle((sessionId, title) => {
-      send({ type: 'titleChanged', pane: sessionId, title })
-    })
-
     // Clicking straight into a pane has to move the active pane with it, or cmd+w
     // would close a terminal the user is not typing in. The focus effect in
     // useWorkspace refocuses on that change, but link.focus ignores a pane that is
@@ -193,8 +177,6 @@ export function createWorkspaceOperations(link: WorkspaceLink): WorkspaceOperati
     })
 
     return () => {
-      stopExit()
-      stopTitle()
       stopFocus()
     }
   }

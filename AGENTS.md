@@ -6,7 +6,7 @@ Nothing here is a style guide. It is the handful of mechanics that are not obvio
 
 ## Layout
 
-Electron, TypeScript throughout, React for the window chrome only. The terminal itself is `@xterm/xterm` over `node-pty`; none of it is our own emulation.
+Electron, TypeScript throughout, React for the window chrome only. The terminal itself is xterm.js over `node-pty`; none of it is our own emulation.
 
 ```
 src/protocol/   every type that crosses between the window, the workspace and the runtime, and the compiler check that they are plain data
@@ -31,6 +31,8 @@ A package may import only what `walls/areas.ts` allows, and `npm test` fails on 
 **The window never starts a shell.** It asks the workspace for a terminal, a split, a fork or a close; the workspace names the terminal, places it and tells the runtime to open it through the `Runtime` interface in `src/protocol/runtime.ts`. Restore runs in the main process at launch, before the window asks for anything.
 
 **The shells run in their own process.** `out/main/runtime.js` is started with `utilityProcess`; the main process talks to it through `Runtime` (`src/app/host/runtime/proxy.ts`), and the window's keystrokes and output go to it directly over a message port the preload asks for. If it dies, the terminals go and the window says why; nothing restarts.
+
+**The runtime holds every terminal's screen, and the window's view follows it.** Each terminal has a headless xterm screen in the runtime (`src/runtime/screens.ts`), fed by the shell's output, and the window draws it with an xterm view. Only two files in each half touch the engine: `src/runtime/engine/` (`@xterm/headless` and its serialize add-on) behind the `Screen` interface, and `src/window/terminal/engine/` (`@xterm/xterm`) behind the `TerminalView` interface in `src/window/terminal/view.ts`. Everything else, the registry included, sees only those interfaces. The window attaches to a terminal over the channel, loads its view from a snapshot of the runtime's screen, and then follows the output, resize and clear events in the order they are sent. The size and Clear are the runtime's: the window asks (`pty.resize`, `pty.clear`) and the view changes only when the answer comes back. When a program asks the terminal something (its cursor position, what kind of terminal it is), the runtime's screen answers, since a view is not always there; the view is told to stay silent on those so the shell does not get two answers (`leaveAnswersToTheRuntime`). Colors and focus are the exception: only a view knows them, so only a view reports them. `src/conformance/` is the test that holds the two engine halves to the same result.
 
 ## Commands
 
