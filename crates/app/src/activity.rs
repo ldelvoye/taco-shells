@@ -17,6 +17,7 @@ use crate::terminal_list::state_mark;
 use crate::window::WindowView;
 
 const SCROLL_ID: &str = "activity-scroll";
+const OLDER_ID: &str = "activity-older";
 const SHELL_TEXT: &str = "No agent here, just a shell.";
 const NEEDS_HEADING: &str = "Needs you.";
 const SET_UP_LABEL: &str = "Set up";
@@ -31,7 +32,7 @@ const DOT_SIZE: f32 = 5.;
 const DOT_TOP: f32 = 8.;
 const LINE_GAP: f32 = 6.;
 const CLOSE_SIZE: f32 = 14.;
-const MS_PER_MINUTE: u64 = 60_000;
+pub const MS_PER_MINUTE: u64 = 60_000;
 const MINUTES_PER_HOUR: u64 = 60;
 
 /// What the panel shows when its terminal has no agent row.
@@ -46,7 +47,7 @@ pub enum NoAgentLine {
 /// One drawn line of the log: neighbouring entries of one kind folded together.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LogLine {
-    /// The `seq` of the newest entry folded into it, which names the line.
+    /// The `seq` of the oldest entry folded into it, which names the line as new entries join it.
     pub seq: u64,
     pub at_ms: u64,
     pub text: String,
@@ -65,6 +66,7 @@ pub struct ActivityLog {
     pub terminal: Option<TerminalId>,
     /// Oldest first, as the workspace sends them.
     pub entries: Vec<ActivityEntry>,
+    /// Whether nothing older than the entries held is left to ask for.
     pub complete: bool,
 }
 
@@ -103,13 +105,22 @@ impl ActivityLog {
                 if !self.watches(&terminal) {
                     return;
                 }
+                // A page asked for twice, or answered after a newer watch, holds entries already here.
+                let held_oldest = self.oldest();
                 let mut merged = entries;
+                merged.retain(|entry| is_before(entry.seq, held_oldest));
                 merged.append(&mut self.entries);
                 self.entries = merged;
                 self.complete = complete;
             }
             ActivityEvent::Appended { terminal, entry } => {
                 if !self.watches(&terminal) {
+                    return;
+                }
+                let newest = self.entries.last();
+                if let Some(newest) = newest
+                    && entry.seq <= newest.seq
+                {
                     return;
                 }
                 self.entries.push(entry);
@@ -200,6 +211,13 @@ pub fn now_ms() -> u64 {
     fitted
 }
 
+fn is_before(seq: u64, held_oldest: Option<u64>) -> bool {
+    match held_oldest {
+        Some(oldest) => seq < oldest,
+        None => true,
+    }
+}
+
 fn no_agent_for(input: &ActivityInput) -> NoAgentLine {
     match input.terminal {
         Some(terminal) => no_agent_line(terminal, input.notices),
@@ -229,14 +247,20 @@ fn end_of_run(entries: &[ActivityEntry], first: usize) -> usize {
         return first;
     }
     let mut last = first;
-    while last + 1 < entries.len() && fold_of(&entries[last + 1].kind) == fold {
+    for next in &entries[first + 1..] {
+        let next_fold = fold_of(&next.kind);
+        if next_fold != fold {
+            break;
+        }
         last += 1;
     }
     last
 }
 
 fn line_of(run: &[ActivityEntry]) -> LogLine {
-    let newest = &run[run.len() - 1];
+    let oldest = &run[0];
+    let last_index = run.len() - 1;
+    let newest = &run[last_index];
     let fold = fold_of(&newest.kind);
     let mut text = single_text(&newest.kind);
     let mut detail = Vec::new();
@@ -252,7 +276,7 @@ fn line_of(run: &[ActivityEntry]) -> LogLine {
         detail = items.collect();
     }
     LogLine {
-        seq: newest.seq,
+        seq: oldest.seq,
         at_ms: newest.at_ms,
         text,
         detail,
@@ -444,9 +468,10 @@ fn log_section(input: &ActivityInput, row: &AgentRow, cx: &mut Context<WindowVie
         section = section.child(shown);
     }
     if !input.log.complete && !input.log.entries.is_empty() {
-        let label = quiet_button(element_id("older", 0), SHOW_OLDER, look);
+        let label = quiet_button(OLDER_ID.into(), SHOW_OLDER, look);
         let older = label.on_click(cx.listener(|view, _, _, _| view.show_older()));
-        section = section.child(div().flex().child(older));
+        let placed = div().flex().child(older);
+        section = section.child(placed);
     }
     section
 }
@@ -488,13 +513,12 @@ fn log_line_element(line: &LogLine, input: &ActivityInput, cx: &mut Context<Wind
 }
 
 fn with_files(
-    body: Div,
+    mut body: Div,
     line: &LogLine,
     is_open: bool,
     look: &Look,
     cx: &mut Context<WindowView>,
 ) -> Div {
-    let mut body = body;
     if is_open {
         for path in &line.detail {
             let file = div()
@@ -513,8 +537,8 @@ fn with_files(
         label = HIDE_FILES;
     }
     let seq = line.seq;
-    let toggle = quiet_button(element_id("files", seq), label, look)
-        .on_click(cx.listener(move |view, _, _, cx| view.toggle_files(seq, cx)));
+    let button = quiet_button(element_id("files", seq), label, look);
+    let toggle = button.on_click(cx.listener(move |view, _, _, cx| view.toggle_files(seq, cx)));
     let placed = div().flex().child(toggle);
     body.child(placed)
 }
@@ -568,6 +592,12 @@ mod tests {
         }
     }
 
+    fn folded(seq: u64, newest: u64, text: &str, detail: &[&str]) -> LogLine {
+        let mut folded = line(seq, text, detail);
+        folded.at_ms = newest * 1000;
+        folded
+    }
+
     fn notice(kind: AgentSetupNoticeKind, terminal: &str) -> AgentSetupNotice {
         AgentSetupNotice {
             harness: HarnessId("claude".to_string()),
@@ -599,13 +629,53 @@ mod tests {
             line(11, "Changed z.rs", &[]),
             line(10, "Searched for *.rs", &[]),
             line(9, "Searched for foo", &[]),
-            line(8, "Changed 2 files", &["x.rs", "y.rs"]),
+            folded(7, 8, "Changed 2 files", &["x.rs", "y.rs"]),
             line(6, "Read d.rs", &[]),
             line(5, "Ran ls", &[]),
-            line(4, "Read 3 files", &["a.rs", "b.rs", "c.rs"]),
+            folded(2, 4, "Read 3 files", &["a.rs", "b.rs", "c.rs"]),
             line(1, "You asked: fix it", &[]),
         ];
         assert_eq!(lines, expected);
+    }
+
+    #[test]
+    fn the_log_takes_only_entries_it_does_not_hold_for_the_terminal_it_watches() {
+        let watched = TerminalId("watched".to_string());
+        let other = TerminalId("other".to_string());
+        let mut log = ActivityLog {
+            terminal: Some(watched.clone()),
+            ..ActivityLog::default()
+        };
+        let page = |seqs: [u64; 2]| seqs.map(|seq| did(seq, "Bash", "ls")).to_vec();
+        log.apply(ActivityEvent::Loaded {
+            terminal: watched.clone(),
+            entries: page([5, 6]),
+            complete: false,
+        });
+        let older = ActivityEvent::Older {
+            terminal: watched.clone(),
+            entries: page([3, 4]),
+            complete: true,
+        };
+        log.apply(older.clone());
+        log.apply(older);
+        log.apply(ActivityEvent::Appended {
+            terminal: watched.clone(),
+            entry: did(6, "Bash", "ls"),
+        });
+        log.apply(ActivityEvent::Appended {
+            terminal: other.clone(),
+            entry: did(7, "Bash", "ls"),
+        });
+        log.apply(ActivityEvent::Loaded {
+            terminal: other,
+            entries: page([1, 2]),
+            complete: true,
+        });
+
+        let held: Vec<u64> = log.entries.iter().map(|entry| entry.seq).collect();
+        assert_eq!(held, [3, 4, 5, 6]);
+        assert!(log.complete);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! What the window runs on until the workspace is wired to it: the list's requests applied with `rules`, and the result published as the workspace would.
+//! What the window runs on until the workspace and the services are wired to it: requests applied with `rules`, fixture logs and setup notices, published as they would be.
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
