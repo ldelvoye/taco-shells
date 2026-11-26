@@ -16,7 +16,7 @@ import {
 } from './harness/connection.ts'
 import { type Key, type Modifiers, press } from './harness/keys.ts'
 import { clickColorDot, rightClickRow, SidebarDrags } from './harness/mouse.ts'
-import { POLL_INTERVAL_MS, sleep } from './harness/poll.ts'
+import { POLL_INTERVAL_MS, pollFor, sleep } from './harness/poll.ts'
 import { readScreen, type Screen, until } from './harness/screen.ts'
 
 // Asked of the app rather than assumed, because the shell it opens is whichever
@@ -34,6 +34,10 @@ const ELECTRON_BINARY = resolve(
 const NODE_SERVICE = '--utility-sub-type=node.mojom.NodeService'
 
 const SHUTDOWN_TIMEOUT_MS = 3000
+const READY_TIMEOUT_MS = 15000
+const TERMINAL_IS_ACTIVE_ELEMENT = `String(
+  document.activeElement !== null && document.activeElement.classList.contains('xterm-helper-textarea')
+)`
 
 const NO_CLAUDE_DIRECTORY = 'no-claude'
 
@@ -332,6 +336,20 @@ export async function launchApp(options: LaunchOptions = {}): Promise<App> {
       await placeWindow(options.window)
     }
     await until(page, waitDescription, (state) => state.rows.length === expectedRows)
+    // The rows are drawn a moment before the window can take a key: its commands are
+    // registered in the same pass that makes the active terminal the page's active
+    // element. The page's own focus is no use here, since this window is in the background.
+    await pollFor(
+      'the active terminal to be given the keyboard',
+      async () => {
+        const given = await evaluate(page, TERMINAL_IS_ACTIVE_ELEMENT)
+        if (given === 'true') {
+          return true
+        }
+        return null
+      },
+      READY_TIMEOUT_MS
+    )
   } catch (failure) {
     await close().catch(() => undefined)
     throw failure
