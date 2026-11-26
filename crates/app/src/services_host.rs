@@ -12,10 +12,11 @@ use taco_protocol::{
     ConfigFile, HarnessId, HookEvent, HookMessage, RuntimeAnswer, RuntimeQuery, TerminalId,
 };
 use taco_services::{
-    AgentMenuAction, AgentSetups, AgentSetupsHost, ConfigStore, HookListener, ListenerEvent,
-    SettingsWriter, UpdateEvent, Updater, UpdaterHost, config_file_path, focus_port_path,
+    AgentMenuAction, AgentSetups, AgentSetupsHost, ConfigChange, ConfigStore, ConfigWriter,
+    HookListener, ListenerEvent, Refusal, UpdateEvent, Updater, UpdaterHost, config_file_path,
+    focus_port_path,
 };
-use taco_settings::{Config, SettingChange};
+use taco_settings::{Config, KeymapChange, SettingChange};
 
 use crate::link::{ServicesOutput, WindowOutput, WindowSender};
 use crate::runtime_client::RuntimeClient;
@@ -36,7 +37,7 @@ pub struct ServicesHost {
 
 struct Inner {
     store: Arc<Slot<ConfigStore>>,
-    writer: Slot<SettingsWriter>,
+    writer: Slot<ConfigWriter>,
     setups: Arc<Slot<AgentSetups>>,
     updater: Arc<Slot<Updater>>,
     listener: Slot<HookListener>,
@@ -161,8 +162,9 @@ fn start_writer(
     directory: &Path,
     store: &Arc<Slot<ConfigStore>>,
     window: &WindowSender,
-) -> SettingsWriter {
+) -> ConfigWriter {
     let settings_path = config_file_path(directory, ConfigFile::Settings);
+    let keybindings_path = config_file_path(directory, ConfigFile::Keybindings);
     let written_store = Arc::clone(store);
     let after_write = move || {
         let store = locked(&written_store);
@@ -172,11 +174,21 @@ fn start_writer(
         }
     };
     let refused_window = window.clone();
-    let on_refused = move |key: &'static str, reason: String| {
-        let refused = ServicesOutput::SettingRefused { key, reason };
+    let on_refused = move |refusal: Refusal| {
+        let refused = match refusal {
+            Refusal::Setting { key, reason } => ServicesOutput::SettingRefused { key, reason },
+            Refusal::Keymap { command, reason } => {
+                ServicesOutput::KeymapRefused { command, reason }
+            }
+        };
         send_to_window(&refused_window, refused);
     };
-    SettingsWriter::start(settings_path, Box::new(after_write), Box::new(on_refused))
+    ConfigWriter::start(
+        settings_path,
+        keybindings_path,
+        Box::new(after_write),
+        Box::new(on_refused),
+    )
 }
 
 // One message at a time, each waiting for its own answer, so the workspace hears a session's start before its first state.
@@ -316,7 +328,14 @@ impl ServicesHost {
     pub fn write_setting(&self, change: SettingChange) {
         let writer = locked(&self.inner.writer);
         if let Some(writer) = writer.as_ref() {
-            writer.write(change);
+            writer.write(ConfigChange::Setting(change));
+        }
+    }
+
+    pub fn write_keybinding(&self, change: KeymapChange) {
+        let writer = locked(&self.inner.writer);
+        if let Some(writer) = writer.as_ref() {
+            writer.write(ConfigChange::Keymap(change));
         }
     }
 
