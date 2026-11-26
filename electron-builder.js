@@ -70,6 +70,10 @@ module.exports = {
   files: [
     '!src',
     '!apps',
+    '!crates',
+    '!target',
+    '!Cargo.toml',
+    '!Cargo.lock',
     '!docs',
     '!walls',
     '!.worktrees',

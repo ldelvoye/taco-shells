@@ -10,6 +10,10 @@ on:
     paths-ignore:
       - "apps/site/**"
       - ".github/workflows/site.yml"
+      # The Rust app under crates/ is not this app either.
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
   workflow_dispatch:
 
 permissions:
