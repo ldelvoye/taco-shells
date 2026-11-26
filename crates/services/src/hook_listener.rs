@@ -23,6 +23,7 @@ const AGENT_START_ROUTE: &str = "/agent-session/start";
 const AGENT_END_ROUTE: &str = "/agent-session/end";
 const AGENT_STATE_ROUTE: &str = "/agent-session/state";
 const AGENT_HOOK_ROUTE: &str = "/agent-session/hook";
+const AGENT_ROUTE_PREFIX: &str = "/agent-session/";
 
 const SMALL_BODY_CAP: u64 = 64 * 1024;
 const AGENT_HOOK_BODY_CAP: u64 = 16 * 1024 * 1024;
@@ -46,6 +47,7 @@ struct Head {
     route: String,
     content_length: u64,
     chunked: bool,
+    has_origin: bool,
 }
 
 pub struct HookListener {
@@ -189,6 +191,16 @@ fn handle(
         return;
     }
 
+    // A browser sends Origin on every cross-origin POST and curl never does: a web page must not reach an agent's log.
+    let is_agent_route = head.route.starts_with(AGENT_ROUTE_PREFIX);
+    if is_agent_route && head.has_origin {
+        let drained = drain_body(&mut stream, leftover.len(), head.content_length, deadline);
+        if drained {
+            respond(&mut stream, 403);
+        }
+        return;
+    }
+
     if head.content_length > cap {
         let drained = drain_body(&mut stream, leftover.len(), head.content_length, deadline);
         if drained {
@@ -258,6 +270,7 @@ fn parse_head(bytes: &[u8]) -> Option<Head> {
 
     let mut content_length = 0;
     let mut chunked = false;
+    let mut has_origin = false;
     for line in lines {
         let Some((name, value)) = line.split_once(':') else {
             continue;
@@ -269,6 +282,8 @@ fn parse_head(bytes: &[u8]) -> Option<Head> {
         } else if name.eq_ignore_ascii_case("transfer-encoding") {
             let lowered = value.to_ascii_lowercase();
             chunked = lowered.contains("chunked");
+        } else if name.eq_ignore_ascii_case("origin") {
+            has_origin = true;
         }
     }
 
@@ -277,6 +292,7 @@ fn parse_head(bytes: &[u8]) -> Option<Head> {
         route: route.to_string(),
         content_length,
         chunked,
+        has_origin,
     })
 }
 
@@ -314,6 +330,7 @@ fn respond(stream: &mut TcpStream, status: u16) {
     let reason = match status {
         200 => "OK",
         400 => "Bad Request",
+        403 => "Forbidden",
         404 => "Not Found",
         _ => "Payload Too Large",
     };
@@ -491,8 +508,12 @@ mod tests {
     const TEST_DEADLINE: Duration = Duration::from_millis(200);
 
     fn post(port: u16, method: &str, path: &str, body: &[u8]) -> u16 {
+        post_with(port, method, path, "", body)
+    }
+
+    fn post_with(port: u16, method: &str, path: &str, extra_headers: &str, body: &[u8]) -> u16 {
         let head = format!(
-            "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{extra_headers}Content-Length: {}\r\nConnection: close\r\n\r\n",
             body.len()
         );
         let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
@@ -646,6 +667,19 @@ mod tests {
 
         let string_payload = r#"{"pids":[1],"harness":"claude","payload":"text"}"#;
         expect_dropped(port, &receiver, AGENT_HOOK_ROUTE, string_payload);
+
+        let from_a_page = "Origin: https://example.com\r\n";
+        let refused = post_with(
+            port,
+            "POST",
+            AGENT_HOOK_ROUTE,
+            from_a_page,
+            hook_body.as_bytes(),
+        );
+        assert_eq!(refused, 403);
+        post(port, "POST", ATTENTION_ROUTE, br#"{"pids":[8]}"#);
+        let after_page = next_event(&receiver);
+        assert_eq!(after_page, hook(vec![8], HookCall::Attention));
 
         let mut stalled = TcpStream::connect(("127.0.0.1", port)).unwrap();
         let stalled_head =
