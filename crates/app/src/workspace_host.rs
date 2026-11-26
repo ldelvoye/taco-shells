@@ -97,7 +97,7 @@ impl WorkspaceHost {
         self.put(Input::AppActivated);
     }
 
-    /// `freeze`, then `flush`; returns once the save file is written. Called at quit before the runtime is stopped.
+    /// `freeze`, then `flush`; blocks the caller until the save file is written, behind every input sent before it. Called once, at quit, before the runtime is stopped.
     pub fn freeze_and_flush(&self) {
         let (done, finished) = bounded(1);
         self.put(Input::FreezeAndFlush(done));
