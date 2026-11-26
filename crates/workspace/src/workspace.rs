@@ -2,10 +2,10 @@ use std::collections::BTreeMap;
 
 use taco_agents::{HARNESSES, default_harness, harness_of};
 use taco_protocol::{
-    ActivityEvent, ActivityKind, ActivityRequest, AgentLabel, AgentSignal, Arrangement, ConfigFile,
-    DrawnState, HarnessId, HookCall, HookEvent, Panels, RequestReply, Row, RowState,
-    RuntimeCommand, RuntimeReport, TabGroup, TabGroupId, TerminalId, TerminalSize, TerminalStart,
-    WorkspaceRequest,
+    ActivityEntry, ActivityEvent, ActivityKind, ActivityRequest, AgentLabel, AgentSignal,
+    Arrangement, ConfigFile, DrawnState, HarnessId, HookCall, HookEvent, Panels, RequestReply, Row,
+    RowState, RuntimeCommand, RuntimeReport, TabGroup, TabGroupId, TerminalId, TerminalSize,
+    TerminalStart, WorkspaceRequest,
 };
 use taco_rules::{
     add_row, add_row_to, apply_drop, can_fork, close_panel, close_row, create_tab_group,
@@ -105,6 +105,24 @@ fn loaded_log<'a>(
     })
 }
 
+/// Puts a new entry in the log's file: the whole log when it is due a rewrite, else the one line. Says whether it did.
+fn write_log(
+    storage: &mut dyn Storage,
+    terminal: &TerminalId,
+    log: &Log,
+    entry: &ActivityEntry,
+    rewrite: bool,
+) -> bool {
+    if rewrite {
+        let lines = log.lines();
+        return storage.rewrite_log(terminal, &lines);
+    }
+    let Some(line) = line_of(entry) else {
+        return false;
+    };
+    storage.append_log(terminal, &line)
+}
+
 fn runtime_problem(reason: &str) -> String {
     format!(
         "The terminals stopped because their background process exited ({reason}). Quit and reopen Taco Shells to start again."
@@ -162,10 +180,13 @@ impl Workspace {
             Some(saved) => self.restore(saved, now_ms, &mut out),
             None => false,
         };
-        if restored {
-            self.drop_orphan_logs();
-        } else {
+        if !restored {
             self.open_fresh(None, &mut out);
+        }
+        // a failed restore deletes no log, since its save was kept aside and can be put back
+        let rows_are_known = restored || !self.options.restore_on_launch;
+        if rows_are_known {
+            self.drop_orphan_logs();
         }
         self.finish(before, now_ms, &mut out);
         out
@@ -686,15 +707,8 @@ impl Workspace {
         let log = loaded_log(&mut self.logs, self.options.storage.as_ref(), terminal);
         let entry = log.append(kind, now_ms);
         let rewrite = log.needs_rewrite();
-        let storage = &mut self.options.storage;
-        let succeeded = if rewrite {
-            storage.rewrite_log(terminal, &log.lines())
-        } else {
-            match line_of(&entry) {
-                Some(line) => storage.append_log(terminal, &line),
-                None => false,
-            }
-        };
+        let storage = self.options.storage.as_mut();
+        let succeeded = write_log(storage, terminal, log, &entry, rewrite);
         log.file_written(rewrite, succeeded);
         if self.watched.as_ref() == Some(terminal) {
             let appended = ActivityEvent::Appended {
