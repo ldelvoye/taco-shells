@@ -38,11 +38,14 @@ const SAMPLE: &str = concat!(
 );
 
 fn main() {
-    let directory = std::env::args().nth(1).unwrap_or_else(|| ".".to_string());
-    let directory = PathBuf::from(directory);
+    let arguments: Vec<String> = std::env::args().collect();
+    let mut directory = PathBuf::from(".");
+    if let Some(given) = arguments.get(1) {
+        directory = PathBuf::from(given);
+    }
     let mut output = SAMPLE.as_bytes().to_vec();
     let mut stem = "terminal".to_string();
-    if let Some(file) = std::env::args().nth(2) {
+    if let Some(file) = arguments.get(2) {
         let file = PathBuf::from(file);
         output = std::fs::read(&file).expect("the bytes file");
         let name = file.file_stem().expect("a file name");

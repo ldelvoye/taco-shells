@@ -9,7 +9,7 @@ use taco_ghostty::render::{Cell, CursorShape, FrameColors, FrameCursor, Row, Und
 use taco_protocol::Rgb;
 
 use crate::grid::CellMetrics;
-use crate::shapes::{Shape, cell_bounds, paint_shape, shape_of};
+use crate::shapes::{Shape, cells_bounds, light_line, paint_shape, shape_of_text};
 
 const FAINT_TEXT_ALPHA: f32 = 0.6;
 /// A block cursor lets the character under it show through.
@@ -173,8 +173,16 @@ fn lay_out_row(row: &Row, y: u16, colors: &FrameColors, selection: Rgb, painting
         if cell.faint {
             color.a *= FAINT_TEXT_ALPHA;
         }
+        let mut strikethrough = None;
+        if cell.strikethrough {
+            strikethrough = Some(color);
+        }
+        let underline = underline_of(cell, color);
+        let mut drawn_text = text;
+        let mut is_shape = false;
+        // A shape fills exactly one cell, so a wide one stays text.
         if columns == 1
-            && let Some(shape) = cell_shape(text)
+            && let Some(shape) = shape_of_text(text)
         {
             let drawn = CellShape {
                 column,
@@ -183,36 +191,45 @@ fn lay_out_row(row: &Row, y: u16, colors: &FrameColors, selection: Rgb, painting
                 color,
             };
             painting.shapes.push(drawn);
-            continue;
+            drawn_text = " ";
+            is_shape = true;
         }
-        let mut strikethrough = None;
-        if cell.strikethrough {
-            strikethrough = Some(color);
-        }
-        let several_code_points = text.chars().nth(1).is_some();
+        let several_code_points = drawn_text.chars().nth(1).is_some();
         let run = Run {
             column,
             row: y,
             columns,
-            text: text.to_string(),
+            text: drawn_text.to_string(),
             color,
             bold: cell.bold,
             italic: cell.italic,
-            underline: underline_of(cell, color),
+            underline,
             strikethrough,
             one_cell_per_glyph: columns == 1 && !several_code_points,
         };
+        // A shape's space is text only where it keeps a run whole or carries an underline or strikethrough; alone, it would cost a run of its own.
+        let decorated = run.underline.is_some() || run.strikethrough.is_some();
+        let joins = joins_last_run(&painting.runs, &run);
+        if is_shape && !decorated && !joins {
+            continue;
+        }
         add_run(&mut painting.runs, run);
     }
 }
 
-fn cell_shape(text: &str) -> Option<Shape> {
-    let mut chars = text.chars();
-    let glyph = chars.next()?;
-    if chars.next().is_some() {
-        return None;
-    }
-    shape_of(glyph)
+fn joins_last_run(runs: &[Run], run: &Run) -> bool {
+    let Some(last) = runs.last() else {
+        return false;
+    };
+    last.one_cell_per_glyph
+        && run.one_cell_per_glyph
+        && last.row == run.row
+        && last.column + last.columns == run.column
+        && last.color == run.color
+        && last.bold == run.bold
+        && last.italic == run.italic
+        && last.underline == run.underline
+        && last.strikethrough == run.strikethrough
 }
 
 /// The colors a cell is drawn in: inverse swaps them, and a selected cell takes the selection background.
@@ -262,21 +279,11 @@ fn add_background(backgrounds: &mut Vec<Background>, stretch: Background) {
 }
 
 fn add_run(runs: &mut Vec<Run>, run: Run) {
-    if let Some(last) = runs.last_mut() {
-        let continues = last.one_cell_per_glyph
-            && run.one_cell_per_glyph
-            && last.row == run.row
-            && last.column + last.columns == run.column
-            && last.color == run.color
-            && last.bold == run.bold
-            && last.italic == run.italic
-            && last.underline == run.underline
-            && last.strikethrough == run.strikethrough;
-        if continues {
-            last.text.push_str(&run.text);
-            last.columns += run.columns;
-            return;
-        }
+    let joins = joins_last_run(runs, &run);
+    if joins && let Some(last) = runs.last_mut() {
+        last.text.push_str(&run.text);
+        last.columns += run.columns;
+        return;
     }
     runs.push(run);
 }
@@ -299,26 +306,24 @@ pub fn paint(
         point(x, y)
     };
 
+    // Backgrounds and shapes share device-pixel edges, so no sliver shows between them.
+    let scale = window.scale_factor();
     for background in &painting.backgrounds {
-        let width = cell_width * f32::from(background.columns);
-        let bounds = Bounds::new(
-            at(background.column, background.row),
-            size(width, cell_height),
+        let bounds = cells_bounds(
+            origin,
+            cell,
+            background.column,
+            background.row,
+            background.columns,
+            scale,
         );
         window.paint_quad(fill(bounds, background.color));
     }
 
-    let scale = window.scale_factor();
+    let light = light_line(font_size, scale);
     for drawn in &painting.shapes {
-        let bounds = cell_bounds(
-            origin,
-            cell.width,
-            cell.height,
-            drawn.column,
-            drawn.row,
-            scale,
-        );
-        paint_shape(drawn.shape, bounds, drawn.color, font_size, scale, window);
+        let bounds = cells_bounds(origin, cell, drawn.column, drawn.row, 1, scale);
+        paint_shape(drawn.shape, bounds, drawn.color, light, scale, window);
     }
 
     for run in &painting.runs {
@@ -529,40 +534,40 @@ mod tests {
     #[test]
     fn block_and_box_characters_are_shapes_in_their_cells_colors_not_text() {
         let mut terminal = Terminal::new(TerminalSize { cols: 20, rows: 1 }).unwrap();
-        // Claude Code's logo paints blocks over a black background; a box corner, a line, and a dashed line the font keeps.
-        terminal.write("a\x1b[38;2;215;119;87;48;2;0;0;0m▛█\x1b[0m\x1b[2m╭─\x1b[0m┄b".as_bytes());
+        // Blocks over a black background, a faint corner and line, a dashed line, an underlined line, a block with a combining mark, and a block between two letters.
+        terminal.write(
+            "a\x1b[38;2;215;119;87;48;2;0;0;0m▛█\x1b[0m\x1b[2m╭─\x1b[0m┄\x1b[4m─\x1b[0m█\u{301}b█c"
+                .as_bytes(),
+        );
         let (painting, _) = painting_of(&terminal);
 
+        let shape_columns: Vec<u16> = painting.shapes.iter().map(|drawn| drawn.column).collect();
+        assert_eq!(shape_columns, vec![1, 2, 3, 4, 6, 9]);
+        // A shape adds no text, except a space that keeps a run whole or carries an underline; the dashed line and the block with a mark stay text.
         let text: Vec<(&str, u16)> = painting
             .runs
             .iter()
             .map(|run| (run.text.as_str(), run.column))
             .collect();
-        assert_eq!(text, vec![("a", 0), ("┄b", 5)]);
-        let shapes: Vec<(u16, Shape)> = painting
-            .shapes
-            .iter()
-            .map(|drawn| (drawn.column, drawn.shape))
-            .collect();
-        assert_eq!(shapes.len(), 4);
-        assert_eq!(shapes[0], (1, shape_of('▛').unwrap()));
         assert_eq!(
-            shapes[2],
-            (
-                3,
-                Shape::Arc {
-                    down: true,
-                    right: true
-                }
-            )
+            text,
+            vec![("a", 0), ("┄", 5), (" ", 6), ("█\u{301}", 7), ("b c", 8)]
         );
+        assert!(painting.runs[2].underline.is_some());
+
+        let corner = painting.shapes[2].shape;
+        let rounded_down_and_right = Shape::Arc {
+            down: true,
+            right: true,
+        };
+        assert_eq!(corner, rounded_down_and_right);
         let clawd = Rgb {
             r: 215,
             g: 119,
             b: 87,
         };
         assert_eq!(painting.shapes[0].color, hsla(clawd));
-        // The black behind the block still fills the cell, to show through the quadrant ▛ leaves empty.
+        // The black still fills the cells, showing through the quadrant ▛ leaves empty.
         let behind = painting.backgrounds[0];
         assert_eq!((behind.column, behind.columns), (1, 2));
         assert!(
