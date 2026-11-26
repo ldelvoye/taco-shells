@@ -80,7 +80,7 @@ cargo test           # every crate; under about 10 s once compiled
 cargo fmt --all      # CI fails on anything rustfmt would change
 cargo clippy --workspace --all-targets -- -D warnings
 cargo xtask run      # build both programs and start the app from target/
-cargo xtask bundle   # the .app into target/bundle.noindex/; --release, --stable, --zip
+cargo xtask bundle   # the .app into target/bundle.noindex/; --release, --stable, --zip, --config-dir <absolute path> (dev only)
 cargo xtask install  # release build of Taco Shells Dev, into /Applications
 cargo xtask smoke    # the tests that drive the real app, against a development bundle
 cargo xtask rehearse-update --until-ready  # the Electron Dev build taking the Rust app as an update, on a throwaway config
