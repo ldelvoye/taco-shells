@@ -698,8 +698,7 @@ fn paint_line(
     }
 }
 
-/// How far to scroll the line so the caret at `caret` stays inside a field `visible` wide, moving as little as it can
-/// from `scroll`, and never past the line's end.
+/// The scroll that keeps the caret in view with the least movement.
 fn scroll_showing(scroll: f32, caret: f32, line_width: f32, visible: f32) -> f32 {
     let room = visible - CARET_WIDTH;
     let mut shown = scroll;

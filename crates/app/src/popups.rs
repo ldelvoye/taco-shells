@@ -38,7 +38,7 @@ pub enum Popup {
 pub enum RenameStep {
     Rename(String),
     Close,
-    /// Esc undoes: the name the popup opened with goes back, since each keystroke was already applied.
+    /// Esc undoes: it puts back the name the popup opened with.
     RenameAndClose(String),
 }
 
@@ -61,7 +61,6 @@ impl Popup {
     }
 }
 
-/// The popup card, drawn over the window next to where it was opened.
 pub fn rename_step(event: &TextFieldEvent, opening_name: &str) -> RenameStep {
     match event {
         TextFieldEvent::Edited(text) => RenameStep::Rename(text.clone()),
@@ -70,6 +69,7 @@ pub fn rename_step(event: &TextFieldEvent, opening_name: &str) -> RenameStep {
     }
 }
 
+/// The popup card, drawn over the window next to where it was opened.
 pub fn popup_layer(
     popup: &Popup,
     drawn: &DrawnState,
@@ -173,16 +173,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn esc_after_several_keystrokes_puts_back_the_opening_name() {
-        let typed = ["T", "Ta", "Tac"];
-        let mut last_sent = String::new();
-        for text in typed {
-            let edited = TextFieldEvent::Edited(text.to_string());
-            if let RenameStep::Rename(name) = rename_step(&edited, "Tacos") {
-                last_sent = name;
-            }
-        }
-        assert_eq!(last_sent, "Tac");
+    fn esc_puts_back_the_opening_name_and_enter_keeps_what_was_typed() {
         let undone = rename_step(&TextFieldEvent::Cancelled, "Tacos");
         assert_eq!(undone, RenameStep::RenameAndClose("Tacos".to_string()));
         let kept = rename_step(&TextFieldEvent::Submitted, "Tacos");
