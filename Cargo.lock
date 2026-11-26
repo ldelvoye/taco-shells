@@ -5054,6 +5054,12 @@ dependencies = [
 [[package]]
 name = "taco-smoke"
 version = "0.0.0"
+dependencies = [
+ "serde_json",
+ "taco-drive",
+ "taco-protocol",
+ "tempfile",
+]
 
 [[package]]
 name = "taco-terminal-view"

@@ -31,6 +31,7 @@ pub fn run() -> Result<(), String> {
         channel: Channel::Development,
         zip: false,
         icon: true,
+        drive: false,
     };
     let bundled = bundle::create(&options)?;
 
