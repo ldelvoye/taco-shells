@@ -11,6 +11,8 @@ mod config_files;
 mod config_store;
 mod hook_listener;
 mod identity;
+mod mac;
+mod updater;
 
 pub use agent_flow::{copy_hook_scripts, hooks_directory};
 pub use agent_hooks::{
@@ -34,3 +36,4 @@ pub use hook_listener::{FOCUS_PORTS, HookListener, ListenerEvent};
 pub use identity::{
     APPLICATION_NAME, CONFIG_DIRECTORY_NAME, CONFIG_DIRECTORY_VARIABLE, IS_STABLE, config_directory,
 };
+pub use updater::{UpdateEvent, Updater, UpdaterHost};
