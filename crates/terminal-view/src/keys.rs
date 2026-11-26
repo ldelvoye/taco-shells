@@ -28,10 +28,15 @@ pub fn key_press(keystroke: &Keystroke, repeat: bool) -> Option<KeyPress<'_>> {
         return None;
     }
     let key = typed_key(&keystroke.key)?;
+    // gpui names the space bar `space`; its text is the character.
+    let mut text = keystroke.key.as_str();
+    if key == Key::Space {
+        text = " ";
+    }
     Some(KeyPress {
         key,
         mods,
-        text: keystroke.key.as_str(),
+        text,
         repeat,
     })
 }
@@ -106,5 +111,7 @@ mod tests {
         assert_eq!((key, mods.alt), (Key::Left, true));
         let (key, _, _) = press("f5").unwrap();
         assert_eq!(key, Key::Function(5));
+        let (key, _, text) = press("ctrl-space").unwrap();
+        assert_eq!((key, text.as_str()), (Key::Space, " "));
     }
 }
