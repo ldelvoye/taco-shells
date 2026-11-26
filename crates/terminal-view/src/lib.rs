@@ -7,4 +7,4 @@ mod shown;
 mod terminals;
 mod view;
 
-pub use terminals::{Terminals, TerminalsEvent};
+pub use terminals::Terminals;

@@ -1,10 +1,12 @@
 //! One terminal's view: a silent copy of the runtime's terminal, fed in the order the terminal channel sends.
 
-use taco_ghostty::render::{Dirty, Frame, RenderState, Row};
+use taco_ghostty::render::{Dirty, RenderState, Row};
 use taco_ghostty::{Error, Step, Terminal};
-use taco_protocol::{CellSize, TerminalColors, TerminalEvent, TerminalSize};
+use taco_protocol::{Rgb, TerminalColors, TerminalEvent};
 
-/// What a view needs to start: what every view's terminal is set to.
+use crate::draw::{Painting, lay_out};
+
+/// What every view's terminal is set to.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ViewConfig {
     pub scrollback: u32,
@@ -14,21 +16,27 @@ pub struct ViewConfig {
 /// What an event did to the view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Applied {
-    /// Not for this view: before its `Attached`, or for an attachment it no longer holds.
+    /// Not for this view: before its `Attached`, or for an attachment it does not hold.
     Ignored,
     Changed,
+    /// The shell exited and the runtime let the terminal go; there is nothing more to show.
     Ended,
 }
 
-/// A view that has asked to attach and follows the runtime once `Attached` comes back with its number.
+/// One frame of the view: what to draw and the background under it.
+pub struct Drawn {
+    pub painting: Painting,
+    pub background: Rgb,
+}
+
+/// A view that has asked to attach, and follows the runtime once `Attached` comes back with its number.
 pub struct View {
     attachment: u64,
     /// None until `Attached` arrives.
     terminal: Option<Terminal>,
     history_pending: bool,
-    size: Option<TerminalSize>,
     render: RenderState,
-    /// The viewport as last read, one row per line, refreshed a dirty row at a time.
+    /// The viewport as last read, refreshed a dirty row at a time.
     rows: Vec<Row>,
     config: ViewConfig,
 }
@@ -40,73 +48,59 @@ impl View {
             attachment,
             terminal: None,
             history_pending: false,
-            size: None,
             render,
             rows: Vec::new(),
             config,
         })
     }
 
-    pub fn apply(
-        &mut self,
-        event: TerminalEvent,
-        cell: Option<CellSize>,
-    ) -> Result<Applied, Error> {
-        if let TerminalEvent::Attached {
-            attachment,
-            size,
-            screen,
-            ..
-        } = &event
-        {
-            if *attachment != self.attachment {
-                return Ok(Applied::Ignored);
-            }
-            let mut terminal = Terminal::restore(screen)?;
-            let scrollback = self.config.scrollback as usize;
-            terminal.set_scrollback(scrollback)?;
-            terminal.set_colors(&self.config.colors)?;
-            self.terminal = Some(terminal);
-            self.size = Some(*size);
-            self.history_pending = true;
-            self.rows.clear();
-            return Ok(Applied::Changed);
-        }
-        let Some(terminal) = self.terminal.as_mut() else {
-            return Ok(Applied::Ignored);
-        };
-
+    pub fn apply(&mut self, event: TerminalEvent) -> Result<Applied, Error> {
         match event {
-            TerminalEvent::Attached { .. } => Ok(Applied::Ignored),
+            TerminalEvent::Attached {
+                attachment, screen, ..
+            } => {
+                if attachment != self.attachment {
+                    return Ok(Applied::Ignored);
+                }
+                let mut terminal = Terminal::restore(&screen)?;
+                let scrollback = self.config.scrollback as usize;
+                terminal.set_scrollback(scrollback)?;
+                terminal.set_colors(&self.config.colors)?;
+                self.terminal = Some(terminal);
+                self.history_pending = true;
+                Ok(Applied::Changed)
+            }
             TerminalEvent::History {
                 attachment,
                 part,
                 last,
                 ..
             } => {
-                if attachment != self.attachment {
+                let Some(terminal) = self.terminal_for(attachment) else {
                     return Ok(Applied::Ignored);
-                }
+                };
                 terminal.push_history(&part, last);
                 Ok(Applied::Changed)
             }
             TerminalEvent::Output { data, .. } => {
+                let Some(terminal) = self.terminal.as_mut() else {
+                    return Ok(Applied::Ignored);
+                };
                 terminal.write(&data);
                 Ok(Applied::Changed)
             }
             TerminalEvent::Resized { size, .. } => {
-                let mut pixels = CellSize {
-                    width_px: 0,
-                    height_px: 0,
+                let Some(terminal) = self.terminal.as_mut() else {
+                    return Ok(Applied::Ignored);
                 };
-                if let Some(known) = cell {
-                    pixels = known;
-                }
-                terminal.resize(size, pixels.width_px, pixels.height_px)?;
-                self.size = Some(size);
+                // Pixel sizes matter only for answering size reports, which the runtime does.
+                terminal.resize(size, 0, 0)?;
                 Ok(Applied::Changed)
             }
             TerminalEvent::Cleared { .. } => {
+                let Some(terminal) = self.terminal.as_mut() else {
+                    return Ok(Applied::Ignored);
+                };
                 terminal.clear()?;
                 Ok(Applied::Changed)
             }
@@ -116,20 +110,19 @@ impl View {
 
     /// Applies at most one page of restored history; false once there is none left.
     pub fn step_history(&mut self) -> Result<bool, Error> {
-        let Some(terminal) = self.terminal.as_mut() else {
-            return Ok(false);
-        };
         if !self.history_pending {
             return Ok(false);
         }
+        let Some(terminal) = self.terminal.as_mut() else {
+            return Ok(false);
+        };
         let step = terminal.step_history()?;
-        let pending = step != Step::Finished;
-        self.history_pending = pending;
-        Ok(pending)
+        self.history_pending = step != Step::Finished;
+        Ok(self.history_pending)
     }
 
-    /// The viewport's rows and the frame they came from, refreshed where they changed. None before `Attached`.
-    pub fn read(&mut self) -> Result<Option<(Frame<'_>, &[Row])>, Error> {
+    /// The viewport laid out for drawing, with the rows that changed read again. None before `Attached`.
+    pub fn draw(&mut self, selection: Rgb) -> Result<Option<Drawn>, Error> {
         let Some(terminal) = self.terminal.as_ref() else {
             return Ok(None);
         };
@@ -149,23 +142,21 @@ impl View {
                 std::mem::swap(&mut self.rows[index], &mut row);
             }
         }
-        Ok(Some((frame, &self.rows)))
+        let colors = frame.colors().clone();
+        let cursor = frame.cursor()?;
+        frame.clean()?;
+        let painting = lay_out(&self.rows, cursor, &colors, selection);
+        Ok(Some(Drawn {
+            painting,
+            background: colors.background,
+        }))
     }
 
-    #[cfg(test)]
-    fn terminal_mut(&mut self) -> &mut Terminal {
-        self.terminal.as_mut().expect("attached")
-    }
-}
-
-#[cfg(test)]
-impl View {
-    fn size(&self) -> Option<TerminalSize> {
-        self.size
-    }
-
-    fn has_history_to_apply(&self) -> bool {
-        self.history_pending
+    fn terminal_for(&mut self, attachment: u64) -> Option<&mut Terminal> {
+        if attachment != self.attachment {
+            return None;
+        }
+        self.terminal.as_mut()
     }
 }
 
@@ -173,25 +164,25 @@ impl View {
 mod tests {
     use super::*;
     use taco_ghostty::Snapshot;
-    use taco_protocol::{Rgb, TerminalId};
+    use taco_protocol::{TerminalId, TerminalSize};
 
     const SIZE: TerminalSize = TerminalSize { cols: 20, rows: 4 };
+    const GREY: Rgb = Rgb {
+        r: 0x80,
+        g: 0x80,
+        b: 0x80,
+    };
 
     fn config() -> ViewConfig {
-        let grey = Rgb {
-            r: 0x80,
-            g: 0x80,
-            b: 0x80,
-        };
         ViewConfig {
             scrollback: 1_000,
             colors: TerminalColors {
-                foreground: grey,
-                background: grey,
-                cursor: grey,
-                cursor_text: grey,
-                selection: grey,
-                ansi: [grey; 16],
+                foreground: GREY,
+                background: GREY,
+                cursor: GREY,
+                cursor_text: GREY,
+                selection: GREY,
+                ansi: [GREY; 16],
             },
         }
     }
@@ -219,11 +210,24 @@ mod tests {
         (event, history)
     }
 
+    fn history(attachment: u64, parts: Vec<Vec<u8>>) -> Vec<TerminalEvent> {
+        let last_index = parts.len().saturating_sub(1);
+        let events = parts
+            .into_iter()
+            .enumerate()
+            .map(|(index, part)| TerminalEvent::History {
+                id: id(),
+                attachment,
+                part,
+                last: index == last_index,
+            });
+        events.collect()
+    }
+
+    /// Each row's text, read the way a frame is drawn.
     fn texts(view: &mut View) -> Vec<String> {
-        let (frame, rows) = view.read().unwrap().unwrap();
-        let texts = rows.iter().map(|row| row.text.clone()).collect();
-        frame.clean().unwrap();
-        texts
+        view.draw(GREY).unwrap().unwrap();
+        view.rows.iter().map(|row| row.text.clone()).collect()
     }
 
     #[test]
@@ -232,28 +236,18 @@ mod tests {
         source.write(b"from the snapshot");
         let mut view = View::new(2, config()).unwrap();
 
-        assert_eq!(
-            view.apply(output("too early"), None).unwrap(),
-            Applied::Ignored
-        );
+        assert_eq!(view.apply(output("too early")).unwrap(), Applied::Ignored);
         // The answer to an earlier attach, still on its way when this view was made.
         let (stale, _) = attached(1, &source);
-        assert_eq!(view.apply(stale, None).unwrap(), Applied::Ignored);
-        assert!(view.read().unwrap().is_none());
+        assert_eq!(view.apply(stale).unwrap(), Applied::Ignored);
+        assert!(view.draw(GREY).unwrap().is_none());
 
-        let (own, history) = attached(2, &source);
-        assert_eq!(view.apply(own, None).unwrap(), Applied::Changed);
-        for (index, part) in history.iter().enumerate() {
-            let last = index + 1 == history.len();
-            let stale_part = TerminalEvent::History {
-                id: id(),
-                attachment: 1,
-                part: part.clone(),
-                last,
-            };
-            assert_eq!(view.apply(stale_part, None).unwrap(), Applied::Ignored);
+        let (own, parts) = attached(2, &source);
+        assert_eq!(view.apply(own).unwrap(), Applied::Changed);
+        for stale_part in history(1, parts) {
+            assert_eq!(view.apply(stale_part).unwrap(), Applied::Ignored);
         }
-        assert_eq!(view.apply(output(" ok"), None).unwrap(), Applied::Changed);
+        assert_eq!(view.apply(output(" ok")).unwrap(), Applied::Changed);
         assert_eq!(texts(&mut view)[0], "from the snapshot ok");
     }
 
@@ -265,28 +259,19 @@ mod tests {
             source.write(format!("line {line}\r\n").as_bytes());
         }
         let mut view = View::new(1, config()).unwrap();
-        let (event, history) = attached(1, &source);
-        view.apply(event, None).unwrap();
-        let last_index = history.len() - 1;
-        for (index, part) in history.into_iter().enumerate() {
-            let history_part = TerminalEvent::History {
-                id: id(),
-                attachment: 1,
-                part,
-                last: index == last_index,
-            };
-            view.apply(history_part, None).unwrap();
+        let (event, parts) = attached(1, &source);
+        view.apply(event).unwrap();
+        for part in history(1, parts) {
+            view.apply(part).unwrap();
         }
 
         let mut steps = 0;
         while view.step_history().unwrap() {
             steps += 1;
-            view.apply(output("live\r\n"), None).unwrap();
+            view.apply(output("live\r\n")).unwrap();
         }
         assert!(steps > 1, "a long history should take more than one step");
-        assert!(!view.has_history_to_apply());
-        let screen = texts(&mut view);
-        assert_eq!(screen[2], "live");
+        assert_eq!(texts(&mut view)[2], "live");
     }
 
     #[test]
@@ -294,24 +279,24 @@ mod tests {
         let source = Terminal::new(SIZE).unwrap();
         let mut view = View::new(1, config()).unwrap();
         let (event, _) = attached(1, &source);
-        view.apply(event, None).unwrap();
+        view.apply(event).unwrap();
 
-        view.apply(output("one\r\ntwo\r\nprompt $"), None).unwrap();
-        let cleared = TerminalEvent::Cleared { id: id() };
-        view.apply(cleared, None).unwrap();
+        view.apply(output("one\r\ntwo\r\nprompt $")).unwrap();
+        view.apply(TerminalEvent::Cleared { id: id() }).unwrap();
         assert_eq!(texts(&mut view), vec!["prompt $", "", "", ""]);
 
         let smaller = TerminalSize { cols: 10, rows: 2 };
-        let resized = TerminalEvent::Resized {
+        view.apply(TerminalEvent::Resized {
             id: id(),
             size: smaller,
-        };
-        view.apply(resized, None).unwrap();
-        assert_eq!(view.size(), Some(smaller));
+        })
+        .unwrap();
         assert_eq!(texts(&mut view).len(), 2);
 
-        let end = TerminalEvent::End { id: id() };
-        assert_eq!(view.apply(end, None).unwrap(), Applied::Ended);
+        assert_eq!(
+            view.apply(TerminalEvent::End { id: id() }).unwrap(),
+            Applied::Ended
+        );
     }
 
     #[test]
@@ -319,11 +304,11 @@ mod tests {
         let source = Terminal::new(SIZE).unwrap();
         let mut view = View::new(1, config()).unwrap();
         let (event, _) = attached(1, &source);
-        view.apply(event, None).unwrap();
+        view.apply(event).unwrap();
 
         // Device attributes, cursor position and a color: the runtime answers these, so a view must not.
-        view.apply(output("\x1b[c\x1b[6n\x1b]10;?\x07"), None)
-            .unwrap();
-        assert!(view.terminal_mut().take_replies().is_empty());
+        view.apply(output("\x1b[c\x1b[6n\x1b]10;?\x07")).unwrap();
+        let terminal = view.terminal.as_mut().unwrap();
+        assert!(terminal.take_replies().is_empty());
     }
 }
