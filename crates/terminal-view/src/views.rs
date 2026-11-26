@@ -31,8 +31,8 @@ pub struct Views {
     on_screen: Option<TerminalId>,
     /// Counts every attach sent, so each has a number of its own.
     attachments: u64,
-    /// The size last asked of the runtime for each terminal, so the same one is not asked twice.
-    asked: HashMap<TerminalId, TerminalSize>,
+    /// The size and cell last asked of the runtime for each terminal, so the same are not asked twice.
+    asked: HashMap<TerminalId, Fit>,
     fit: Option<Fit>,
     /// Used before the middle has been laid out.
     cell: CellSize,
@@ -107,11 +107,11 @@ impl Views {
         let Some(id) = self.on_screen.clone() else {
             return;
         };
-        let already_asked = self.asked.get(&id) == Some(&fit.size);
+        let already_asked = self.asked.get(&id) == Some(&fit);
         if already_asked || !self.views.contains_key(&id) {
             return;
         }
-        self.asked.insert(id.clone(), fit.size);
+        self.asked.insert(id.clone(), fit);
         self.outbox.push(TerminalRequest::Resize {
             id,
             size: fit.size,
@@ -175,6 +175,20 @@ impl Views {
         left
     }
 
+    /// New settings or theme colors for every view, and for the views made from now on.
+    pub fn configure(&mut self, config: ViewConfig) {
+        self.config = config.clone();
+        let mut broken = Vec::new();
+        for (id, view) in self.views.iter_mut() {
+            if view.configure(config.clone()).is_err() {
+                broken.push(id.clone());
+            }
+        }
+        for id in broken {
+            self.start_over(id);
+        }
+    }
+
     /// Sends what a view of the terminal on screen wants written, as typed.
     pub fn write_on_screen(&mut self, data: Vec<u8>) {
         let Some(id) = self.on_screen.clone() else {
@@ -229,7 +243,7 @@ impl Views {
         let mut size = None;
         let mut cell = self.cell;
         if let Some(fit) = self.fit {
-            self.asked.insert(id.clone(), fit.size);
+            self.asked.insert(id.clone(), fit);
             size = Some(fit.size);
             cell = fit.cell;
         }
@@ -290,6 +304,8 @@ mod tests {
                 selection: grey,
                 ansi: [grey; 16],
             },
+            cursor_shape: taco_ghostty::render::CursorShape::Block,
+            cursor_blink: false,
         };
         Views::new(config, CELL)
     }
