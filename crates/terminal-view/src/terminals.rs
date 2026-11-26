@@ -6,6 +6,7 @@ use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
 use futures::StreamExt as _;
+use futures::channel::mpsc::Receiver;
 use gpui::{
     App, Bounds, Context, ElementInputHandler, EntityInputHandler, EventEmitter, FocusHandle,
     InteractiveElement as _, IntoElement, KeyDownEvent, Modifiers, MouseButton, MouseDownEvent,
@@ -17,7 +18,7 @@ use taco_ghostty::input::{
     CellPoint, Grid, Key, KeyEncoder, KeyPress, Mods, MouseAction, MouseButton as GridButton,
     MouseInput, Scroll,
 };
-use taco_protocol::{TerminalColors, TerminalId, TerminalSize};
+use taco_protocol::{TerminalColors, TerminalEvent, TerminalId, TerminalSize};
 use taco_settings::Settings;
 
 use crate::connection::{Requests, connect};
@@ -94,16 +95,38 @@ struct Pointer {
     y: f32,
 }
 
+/// The terminal channel, connected, from `Terminals::connect`.
+pub struct TerminalChannel {
+    requests: Requests,
+    events: Receiver<TerminalEvent>,
+    keys: KeyEncoder,
+}
+
 impl EventEmitter<TerminalsEvent> for Terminals {}
 
 impl Terminals {
+    /// The part of making `Terminals` that can fail, done before gpui's `cx.new`.
+    pub fn connect(connection: UnixStream) -> io::Result<TerminalChannel> {
+        let (requests, events) = connect(connection)?;
+        let keys = KeyEncoder::new().map_err(io::Error::other)?;
+        Ok(TerminalChannel {
+            requests,
+            events,
+            keys,
+        })
+    }
+
     pub fn new(
-        connection: UnixStream,
+        channel: TerminalChannel,
         settings: &Settings,
         colors: &TerminalColors,
         cx: &mut Context<Terminals>,
-    ) -> io::Result<Terminals> {
-        let (requests, mut events) = connect(connection)?;
+    ) -> Terminals {
+        let TerminalChannel {
+            requests,
+            mut events,
+            keys,
+        } = channel;
         let task = cx.spawn(async move |this, cx| {
             while let Some(event) = events.next().await {
                 let received = this.update(cx, |terminals, cx| {
@@ -139,8 +162,7 @@ impl Terminals {
         let font_size = settings.font_size as f32;
         let cell = measure(&family, font_size, cx);
         let config = view_config(settings, colors);
-        let keys = KeyEncoder::new().map_err(io::Error::other)?;
-        Ok(Terminals {
+        Terminals {
             requests,
             views: Views::new(config.clone(), cell.size_px()),
             keys,
@@ -164,7 +186,7 @@ impl Terminals {
             config,
             _events: task,
             _blink: blink,
-        })
+        }
     }
 
     /// New settings or theme colors: the font, the scrollback, the wheel and every view's colors. The cursor's defaults are the runtime's.
