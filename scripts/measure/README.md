@@ -173,3 +173,59 @@ The two runs at the new commit:
 | Switch, between two entries: median / 95th / worst (ms) | 6.3 / 6.8 / 7.4 | 6.3 / 7.0 / 14.3 |
 | Graphics contexts lost | 8 | 8 |
 | Terminals on the slow renderer | 8 | 8 |
+
+### After the runtime kept every screen
+
+One run on 2026-11-26, same machine and settings, at the commit that added `src/runtime/screens.ts`. The runtime now holds a screen for every terminal and the window still holds a view for every terminal, so each terminal's contents are in memory twice. The step that follows removes the window's copy for terminals that are not on screen.
+
+What it shows:
+
+- **Every scrollback is held twice.** After the scrollback fill the runtime holds 1,868 MB and the window 1,779 MB, and all processes together 3,918 MB, against about 2,800 MB in the two runs above.
+- **The runtime slows a shell that prints faster than it can read.** Output reached the window at 55 MB/s, against about 90 MB/s in the two runs above. The backlog after printing stopped is 7 ms, against 59 and 112 ms.
+- **Typing while four terminals print is close to typing when nothing prints**: 11 ms at the median and 20 ms at the 95th percentile, against about 100 and 115 ms in the two runs above. The frame gap while printing is 4.2 ms at the median, against 41.7 ms. One run, and the first run before the core rip out shows how much these rows move with the output rate, so read this as a direction and not as a size.
+- Switching and the 8 lost graphics contexts are as before.
+
+| Measure | One run |
+| --- | --- |
+| Memory, one terminal: Browser | 160 |
+| Memory, one terminal: GPU | 99 |
+| Memory, one terminal: Network Service | 48 |
+| Memory, one terminal: Terminal runtime | 76 |
+| Memory, one terminal: Tab | 141 |
+| Memory, one terminal: total | 524 |
+| Memory, one terminal: window's JavaScript heap | 11 |
+| Memory, 24 terminals, each shown once: Browser | 162 |
+| Memory, 24 terminals, each shown once: GPU | 116 |
+| Memory, 24 terminals, each shown once: Network Service | 48 |
+| Memory, 24 terminals, each shown once: Terminal runtime | 102 |
+| Memory, 24 terminals, each shown once: Tab | 188 |
+| Memory, 24 terminals, each shown once: total | 616 |
+| Memory, 24 terminals, each shown once: window's JavaScript heap | 11 |
+| Memory, 8 terminals with a full scrollback: Browser | 141 |
+| Memory, 8 terminals with a full scrollback: GPU | 89 |
+| Memory, 8 terminals with a full scrollback: Network Service | 40 |
+| Memory, 8 terminals with a full scrollback: Terminal runtime | 1868 |
+| Memory, 8 terminals with a full scrollback: Tab | 1779 |
+| Memory, 8 terminals with a full scrollback: total | 3918 |
+| Memory, 8 terminals with a full scrollback: window's JavaScript heap | 11 |
+| Memory, at the end: Browser | 144 |
+| Memory, at the end: GPU | 99 |
+| Memory, at the end: Network Service | 40 |
+| Memory, at the end: Terminal runtime | 1667 |
+| Memory, at the end: Tab | 1702 |
+| Memory, at the end: total | 3653 |
+| Memory, at the end: window's JavaScript heap | 11 |
+| Typing delay, nothing printing: median / 95th / worst (ms) | 10.1 / 10.6 / 11.1 |
+| Typing delay, while printing: median / 95th / worst (ms) | 11.2 / 20.0 / 90.0 |
+| Main process timer lag, nothing printing: median / 95th / worst (ms) | 0.7 / 0.8 / 2.3 |
+| Main process timer lag, while printing: median / 95th / worst (ms) | 0.7 / 0.8 / 2.9 |
+| Frame gap, nothing printing: median / 95th / worst (ms) | 4.2 / 4.5 / 4.8 |
+| Frame gap, while printing: median / 95th / worst (ms) | 4.2 / 4.6 / 45.8 |
+| Long tasks over 50 ms, nothing printing | 0 |
+| Long tasks over 50 ms, while printing | 0 |
+| Output reaching the window while printing (MB/s) | 55.4 |
+| Backlog after printing stopped (ms) | 7.1 |
+| Switch, every entry in turn: median / 95th / worst (ms) | 6.2 / 6.7 / 7.1 |
+| Switch, between two entries: median / 95th / worst (ms) | 6.3 / 6.9 / 7.3 |
+| Graphics contexts lost | 8 |
+| Terminals on the slow renderer | 8 |
