@@ -20,8 +20,8 @@ mod window;
 pub mod workspace_host;
 
 use gpui::{
-    App, AppContext, Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions, WindowAppearance,
-    WindowBounds, WindowOptions, actions, px, size,
+    AnyWindowHandle, App, AppContext, Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions,
+    WindowAppearance, WindowBounds, WindowOptions, actions, px, size,
 };
 use taco_services::APPLICATION_NAME;
 use taco_settings::Appearance;
@@ -55,10 +55,16 @@ pub fn run(fixture: Fixture) {
             eprintln!("the window's fonts did not load: {error:#}");
         }
         install_menu(cx);
-        open_window(fixture, background, cx);
+        let window = open_window(fixture, background, cx);
         if !background {
             cx.activate(true);
         }
+        #[cfg(feature = "drive")]
+        if let Some(window) = window {
+            drive::listen(window, cx);
+        }
+        #[cfg(not(feature = "drive"))]
+        let _ = window;
     });
 }
 
@@ -77,7 +83,7 @@ fn install_menu(cx: &mut App) {
     quit_when_closed.detach();
 }
 
-fn open_window(fixture: Fixture, background: bool, cx: &mut App) {
+fn open_window(fixture: Fixture, background: bool, cx: &mut App) -> Option<AnyWindowHandle> {
     let window_size = size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT));
     let bounds = Bounds::centered(None, window_size, cx);
     let titlebar = TitlebarOptions {
@@ -112,9 +118,13 @@ fn open_window(fixture: Fixture, background: bool, cx: &mut App) {
             WindowView::new(shown, look, trial, lights, port, outputs, cx)
         })
     });
-    if let Err(error) = opened {
-        eprintln!("the window did not open: {error:#}");
-        cx.quit();
+    match opened {
+        Ok(window) => Some(window.into()),
+        Err(error) => {
+            eprintln!("the window did not open: {error:#}");
+            cx.quit();
+            None
+        }
     }
 }
 

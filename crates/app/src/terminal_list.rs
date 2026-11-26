@@ -11,6 +11,7 @@ use taco_protocol::{
 use taco_rules::{DropMark, DropPoint, MarkEdge, MarkTarget, summary_state};
 
 use crate::assets::{DONE_ICON, PLUS_ICON, TRASH_ICON, WORKING_ICON};
+use crate::drive;
 use crate::look::{FONT_FAMILY, Look, MARK_SIZE, ROW_HEIGHT, ROW_RADIUS, TEXT_SIZE, TRAY_RADIUS};
 use crate::trial::PlusPlace;
 use crate::window::WindowView;
@@ -331,6 +332,8 @@ fn row_element(
     {
         shown = marked(shown, mark.edge, look);
     }
+    let terminal_name = &row.terminal.0;
+    shown = drive::mark(shown, format!("row:{terminal_name}"));
 
     let selected_terminal = row.terminal.clone();
     let drag = ListDrag {
