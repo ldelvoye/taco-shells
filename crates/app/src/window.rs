@@ -1,7 +1,6 @@
 use std::rc::Rc;
 
 use futures::StreamExt;
-use futures::channel::mpsc::UnboundedReceiver;
 use gpui::{
     AnyElement, Context, Div, IntoElement, ParentElement, Render, Styled, Task, Window, div, px,
 };
@@ -12,7 +11,7 @@ use taco_protocol::{
 use taco_rules::{DropMark, DropPoint, drop_for, drop_mark_for, selected_terminal};
 
 use crate::banners::{Banner, banner_cards, banner_strips};
-use crate::link::{Ahead, WorkspacePort, drawn_with, next_move};
+use crate::link::{Ahead, WindowOutput, WindowReceiver, WorkspacePort, drawn_with, next_move};
 use crate::look::{FONT_FAMILY, Look, TEXT_SIZE};
 use crate::panels::{docked, open_on, title_plus};
 use crate::platform::TrafficLights;
@@ -54,15 +53,15 @@ impl WindowView {
         trial: Trial,
         traffic_lights: TrafficLights,
         port: Rc<dyn WorkspacePort>,
-        published: UnboundedReceiver<DrawnState>,
+        outputs: WindowReceiver,
         cx: &mut Context<Self>,
     ) -> Self {
         let last_move = shown.drawn.focus_count;
         let following = cx.spawn(async move |this, cx| {
-            let mut published = published;
-            while let Some(state) = published.next().await {
-                let shown = this.update(cx, |view, cx| view.show(state, cx));
-                if shown.is_err() {
+            let mut outputs = outputs;
+            while let Some(output) = outputs.next().await {
+                let received = this.update(cx, |view, cx| view.receive(output, cx));
+                if received.is_err() {
                     return;
                 }
             }
@@ -84,6 +83,17 @@ impl WindowView {
         self.look = look;
     }
 
+    fn receive(&mut self, output: WindowOutput, cx: &mut Context<Self>) {
+        match output {
+            WindowOutput::State(state) => self.show(state, cx),
+            WindowOutput::Emptied => cx.quit(),
+            // Nothing in the window asks for these yet.
+            WindowOutput::Replied { .. }
+            | WindowOutput::Activity(_)
+            | WindowOutput::Services(_) => {}
+        }
+    }
+
     fn show(&mut self, state: DrawnState, cx: &mut Context<Self>) {
         if state.revision <= self.shown.drawn.revision {
             return;
@@ -92,7 +102,8 @@ impl WindowView {
         cx.notify();
     }
 
-    fn drawn(&self) -> DrawnState {
+    /// The published state with the window's own focus move laid over it: what the window draws.
+    pub(crate) fn drawn(&self) -> DrawnState {
         let (drawn, _) = drawn_with(&self.shown.drawn, self.ahead.as_ref());
         drawn
     }
@@ -114,7 +125,7 @@ impl WindowView {
             terminal: terminal.clone(),
             count,
         };
-        self.port.send(reported);
+        self.port.send(reported, None);
         cx.notify();
     }
 
@@ -122,19 +133,19 @@ impl WindowView {
         let request = WorkspaceRequest::CloseTerminal {
             terminal: terminal.clone(),
         };
-        self.port.send(request);
+        self.port.send(request, None);
     }
 
     pub(crate) fn toggle_group(&self, tab_group: &TabGroupId) {
         let request = WorkspaceRequest::TabGroupToggled {
             id: tab_group.clone(),
         };
-        self.port.send(request);
+        self.port.send(request, None);
     }
 
     pub(crate) fn open_terminal_in(&self, tab_group: Option<TabGroupId>) {
         let request = WorkspaceRequest::OpenTerminalIn { tab_group };
-        self.port.send(request);
+        self.port.send(request, None);
     }
 
     pub(crate) fn leave_list(&mut self, cx: &mut Context<Self>) {
@@ -173,7 +184,7 @@ impl WindowView {
             dragged: drag.dragged.clone(),
             place,
         };
-        self.port.send(request);
+        self.port.send(request, None);
     }
 
     fn body(&self, drawn: &DrawnState, mark: Option<&DropMark>, cx: &mut Context<Self>) -> Div {
