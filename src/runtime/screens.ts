@@ -3,6 +3,8 @@ import type { TerminalEvent, TerminalRequest } from '@protocol/runtimeMessages'
 import type { MakeScreen, Screen } from './screen'
 import type { PtySessions } from './sessions'
 
+// How much of a shell's output may wait to be parsed before the shell is paused.
+// Without it a shell that prints faster than its screen reads grows this process without end.
 export const FLOOD_LIMIT = 1_000_000
 const DEFAULT_SCROLLBACK = 1000
 
@@ -18,18 +20,26 @@ interface Connection {
   post: (event: TerminalEvent) => void
 }
 
+// A view must not be sent anything before its snapshot. Until `attached` is posted,
+// what it would be sent is kept here and follows the snapshot.
 interface View {
   connection: Connection
   attached: boolean
   kept: TerminalEvent[]
 }
 
+// A screen takes in output a moment after it arrives, so two things are true of a
+// terminal at once: what it has been asked to be, and what its screen has reached.
 interface TerminalState {
   screen: Screen
+  /** The size last asked for. The shell has it already. */
   size: PtySize
+  /** The size the screen has reached, which is the size a snapshot taken now has. */
   shownSize: PtySize
+  /** Characters of output the screen has not taken in yet. */
   unparsed: number
   paused: boolean
+  /** The shell has exited: the end mark and the screen's disposal wait for its last output. */
   ending: boolean
   view: View | null
 }
@@ -99,8 +109,9 @@ export class Screens {
 
     terminal.ending = true
     terminal.screen.afterParsed(() => {
+      // A view that was attaching has its snapshot by now: its own turn came first.
       const view = terminal.view
-      if (view !== null && view.attached) {
+      if (view !== null) {
         view.connection.post({ type: 'end', id, exitCode })
       }
       terminal.screen.dispose()
@@ -136,6 +147,7 @@ export class Screens {
     }
 
     return (request) => {
+      // A replaced connection belongs to a page that is gone.
       if (this.current !== connection) {
         return
       }
@@ -160,7 +172,9 @@ export class Screens {
       this.detach(request.id)
       return
     }
-    this.attach(connection, request.id, request.size)
+    if (request.type === 'attach') {
+      this.attach(connection, request.id, request.size)
+    }
   }
 
   private attach(connection: Connection, id: SessionId, size: PtySize | null): void {
@@ -169,6 +183,7 @@ export class Screens {
       return
     }
 
+    // With no view while it resizes, nobody is told: the snapshot that follows has the new size already.
     terminal.view = null
     if (size !== null) {
       this.resizeTerminal(id, terminal, size)
@@ -176,7 +191,9 @@ export class Screens {
 
     const view: View = { connection, attached: false, kept: [] }
     terminal.view = view
+    // The snapshot waits its turn, so it holds exactly the output that came before this request.
     terminal.screen.afterParsed(() => {
+      // Detached or attached again since: this attach was cancelled.
       if (terminal.view !== view) {
         return
       }
@@ -218,6 +235,8 @@ export class Screens {
 
     terminal.size = size
     this.shells.resize(id, size)
+    // The screen changes size after the output already waiting, and the view is told
+    // now, among its output, so both change at the same point in what they are fed.
     terminal.screen.afterParsed(() => {
       terminal.screen.resize(size)
       terminal.shownSize = size

@@ -469,14 +469,16 @@ describe('Workspace', () => {
   })
 
   it('reports the arrangement to save only when it changed', () => {
-    const { workspace, runtime, arrangements } = opened(1)
+    const { workspace, runtime, states, arrangements } = opened(1)
     const savesBefore = arrangements.length
 
     runtime.fireTitle('pty-1', 'renamed')
     expect(arrangements.length).toBe(savesBefore + 1)
 
+    const statesBefore = states.length
     runtime.fireTitle('gone', 'renamed')
     expect(arrangements.length).toBe(savesBefore + 1)
+    expect(states.length).toBe(statesBefore)
 
     workspace.agentSignalled({ id: 'pty-1', harness: 'claude', sessionId: SESSION, signal: 'start' })
     expect(arrangements.length).toBe(savesBefore + 1)

@@ -6,6 +6,7 @@ import type { MakeScreen, Screen, ScreenOptions } from '@runtime/screen'
 
 import { trackCursorHidden } from './cursor'
 
+// The serialize add-on does not carry whether the cursor is hidden, so a snapshot ends with this when it is.
 const HIDE_CURSOR = '\x1b[?25l'
 const ICON_TITLE_OSC = 1
 
@@ -43,6 +44,8 @@ export const makeXtermScreen: MakeScreen = (options: ScreenOptions): Screen => {
       }
       return screen
     },
+    // Both title sequences count, and the last one a program sets wins. False
+    // leaves xterm's own handler to record the icon name.
     onTitle(listener: (title: string) => void): void {
       term.onTitleChange(listener)
       term.parser.registerOscHandler(ICON_TITLE_OSC, (title) => {
