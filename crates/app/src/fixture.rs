@@ -1,6 +1,6 @@
 //! Made-up states the window can be drawn from.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use taco_protocol::{
@@ -213,6 +213,7 @@ fn mixed() -> Shown {
         let directory = home().join(fixture_row.directory);
         let directory_text = directory.to_string_lossy().into_owned();
         drawn.directories.insert(terminal.clone(), directory_text);
+        drawn.started.insert(terminal.clone());
         if let Some(state) = fixture_row.state {
             drawn.agent_rows.insert(terminal, agent_row(index, state));
         }
@@ -269,6 +270,7 @@ fn empty_drawn() -> DrawnState {
         arrangement: None,
         agent_rows: BTreeMap::new(),
         directories: BTreeMap::new(),
+        started: BTreeSet::new(),
         refocus: 0,
         focus_count: 0,
         agents,

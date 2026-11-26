@@ -116,6 +116,7 @@ impl StandIn {
                 if closed {
                     state.agent_rows.remove(&terminal);
                     state.directories.remove(&terminal);
+                    state.started.remove(&terminal);
                 }
                 closed
             }
@@ -124,6 +125,7 @@ impl StandIn {
             }
             WorkspaceRequest::OpenTerminalIn { tab_group } => {
                 let terminal = self.new_terminal();
+                state.started.insert(terminal.clone());
                 rearrange(&mut state, |before| add_row_to(before, terminal, tab_group))
             }
             WorkspaceRequest::Dropped { dragged, place } => {
@@ -131,6 +133,7 @@ impl StandIn {
             }
             WorkspaceRequest::ForkTerminal { terminal } => {
                 let fork = self.new_terminal();
+                state.started.insert(fork.clone());
                 rearrange(&mut state, |before| fork_row(before, &terminal, fork))
             }
             WorkspaceRequest::TabGroupCreated { terminal } => {
