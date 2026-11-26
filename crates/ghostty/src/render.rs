@@ -122,7 +122,7 @@ pub struct Row {
     pub cells: Vec<Cell>,
 }
 
-/// Reads a terminal's viewport for drawing. Keep one per terminal: it tracks what changed since the last frame.
+/// A terminal's viewport, read for drawing. Keep one per terminal: it tracks what changed since the last frame.
 pub struct RenderState {
     raw: sys::GhosttyRenderState,
     rows: sys::GhosttyRenderStateRowIterator,
@@ -166,7 +166,7 @@ impl RenderState {
         })
     }
 
-    /// Reads the terminal's viewport.
+    /// The terminal's viewport as of now, for one frame.
     pub fn update(&mut self, terminal: &Terminal) -> Result<Frame<'_>, Error> {
         let updated = unsafe { sys::ghostty_render_state_update(self.raw, terminal.as_raw()) };
         check(updated, "update the render state")?;
@@ -344,16 +344,10 @@ impl Frame<'_> {
         &self.colors
     }
 
-    /// Reads the next row into `row`; with `only_dirty`, unchanged rows are skipped. False when no rows remain.
+    /// The next row, read into `row`, skipping unchanged rows with `only_dirty`. False when no rows remain.
     pub fn next_row(&mut self, row: &mut Row, only_dirty: bool) -> Result<bool, Error> {
         let state = &mut *self.state;
-        // The dirty walk also reports a position; the row's own VIEWPORT_Y below serves both walks.
-        let mut walked_y: u16 = 0;
-        let moved = if only_dirty {
-            unsafe { sys::ghostty_render_state_row_iterator_next_dirty(state.rows, &mut walked_y) }
-        } else {
-            unsafe { sys::ghostty_render_state_row_iterator_next(state.rows) }
-        };
+        let moved = advance(state.rows, only_dirty);
         if !moved {
             return Ok(false);
         }
@@ -410,7 +404,7 @@ impl Frame<'_> {
         Ok(true)
     }
 
-    /// Marks the whole frame drawn. Without it, every row read now is still reported dirty by the next update.
+    /// The end of a drawn frame. Without it, every row read now is still reported dirty by the next update.
     pub fn clean(self) -> Result<(), Error> {
         let cleaned = unsafe { sys::ghostty_render_state_clean(self.state.raw) };
         check(cleaned, "clean the render state")
@@ -437,6 +431,15 @@ impl Default for Row {
     fn default() -> Row {
         Row::new()
     }
+}
+
+fn advance(rows: sys::GhosttyRenderStateRowIterator, only_dirty: bool) -> bool {
+    if only_dirty {
+        // The dirty walk also reports a position; `next_row` reads the row's own VIEWPORT_Y for both walks.
+        let mut walked_y: u16 = 0;
+        return unsafe { sys::ghostty_render_state_row_iterator_next_dirty(rows, &mut walked_y) };
+    }
+    unsafe { sys::ghostty_render_state_row_iterator_next(rows) }
 }
 
 /// A value the library returned that this version does not know.
@@ -680,6 +683,28 @@ mod tests {
         assert_eq!(ys, vec![1]);
         assert_eq!(second[0].text, "changed");
         assert!(second[0].dirty);
+    }
+
+    #[test]
+    fn a_frame_keeps_its_rows_while_the_terminal_changes_under_it() {
+        let mut terminal = Terminal::new(SIZE).unwrap();
+        terminal.write(b"before");
+        let mut state = RenderState::new().unwrap();
+        let mut frame = state.update(&terminal).unwrap();
+
+        // A frame borrows the render state, not the terminal: output that scrolls every row away, and a resize, land mid-frame.
+        let flood = "line\r\n".repeat(1_000);
+        terminal.write(flood.as_bytes());
+        let smaller = TerminalSize { cols: 8, rows: 2 };
+        terminal.resize(smaller, 8, 16).unwrap();
+
+        let mut row = Row::new();
+        let mut texts = Vec::new();
+        while frame.next_row(&mut row, false).unwrap() {
+            texts.push(row.text.clone());
+        }
+        assert_eq!(texts.len(), usize::from(SIZE.rows));
+        assert_eq!(texts[0], "before");
     }
 
     #[test]
