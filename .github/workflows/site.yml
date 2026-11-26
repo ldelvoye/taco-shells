@@ -1,6 +1,4 @@
-# Checks the release page in apps/site. It ships nothing: the page is not
-# deployed yet. The app's own workflow, main.yml, skips pushes that touch only
-# the site.
+# Checks the release page in apps/site. main.yml skips a push that touches only the site.
 name: site
 
 on:

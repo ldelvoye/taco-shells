@@ -1,11 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!--
-  The taco from taco-shells.svg without its ground, for drawing on the app's own
-  chrome. Shapes and colours are copied from the icon; keep the two in step.
-
-  The prompt is masked out rather than painted in the icon's ground colour, so
-  whatever sits behind the mark shows through it.
--->
+<!-- A copy of branding/icons/taco-shells-mark.svg for the release page; keep the two in step. -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="112 262 800 478" width="800" height="478">
   <defs>
     <mask id="prompt" maskUnits="userSpaceOnUse" x="112" y="262" width="800" height="478">

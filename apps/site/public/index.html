@@ -28,7 +28,7 @@
 <section class="install">
 <div class="install-box">
 <code class="install-command"><span class="prompt">$ </span>curl -fsSL https://tacoshells.dev/install.sh | sh</code>
-<button type="button" class="copy-button" id="copy-button"><svg id="copy-check" width="12" height="12" aria-hidden="true" hidden><path class="check check-button" d="M2 6.5 L5 9.5 L10 3"></path></svg><span id="copy-label">Copy</span></button>
+<button type="button" class="copy-button" id="copy-button" data-command="curl -fsSL https://tacoshells.dev/install.sh | sh"><svg id="copy-check" width="12" height="12" aria-hidden="true" hidden><path class="check check-button" d="M2 6.5 L5 9.5 L10 3"></path></svg><span id="copy-label">Copy</span></button>
 </div>
 <p class="install-note">Paste it into a terminal. It installs the latest stable release into Applications and opens it. Needs a Mac with Apple silicon. <a href="https://github.com/ldelvoye/taco-shells/blob/main/install.sh">Read the script first.</a></p>
 </section>
@@ -58,21 +58,21 @@
 <span class="sidebar-title">Terminals</span>
 <div class="group">
 <span class="group-title">api · 3</span>
-<button type="button" class="row is-selected" data-index="0" aria-pressed="true">
+<button type="button" class="row is-selected" aria-pressed="true">
 <span class="row-icon"><span class="spinner spinner-sm ts-spin"></span></span>
 <span class="row-name">fix the flaky login test</span>
 </button>
-<button type="button" class="row" data-index="1" aria-pressed="false">
+<button type="button" class="row" aria-pressed="false">
 <span class="row-icon"><span class="dot dot-row"></span></span>
 <span class="row-name">write the migration</span>
 </button>
-<button type="button" class="row" data-index="2" aria-pressed="false">
+<button type="button" class="row" aria-pressed="false">
 <span class="row-icon"><svg width="12" height="12" aria-hidden="true"><path class="check check-done" d="M2 6.5 L5 9.5 L10 3"></path></svg></span>
 <span class="row-name">bump dependencies</span>
 </button>
 </div>
 <div class="loose">
-<button type="button" class="row" data-index="3" aria-pressed="false">
+<button type="button" class="row" aria-pressed="false">
 <span class="row-icon"></span>
 <span class="row-name">zsh</span>
 </button>

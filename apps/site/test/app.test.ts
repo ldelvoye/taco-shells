@@ -17,8 +17,8 @@ describe('the site', () => {
     expect(response.headers.get('content-type')).toMatch(/^text\/html/)
   })
 
-  it('answers 404 for a path that is not a file of the page', async () => {
-    const response = await createApp().request('/nope')
+  it('serves nothing from outside public/', async () => {
+    const response = await createApp().request('/package.json')
 
     expect(response.status).toBe(404)
   })

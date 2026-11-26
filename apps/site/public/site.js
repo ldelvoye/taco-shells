@@ -1,8 +1,8 @@
-const INSTALL_COMMAND = 'curl -fsSL https://tacoshells.dev/install.sh | sh';
+const COPIED_FOR_MS = 2000;
 
 const TERMINALS = [
   {
-    kind: 'working',
+    hasAgent: true,
     question: '',
     lines: [
       { text: '~/code/api ❯ claude', tone: 'dim' },
@@ -20,7 +20,7 @@ const TERMINALS = [
     ],
   },
   {
-    kind: 'needs',
+    hasAgent: true,
     question: 'Run the migration against the dev database?',
     lines: [
       { text: '> Add a nullable billing_email to accounts.', tone: 'ink' },
@@ -37,7 +37,7 @@ const TERMINALS = [
     ],
   },
   {
-    kind: 'done',
+    hasAgent: true,
     question: '',
     lines: [
       { text: '> Bump the patch versions and run the tests.', tone: 'ink' },
@@ -54,7 +54,7 @@ const TERMINALS = [
     ],
   },
   {
-    kind: 'shell',
+    hasAgent: false,
     question: '',
     lines: [
       { text: '~/code/api ❯ git status --short', tone: 'dim' },
@@ -111,7 +111,7 @@ function renderLog(log) {
 
 function select(index) {
   const terminal = TERMINALS[index];
-  const hasAgent = terminal.kind !== 'shell';
+  const hasAgent = terminal.hasAgent;
   const hasQuestion = terminal.question !== '';
 
   rows.forEach((row, rowIndex) => {
@@ -128,14 +128,24 @@ function select(index) {
   noAgent.hidden = hasAgent;
 }
 
+let resetTimer;
+
+function resetCopyButton() {
+  copyLabel.textContent = 'Copy';
+  copyCheck.setAttribute('hidden', '');
+}
+
 function showCopied() {
   copyLabel.textContent = 'Copied';
   copyCheck.removeAttribute('hidden');
+  clearTimeout(resetTimer);
+  resetTimer = setTimeout(resetCopyButton, COPIED_FOR_MS);
 }
 
 async function copyCommand() {
+  const command = copyButton.dataset.command;
   try {
-    await navigator.clipboard.writeText(INSTALL_COMMAND);
+    await navigator.clipboard.writeText(command);
   } catch {
     return;
   }

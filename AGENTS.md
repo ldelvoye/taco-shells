@@ -105,7 +105,7 @@ npm run typecheck
 
 The page is one HTML file, one stylesheet and one script, with no build step; reload the browser after editing them. Light and dark follow the system setting through `prefers-color-scheme`.
 
-**It is not deployed yet.** The Railway project `taco-shells` (one empty service, `site`) and the domain exist, but deploying waits for the app's rewrite, so nothing connects the service to this repo. `.github/workflows/site.yml` checks the site on its own, and `main.yml` skips a push that touches only the site, so the page never cuts an app version.
+**It is not deployed.** Nothing connects the Railway project `taco-shells` to this repo. `.github/workflows/site.yml` checks the site on its own. `main.yml` skips a push that touches only the site, and the release scripts leave site-only commits out of the version and the notes, so the page never cuts an app version.
 
 ## Landing
 
