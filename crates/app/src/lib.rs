@@ -16,6 +16,7 @@ mod terminal_list;
 mod title_bar;
 mod trial;
 mod window;
+pub mod workspace_host;
 
 use gpui::{
     App, AppContext, Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions, WindowAppearance,

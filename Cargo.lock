@@ -1044,6 +1044,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam-channel"
+version = "0.5.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "98b0cc327b5bc766e7fda9c9260cc0fa81b43a8e240440422dff70788e3f9ef1"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "crossbeam-deque"
 version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4978,6 +4987,7 @@ dependencies = [
 name = "taco-app"
 version = "0.0.0"
 dependencies = [
+ "crossbeam-channel",
  "futures",
  "gpui",
  "gpui_platform",
@@ -4991,6 +5001,7 @@ dependencies = [
  "taco-settings",
  "taco-terminal-view",
  "taco-workspace",
+ "uuid",
 ]
 
 [[package]]

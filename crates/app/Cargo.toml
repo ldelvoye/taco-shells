@@ -36,6 +36,8 @@ taco-terminal-view.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
 futures.workspace = true
+crossbeam-channel.workspace = true
+uuid.workspace = true
 image = { workspace = true, optional = true }
 taco-drive = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
