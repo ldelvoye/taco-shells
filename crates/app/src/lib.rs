@@ -1,5 +1,6 @@
 //! The window, and the wiring that starts everything.
 
+mod activity;
 mod assets;
 mod banners;
 pub mod drive;
@@ -106,7 +107,7 @@ fn open_window(fixture: Fixture, background: bool, cx: &mut App) -> Option<AnyWi
         let appearance = appearance_of(window.appearance());
         let look = Look::new(appearance);
         let shown = fixture.shown();
-        let (port, outputs) = StandIn::start(shown.drawn.clone());
+        let ports = StandIn::start(&shown, fixture.logs());
         cx.new(|cx| {
             let follow =
                 cx.observe_window_appearance(window, |view: &mut WindowView, window, cx| {
@@ -116,7 +117,15 @@ fn open_window(fixture: Fixture, background: bool, cx: &mut App) -> Option<AnyWi
                 });
             follow.detach();
             let lights = TrafficLights::Native;
-            WindowView::new(shown, look, lights, port, outputs, cx)
+            WindowView::new(
+                shown,
+                look,
+                lights,
+                ports.workspace,
+                ports.services,
+                ports.outputs,
+                cx,
+            )
         })
     });
     match opened {

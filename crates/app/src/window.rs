@@ -1,5 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::time::Duration;
 
 use futures::StreamExt;
 use gpui::{
@@ -7,14 +8,19 @@ use gpui::{
     IntoElement, ParentElement, Pixels, Point, Render, Size, Styled, Task, Window, div, px,
 };
 use taco_protocol::{
-    ConfigFile, Dragged, DrawnState, DropPlace, Edge, Panel, PanelPlace, RequestReply, TabGroupId,
-    TerminalId, WorkspaceRequest,
+    ActivityRequest, ConfigFile, Dragged, DrawnState, DropPlace, Edge, HarnessId, Panel,
+    PanelPlace, RequestReply, TabGroupId, TerminalId, WorkspaceRequest,
 };
 use taco_rules::{DropMark, DropPoint, drop_for, drop_mark_for, selected_terminal};
+use taco_services::{AgentMenuAction, AgentSetupView};
 
+use crate::activity::{ActivityInput, ActivityLog, activity_panel, now_ms};
 use crate::banners::{Banner, banner_cards};
 use crate::drive::mark;
-use crate::link::{Ahead, WindowOutput, WindowReceiver, WorkspacePort, drawn_with, next_move};
+use crate::link::{
+    Ahead, ServicesOutput, ServicesPort, WindowOutput, WindowReceiver, WorkspacePort, drawn_with,
+    next_move,
+};
 use crate::look::{FONT_FAMILY, Look, TEXT_SIZE};
 use crate::panels::{
     PanelDrag, ResizeDrag, docked, drop_bands, open_on, place_of, size_for_pointer,
@@ -29,6 +35,7 @@ use crate::title_bar::title_bar;
 const MIDDLE_MARK: &str = "middle";
 const PLACEHOLDER_FONT: &str = "Menlo";
 const PLACEHOLDER_TEXT_SIZE: f32 = 12.;
+const CLOCK_TICK: Duration = Duration::from_secs(30);
 
 /// What the window draws: the workspace's state, and what the services and the app put beside it.
 #[derive(Clone, Debug)]
@@ -37,6 +44,7 @@ pub struct Shown {
     pub banners: Vec<Banner>,
     /// Lines drawn in the middle in place of a terminal.
     pub placeholder_screen: Vec<String>,
+    pub setups: AgentSetupView,
 }
 
 /// The one window's root view.
@@ -45,6 +53,10 @@ pub struct WindowView {
     look: Look,
     traffic_lights: TrafficLights,
     port: Rc<dyn WorkspacePort>,
+    services: Rc<dyn ServicesPort>,
+    activity: ActivityLog,
+    /// The log lines whose files are shown, by `seq`.
+    expanded: HashSet<u64>,
     ahead: Option<Ahead>,
     /// The number of this window's last focus move.
     last_move: u64,
@@ -57,6 +69,7 @@ pub struct WindowView {
     last_token: u64,
     awaiting: HashMap<u64, Awaited>,
     _following: Task<()>,
+    _clock: Task<()>,
 }
 
 /// What the window does with a reply it asked for.
@@ -71,6 +84,7 @@ impl WindowView {
         look: Look,
         traffic_lights: TrafficLights,
         port: Rc<dyn WorkspacePort>,
+        services: Rc<dyn ServicesPort>,
         outputs: WindowReceiver,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -84,11 +98,24 @@ impl WindowView {
                 }
             }
         });
+        // Keeps "Finished 5 minutes ago" true while nothing else redraws the window.
+        let clock = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(CLOCK_TICK).await;
+                let ticked = this.update(cx, |_, cx| cx.notify());
+                if ticked.is_err() {
+                    return;
+                }
+            }
+        });
         Self {
             shown,
             look,
             traffic_lights,
             port,
+            services,
+            activity: ActivityLog::default(),
+            expanded: HashSet::new(),
             ahead: None,
             last_move,
             drop_place: None,
@@ -98,6 +125,7 @@ impl WindowView {
             last_token: 0,
             awaiting: HashMap::new(),
             _following: following,
+            _clock: clock,
         }
     }
 
@@ -110,9 +138,66 @@ impl WindowView {
             WindowOutput::State(state) => self.show(state, cx),
             WindowOutput::Replied { token, reply } => self.replied(token, reply, cx),
             WindowOutput::Emptied => cx.quit(),
-            // Nothing in the window asks for these yet.
-            WindowOutput::Activity(_) | WindowOutput::Services(_) => {}
+            WindowOutput::Activity(event) => {
+                self.activity.apply(event);
+                cx.notify();
+            }
+            WindowOutput::Services(ServicesOutput::Setups(setups)) => {
+                self.shown.setups = setups;
+                cx.notify();
+            }
+            // The window draws nothing else from the services yet.
+            WindowOutput::Services(_) => {}
         }
+    }
+
+    // Watches the selected terminal's log while Agent Activity is open, and nothing while it is closed.
+    fn watch_activity(&mut self, drawn: &DrawnState) {
+        let mut wanted = None;
+        if drawn.panels.agent_activity.open {
+            let selected = selected_terminal(drawn.arrangement.as_ref());
+            wanted = selected.cloned();
+        }
+        if wanted == self.activity.terminal {
+            return;
+        }
+        self.activity = ActivityLog {
+            terminal: wanted.clone(),
+            ..ActivityLog::default()
+        };
+        self.expanded.clear();
+        let request = ActivityRequest::Watch { terminal: wanted };
+        self.port.activity(request);
+    }
+
+    pub(crate) fn set_up(&self, harness: &HarnessId) {
+        self.services.agent_action(harness, AgentMenuAction::SetUp);
+    }
+
+    pub(crate) fn dismiss_notice(&self, harness: &HarnessId) {
+        self.services.dismiss_notice(harness);
+    }
+
+    pub(crate) fn toggle_files(&mut self, seq: u64, cx: &mut Context<Self>) {
+        let was_open = self.expanded.remove(&seq);
+        if !was_open {
+            self.expanded.insert(seq);
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn show_older(&self) {
+        let Some(terminal) = &self.activity.terminal else {
+            return;
+        };
+        let Some(before) = self.activity.oldest() else {
+            return;
+        };
+        let request = ActivityRequest::Older {
+            terminal: terminal.clone(),
+            before,
+        };
+        self.port.activity(request);
     }
 
     fn replied(&mut self, token: u64, reply: RequestReply, cx: &mut Context<Self>) {
@@ -432,7 +517,24 @@ impl WindowView {
                 let list = terminal_list(&input, cx);
                 docked(panel, edge, size, list, look, cx)
             }
-            Panel::AgentActivity => docked(panel, edge, size, div(), look, cx),
+            Panel::AgentActivity => {
+                let terminal = selected_terminal(drawn.arrangement.as_ref());
+                let mut agent_row = None;
+                if let Some(terminal) = terminal {
+                    agent_row = drawn.agent_rows.get(terminal);
+                }
+                let input = ActivityInput {
+                    terminal,
+                    agent_row,
+                    notices: &self.shown.setups.notices,
+                    log: &self.activity,
+                    expanded: &self.expanded,
+                    now_ms: now_ms(),
+                    look,
+                };
+                let contents = activity_panel(&input, cx);
+                docked(panel, edge, size, contents, look, cx)
+            }
         }
     }
 
@@ -473,6 +575,7 @@ impl Render for WindowView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (drawn, kept) = drawn_with(&self.shown.drawn, self.ahead.as_ref());
         self.ahead = kept;
+        self.watch_activity(&drawn);
         // Once no drag is under way, there is nothing to mark and no panel on the move.
         if !cx.has_active_drag() {
             self.drop_place = None;

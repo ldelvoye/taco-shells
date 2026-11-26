@@ -2,10 +2,11 @@
 
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use taco_protocol::{
-    ActivityEvent, ActivityRequest, DrawnState, RequestReply, TerminalId, WorkspaceRequest,
+    ActivityEvent, ActivityRequest, DrawnState, HarnessId, RequestReply, TerminalId,
+    WorkspaceRequest,
 };
 use taco_rules::{locate_row, select_row};
-use taco_services::AgentSetupView;
+use taco_services::{AgentMenuAction, AgentSetupView};
 use taco_settings::Config;
 
 pub type WindowSender = UnboundedSender<WindowOutput>;
@@ -16,6 +17,12 @@ pub trait WorkspacePort {
     /// `token`, when given, comes back in `WindowOutput::Replied`, after the state that holds the request's effect.
     fn send(&self, request: WorkspaceRequest, token: Option<u64>);
     fn activity(&self, request: ActivityRequest);
+}
+
+/// Where the window sends what the user did about the services: answered by `ServicesOutput`.
+pub trait ServicesPort {
+    fn agent_action(&self, harness: &HarnessId, action: AgentMenuAction);
+    fn dismiss_notice(&self, harness: &HarnessId);
 }
 
 /// What the services send the window.
