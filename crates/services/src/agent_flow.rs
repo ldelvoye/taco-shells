@@ -187,7 +187,8 @@ fn replace_file(real: &Path, text: &str) -> io::Result<()> {
     };
     let shown_name = name.to_string_lossy();
     let process = std::process::id();
-    let temporary_name = format!(".{shown_name}.taco-shells-{process}.tmp");
+    // Not ".taco-shells": a dev binary holding the stable app's directory name fails the bundle check.
+    let temporary_name = format!(".{shown_name}.{process}.taco-tmp");
     let temporary = directory.join(temporary_name);
     let replaced = write_then_rename(real, &temporary, text);
     if replaced.is_err() {
@@ -571,7 +572,7 @@ mod tests {
         let beside_target = file_names_in(&dotfiles);
         let beside_link = file_names_in(&agent.paths.agent_directory);
         for name in beside_target.iter().chain(beside_link.iter()) {
-            assert!(!name.ends_with(".tmp"), "{name}");
+            assert!(!name.ends_with("taco-tmp"), "{name}");
         }
     }
 
