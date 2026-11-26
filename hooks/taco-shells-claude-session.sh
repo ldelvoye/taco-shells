@@ -61,9 +61,18 @@ else
   exit 0
 fi
 
+hook_body() {
+  printf '{"pids":[%s],"harness":"claude","payload":' "$pids"
+  printf '%s' "$payload"
+  printf '}'
+}
+
 for port in $ports; do
   curl -s -m 1 -X POST -H 'Content-Type: application/json' \
     -d "$body" "http://127.0.0.1:$port$route" >/dev/null 2>&1
+  # The marks stay on the route above, so an app that does not know this one loses nothing.
+  hook_body | curl -s -m 1 -X POST -H 'Content-Type: application/json' \
+    --data-binary @- "http://127.0.0.1:$port/agent-session/hook" >/dev/null 2>&1
 done
 
 exit 0
