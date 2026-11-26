@@ -24,8 +24,10 @@ export interface Runtime {
   close(id: SessionId): void
   write(id: SessionId, data: string): void
   resize(id: SessionId, size: PtySize): void
+  setScrollback(lines: number): void
   onStarted(listener: (event: TerminalStarted) => void): void
   onExit(listener: (event: PtyExitEvent) => void): void
+  onTitle(listener: (id: SessionId, title: string) => void): void
   onSubmit(listener: (id: SessionId) => void): void
   directoryOf(id: SessionId): Promise<string | null>
   foregroundCommands(id: SessionId): Promise<string[]>

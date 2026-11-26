@@ -12,6 +12,8 @@ export interface Screen {
   /** What a fresh view needs to show what this screen shows. Opaque outside the engine pair. */
   snapshot(): string
   onTitle(listener: (title: string) => void): void
+  /** What the terminal answers when a program asks it something. It goes to the shell as typed input does. */
+  onReply(listener: (data: string) => void): void
   dispose(): void
 }
 

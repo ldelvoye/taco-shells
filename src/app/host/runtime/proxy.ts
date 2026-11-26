@@ -13,6 +13,7 @@ export interface RuntimeProxy extends Runtime {
 export function createRuntimeProxy(post: (command: RuntimeCommand) => void): RuntimeProxy {
   const startedListeners: ((event: TerminalStarted) => void)[] = []
   const exitListeners: ((event: PtyExitEvent) => void)[] = []
+  const titleListeners: ((id: SessionId, title: string) => void)[] = []
   const submitListeners: ((id: SessionId) => void)[] = []
   const inFlight = new Map<number, (value: Answer) => void>()
   let nextAsk = 1
@@ -66,11 +67,17 @@ export function createRuntimeProxy(post: (command: RuntimeCommand) => void): Run
     resize(id: SessionId, size: PtySize): void {
       post({ type: 'resize', id, size })
     },
+    setScrollback(lines: number): void {
+      post({ type: 'scrollback', lines })
+    },
     onStarted(listener): void {
       startedListeners.push(listener)
     },
     onExit(listener): void {
       exitListeners.push(listener)
+    },
+    onTitle(listener): void {
+      titleListeners.push(listener)
     },
     onSubmit(listener): void {
       submitListeners.push(listener)
@@ -100,6 +107,12 @@ export function createRuntimeProxy(post: (command: RuntimeCommand) => void): Run
       if (report.type === 'submitted') {
         for (const listener of submitListeners) {
           listener(report.id)
+        }
+        return
+      }
+      if (report.type === 'titled') {
+        for (const listener of titleListeners) {
+          listener(report.id, report.title)
         }
         return
       }

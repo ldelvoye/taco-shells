@@ -1,4 +1,4 @@
-import type { PtyDataEvent, PtyExitEvent, PtySize, SessionId } from './ipc'
+import type { PtyExitEvent, PtySize, SessionId } from './ipc'
 import type { TerminalStart, TerminalStarted } from './runtime'
 
 export type RuntimeQuery =
@@ -12,22 +12,29 @@ export type RuntimeCommand =
   | { type: 'close'; id: SessionId }
   | { type: 'write'; id: SessionId; data: string }
   | { type: 'resize'; id: SessionId; size: PtySize }
+  | { type: 'scrollback'; lines: number }
   | { type: 'ask'; ask: number; query: RuntimeQuery }
 
 /** What the runtime sends the main process. */
 export type RuntimeReport =
   | { type: 'started'; event: TerminalStarted }
   | { type: 'exited'; event: PtyExitEvent }
+  | { type: 'titled'; id: SessionId; title: string }
   | { type: 'submitted'; id: SessionId }
   | { type: 'answer'; ask: number; value: string | string[] | null }
 
-/** What the window sends the runtime on its own connection. */
-export type TerminalInput =
+/** What a window asks of a terminal over its connection. `write` and `resize` work with no view attached. */
+export type TerminalRequest =
+  | { type: 'attach'; id: SessionId; size: PtySize | null }
+  | { type: 'detach'; id: SessionId }
   | { type: 'write'; id: SessionId; data: string }
   | { type: 'resize'; id: SessionId; size: PtySize }
-  | { type: 'listening' }
+  | { type: 'clear'; id: SessionId }
 
-/** What the runtime sends the window. An exit follows the last output of its terminal. */
-export type TerminalOutput =
-  | { type: 'data'; event: PtyDataEvent }
-  | { type: 'exit'; event: PtyExitEvent }
+/** What an attached view is sent, in the order it has to apply it. */
+export type TerminalEvent =
+  | { type: 'attached'; id: SessionId; size: PtySize; snapshot: string }
+  | { type: 'output'; id: SessionId; data: string }
+  | { type: 'resized'; id: SessionId; size: PtySize }
+  | { type: 'cleared'; id: SessionId }
+  | { type: 'end'; id: SessionId; exitCode: number }

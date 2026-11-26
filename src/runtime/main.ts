@@ -1,10 +1,13 @@
-import type { RuntimeCommand, TerminalInput } from '@protocol/runtimeMessages'
+import type { RuntimeCommand, TerminalRequest } from '@protocol/runtimeMessages'
+import { makeXtermScreen } from './engine/xtermScreen'
+import { Screens } from './screens'
 import { serveRuntime } from './server'
 import { PtySessions } from './sessions'
 
 const parent = process.parentPort
 const sessions = new PtySessions()
-const server = serveRuntime(sessions, (report) => {
+const screens = new Screens({ makeScreen: makeXtermScreen, shells: sessions })
+const server = serveRuntime(sessions, screens, (report) => {
   parent.postMessage(report)
 })
 
@@ -20,8 +23,8 @@ parent.on('message', (event) => {
     port.postMessage(output)
   })
   port.on('message', (message) => {
-    const input: TerminalInput = message.data
-    send(input)
+    const request: TerminalRequest = message.data
+    send(request)
   })
   port.start()
 })

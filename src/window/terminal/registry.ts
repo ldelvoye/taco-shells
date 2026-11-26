@@ -1,29 +1,18 @@
-import { FitAddon } from '@xterm/addon-fit'
-import { WebLinksAddon } from '@xterm/addon-web-links'
-import { WebglAddon } from '@xterm/addon-webgl'
-import { Terminal, type ILinkHandler, type ITerminalOptions } from '@xterm/xterm'
-import type { SessionId } from '@protocol/ipc'
+import type { PtySize, SessionId } from '@protocol/ipc'
+import type { TerminalEvent } from '@protocol/runtimeMessages'
 import type { Settings } from '@protocol/settings'
 import type { TerminalColors } from '@protocol/theme'
 import { DEFAULT_SETTINGS } from '@settings/settings'
 import { DARK_PALETTE } from '@settings/theme'
-
-// OSC 8 hyperlinks, where the text shown can differ from the URL behind it.
-// Main decides which schemes may open, so xterm is told to pass them all.
-const HYPERLINK_HANDLER: ILinkHandler = {
-  activate: (event, url) => {
-    openLinkOnCmdClick(event, url)
-  },
-  allowNonHttpProtocols: true
-}
+import { makeXtermView } from './engine/xtermView'
+import type { TerminalView } from './view'
 
 interface TerminalHandle {
   id: SessionId
-  term: Terminal
-  fit: FitAddon
-  element: HTMLDivElement
-  opened: boolean
+  view: TerminalView
   observer: ResizeObserver | null
+  asked: PtySize | null
+  attachSent: boolean
 }
 
 // xterm instances live here rather than in React state. React owns the chrome
@@ -37,37 +26,40 @@ let expectedFocus: SessionId | null = null
 
 // Sessions created later must match the ones already open, so the current
 // options live here rather than being passed in at each call site.
-let terminalOptions: ITerminalOptions = optionsFrom(DEFAULT_SETTINGS, DARK_PALETTE.terminal)
+let currentSettings: Settings = DEFAULT_SETTINGS
+let currentColors: TerminalColors = DARK_PALETTE.terminal
 
-// A shell starts printing the moment it is spawned, which can land before the
-// window has drawn its terminal and made a handle to write into. Without
-// somewhere to put that output it is simply dropped, and what goes missing is
-// the first prompt.
-const pendingOutput = new Map<SessionId, string[]>()
-
-type TitleListener = (id: SessionId, title: string) => void
 type FocusListener = (id: SessionId) => void
 
-const titleListeners = new Set<TitleListener>()
 const focusListeners = new Set<FocusListener>()
 
-window.tacoShells.pty.onData((event) => {
+window.tacoShells.pty.onEvent(handleEvent)
+
+function handleEvent(event: TerminalEvent): void {
   const handle = handles.get(event.id)
-  if (handle) {
-    handle.term.write(event.data)
+  if (!handle) {
     return
   }
 
-  const buffered = pendingOutput.get(event.id)
-  if (buffered) {
-    buffered.push(event.data)
+  if (event.type === 'attached') {
+    handle.view.load(event.snapshot, event.size)
+    handle.asked = event.size
     return
   }
-
-  pendingOutput.set(event.id, [event.data])
-})
-
-window.tacoShells.pty.listening()
+  if (event.type === 'output') {
+    handle.view.write(event.data)
+    return
+  }
+  if (event.type === 'resized') {
+    handle.view.resize(event.size)
+    return
+  }
+  if (event.type === 'cleared') {
+    handle.view.clear()
+    return
+  }
+  disposeSession(event.id)
+}
 
 function handleFor(id: SessionId): TerminalHandle {
   const existing = handles.get(id)
@@ -78,23 +70,21 @@ function handleFor(id: SessionId): TerminalHandle {
 }
 
 function createHandle(id: SessionId): TerminalHandle {
-  const term = new Terminal(terminalOptions)
-
-  const fit = new FitAddon()
-  term.loadAddon(fit)
-
-  const webLinks = new WebLinksAddon(openLinkOnCmdClick)
-  term.loadAddon(webLinks)
-
-  const element = document.createElement('div')
-  element.className = 'terminal-host'
+  const view = makeXtermView({
+    settings: currentSettings,
+    colors: currentColors,
+    onInput: (data) => {
+      window.tacoShells.pty.write(id, data)
+    },
+    onLink: openLinkOnCmdClick
+  })
 
   // Clicking into a pane is how focus moves between the panes of a split, so the
   // workspace has to hear about it. What arrives here is either that click or the
   // echo of a focus the app itself asked for, and only the click is news: by the
   // time an echo lands the workspace may have moved on, and reporting it would
   // drag the active pane back.
-  element.addEventListener('focusin', () => {
+  view.element.addEventListener('focusin', () => {
     if (expectedFocus === id) {
       expectedFocus = null
       return
@@ -102,32 +92,18 @@ function createHandle(id: SessionId): TerminalHandle {
     emitFocus(id)
   })
 
-  term.onData((data) => {
-    window.tacoShells.pty.write(id, data)
-  })
-
-  // Both title sequences feed the sidebar, and the last one a program sets wins.
-  term.onTitleChange((title) => {
-    emitTitle(id, title)
-  })
-  term.parser.registerOscHandler(1, (title) => {
-    emitTitle(id, title)
-    // False, so xterm's own handler still gets to record the icon name.
-    return false
-  })
-
-  const handle: TerminalHandle = { id, term, fit, element, opened: false, observer: null }
+  const handle: TerminalHandle = { id, view, observer: null, asked: null, attachSent: false }
   handles.set(id, handle)
-  drainPendingOutput(id, term)
 
   return handle
 }
 
 export function applyTerminalConfig(settings: Settings, colors: TerminalColors): void {
-  terminalOptions = optionsFrom(settings, colors)
+  currentSettings = settings
+  currentColors = colors
 
   for (const handle of handles.values()) {
-    Object.assign(handle.term.options, terminalOptions)
+    handle.view.apply(settings, colors)
     fitToHost(handle)
   }
 }
@@ -138,19 +114,21 @@ export function attachSession(id: SessionId, host: HTMLElement): void {
   // Attaching twice would strand the first ResizeObserver, still connected and
   // still fitting the terminal to a host it has left.
   detachSession(id)
-  host.appendChild(handle.element)
-
-  if (!handle.opened) {
-    handle.term.open(handle.element)
-    loadWebglRenderer(handle.term)
-    handle.opened = true
-  }
+  host.appendChild(handle.view.element)
+  handle.view.mount()
 
   const observer = new ResizeObserver(() => {
     fitToHost(handle)
   })
   observer.observe(host)
   handle.observer = observer
+
+  if (!handle.attachSent) {
+    const size = handle.view.fittingSize()
+    handle.attachSent = true
+    handle.asked = size
+    window.tacoShells.pty.attach(id, size)
+  }
 
   fitToHost(handle)
   // No focus here: every session attaches on mount, active or not, so focusing
@@ -168,21 +146,29 @@ export function detachSession(id: SessionId): void {
     handle.observer = null
   }
 
-  handle.element.remove()
+  handle.view.element.remove()
 }
 
 export function disposeSession(id: SessionId): void {
-  // Before the handle check: output arriving after a close is buffered again, and the pty's exit then calls this with no handle left.
-  pendingOutput.delete(id)
-
   const handle = handles.get(id)
   if (!handle) {
     return
   }
 
   detachSession(id)
-  handle.term.dispose()
+  handle.view.dispose()
   handles.delete(id)
+}
+
+// A terminal's end mark and its pane leaving the workspace arrive in either order,
+// and a terminal that ended before its view attached sends no end mark at all.
+export function disposeSessionsNotIn(open: ReadonlySet<SessionId>): void {
+  const held = [...handles.keys()]
+  for (const id of held) {
+    if (!open.has(id)) {
+      disposeSession(id)
+    }
+  }
 }
 
 export function focusSession(id: SessionId): void {
@@ -191,26 +177,19 @@ export function focusSession(id: SessionId): void {
     return
   }
 
-  const alreadyFocused = handle.element.contains(document.activeElement)
+  const alreadyFocused = handle.view.element.contains(document.activeElement)
   if (!alreadyFocused) {
     expectedFocus = id
   }
-  handle.term.focus()
+  handle.view.focus()
 }
 
-export function sessionTerminal(id: SessionId): Terminal | null {
+export function sessionView(id: SessionId): TerminalView | null {
   const handle = handles.get(id)
   if (!handle) {
     return null
   }
-  return handle.term
-}
-
-export function onSessionTitle(listener: TitleListener): () => void {
-  titleListeners.add(listener)
-  return () => {
-    titleListeners.delete(listener)
-  }
+  return handle.view
 }
 
 export function onSessionFocus(listener: FocusListener): () => void {
@@ -220,40 +199,9 @@ export function onSessionFocus(listener: FocusListener): () => void {
   }
 }
 
-function emitTitle(id: SessionId, title: string): void {
-  for (const listener of titleListeners) {
-    listener(id, title)
-  }
-}
-
 function emitFocus(id: SessionId): void {
   for (const listener of focusListeners) {
     listener(id)
-  }
-}
-
-function drainPendingOutput(id: SessionId, term: Terminal): void {
-  const buffered = pendingOutput.get(id)
-  if (!buffered) {
-    return
-  }
-
-  pendingOutput.delete(id)
-  for (const chunk of buffered) {
-    term.write(chunk)
-  }
-}
-
-function optionsFrom(settings: Settings, colors: TerminalColors): ITerminalOptions {
-  return {
-    fontFamily: settings.fontFamily,
-    fontSize: settings.fontSize,
-    scrollback: settings.scrollback,
-    scrollSensitivity: settings.scrollSensitivity,
-    cursorBlink: settings.cursorBlink,
-    cursorStyle: settings.cursorStyle,
-    theme: colors,
-    linkHandler: HYPERLINK_HANDLER
   }
 }
 
@@ -266,30 +214,22 @@ function openLinkOnCmdClick(event: MouseEvent, url: string): void {
   window.tacoShells.link.open(url)
 }
 
+function sameSize(first: PtySize | null, second: PtySize): boolean {
+  if (first === null) {
+    return false
+  }
+  return first.cols === second.cols && first.rows === second.rows
+}
+
 function fitToHost(handle: TerminalHandle): void {
-  const proposed = handle.fit.proposeDimensions()
+  const proposed = handle.view.fittingSize()
   if (!proposed) {
     return
   }
-  if (!Number.isFinite(proposed.cols) || !Number.isFinite(proposed.rows)) {
-    return
-  }
-  if (proposed.cols === handle.term.cols && proposed.rows === handle.term.rows) {
+  if (sameSize(handle.asked, proposed)) {
     return
   }
 
-  handle.fit.fit()
-  window.tacoShells.pty.resize(handle.id, { cols: handle.term.cols, rows: handle.term.rows })
-}
-
-function loadWebglRenderer(term: Terminal): void {
-  try {
-    const addon = new WebglAddon()
-    addon.onContextLoss(() => {
-      addon.dispose()
-    })
-    term.loadAddon(addon)
-  } catch {
-    // No WebGL context available; xterm keeps its DOM renderer.
-  }
+  handle.asked = proposed
+  window.tacoShells.pty.resize(handle.id, proposed)
 }

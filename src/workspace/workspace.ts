@@ -11,7 +11,7 @@ import type {
   RequestReply,
   WorkspaceRequest
 } from '@protocol/workspace'
-import { canSplitPane, emptyWorkspace } from '@rules/arrangement'
+import { canSplitPane, emptyWorkspace, locatePane } from '@rules/arrangement'
 import { forkNameFor } from '@rules/forkName'
 import type { AgentSessions } from './agentSessions'
 import {
@@ -134,6 +134,9 @@ export class Workspace {
   start(): void {
     this.options.runtime.onExit((event) => {
       this.terminalExited(event.id)
+    })
+    this.options.runtime.onTitle((id, title) => {
+      this.terminalTitled(id, title)
     })
     this.options.runtime.onStarted((event) => {
       this.effects.onStartedIn(event.id, event.directory)
@@ -273,7 +276,6 @@ export class Workspace {
       }
       case 'tabGroupCreated':
         return this.createTabGroup(request.pane)
-      case 'titleChanged':
       case 'paneColored':
       case 'activeColorToggled':
       case 'dividerMoved':
@@ -329,6 +331,14 @@ export class Workspace {
     const group = this.groupFor(pane)
     this.dispatch({ type: 'terminalOpened', group })
     this.openTerminal(pane, { cwd: null, cwdFrom: null, command })
+  }
+
+  private terminalTitled(pane: SessionId, title: string): void {
+    const workspace = this.store.getState().workspace
+    if (workspace === null || locatePane(workspace, pane) === null) {
+      return
+    }
+    this.dispatch({ type: 'titleChanged', pane, title })
   }
 
   private terminalExited(pane: SessionId): void {

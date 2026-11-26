@@ -76,7 +76,7 @@ export const WALLS: WallConfig = {
       name: 'window',
       folders: ['src/window/'],
       mayImport: ['protocol', 'rules', 'settings', 'window/terminal/engine'],
-      modules: ['react', 'react-dom', '@xterm/']
+      modules: ['react', 'react-dom']
     },
     {
       name: 'window/terminal/engine',

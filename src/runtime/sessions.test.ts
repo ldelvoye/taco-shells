@@ -14,12 +14,14 @@ interface Spawned {
 interface FakeSpawn {
   spawned: Spawned[]
   written: string[]
+  flow: string[]
   spawn: SpawnPty
 }
 
 function fakeSpawn(failure: Error | null = null): FakeSpawn {
   const spawned: Spawned[] = []
   const written: string[] = []
+  const flow: string[] = []
   const spawn: SpawnPty = (_file, _args, options) => {
     if (failure !== null) {
       throw failure
@@ -31,13 +33,19 @@ function fakeSpawn(failure: Error | null = null): FakeSpawn {
         written.push(String(data))
       },
       resize: () => undefined,
+      pause: () => {
+        flow.push('pause')
+      },
+      resume: () => {
+        flow.push('resume')
+      },
       kill: () => undefined,
       onData: () => ({ dispose: () => undefined }),
       onExit: () => ({ dispose: () => undefined })
     }
     return pty
   }
-  return { spawned, written, spawn }
+  return { spawned, written, flow, spawn }
 }
 
 function startOf(id: string, overrides: Partial<TerminalStart> = {}): TerminalStart {
@@ -105,6 +113,22 @@ describe('PtySessions', () => {
 
     expect(written).toEqual(['claude --resume x\r', 'pw', 'd\r'])
     expect(submitted).toEqual(['pty-1'])
+  })
+
+  it('stops and restarts reading a started shell, and ignores both while it is opening', async () => {
+    const { flow, spawn } = fakeSpawn()
+    const sessions = new PtySessions(spawn)
+    const started = nextStarts(sessions, 1)
+
+    sessions.open(startOf('pty-1'))
+    sessions.pause('pty-1')
+    sessions.resume('pty-1')
+    expect(flow).toEqual([])
+    await started
+    sessions.pause('pty-1')
+    sessions.resume('pty-1')
+
+    expect(flow).toEqual(['pause', 'resume'])
   })
 
   it('starts a split of a terminal that is itself still opening where that terminal will start', async () => {

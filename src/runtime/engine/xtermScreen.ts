@@ -50,6 +50,9 @@ export const makeXtermScreen: MakeScreen = (options: ScreenOptions): Screen => {
         return false
       })
     },
+    onReply(listener: (data: string) => void): void {
+      term.onData(listener)
+    },
     dispose(): void {
       term.dispose()
     }
