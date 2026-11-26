@@ -4,8 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::thread;
+use std::time::Duration;
 
-use crossbeam_channel::{Receiver, Sender, unbounded};
+use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use futures::channel::mpsc;
 use taco_protocol::{
     ConfigFile, CursorShape, DrawnState, HarnessId, RuntimeCommand, RuntimeReport,
@@ -19,6 +20,9 @@ use crate::link::{ServicesPort, WindowReceiver};
 use crate::runtime_client::{RuntimeClient, RuntimeEvent};
 use crate::services_host::ServicesHost;
 use crate::workspace_host::{RuntimeCommands, WorkspaceHost, new_terminal_id};
+
+/// A healthy save takes milliseconds; this only bounds one stuck behind a wedged runtime.
+const SAVE_PATIENCE: Duration = Duration::from_millis(1500);
 
 /// Everything the window runs on, started.
 #[derive(Clone)]
@@ -143,9 +147,28 @@ fn terminal_settings_of(config: &Config) -> [RuntimeCommand; 3] {
 
 /// Saves, stops the services, then the runtime. Blocks for seconds at worst: never on gpui's thread.
 pub fn shut_down(hosts: &Hosts) {
-    hosts.workspace.freeze_and_flush();
+    let saved = saved_within(&hosts.workspace, SAVE_PATIENCE);
+    if !saved {
+        eprintln!("the final save had not finished; stopping the runtime anyway");
+    }
     hosts.services.stop();
     hosts.runtime.stop();
+}
+
+// A save stuck behind a send to a wedged runtime would keep the runtime from ever being stopped; stopping it unblocks the save.
+fn saved_within(workspace: &WorkspaceHost, patience: Duration) -> bool {
+    let (done, finished) = bounded(1);
+    let saving = workspace.clone();
+    let save = move || {
+        saving.freeze_and_flush();
+        let _ = done.send(());
+    };
+    let spawned = thread::Builder::new().name("final save".into()).spawn(save);
+    if spawned.is_err() {
+        return false;
+    }
+    let waited = finished.recv_timeout(patience);
+    waited.is_ok()
 }
 
 /// The state drawn before the workspace publishes its first.
