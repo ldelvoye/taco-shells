@@ -39,7 +39,7 @@ pub enum UpdateEvent {
 
 pub struct UpdaterHost {
     pub executable: PathBuf,
-    // Called on the updater's thread.
+    // Called on the updater's thread, and once on the caller's inside start for a download kept from before.
     pub on_event: Box<dyn Fn(UpdateEvent) + Send + Sync>,
     pub quit: Box<dyn Fn() + Send + Sync>,
 }
