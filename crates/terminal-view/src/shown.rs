@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use taco_protocol::TerminalId;
 
-const KEPT_VIEWS: usize = 8;
+pub const KEPT_VIEWS: usize = 8;
 
 /// Open terminals, most recently shown first, after `on_screen` was shown.
 pub fn after_showing(

@@ -3,8 +3,11 @@
 mod connection;
 mod draw;
 mod grid;
+mod keys;
+mod links;
 mod shown;
 mod terminals;
 mod view;
+mod views;
 
-pub use terminals::Terminals;
+pub use terminals::{Terminals, TerminalsEvent};
