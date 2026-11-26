@@ -17,9 +17,8 @@ use taco_ghostty::input::{
     CellPoint, Grid, Key, KeyEncoder, KeyPress, Mods, MouseAction, MouseButton as GridButton,
     MouseInput, Scroll,
 };
-use taco_ghostty::render::CursorShape;
 use taco_protocol::{TerminalColors, TerminalId, TerminalSize};
-use taco_settings::{CursorStyle, Settings};
+use taco_settings::Settings;
 
 use crate::connection::{Requests, connect};
 use crate::draw::{cursor_as_shown, hsla, paint};
@@ -168,7 +167,7 @@ impl Terminals {
         })
     }
 
-    /// New settings or theme colors: the font, the scrollback, the cursor, the wheel and every view's colors.
+    /// New settings or theme colors: the font, the scrollback, the wheel and every view's colors. The cursor's defaults are the runtime's.
     pub fn apply(
         &mut self,
         settings: &Settings,
@@ -817,16 +816,9 @@ fn paint_marked_text(
 }
 
 fn view_config(settings: &Settings, colors: &TerminalColors) -> ViewConfig {
-    let cursor_shape = match settings.cursor_style {
-        CursorStyle::Block => CursorShape::Block,
-        CursorStyle::Underline => CursorShape::Underline,
-        CursorStyle::Bar => CursorShape::Bar,
-    };
     ViewConfig {
         scrollback: settings.scrollback,
         colors: colors.clone(),
-        cursor_shape,
-        cursor_blink: settings.cursor_blink,
     }
 }
 
