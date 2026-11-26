@@ -50,8 +50,6 @@ pub struct WindowView {
     last_move: u64,
     drop_place: Option<DropPlace>,
     popup: Option<Popup>,
-    /// Set when the group popup's name field has just opened and should take the keyboard.
-    focus_field: bool,
     last_token: u64,
     awaiting: HashMap<u64, Awaited>,
     _following: Task<()>,
@@ -93,7 +91,6 @@ impl WindowView {
             last_move,
             drop_place: None,
             popup: None,
-            focus_field: false,
             last_token: 0,
             awaiting: HashMap::new(),
             _following: following,
@@ -123,6 +120,10 @@ impl WindowView {
                 let Some(tab_group) = reply.tab_group else {
                     return;
                 };
+                // A popup opened since the request is the user's more recent choice.
+                if self.popup.is_some() {
+                    return;
+                }
                 self.open_group_popup(tab_group, at, cx);
             }
         }
@@ -166,9 +167,9 @@ impl WindowView {
             tab_group,
             at,
             field,
+            needs_focus: true,
             _edits: edits,
         });
-        self.focus_field = true;
         cx.notify();
     }
 
@@ -440,12 +441,16 @@ impl Render for WindowView {
         if !popup_stays {
             self.popup = None;
         }
-        if self.focus_field
-            && let Some(Popup::Group { field, .. }) = &self.popup
+        // The field takes the keyboard on the first frame it is drawn in, which only rendering has the window for.
+        if let Some(Popup::Group {
+            field, needs_focus, ..
+        }) = &mut self.popup
+            && *needs_focus
         {
-            let handle = field.read(cx).focus_handle(cx);
+            let shown_field = field.read(cx);
+            let handle = shown_field.focus_handle(cx);
             window.focus(&handle, cx);
-            self.focus_field = false;
+            *needs_focus = false;
         }
 
         let look = &self.look;

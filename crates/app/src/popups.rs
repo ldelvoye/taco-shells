@@ -26,12 +26,15 @@ pub enum Popup {
         tab_group: TabGroupId,
         at: Point<Pixels>,
         field: Entity<TextField>,
+        /// Whether the field has yet to take the keyboard.
+        needs_focus: bool,
+        /// Holding it is what keeps the field's edits reaching the window.
         _edits: Subscription,
     },
 }
 
 impl Popup {
-    /// Whether what the popup is about is still in the state, so it can stay open.
+    /// Whether the row or tab group the popup is on still exists.
     pub fn still_shown_in(&self, drawn: &DrawnState) -> bool {
         let Some(arrangement) = &drawn.arrangement else {
             return false;
@@ -49,7 +52,7 @@ impl Popup {
     }
 }
 
-/// The popup drawn over everything else at the point it was opened.
+/// The popup card, drawn over the window next to where it was opened.
 pub fn popup_layer(
     popup: &Popup,
     drawn: &DrawnState,
@@ -94,7 +97,8 @@ fn row_items(
     cx: &mut Context<WindowView>,
 ) -> Vec<AnyElement> {
     let forks = can_fork(&drawn.agent_rows, &drawn.agents, terminal);
-    let fork_label = format!("Fork with {}", agent_name_of(terminal, drawn));
+    let agent_name = agent_name_of(terminal, drawn);
+    let fork_label = format!("Fork with {agent_name}");
     let forked = terminal.clone();
     let mut fork = item("popup-fork", fork_label, forks, look);
     if forks {
@@ -119,7 +123,6 @@ fn group_items(
     vec![field.clone().into_any_element(), ungroup.into_any_element()]
 }
 
-// The agent a fork would start, by the name the app knows it by.
 fn agent_name_of(terminal: &TerminalId, drawn: &DrawnState) -> String {
     let Some(agent_row) = drawn.agent_rows.get(terminal) else {
         return drawn.default_agent_name.clone();

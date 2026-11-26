@@ -97,7 +97,7 @@ impl StandIn {
             WorkspaceRequest::TabGroupUngrouped { id } => {
                 rearrange(&mut state, |before| ungroup_tab_group(before, &id))
             }
-            // The stand-in answers only what the list sends.
+            // The stand-in answers only what the window sends.
             _ => false,
         };
         if changed {
