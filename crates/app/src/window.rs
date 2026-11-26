@@ -43,6 +43,8 @@ const MIDDLE_MARK: &str = "middle";
 const PLACEHOLDER_FONT: &str = "Menlo";
 const PLACEHOLDER_TEXT_SIZE: f32 = 12.;
 const CLOCK_TICK: Duration = Duration::from_secs(30);
+const TERMINAL_INSET_SIDE: f32 = 8.;
+const TERMINAL_INSET_TOP: f32 = 6.;
 
 /// What the window draws: the workspace's state, and what the services and the app put beside it.
 #[derive(Clone, Debug)]
@@ -86,6 +88,8 @@ pub struct WindowView {
     terminals: Option<Entity<Terminals>>,
     /// What the terminal view was last told to show.
     attached: Attachable,
+    /// The workspace's last request to give the keyboard back to the selected terminal.
+    refocus: u64,
 }
 
 /// What the window does with a reply it asked for.
@@ -103,6 +107,7 @@ impl WindowView {
         cx: &mut Context<Self>,
     ) -> Self {
         let last_move = shown.drawn.focus_count;
+        let refocus = shown.drawn.refocus;
         set_menus(&shown, cx);
         let Ports {
             workspace: port,
@@ -163,6 +168,7 @@ impl WindowView {
             dismissed: HashSet::new(),
             terminals,
             attached: Attachable::default(),
+            refocus,
         }
     }
 
@@ -170,7 +176,6 @@ impl WindowView {
     pub fn set_look(&mut self, look: Look) {
         self.look = look;
     }
-
     fn receive(&mut self, output: WindowOutput, cx: &mut Context<Self>) {
         match output {
             WindowOutput::State(state) => self.show(state, cx),
@@ -761,7 +766,16 @@ impl WindowView {
             .overflow_hidden()
             .bg(look.terminal_background);
         match &self.terminals {
-            Some(terminals) => terminal = terminal.child(terminals.clone()),
+            Some(terminals) => {
+                // The grid is laid out inside the inset, so the size the view reports shrinks with it.
+                let inset = div()
+                    .size_full()
+                    .pl(px(TERMINAL_INSET_SIDE))
+                    .pr(px(TERMINAL_INSET_SIDE))
+                    .pt(px(TERMINAL_INSET_TOP))
+                    .child(terminals.clone());
+                terminal = terminal.child(inset);
+            }
             None => terminal = terminal.child(self.placeholder()),
         }
         if !banners.is_empty() {
@@ -775,7 +789,9 @@ impl WindowView {
     /// Tells the terminal view what changed, and keeps the keyboard in the terminal on screen.
     fn show_terminals(&mut self, drawn: &DrawnState, window: &mut Window, cx: &mut Context<Self>) {
         let attached = attachable(drawn);
-        let switched = attached.on_screen != self.attached.on_screen;
+        let refocused = drawn.refocus != self.refocus;
+        self.refocus = drawn.refocus;
+        let switched = attached.on_screen != self.attached.on_screen || refocused;
         if let Some(terminals) = &self.terminals
             && attached != self.attached
         {
