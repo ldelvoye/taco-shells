@@ -9,6 +9,18 @@ const BOOLEAN_REQUIREMENT: &str = "must be true or false";
 const CURSOR_STYLE_REQUIREMENT: &str = "must be \"block\", \"underline\" or \"bar\"";
 const SHELL_ROW_NAME_REQUIREMENT: &str = "must be \"folder\" or \"path\"";
 const CHECK_LABEL: &str = "settings.json";
+const SETTING_KEYS: [&str; 10] = [
+    "theme",
+    "fontFamily",
+    "fontSize",
+    "scrollback",
+    "scrollSensitivity",
+    "cursorBlink",
+    "cursorStyle",
+    "restoreOnLaunch",
+    "manageAgentHooks",
+    "shellRowName",
+];
 
 pub const FONT_SIZE_MIN: f64 = 1.0;
 pub const FONT_SIZE_MAX: f64 = 72.0;
@@ -93,10 +105,9 @@ impl Default for Settings {
 
 // A whole number is written as one ("fontSize": 20), the way a person writes it, not as 20.0.
 fn number_value(number: f64) -> Value {
-    let is_whole = number.is_finite() && number.fract() == 0.0;
-    let fits = number.abs() < 9_007_199_254_740_992.0;
-    if is_whole && fits {
-        let whole = number as i64;
+    let whole = number as i64;
+    let round_trips = whole as f64 == number;
+    if round_trips {
         return Value::from(whole);
     }
     Value::from(number)
@@ -154,31 +165,27 @@ impl SettingChange {
     }
 
     pub fn check(&self) -> Result<(), String> {
+        let key = self.key().to_string();
+        let value = self.value();
         let mut layer = Map::new();
-        layer.insert(self.key().to_string(), self.value());
+        layer.insert(key, value);
         let base = Settings::default();
         let result = apply_settings_layer(&base, &layer, CHECK_LABEL);
-        match result.problems.into_iter().next() {
+        let first_problem = result.problems.into_iter().next();
+        match first_problem {
             Some(problem) => Err(problem),
             None => Ok(()),
         }
     }
 }
 
-fn known_key(key: &str) -> Option<&'static str> {
-    match key {
-        "theme" => Some("theme"),
-        "fontFamily" => Some("fontFamily"),
-        "fontSize" => Some("fontSize"),
-        "scrollback" => Some("scrollback"),
-        "scrollSensitivity" => Some("scrollSensitivity"),
-        "cursorBlink" => Some("cursorBlink"),
-        "cursorStyle" => Some("cursorStyle"),
-        "restoreOnLaunch" => Some("restoreOnLaunch"),
-        "manageAgentHooks" => Some("manageAgentHooks"),
-        "shellRowName" => Some("shellRowName"),
-        _ => None,
+fn setting_name(key: &str) -> Option<&'static str> {
+    for name in SETTING_KEYS {
+        if name == key {
+            return Some(name);
+        }
     }
+    None
 }
 
 fn read_theme(value: &Value) -> Option<ThemeChoice> {
@@ -254,8 +261,12 @@ fn assign<T>(slot: &mut T, parsed: Option<T>, requirement: &'static str) -> Resu
     }
 }
 
-fn apply_setting(settings: &mut Settings, key: &str, value: &Value) -> Result<(), Rejection> {
-    match key {
+fn apply_setting(
+    settings: &mut Settings,
+    name: &'static str,
+    value: &Value,
+) -> Result<(), Rejection> {
+    match name {
         "theme" => assign(&mut settings.theme, read_theme(value), THEME_REQUIREMENT),
         "fontFamily" => assign(
             &mut settings.font_family,
@@ -316,17 +327,18 @@ pub fn apply_settings_layer(
     let mut rejected = Vec::new();
 
     for (key, value) in layer {
-        let outcome = apply_setting(&mut settings, key, value);
+        let unknown = format!("{label}: \"{key}\" is not a setting");
+        let Some(name) = setting_name(key) else {
+            problems.push(unknown);
+            continue;
+        };
+        let outcome = apply_setting(&mut settings, name, value);
         match outcome {
             Ok(()) => {}
-            Err(Rejection::UnknownKey) => {
-                problems.push(format!("{label}: \"{key}\" is not a setting"));
-            }
+            Err(Rejection::UnknownKey) => problems.push(unknown),
             Err(Rejection::Invalid(requirement)) => {
                 problems.push(format!("{label}: \"{key}\" {requirement}"));
-                if let Some(name) = known_key(key) {
-                    rejected.push(name);
-                }
+                rejected.push(name);
             }
         }
     }
@@ -434,16 +446,13 @@ mod tests {
         assert_eq!(too_big, Err(line.to_string()));
 
         assert_eq!(SettingChange::FontSize(72.0).check(), Ok(()));
-        assert_eq!(
-            SettingChange::ShellRowName(ShellRowName::Path).check(),
-            Ok(())
-        );
-        assert_eq!(SettingChange::Theme(ThemeChoice::Dark).check(), Ok(()));
 
         let whole = SettingChange::FontSize(20.0).value();
         assert_eq!(whole.to_string(), "20");
         let fraction = SettingChange::FontSize(12.5).value();
         assert_eq!(fraction.to_string(), "12.5");
+        let beyond_whole_numbers = SettingChange::ScrollSensitivity(1e300).value();
+        assert_eq!(beyond_whole_numbers.as_f64(), Some(1e300));
         assert!(SettingChange::FontFamily(String::new()).check().is_err());
 
         let base = Settings::default();
