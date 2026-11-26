@@ -10,7 +10,7 @@ use crate::terminal::{Error, Terminal, check};
 const MODE_FOCUS_EVENTS: u16 = 1004;
 const MODE_ALTERNATE_SCROLL: u16 = 1007;
 const MODE_BRACKETED_PASTE: u16 = 2004;
-/// Enough for any key, mouse or focus sequence.
+/// Room for a key, mouse or focus sequence today; a longer one is retried at the size the library reports.
 const SEQUENCE_BYTES: usize = 128;
 /// What bracketed paste adds around the text: `ESC [200~` and `ESC [201~`.
 const BRACKETS_BYTES: usize = 12;
@@ -183,7 +183,7 @@ impl KeyEncoder {
         let event = self.event;
         let mut encoded = Err(set_text);
         if set_text == sys::GhosttyResult_GHOSTTY_SUCCESS {
-            encoded = encode_into(|buf, len, written| unsafe {
+            encoded = encode_into(SEQUENCE_BYTES, |buf, len, written| unsafe {
                 sys::ghostty_key_encoder_encode(encoder, event, buf, len, written)
             });
         }
@@ -284,7 +284,7 @@ impl MouseEncoder {
 
         let encoder = self.encoder;
         let event = self.event;
-        let encoded = encode_into(|buf, len, written| unsafe {
+        let encoded = encode_into(SEQUENCE_BYTES, |buf, len, written| unsafe {
             sys::ghostty_mouse_encoder_encode(encoder, event, buf, len, written)
         });
         encoded.map_err(|code| Error {
@@ -320,7 +320,7 @@ impl Terminal {
             return Ok(None);
         }
         let event = focus_event(focused);
-        let encoded = encode_into(|buf, len, written| unsafe {
+        let encoded = encode_into(SEQUENCE_BYTES, |buf, len, written| unsafe {
             sys::ghostty_focus_encode(event, buf, len, written)
         });
         let bytes = encoded.map_err(|code| Error {
@@ -337,22 +337,14 @@ impl Terminal {
         let mut data = text.as_bytes().to_vec();
         let data_pointer = data.as_mut_ptr() as *mut c_char;
         let data_len = data.len();
-        // The output is the text, rewritten no longer than it was, plus the brackets.
-        let mut out = vec![0u8; data_len + BRACKETS_BYTES];
-        let mut written = 0usize;
-        let encoded = unsafe {
-            sys::ghostty_paste_encode(
-                data_pointer,
-                data_len,
-                bracketed,
-                out.as_mut_ptr(),
-                out.len(),
-                &mut written,
-            )
-        };
-        check(encoded, "encode a paste")?;
-        out.truncate(written);
-        Ok(out)
+        // Encoding the rewritten text again gives the same result, so a retry at the reported size is safe.
+        let encoded = encode_into(data_len + BRACKETS_BYTES, |buf, len, written| unsafe {
+            sys::ghostty_paste_encode(data_pointer, data_len, bracketed, buf, len, written)
+        });
+        encoded.map_err(|code| Error {
+            code,
+            call: "encode a paste",
+        })
     }
 
     /// Whether the program tracks the mouse, so clicks and the wheel go to it instead of selecting and scrolling.
@@ -598,12 +590,18 @@ fn set_formatter<T>(
     check(set, "set a formatter option")
 }
 
+/// Runs an encoder into a buffer of `capacity` bytes, once more at the size it reports if that was too small.
 fn encode_into(
+    capacity: usize,
     mut encode: impl FnMut(*mut u8, usize, *mut usize) -> sys::GhosttyResult,
 ) -> Result<Vec<u8>, sys::GhosttyResult> {
-    let mut out = vec![0u8; SEQUENCE_BYTES];
+    let mut out = vec![0u8; capacity];
     let mut written = 0usize;
-    let result = encode(out.as_mut_ptr(), out.len(), &mut written);
+    let mut result = encode(out.as_mut_ptr(), out.len(), &mut written);
+    if result == sys::GhosttyResult_GHOSTTY_OUT_OF_SPACE {
+        out.resize(written, 0);
+        result = encode(out.as_mut_ptr(), out.len(), &mut written);
+    }
     if result != sys::GhosttyResult_GHOSTTY_SUCCESS {
         return Err(result);
     }
