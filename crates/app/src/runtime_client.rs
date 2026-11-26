@@ -9,9 +9,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, TryLockError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use taco_protocol::{RuntimeAnswer, RuntimeCommand, RuntimeQuery, RuntimeReport};
 
@@ -21,8 +21,9 @@ const CONTROL_FD: RawFd = 3;
 const TERMINALS_FD: RawFd = 4;
 /// Above both, so moving one connection into place cannot overwrite the other.
 const ABOVE_BOTH: RawFd = 10;
-/// How long a stop waits for the runtime to go by itself, and then again after SIGTERM.
+/// How long each step of a stop waits: to send `Stop`, for the runtime to go by itself, and after each signal.
 const STOP_PATIENCE: Duration = Duration::from_secs(2);
+const LOCK_RETRY: Duration = Duration::from_millis(10);
 
 pub enum RuntimeEvent {
     Report(RuntimeReport),
@@ -159,15 +160,50 @@ impl RuntimeClient {
         answered
     }
 
-    /// Sends `Stop`, waits up to two seconds for the exit, then SIGTERM. A stop never produces `RuntimeEvent::Died`.
+    /// Sends `Stop`, then SIGTERM, then SIGKILL, waiting up to two seconds for the exit after each; a runtime that cannot be sent `Stop` goes straight to SIGTERM.
+    /// About four seconds at worst. A stop never produces `RuntimeEvent::Died`.
     pub fn stop(&self) {
         self.shared.stopping.store(true, Ordering::SeqCst);
-        self.send(RuntimeCommand::Stop);
+        let stop_sent = self.send_stop();
+        if stop_sent && self.wait_for_exit() {
+            return;
+        }
+        self.signal(libc::SIGTERM);
         if self.wait_for_exit() {
             return;
         }
-        unsafe { libc::kill(self.shared.pid as libc::pid_t, libc::SIGTERM) };
+        self.signal(libc::SIGKILL);
         self.wait_for_exit();
+    }
+
+    /// Whether `Stop` went out within `STOP_PATIENCE`. A send stuck on a full connection holds it, so a stop does not wait its turn.
+    fn send_stop(&self) -> bool {
+        let Some(mut control) = self.control_within(STOP_PATIENCE) else {
+            return false;
+        };
+        if control.set_write_timeout(Some(STOP_PATIENCE)).is_err() {
+            return false;
+        }
+        taco_wire::write_frame(&mut *control, &RuntimeCommand::Stop).is_ok()
+    }
+
+    fn control_within(&self, patience: Duration) -> Option<MutexGuard<'_, UnixStream>> {
+        let deadline = Instant::now() + patience;
+        loop {
+            match self.shared.control.try_lock() {
+                Ok(control) => return Some(control),
+                Err(TryLockError::Poisoned(poisoned)) => return Some(poisoned.into_inner()),
+                Err(TryLockError::WouldBlock) => {}
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            thread::sleep(LOCK_RETRY);
+        }
+    }
+
+    fn signal(&self, signal: libc::c_int) {
+        unsafe { libc::kill(self.shared.pid as libc::pid_t, signal) };
     }
 
     /// Whether the runtime has exited, waiting up to `STOP_PATIENCE` for it.
@@ -247,10 +283,6 @@ mod tests {
 
     /// A stand-in runtime. It writes whether SIGTERM is blocked in it to `<itself>.mask`, takes one byte of what it is sent, and exits with `code`.
     fn stand_in(name: &str, code: i32) -> PathBuf {
-        let directory =
-            std::env::temp_dir().join(format!("taco-runtime-client-{}", std::process::id()));
-        std::fs::create_dir_all(&directory).unwrap();
-        let path = directory.join(name);
         let script = format!(
             r#"#!/usr/bin/perl
 use POSIX;
@@ -264,10 +296,74 @@ read($control, my $byte, 1);
 exit {code};
 "#
         );
+        program(name, &script)
+    }
+
+    fn program(name: &str, script: &str) -> PathBuf {
+        let directory =
+            std::env::temp_dir().join(format!("taco-runtime-client-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join(name);
         std::fs::write(&path, script).unwrap();
         let executable = std::fs::Permissions::from_mode(0o755);
         std::fs::set_permissions(&path, executable).unwrap();
         path
+    }
+
+    /// Stops it on a thread of its own, so a stop that hangs fails the test instead of hanging it.
+    fn stopped_in_time(client: &RuntimeClient) -> Option<ExitStatus> {
+        let (done, stopped) = mpsc::channel();
+        let stopping = client.clone();
+        thread::spawn(move || {
+            stopping.stop();
+            let _ = done.send(());
+        });
+        stopped
+            .recv_timeout(Duration::from_secs(15))
+            .expect("the stop returned");
+        *client.shared.exit.lock().unwrap()
+    }
+
+    #[test]
+    fn a_stop_ends_a_runtime_that_reads_nothing_while_a_send_is_stuck() {
+        let program = program("reads-nothing", "#!/bin/sh\nexec sleep 999\n");
+        let started = RuntimeClient::start(&program, |_| {}).unwrap();
+        let sender = started.client.clone();
+        thread::spawn(move || {
+            for lines in 0..100_000 {
+                sender.send(RuntimeCommand::Scrollback { lines });
+            }
+        });
+        // Long enough for the connection to fill and the sender to stick, holding it.
+        thread::sleep(Duration::from_millis(500));
+        let exit = stopped_in_time(&started.client);
+        assert!(exit.is_some(), "the runtime is gone");
+    }
+
+    #[test]
+    fn a_stop_ends_a_runtime_that_reads_nothing_once_its_connection_is_full() {
+        let program = program("reads-nothing-full", "#!/bin/sh\nexec sleep 999\n");
+        let started = RuntimeClient::start(&program, |_| {}).unwrap();
+        {
+            let mut control = started.client.shared.control.lock().unwrap();
+            control.set_nonblocking(true).unwrap();
+            let filler = [0u8; 4096];
+            while io::Write::write(&mut *control, &filler).is_ok() {}
+            control.set_nonblocking(false).unwrap();
+        }
+        let exit = stopped_in_time(&started.client);
+        assert!(exit.is_some(), "the runtime is gone");
+    }
+
+    #[test]
+    fn a_stop_kills_a_runtime_that_ignores_sigterm() {
+        let program = program(
+            "ignores-sigterm",
+            "#!/usr/bin/perl\n$SIG{TERM} = 'IGNORE';\nsleep 999;\n",
+        );
+        let started = RuntimeClient::start(&program, |_| {}).unwrap();
+        let exit = stopped_in_time(&started.client).expect("the runtime is gone");
+        assert_eq!(exit.signal(), Some(libc::SIGKILL));
     }
 
     #[test]
