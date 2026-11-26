@@ -16,8 +16,10 @@ taco-workspace = { path = "crates/workspace" }
 taco-settings = { path = "crates/settings" }
 taco-services = { path = "crates/services" }
 taco-terminal-view = { path = "crates/terminal-view" }
+taco-wire = { path = "crates/wire" }
 
 serde = { version = "1", features = ["derive"] }
+postcard = { version = "1", default-features = false, features = ["use-std"] }
 
 # Debug info is most of a gpui build's size and link time; line tables keep backtraces readable.
 [profile.dev]
