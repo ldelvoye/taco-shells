@@ -20,6 +20,7 @@ pub mod render;
 mod row_name;
 pub mod runtime_client;
 pub mod services_host;
+mod shell;
 #[cfg(feature = "render")]
 mod stand_in;
 mod strip;

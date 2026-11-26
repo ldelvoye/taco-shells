@@ -1,5 +1,5 @@
 use gpui::{
-    AnyElement, App, AppContext, Context, CursorStyle, Div, ElementId, Entity, FontWeight,
+    AnyElement, App, AppContext, Bounds, Context, CursorStyle, Div, ElementId, Entity, FontWeight,
     InteractiveElement, IntoElement, ParentElement, Pixels, Point, Render, SharedString, Size,
     StatefulInteractiveElement, Styled, Window, div, px, svg,
 };
@@ -7,17 +7,25 @@ use taco_protocol::{Edge, Panel, PanelPlace, Panels};
 
 use crate::assets::CLOSE_ICON;
 use crate::drive::mark;
-use crate::look::{FONT_FAMILY, Look, PANEL_TITLE_HEIGHT, STRIP_WIDTH, TEXT_SIZE};
+use crate::look::{FONT_FAMILY, Look, PANEL_TITLE_HEIGHT, SMALL_TEXT_SIZE, STRIP_WIDTH, TEXT_SIZE};
+use crate::shell::{shell_orange, shell_outline};
 use crate::window::WindowView;
 
 const TITLE_ICON_SIZE: f32 = 14.;
 const RESIZE_HANDLE: f32 = 5.;
-const DROP_BAND: f32 = 72.;
 const MIN_SIDE_PANEL: f32 = 140.;
 const MIN_BOTTOM_PANEL: f32 = 120.;
 const MAX_WINDOW_SHARE: f32 = 0.5;
 const DRAG_PREVIEW_WIDTH: f32 = 160.;
-const EDGES: [Edge; 3] = [Edge::Left, Edge::Right, Edge::Bottom];
+// The landing preview Lucas chose (the "shell landing preview" mock, 2026-11-26).
+const SIDE_ZONE: f32 = 0.3;
+const BOTTOM_ZONE: f32 = 0.38;
+const LANDING_INSET: f32 = 4.;
+const LANDING_RADIUS: f32 = 9.;
+const LANDING_OUTLINE: f32 = 3.;
+const LANDING_ANGLE: f32 = 135.;
+const LANDING_WASH: f32 = 0.13;
+const LANDING_TITLE_LINE: f32 = 0.45;
 
 /// A panel being moved by its title.
 #[derive(Clone, Debug)]
@@ -228,36 +236,64 @@ fn resize_handle(panel: Panel, edge: Edge) -> AnyElement {
         .into_any_element()
 }
 
-/// While a panel is moved, a band on each edge it can go to, lit under the pointer.
-pub fn drop_bands(look: &Look, cx: &mut Context<WindowView>) -> Div {
-    let bands = EDGES.map(|edge| drop_band(edge, look, cx));
-    div()
-        .absolute()
-        .top_0()
-        .bottom_0()
-        .left(px(STRIP_WIDTH))
-        .right_0()
-        .children(bands)
+/// The edge a dragged panel would go to with the pointer at `pointer`: near the left or right of `area` (left and right win in the corners), or else near its bottom.
+pub fn edge_near(pointer: Point<Pixels>, area: Bounds<Pixels>) -> Option<Edge> {
+    if !area.contains(&pointer) {
+        return None;
+    }
+    let width = f32::from(area.size.width);
+    let height = f32::from(area.size.height);
+    let from_left = f32::from(pointer.x - area.left());
+    let from_right = f32::from(area.right() - pointer.x);
+    let from_bottom = f32::from(area.bottom() - pointer.y);
+    if from_left <= width * SIDE_ZONE {
+        return Some(Edge::Left);
+    }
+    if from_right <= width * SIDE_ZONE {
+        return Some(Edge::Right);
+    }
+    if from_bottom <= height * BOTTOM_ZONE {
+        return Some(Edge::Bottom);
+    }
+    None
 }
 
-fn drop_band(edge: Edge, look: &Look, cx: &mut Context<WindowView>) -> AnyElement {
-    let lit = look.strong_veil;
-    let line = look.secondary_text;
-    let edge_name = format!("{edge:?}");
-    let band = div().id(element_id("drop-band", &edge_name)).absolute();
-    let placed = match edge {
-        Edge::Left => band.top_0().bottom_0().left_0().w(px(DROP_BAND)),
-        Edge::Right => band.top_0().bottom_0().right_0().w(px(DROP_BAND)),
-        Edge::Bottom => band.left_0().right_0().bottom_0().h(px(DROP_BAND)),
-    };
-    placed
-        .border_1()
-        .border_color(look.hairline)
-        .drag_over::<PanelDrag>(move |style, _, _, _| style.bg(lit).border_color(line))
-        .on_drop(cx.listener(move |view, drag: &PanelDrag, _, cx| {
-            view.move_panel(drag.panel, edge, cx);
-        }))
-        .into_any_element()
+/// Where a dragged panel would land on `edge`: drawn at the size it would take there, with its title bar, in the shell's colors.
+pub fn landing_preview(panel: Panel, edge: Edge, size: f32, look: &Look) -> Div {
+    let extent = px(size - 2. * LANDING_INSET);
+    let inset = px(LANDING_INSET);
+    let wash = shell_orange().opacity(LANDING_WASH);
+    let underline = shell_orange().opacity(LANDING_TITLE_LINE);
+    let title = div()
+        .w_full()
+        .pt(px(8.))
+        .pb(px(7.))
+        .px(px(12.))
+        .border_b_1()
+        .border_color(underline)
+        .text_size(px(SMALL_TEXT_SIZE))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(look.text)
+        .child(name_of(panel));
+    let outline = shell_outline(LANDING_OUTLINE, LANDING_RADIUS, LANDING_ANGLE);
+    let shape = div()
+        .absolute()
+        .flex()
+        .flex_col()
+        .rounded(px(LANDING_RADIUS))
+        .bg(wash)
+        .child(title)
+        .child(outline);
+    let left_of_area = px(STRIP_WIDTH + LANDING_INSET);
+    match edge {
+        Edge::Left => shape.left(left_of_area).top(inset).bottom(inset).w(extent),
+        Edge::Right => shape.right(inset).top(inset).bottom(inset).w(extent),
+        Edge::Bottom => shape
+            .left(left_of_area)
+            .right(inset)
+            .bottom(inset)
+            .h(extent),
+    }
 }
 
 fn element_id(kind: &str, name: &str) -> ElementId {
