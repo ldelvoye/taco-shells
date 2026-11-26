@@ -17,6 +17,7 @@ taco-settings = { path = "crates/settings" }
 taco-services = { path = "crates/services" }
 taco-terminal-view = { path = "crates/terminal-view" }
 taco-wire = { path = "crates/wire" }
+taco-drive = { path = "crates/drive" }
 
 serde = { version = "1", features = ["derive"] }
 # preserve_order: key bindings layer, and problems are listed, in the order the user's file has them.
