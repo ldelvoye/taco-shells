@@ -1,5 +1,6 @@
 //! Ghostty's terminal library, libghostty-vt, for the runtime and the terminal view.
 
+pub mod input;
 pub mod render;
 mod restore;
 mod snapshot;
