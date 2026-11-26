@@ -180,12 +180,8 @@ impl SettingChange {
 }
 
 fn setting_name(key: &str) -> Option<&'static str> {
-    for name in SETTING_KEYS {
-        if name == key {
-            return Some(name);
-        }
-    }
-    None
+    let mut names = SETTING_KEYS.into_iter();
+    names.find(|name| *name == key)
 }
 
 fn read_theme(value: &Value) -> Option<ThemeChoice> {
