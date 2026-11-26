@@ -12,6 +12,8 @@ const DARK_SHADE: f32 = 0.75;
 
 /// A rectangle inside a cell, in eighths of its width and height: x, y, width, height.
 type Eighths = [u8; 4];
+/// A rectangle in pixels: left, top, right, bottom.
+type Edges = [f32; 4];
 
 const UPPER_LEFT: Eighths = [0, 0, 4, 4];
 const UPPER_RIGHT: Eighths = [4, 0, 4, 4];
@@ -308,25 +310,80 @@ fn paint_lines(
     let joint_right = joint_left + widest;
     let joint_bottom = joint_top + widest;
 
+    let mut arm_edges = [[0.0; 4]; 4];
+    let mut arm_count = 0;
     if left_width > 0.0 {
         let top = snap(middle_y - left_width / 2.0, scale);
-        let arm = bounds_between(cell_left, top, joint_right, top + left_width);
-        window.paint_quad(fill(arm, color));
+        arm_edges[arm_count] = [cell_left, top, joint_right, top + left_width];
+        arm_count += 1;
     }
     if right_width > 0.0 {
         let top = snap(middle_y - right_width / 2.0, scale);
-        let arm = bounds_between(joint_left, top, cell_right, top + right_width);
-        window.paint_quad(fill(arm, color));
+        arm_edges[arm_count] = [joint_left, top, cell_right, top + right_width];
+        arm_count += 1;
     }
     if up_width > 0.0 {
         let left = snap(middle_x - up_width / 2.0, scale);
-        let arm = bounds_between(left, cell_top, left + up_width, joint_bottom);
-        window.paint_quad(fill(arm, color));
+        arm_edges[arm_count] = [left, cell_top, left + up_width, joint_bottom];
+        arm_count += 1;
     }
     if down_width > 0.0 {
         let left = snap(middle_x - down_width / 2.0, scale);
-        let arm = bounds_between(left, joint_top, left + down_width, cell_bottom);
-        window.paint_quad(fill(arm, color));
+        arm_edges[arm_count] = [left, joint_top, left + down_width, cell_bottom];
+        arm_count += 1;
+    }
+    let arms_drawn = &arm_edges[..arm_count];
+    for_each_piece(arms_drawn, |[left, top, right, bottom]| {
+        let piece = bounds_between(left, top, right, bottom);
+        window.paint_quad(fill(piece, color));
+    });
+}
+
+/// The area `arms` cover, as rectangles that do not overlap, so a translucent line is painted once at every pixel. Each is left, top, right, bottom.
+fn for_each_piece(arms: &[Edges], mut paint: impl FnMut(Edges)) {
+    let mut xs = [0.0; 8];
+    let mut ys = [0.0; 8];
+    for (index, [left, top, right, bottom]) in arms.iter().enumerate() {
+        xs[index * 2] = *left;
+        xs[index * 2 + 1] = *right;
+        ys[index * 2] = *top;
+        ys[index * 2 + 1] = *bottom;
+    }
+    let edge_count = arms.len() * 2;
+    let xs = &mut xs[..edge_count];
+    let ys = &mut ys[..edge_count];
+    xs.sort_by(f32::total_cmp);
+    ys.sort_by(f32::total_cmp);
+
+    // Each band between two horizontal edges is painted as the stretches of it that an arm covers.
+    for band in ys.windows(2) {
+        let [top, bottom] = [band[0], band[1]];
+        if bottom <= top {
+            continue;
+        }
+        let middle_y = (top + bottom) / 2.0;
+        let mut stretch_left = None;
+        for tile in xs.windows(2) {
+            let [left, right] = [tile[0], tile[1]];
+            if right <= left {
+                continue;
+            }
+            let middle_x = (left + right) / 2.0;
+            let covered = arms.iter().any(|arm| {
+                arm[0] <= middle_x && middle_x < arm[2] && arm[1] <= middle_y && middle_y < arm[3]
+            });
+            match (covered, stretch_left) {
+                (true, None) => stretch_left = Some(left),
+                (false, Some(start)) => {
+                    paint([start, top, left, bottom]);
+                    stretch_left = None;
+                }
+                _ => {}
+            }
+        }
+        if let (Some(start), Some(end)) = (stretch_left, xs.last()) {
+            paint([start, top, *end, bottom]);
+        }
     }
 }
 
@@ -419,6 +476,43 @@ mod tests {
             assert_eq!(this.bottom(), below.top(), "column {column}");
             let device_left = f32::from(this.left()) * scale;
             assert_eq!(device_left, device_left.round());
+        }
+    }
+
+    #[test]
+    fn line_pieces_never_overlap_and_cover_exactly_the_arms() {
+        // ╂ (a light horizontal across a heavy vertical), ┝, ─ and a lone ╴, as paint_lines lays them out in an 8 by 16 cell.
+        let cases: [&[Edges]; 4] = [
+            &[
+                [0.0, 7.0, 5.0, 8.0],
+                [3.0, 7.0, 8.0, 8.0],
+                [3.0, 0.0, 5.0, 9.0],
+                [3.0, 7.0, 5.0, 16.0],
+            ],
+            &[
+                [3.5, 0.0, 4.5, 9.0],
+                [3.5, 7.0, 4.5, 16.0],
+                [3.5, 7.0, 8.0, 9.0],
+            ],
+            &[[0.0, 7.0, 4.5, 8.0], [3.5, 7.0, 8.0, 8.0]],
+            &[[0.0, 7.0, 4.5, 8.0]],
+        ];
+        for arms in cases {
+            let mut pieces = Vec::new();
+            for_each_piece(arms, |piece| pieces.push(piece));
+            // Every half-pixel point is painted once if an arm covers it, and never otherwise.
+            for step_y in 0..32 {
+                for step_x in 0..16 {
+                    let x = f32::from(step_x as u8) / 2.0 + 0.25;
+                    let y = f32::from(step_y as u8) / 2.0 + 0.25;
+                    let inside = |edges: &Edges| {
+                        edges[0] <= x && x < edges[2] && edges[1] <= y && y < edges[3]
+                    };
+                    let in_arm = arms.iter().any(inside);
+                    let times_painted = pieces.iter().filter(|piece| inside(piece)).count();
+                    assert_eq!(times_painted, usize::from(in_arm), "{arms:?} at {x}, {y}");
+                }
+            }
         }
     }
 }
