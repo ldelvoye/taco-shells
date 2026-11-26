@@ -58,3 +58,38 @@ pub(crate) fn replace_file(real: &Path, text: &str) -> io::Result<()> {
     }
     replaced
 }
+
+pub(crate) fn read_text(path: &Path, shown: &str) -> Result<Option<String>, String> {
+    let read = fs::read_to_string(path);
+    match read {
+        Ok(text) => Ok(Some(text)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("{shown} could not be read: {error}")),
+    }
+}
+
+pub(crate) fn write_if_unchanged(
+    path: &Path,
+    shown: &str,
+    original: Option<&str>,
+    text: &str,
+) -> Result<(), String> {
+    let current = read_text(path, shown);
+    let still_original = match &current {
+        Ok(found) => found.as_deref() == original,
+        Err(_) => false,
+    };
+    if !still_original {
+        return Err(format!(
+            "{shown} changed while it was being edited, so nothing was changed."
+        ));
+    }
+
+    // Written to a temporary file beside the real file (a symlink's target) and renamed over it, so a crash never leaves it half-written and a symlink stays one.
+    let real = real_file_of(path);
+    let written = real.and_then(|real| replace_file(&real, text));
+    match written {
+        Ok(()) => Ok(()),
+        Err(error) => Err(format!("{shown} could not be written: {error}")),
+    }
+}

@@ -55,6 +55,7 @@ pub enum ServicesOutput {
     Problem(String),
     /// The downloaded update is waiting for this app to quit, which goes the way `cmd+q` does.
     QuitForUpdate,
+    /// A setting the page asked to write that was not written, named as in `settings.json`, with a reason the page can show.
     SettingRefused {
         key: &'static str,
         reason: String,

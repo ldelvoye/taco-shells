@@ -167,7 +167,7 @@ fn start_writer(
     let after_write = move || {
         let store = locked(&written_store);
         if let Some(store) = store.as_ref() {
-            // Published at once, not when the watcher notices, so a click redraws straight away; the watcher's later look then finds nothing new.
+            // Published now, so a change shows at once without waiting for the watcher.
             store.refresh_now();
         }
     };
