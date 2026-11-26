@@ -7,7 +7,7 @@ interface TerminalHostProps {
   width: number
 }
 
-// Sessions in a hidden group stay mounted rather than unmounting. An xterm
+// Sessions in a hidden group stay mounted rather than unmounting. A view's
 // element changes host only when its pane moves to another split.
 export function TerminalHost({ sessionId, width }: TerminalHostProps): JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
