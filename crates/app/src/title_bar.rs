@@ -4,6 +4,7 @@ use gpui::{
 };
 use taco_protocol::DrawnState;
 use taco_rules::{selected_terminal, waiting_count};
+use taco_services::APPLICATION_NAME;
 
 use crate::assets::MARK;
 use crate::look::{Look, SMALL_TEXT_SIZE, TITLE_BAR_HEIGHT};
@@ -11,7 +12,6 @@ use crate::platform::{
     THIS_MACHINE, TRAFFIC_LIGHT_DIAMETER, TrafficLights, traffic_light_centers, traffic_lights_room,
 };
 
-const WORDMARK: &str = "Taco Shells";
 const EDGE_PADDING: f32 = 12.;
 const MARK_HEIGHT: f32 = 14.;
 // The mark's view box is 800 by 478.
@@ -34,7 +34,7 @@ pub fn title_bar(
         .font_weight(FontWeight::SEMIBOLD)
         .text_size(px(13.))
         .child(img(MARK).w(px(MARK_WIDTH)).h(px(MARK_HEIGHT)))
-        .child(WORDMARK);
+        .child(APPLICATION_NAME);
 
     let mut place = div()
         .flex_1()
