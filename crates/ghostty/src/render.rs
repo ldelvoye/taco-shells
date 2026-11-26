@@ -349,14 +349,11 @@ impl Frame<'_> {
         let state = &mut *self.state;
         // The dirty walk also reports a position; the row's own VIEWPORT_Y below serves both walks.
         let mut walked_y: u16 = 0;
-        let moved;
-        if only_dirty {
-            moved = unsafe {
-                sys::ghostty_render_state_row_iterator_next_dirty(state.rows, &mut walked_y)
-            };
+        let moved = if only_dirty {
+            unsafe { sys::ghostty_render_state_row_iterator_next_dirty(state.rows, &mut walked_y) }
         } else {
-            moved = unsafe { sys::ghostty_render_state_row_iterator_next(state.rows) };
-        }
+            unsafe { sys::ghostty_render_state_row_iterator_next(state.rows) }
+        };
         if !moved {
             return Ok(false);
         }
