@@ -27,7 +27,6 @@ enum Input {
     Report(RuntimeReport),
     RuntimeDied(String),
     Hook(HookEvent),
-    AppActivated,
     /// Answered once the save file is written.
     FreezeAndFlush(Sender<()>),
 }
@@ -91,10 +90,6 @@ impl WorkspaceHost {
 
     pub fn hook(&self, event: HookEvent) {
         self.put(Input::Hook(event));
-    }
-
-    pub fn app_activated(&self) {
-        self.put(Input::AppActivated);
     }
 
     /// `freeze`, then `flush`; blocks the caller until the save file is written, behind every input sent before it. Called once, at quit, before the runtime is stopped.
@@ -193,7 +188,6 @@ fn serve(
             Input::Report(report) => workspace.runtime_report(report, now),
             Input::RuntimeDied(reason) => workspace.runtime_died(&reason, now),
             Input::Hook(event) => workspace.hook(event, now),
-            Input::AppActivated => workspace.app_activated(now),
             Input::FreezeAndFlush(done) => {
                 workspace.freeze();
                 workspace.flush(now);

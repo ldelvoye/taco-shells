@@ -72,12 +72,6 @@ pub fn run() {
     let assets = Assets::for_this_build();
     let application = gpui_platform::application().with_assets(assets);
     let background = platform::is_background_window();
-    // Only a reopen (the Dock icon, or opening the running app) jumps to the terminal that asked for attention; switching desktops or apps does not.
-    application.on_reopen(|cx| {
-        if let Some(running) = cx.try_global::<Running>() {
-            running.hosts.workspace.app_activated();
-        }
-    });
     application.run(move |cx: &mut App| {
         if background {
             platform::keep_out_of_the_dock(cx);
