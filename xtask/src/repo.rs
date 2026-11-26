@@ -1,6 +1,15 @@
 use std::env;
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Command;
+
+pub fn cargo_program() -> OsString {
+    let configured = env::var_os("CARGO");
+    match configured {
+        Some(path) => path,
+        None => OsString::from("cargo"),
+    }
+}
 
 pub fn root() -> Result<PathBuf, String> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

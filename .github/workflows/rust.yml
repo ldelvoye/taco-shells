@@ -67,3 +67,6 @@ jobs:
             echo "::error::cargo test took ${elapsed} s once compiled, over the 20 s budget."
             exit 1
           fi
+
+      # Builds a development bundle and drives it. The runner has Metal, so the window draws.
+      - run: cargo xtask smoke

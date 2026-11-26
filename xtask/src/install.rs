@@ -30,6 +30,7 @@ pub fn run() -> Result<(), String> {
         profile: Profile::Release,
         channel: Channel::Development,
         zip: false,
+        icon: true,
     };
     let bundled = bundle::create(&options)?;
 

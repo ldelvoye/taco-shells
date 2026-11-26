@@ -1,4 +1,3 @@
-use std::env;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -35,11 +34,7 @@ pub enum Channel {
 pub fn binaries(profile: Profile, channel: Channel) -> Result<PathBuf, String> {
     let repo_root = repo::root()?;
     let target = repo::target_dir()?;
-    let cargo_path = env::var_os("CARGO");
-    let program = match cargo_path {
-        Some(path) => path,
-        None => OsString::from("cargo"),
-    };
+    let program = repo::cargo_program();
 
     let mut cargo = cargo_command(program, profile, channel, &target);
     cargo.current_dir(&repo_root);
