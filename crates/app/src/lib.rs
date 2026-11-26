@@ -10,6 +10,7 @@ mod keys;
 pub mod link;
 mod look;
 mod menu;
+mod middle;
 mod panels;
 mod platform;
 mod popups;
@@ -27,7 +28,6 @@ mod window;
 mod wiring;
 pub mod workspace_host;
 
-use std::os::unix::net::UnixStream;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -38,7 +38,8 @@ use gpui::{
     WindowBounds, WindowOptions, px, size,
 };
 use taco_services::{APPLICATION_NAME, AgentSetupView};
-use taco_settings::{Appearance, Config};
+use taco_settings::{Appearance, Config, palette_for};
+use taco_terminal_view::Terminals;
 
 #[cfg(feature = "render")]
 pub use fixture::Fixture;
@@ -62,7 +63,6 @@ const SHUTDOWN_PATIENCE: Duration = Duration::from_secs(8);
 struct Running {
     hosts: Hosts,
     stopping: bool,
-    _terminals: UnixStream,
 }
 
 impl Global for Running {}
@@ -179,16 +179,31 @@ fn open_window(started: Started, background: bool, cx: &mut App) -> Option<AnyWi
         first_config,
         terminals,
     } = started;
-    let shown = shown_from(&first_config);
+    let mut shown = shown_from(&first_config);
     let look = Look::new(first_config.appearance);
+    let connected = Terminals::connect(terminals);
+    let channel = match connected {
+        Ok(channel) => Some(channel),
+        Err(error) => {
+            let problem = format!("The terminals could not be shown: {error}");
+            shown.notices.problems.push(problem);
+            None
+        }
+    };
     let window_hosts = hosts.clone();
     cx.set_global(Running {
         hosts,
         stopping: false,
-        _terminals: terminals,
     });
     let opened = cx.open_window(options, move |window, cx| {
         let hosts = window_hosts;
+        let settings = &first_config.settings;
+        let palette = palette_for(first_config.appearance);
+        let mut terminals = None;
+        if let Some(channel) = channel {
+            let made = cx.new(|cx| Terminals::new(channel, settings, &palette.terminal, cx));
+            terminals = Some(made);
+        }
         let services = hosts.services.clone();
         let activated = hosts.clone();
         let terminal_settings = hosts.terminal_settings.clone();
@@ -200,6 +215,7 @@ fn open_window(started: Started, background: bool, cx: &mut App) -> Option<AnyWi
             services: Rc::new(hosts.services),
             outputs,
             config_changed: Box::new(config_changed),
+            terminals,
         };
         let lights = TrafficLights::Native;
         cx.new(|cx| {

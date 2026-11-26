@@ -4,9 +4,9 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use gpui::{
-    AnyElement, AppContext, Context, Div, DragMoveEvent, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Pixels, Point, Render, Size,
-    Styled, Task, Window, div, px,
+    AnyElement, AppContext, ClipboardItem, Context, Div, DragMoveEvent, Entity, FocusHandle,
+    Focusable, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Pixels, Point, Render,
+    Size, Styled, Task, Window, div, px,
 };
 use taco_protocol::{
     ActivityRequest, ConfigFile, Dragged, DrawnState, DropPlace, Edge, FocusMove, HarnessId, Panel,
@@ -14,7 +14,8 @@ use taco_protocol::{
 };
 use taco_rules::{DropMark, DropPoint, drop_for, drop_mark_for, focus_target, selected_terminal};
 use taco_services::{AgentMenuAction, AgentSetupView};
-use taco_settings::{Binding, CommandId, Config, command_for};
+use taco_settings::{Binding, CommandId, Config, command_for, palette_for};
+use taco_terminal_view::{Terminals, TerminalsEvent};
 
 use crate::activity::{ActivityInput, ActivityLog, activity_panel, now_ms};
 use crate::banners::{Dismissal, Notices, banner_cards, banners_of};
@@ -27,6 +28,7 @@ use crate::look::{FONT_FAMILY, Look, TEXT_SIZE};
 use crate::menu::{
     AgentMenuClicked, Minimize, Quit, RestartToUpdate, ShowHookScripts, Zoom, set_menus,
 };
+use crate::middle::{Attachable, attachable, line_editing_bytes, opens_link};
 use crate::panels::{
     PanelDrag, ResizeDrag, docked, drop_bands, open_on, place_of, size_for_pointer,
 };
@@ -80,6 +82,10 @@ pub struct WindowView {
     /// The window's own focus, which keys reach when nothing inside it holds the keyboard.
     focus: FocusHandle,
     dismissed: HashSet<Dismissal>,
+    /// The runtime's terminals, drawn in the middle; none while the window runs on fixtures.
+    terminals: Option<Entity<Terminals>>,
+    /// What the terminal view was last told to show.
+    attached: Attachable,
 }
 
 /// What the window does with a reply it asked for.
@@ -103,7 +109,14 @@ impl WindowView {
             services,
             outputs,
             config_changed,
+            terminals,
         } = ports;
+        if let Some(terminals) = &terminals {
+            let heard = cx.subscribe(terminals, |view, _, event, cx| {
+                view.terminals_said(event, cx)
+            });
+            heard.detach();
+        }
         let following = cx.spawn(async move |this, cx| {
             let mut outputs = outputs;
             while let Some(output) = outputs.next().await {
@@ -148,6 +161,8 @@ impl WindowView {
             _clock: clock,
             focus: cx.focus_handle(),
             dismissed: HashSet::new(),
+            terminals,
+            attached: Attachable::default(),
         }
     }
 
@@ -179,6 +194,12 @@ impl WindowView {
             }
             ServicesOutput::Config(config) => {
                 (self.config_changed)(&config);
+                if let Some(terminals) = &self.terminals {
+                    let palette = palette_for(config.appearance);
+                    terminals.update(cx, |view, cx| {
+                        view.apply(&config.settings, &palette.terminal, cx);
+                    });
+                }
                 self.look = Look::new(config.appearance);
                 self.shown.bindings = config.bindings;
                 notices.config_problems = config.problems;
@@ -206,6 +227,18 @@ impl WindowView {
     pub(crate) fn dismiss_banner(&mut self, dismissal: Dismissal, cx: &mut Context<Self>) {
         self.dismissed.insert(dismissal);
         cx.notify();
+    }
+
+    fn terminals_said(&mut self, event: &TerminalsEvent, cx: &mut Context<Self>) {
+        match event {
+            // A click put the keyboard in the terminal on screen: the selection it already shows, reported as a focus move.
+            TerminalsEvent::Focused(terminal) => self.select(terminal, cx),
+            TerminalsEvent::LinkClicked(url) => {
+                if opens_link(url) {
+                    cx.open_url(url);
+                }
+            }
+        }
     }
 
     fn show_hook_scripts(&self, cx: &mut Context<Self>) {
@@ -385,14 +418,19 @@ impl WindowView {
         if !self.runs(command) {
             return false;
         }
-        if !event.is_held {
+        // Moving a word at a time repeats while held, as in any terminal; every other command runs once.
+        let repeats = matches!(
+            command,
+            CommandId::TerminalWordLeft | CommandId::TerminalWordRight
+        );
+        if !event.is_held || repeats {
             self.run(command, cx);
         }
         true
     }
 
     fn runs(&self, command: CommandId) -> bool {
-        matches!(
+        let window_command = matches!(
             command,
             CommandId::TerminalNew
                 | CommandId::TerminalClose
@@ -401,7 +439,46 @@ impl WindowView {
                 | CommandId::SidebarToggle
                 | CommandId::ConfigOpenSettings
                 | CommandId::ConfigOpenKeybindings
-        )
+        );
+        if window_command {
+            return true;
+        }
+        // The terminal's own commands need a terminal on screen to act on.
+        self.attached.on_screen.is_some()
+    }
+
+    fn run_in_terminal(&mut self, command: CommandId, cx: &mut Context<Self>) {
+        let Some(terminals) = self.terminals.clone() else {
+            return;
+        };
+        let Some(terminal) = self.attached.on_screen.clone() else {
+            return;
+        };
+        match command {
+            CommandId::TerminalCopy => {
+                let selection = terminals.update(cx, |view, _| view.selection(&terminal));
+                if let Some(text) = selection {
+                    let copied = ClipboardItem::new_string(text);
+                    cx.write_to_clipboard(copied);
+                }
+            }
+            CommandId::TerminalPaste => {
+                let Some(clipboard) = cx.read_from_clipboard() else {
+                    return;
+                };
+                let Some(text) = clipboard.text() else {
+                    return;
+                };
+                terminals.update(cx, |view, cx| view.paste(&terminal, &text, cx));
+            }
+            CommandId::TerminalClear => terminals.update(cx, |view, _| view.clear(&terminal)),
+            _ => {
+                let Some(bytes) = line_editing_bytes(command) else {
+                    return;
+                };
+                terminals.update(cx, |view, _| view.type_bytes(&terminal, bytes));
+            }
+        }
     }
 
     fn run(&mut self, command: CommandId, cx: &mut Context<Self>) {
@@ -422,7 +499,7 @@ impl WindowView {
             CommandId::SidebarToggle => self.toggle_panel(Panel::Terminals),
             CommandId::ConfigOpenSettings => self.open_file(ConfigFile::Settings),
             CommandId::ConfigOpenKeybindings => self.open_file(ConfigFile::Keybindings),
-            _ => {}
+            _ => self.run_in_terminal(command, cx),
         }
     }
 
@@ -682,14 +759,48 @@ impl WindowView {
             .flex_1()
             .min_h_0()
             .overflow_hidden()
-            .bg(look.terminal_background)
-            .child(self.placeholder());
+            .bg(look.terminal_background);
+        match &self.terminals {
+            Some(terminals) => terminal = terminal.child(terminals.clone()),
+            None => terminal = terminal.child(self.placeholder()),
+        }
         if !banners.is_empty() {
             let cards = banner_cards(&banners, look, cx);
             terminal = terminal.child(cards);
         }
         terminal = mark(terminal, MIDDLE_MARK);
         div().flex().flex_col().flex_1().min_h_0().child(terminal)
+    }
+
+    /// Tells the terminal view what changed, and keeps the keyboard in the terminal on screen.
+    fn show_terminals(&mut self, drawn: &DrawnState, window: &mut Window, cx: &mut Context<Self>) {
+        let attached = attachable(drawn);
+        let switched = attached.on_screen != self.attached.on_screen;
+        if let Some(terminals) = &self.terminals
+            && attached != self.attached
+        {
+            // Only on a change: showing redraws the view, which would redraw the window again.
+            terminals.update(cx, |view, cx| {
+                view.show(&attached.open, attached.on_screen.as_ref(), cx);
+            });
+        }
+        self.attached = attached;
+        // A key pressed with nothing focused reaches no listener, so the keyboard goes back to the terminal, or the window.
+        let focused = window.focused(cx);
+        let unfocused = focused.is_none();
+        if !switched && !unfocused {
+            return;
+        }
+        let on_screen = self.attached.on_screen.clone();
+        if let (Some(terminals), Some(terminal)) = (&self.terminals, &on_screen)
+            && self.popup.is_none()
+        {
+            terminals.update(cx, |view, cx| view.focus(terminal, window, cx));
+            return;
+        }
+        if unfocused {
+            window.focus(&self.focus, cx);
+        }
     }
 
     fn placeholder(&self) -> AnyElement {
@@ -743,12 +854,8 @@ impl Render for WindowView {
             *needs_focus = false;
         }
 
+        self.show_terminals(&drawn, window, cx);
         let look = &self.look;
-        // A key pressed with nothing focused reaches no listener, so the keyboard falls back to the window.
-        let focused = window.focused(cx);
-        if focused.is_none() {
-            window.focus(&self.focus, cx);
-        }
         let full_screen = window.is_fullscreen();
         let bar = title_bar(&drawn, look, full_screen, self.traffic_lights);
         let body = self.body(&drawn, mark.as_ref(), cx);

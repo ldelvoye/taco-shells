@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
+use gpui::Entity;
 use taco_protocol::{
     ActivityEvent, ActivityRequest, DrawnState, HarnessId, RequestReply, TerminalId,
     WorkspaceRequest,
@@ -11,6 +12,7 @@ use taco_protocol::{
 use taco_rules::{locate_row, select_row};
 use taco_services::{AgentMenuAction, AgentSetupView};
 use taco_settings::Config;
+use taco_terminal_view::Terminals;
 
 pub type WindowSender = UnboundedSender<WindowOutput>;
 pub type WindowReceiver = UnboundedReceiver<WindowOutput>;
@@ -37,6 +39,8 @@ pub struct Ports {
     pub outputs: WindowReceiver,
     /// Runs on the window's thread for each new config, after the window has taken it.
     pub config_changed: Box<dyn Fn(&Config)>,
+    /// The runtime's terminals, for the middle; none on fixtures.
+    pub terminals: Option<Entity<Terminals>>,
 }
 
 /// What the services send the window.
