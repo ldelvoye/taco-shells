@@ -3,12 +3,12 @@ use std::rc::Rc;
 
 use futures::StreamExt;
 use gpui::{
-    AnyElement, AppContext, Context, Div, Focusable, IntoElement, ParentElement, Pixels, Point,
-    Render, Styled, Task, Window, div, px,
+    AnyElement, AppContext, Context, Div, DragMoveEvent, Focusable, InteractiveElement,
+    IntoElement, ParentElement, Pixels, Point, Render, Size, Styled, Task, Window, div, px,
 };
 use taco_protocol::{
-    Dragged, DrawnState, DropPlace, Edge, Panel, PanelPlace, RequestReply, TabGroupId, TerminalId,
-    WorkspaceRequest,
+    ConfigFile, Dragged, DrawnState, DropPlace, Edge, Panel, PanelPlace, RequestReply, TabGroupId,
+    TerminalId, WorkspaceRequest,
 };
 use taco_rules::{DropMark, DropPoint, drop_for, drop_mark_for, selected_terminal};
 
@@ -16,7 +16,9 @@ use crate::banners::{Banner, banner_cards};
 use crate::drive::mark;
 use crate::link::{Ahead, WindowOutput, WindowReceiver, WorkspacePort, drawn_with, next_move};
 use crate::look::{FONT_FAMILY, Look, TEXT_SIZE};
-use crate::panels::{docked, open_on};
+use crate::panels::{
+    PanelDrag, ResizeDrag, docked, drop_bands, open_on, place_of, size_for_pointer,
+};
 use crate::platform::TrafficLights;
 use crate::popups::{Popup, popup_layer};
 use crate::strip::strip;
@@ -48,6 +50,10 @@ pub struct WindowView {
     last_move: u64,
     drop_place: Option<DropPlace>,
     popup: Option<Popup>,
+    /// A panel being resized, and the size it is drawn at until the release sends it.
+    resizing: Option<(Panel, f32)>,
+    /// Whether a panel is being moved by its title, which shows where it can go.
+    panel_dragging: bool,
     last_token: u64,
     awaiting: HashMap<u64, Awaited>,
     _following: Task<()>,
@@ -87,6 +93,8 @@ impl WindowView {
             last_move,
             drop_place: None,
             popup: None,
+            resizing: None,
+            panel_dragging: false,
             last_token: 0,
             awaiting: HashMap::new(),
             _following: following,
@@ -179,6 +187,61 @@ impl WindowView {
             return String::new();
         };
         found.name.clone()
+    }
+
+    pub(crate) fn toggle_panel(&self, panel: Panel) {
+        let drawn = self.drawn();
+        let place = place_of(&drawn.panels, panel);
+        if place.open {
+            self.close_panel(panel);
+            return;
+        }
+        let request = WorkspaceRequest::PanelOpened { panel };
+        self.port.send(request, None);
+    }
+
+    pub(crate) fn close_panel(&self, panel: Panel) {
+        let request = WorkspaceRequest::PanelClosed { panel };
+        self.port.send(request, None);
+    }
+
+    pub(crate) fn move_panel(&mut self, panel: Panel, edge: Edge, cx: &mut Context<Self>) {
+        self.panel_dragging = false;
+        cx.notify();
+        let request = WorkspaceRequest::PanelMoved { panel, edge };
+        self.port.send(request, None);
+    }
+
+    pub(crate) fn open_settings(&self) {
+        let request = WorkspaceRequest::OpenTerminal {
+            file: Some(ConfigFile::Settings),
+        };
+        self.port.send(request, None);
+    }
+
+    fn resize_to(
+        &mut self,
+        drag: &ResizeDrag,
+        pointer: Point<Pixels>,
+        window: Size<Pixels>,
+    ) -> bool {
+        let size = size_for_pointer(drag.edge, pointer, window);
+        let live = Some((drag.panel, size));
+        if self.resizing == live {
+            return false;
+        }
+        self.resizing = live;
+        true
+    }
+
+    // The size goes to the workspace once, on release, so a resize is one save and one terminal resize.
+    fn finish_resize(&mut self, cx: &mut Context<Self>) {
+        let Some((panel, size)) = self.resizing.take() else {
+            return;
+        };
+        cx.notify();
+        let request = WorkspaceRequest::PanelResized { panel, size };
+        self.port.send(request, None);
     }
 
     pub(crate) fn close_popup(&mut self, cx: &mut Context<Self>) {
@@ -332,17 +395,17 @@ impl WindowView {
             center = center.child(self.panel(panel, place, drawn, mark, cx));
         }
 
-        let mut body = div()
-            .flex()
-            .flex_1()
-            .min_h_0()
-            .child(strip(&drawn.panels, look));
+        let side_strip = strip(&drawn.panels, look, cx);
+        let mut body = div().relative().flex().flex_1().min_h_0().child(side_strip);
         if let Some((panel, place)) = open_on(&drawn.panels, Edge::Left) {
             body = body.child(self.panel(panel, place, drawn, mark, cx));
         }
         body = body.child(center);
         if let Some((panel, place)) = open_on(&drawn.panels, Edge::Right) {
             body = body.child(self.panel(panel, place, drawn, mark, cx));
+        }
+        if self.panel_dragging {
+            body = body.child(drop_bands(look, cx));
         }
         body
     }
@@ -356,13 +419,20 @@ impl WindowView {
         cx: &mut Context<Self>,
     ) -> Div {
         let look = &self.look;
+        let edge = place.edge;
+        let mut size = place.size;
+        if let Some((resized, live)) = self.resizing
+            && resized == panel
+        {
+            size = live;
+        }
         match panel {
             Panel::Terminals => {
                 let input = ListInput { drawn, mark, look };
                 let list = terminal_list(&input, cx);
-                docked(panel, place, list, look)
+                docked(panel, edge, size, list, look, cx)
             }
-            Panel::AgentActivity => docked(panel, place, div(), look),
+            Panel::AgentActivity => docked(panel, edge, size, div(), look, cx),
         }
     }
 
@@ -403,9 +473,11 @@ impl Render for WindowView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (drawn, kept) = drawn_with(&self.shown.drawn, self.ahead.as_ref());
         self.ahead = kept;
-        // Once no drag is under way, there is nothing to mark.
+        // Once no drag is under way, there is nothing to mark and no panel on the move.
         if !cx.has_active_drag() {
             self.drop_place = None;
+            self.panel_dragging = false;
+            self.resizing = None;
         }
         let mut mark = None;
         if let (Some(arrangement), Some(place)) = (&drawn.arrangement, &self.drop_place) {
@@ -443,6 +515,23 @@ impl Render for WindowView {
             .text_color(look.text)
             .font_family(FONT_FAMILY)
             .text_size(px(TEXT_SIZE))
+            .on_drag_move(cx.listener(|view, _: &DragMoveEvent<PanelDrag>, _, cx| {
+                if !view.panel_dragging {
+                    view.panel_dragging = true;
+                    cx.notify();
+                }
+            }))
+            .on_drag_move(
+                cx.listener(|view, event: &DragMoveEvent<ResizeDrag>, _, cx| {
+                    let drag = *event.drag(cx);
+                    let window_size = event.bounds.size;
+                    let pointer = event.event.position;
+                    if view.resize_to(&drag, pointer, window_size) {
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_drop(cx.listener(|view, _: &ResizeDrag, _, cx| view.finish_resize(cx)))
             .child(bar)
             .child(body);
         if let Some(popup) = &self.popup {
