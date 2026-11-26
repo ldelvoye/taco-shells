@@ -2,6 +2,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use gpui::{
     AnyWindowHandle, AppContext, HeadlessAppContext, Keystroke, MouseButton, MouseDownEvent,
@@ -33,6 +34,8 @@ pub enum Gesture {
     Hold(Point<Pixels>, Point<Pixels>),
     /// Keystrokes in gpui's notation, such as `cmd-a` or `enter`, or a single character to type.
     Keys(Vec<String>),
+    /// Time passing, drawn once at the end, for something that opens or moves over time.
+    Wait(Duration),
 }
 
 /// Writes the window, drawn from `fixture` in `appearance` after `gestures`, to a PNG at `out`.
@@ -107,6 +110,10 @@ fn play(cx: &mut HeadlessAppContext, window: AnyWindowHandle, gesture: &Gesture)
                 type_key(cx, window, key)?;
             }
             Ok(())
+        }
+        Gesture::Wait(time) => {
+            std::thread::sleep(*time);
+            draw(cx, window)
         }
     }
 }

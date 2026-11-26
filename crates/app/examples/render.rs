@@ -74,6 +74,10 @@ fn gesture_from(text: &str) -> Option<Gesture> {
     if kind == "key" {
         return Some(Gesture::Keys(vec![points.to_string()]));
     }
+    if kind == "wait" {
+        let millis = points.parse().ok()?;
+        return Some(Gesture::Wait(std::time::Duration::from_millis(millis)));
+    }
     match (kind, parts.as_slice()) {
         ("click", [at]) => Some(Gesture::Click(point_from(at)?)),
         ("rightclick", [at]) => Some(Gesture::RightClick(point_from(at)?)),
