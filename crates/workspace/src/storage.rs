@@ -1,12 +1,14 @@
 use std::fs;
 use std::path::PathBuf;
 
-use crate::save::{ELECTRON_VERSION, version_of};
+use crate::save::{ELECTRON_VERSION, SAVE_VERSION, read_saved, version_of};
 
 const SAVE_FILE: &str = "workspace.json";
 const TEMPORARY_FILE: &str = "workspace.json.tmp";
-/// Where the Electron app's last save is kept when the Rust app first replaces it.
+/// Where the Electron app's save is kept when the Rust app replaces it.
 pub const ELECTRON_COPY_FILE: &str = "workspace.electron.json";
+/// Where a save this build cannot read, such as one from a newer build, is kept when it is replaced.
+pub const UNREADABLE_COPY_FILE: &str = "workspace.unreadable.json";
 
 /// Where the workspace keeps what outlives a launch.
 pub trait Storage: Send {
@@ -19,6 +21,22 @@ pub trait Storage: Send {
 /// Storage in the app's config directory.
 pub struct FileStorage {
     directory: PathBuf,
+}
+
+/// The copy a file this build did not write needs before it is replaced, or none for our own save.
+fn copy_for(replaced: &[u8]) -> Option<&'static str> {
+    let Ok(text) = std::str::from_utf8(replaced) else {
+        return Some(UNREADABLE_COPY_FILE);
+    };
+    let version = version_of(text);
+    if version == Some(ELECTRON_VERSION) {
+        return Some(ELECTRON_COPY_FILE);
+    }
+    let ours = version == Some(SAVE_VERSION) && read_saved(text).is_some();
+    if ours {
+        return None;
+    }
+    Some(UNREADABLE_COPY_FILE)
 }
 
 impl FileStorage {
@@ -35,11 +53,14 @@ impl Storage for FileStorage {
 
     fn write_save(&mut self, text: &str) -> bool {
         let path = self.directory.join(SAVE_FILE);
-        if let Some(replaced) = self.read_save()
-            && version_of(&replaced) == Some(ELECTRON_VERSION)
+        if let Ok(replaced) = fs::read(&path)
+            && let Some(copy_name) = copy_for(&replaced)
         {
-            let copy = self.directory.join(ELECTRON_COPY_FILE);
-            let _ = fs::write(copy, replaced);
+            let copy = self.directory.join(copy_name);
+            // the original stays until its copy is safe
+            if fs::write(copy, &replaced).is_err() {
+                return false;
+            }
         }
         let temporary = self.directory.join(TEMPORARY_FILE);
         if fs::write(&temporary, text).is_err() {
@@ -54,28 +75,38 @@ impl Storage for FileStorage {
 mod tests {
     use super::*;
 
+    const OURS: &str = r#"{"version":2,"rows":[{}]}"#;
+
     #[test]
-    fn a_save_reads_back_and_the_electron_file_it_replaces_is_kept_beside_it() {
+    fn a_file_this_build_did_not_write_is_kept_beside_the_new_save_before_it_is_replaced() {
         let directory = tempfile::tempdir().unwrap();
+        let save = directory.path().join(SAVE_FILE);
         let mut storage = FileStorage::new(directory.path().to_path_buf());
         assert_eq!(storage.read_save(), None);
+        assert!(storage.write_save(OURS));
 
         let electron = r#"{"version":1,"groups":[]}"#;
-        fs::write(directory.path().join(SAVE_FILE), electron).unwrap();
-        storage.write_save(r#"{"version":2,"rows":[]}"#);
-        let copy = directory.path().join(ELECTRON_COPY_FILE);
-        assert_eq!(fs::read_to_string(&copy).unwrap(), electron);
+        fs::write(&save, electron).unwrap();
+        assert!(storage.write_save(OURS));
+        let electron_copy = directory.path().join(ELECTRON_COPY_FILE);
+        assert_eq!(fs::read_to_string(&electron_copy).unwrap(), electron);
+        assert_eq!(storage.read_save().as_deref(), Some(OURS));
 
-        storage.write_save(r#"{"version":2,"rows":[{}]}"#);
-        assert_eq!(
-            storage.read_save().as_deref(),
-            Some(r#"{"version":2,"rows":[{}]}"#)
-        );
-        assert_eq!(
-            fs::read_to_string(&copy).unwrap(),
-            electron,
-            "only a version 1 file is copied"
-        );
+        let unreadable_copy = directory.path().join(UNREADABLE_COPY_FILE);
+        assert!(storage.write_save(OURS));
+        assert!(!unreadable_copy.exists(), "our own save is not copied");
+        for unreadable in [r#"{"version":3,"rows":[]}"#, "not json"] {
+            fs::write(&save, unreadable).unwrap();
+            assert!(storage.write_save(OURS));
+            assert_eq!(fs::read_to_string(&unreadable_copy).unwrap(), unreadable);
+        }
+
+        // a copy that cannot be written leaves the original where it was
+        fs::write(&save, electron).unwrap();
+        fs::remove_file(&electron_copy).unwrap();
+        fs::create_dir(&electron_copy).unwrap();
+        assert!(!storage.write_save(OURS));
+        assert_eq!(fs::read_to_string(&save).unwrap(), electron);
 
         let mut gone = FileStorage::new(directory.path().join("missing"));
         assert!(!gone.write_save("{}"), "a failed write says so");
