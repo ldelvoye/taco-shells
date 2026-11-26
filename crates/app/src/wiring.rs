@@ -147,16 +147,21 @@ fn terminal_settings_of(config: &Config) -> [RuntimeCommand; 3] {
 
 /// Saves, stops the services, then the runtime. Blocks for seconds at worst: never on gpui's thread.
 pub fn shut_down(hosts: &Hosts) {
-    let saved = saved_within(&hosts.workspace, SAVE_PATIENCE);
-    if !saved {
+    let save = start_final_save(&hosts.workspace);
+    let saved_first = saved_within(&save, SAVE_PATIENCE);
+    if !saved_first {
         eprintln!("the final save had not finished; stopping the runtime anyway");
     }
     hosts.services.stop();
     hosts.runtime.stop();
+    // Stopping the runtime frees a save stuck behind it; the app must not quit before that save lands.
+    if !saved_first && !saved_within(&save, SAVE_PATIENCE) {
+        eprintln!("the final save did not finish");
+    }
 }
 
-// A save stuck behind a send to a wedged runtime would keep the runtime from ever being stopped; stopping it unblocks the save.
-fn saved_within(workspace: &WorkspaceHost, patience: Duration) -> bool {
+// A save stuck behind a send to a wedged runtime would keep the runtime from ever being stopped, so it runs on a thread of its own.
+fn start_final_save(workspace: &WorkspaceHost) -> Option<Receiver<()>> {
     let (done, finished) = bounded(1);
     let saving = workspace.clone();
     let save = move || {
@@ -165,8 +170,15 @@ fn saved_within(workspace: &WorkspaceHost, patience: Duration) -> bool {
     };
     let spawned = thread::Builder::new().name("final save".into()).spawn(save);
     if spawned.is_err() {
-        return false;
+        return None;
     }
+    Some(finished)
+}
+
+fn saved_within(save: &Option<Receiver<()>>, patience: Duration) -> bool {
+    let Some(finished) = save else {
+        return false;
+    };
     let waited = finished.recv_timeout(patience);
     waited.is_ok()
 }
