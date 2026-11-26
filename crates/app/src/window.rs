@@ -17,7 +17,7 @@ use taco_services::{AgentMenuAction, AgentSetupView};
 use taco_settings::{Binding, CommandId, command_for};
 
 use crate::activity::{ActivityInput, ActivityLog, activity_panel, now_ms};
-use crate::banners::{Banner, banner_cards};
+use crate::banners::{Dismissal, Notices, banner_cards, banners_of};
 use crate::drive::mark;
 use crate::keys::chord_of;
 use crate::link::{
@@ -25,6 +25,7 @@ use crate::link::{
     next_move,
 };
 use crate::look::{FONT_FAMILY, Look, TEXT_SIZE};
+use crate::menu::{AgentMenuClicked, Minimize, RestartToUpdate, ShowHookScripts, Zoom, set_menus};
 use crate::panels::{
     PanelDrag, ResizeDrag, docked, drop_bands, open_on, place_of, size_for_pointer,
 };
@@ -44,7 +45,7 @@ const CLOCK_TICK: Duration = Duration::from_secs(30);
 #[derive(Clone, Debug)]
 pub struct Shown {
     pub drawn: DrawnState,
-    pub banners: Vec<Banner>,
+    pub notices: Notices,
     /// Lines drawn in the middle in place of a terminal.
     pub placeholder_screen: Vec<String>,
     pub setups: AgentSetupView,
@@ -76,6 +77,7 @@ pub struct WindowView {
     _clock: Task<()>,
     /// The window's own focus, which keys reach when nothing inside it holds the keyboard.
     focus: FocusHandle,
+    dismissed: HashSet<Dismissal>,
 }
 
 /// What the window does with a reply it asked for.
@@ -95,6 +97,7 @@ impl WindowView {
         cx: &mut Context<Self>,
     ) -> Self {
         let last_move = shown.drawn.focus_count;
+        set_menus(&shown, cx);
         let following = cx.spawn(async move |this, cx| {
             let mut outputs = outputs;
             while let Some(output) = outputs.next().await {
@@ -137,6 +140,7 @@ impl WindowView {
             _following: following,
             _clock: clock,
             focus: cx.focus_handle(),
+            dismissed: HashSet::new(),
         }
     }
 
@@ -153,16 +157,53 @@ impl WindowView {
                 self.activity.apply(event);
                 cx.notify();
             }
-            WindowOutput::Services(ServicesOutput::Setups(setups)) => {
-                self.shown.setups = setups;
-                cx.notify();
-            }
-            WindowOutput::Services(ServicesOutput::Config(config)) => {
-                self.shown.bindings = config.bindings;
-            }
-            // No other service output is drawn.
-            WindowOutput::Services(_) => {}
+            WindowOutput::Services(output) => self.services_said(output, cx),
         }
+    }
+
+    fn services_said(&mut self, output: ServicesOutput, cx: &mut Context<Self>) {
+        let notices = &mut self.shown.notices;
+        match output {
+            ServicesOutput::Setups(setups) => {
+                self.shown.setups = setups;
+                set_menus(&self.shown, cx);
+            }
+            ServicesOutput::Config(config) => {
+                self.shown.bindings = config.bindings;
+                notices.config_problems = config.problems;
+            }
+            ServicesOutput::UpdateReady { version } => {
+                notices.update = Some(version);
+                notices.update_problem = None;
+                set_menus(&self.shown, cx);
+            }
+            ServicesOutput::UpdateProblem(problem) => notices.update_problem = Some(problem),
+            ServicesOutput::Problem(problem) => {
+                if !notices.problems.contains(&problem) {
+                    notices.problems.push(problem);
+                }
+            }
+            ServicesOutput::QuitForUpdate => cx.quit(),
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn apply_update(&self) {
+        self.services.apply_update();
+    }
+
+    pub(crate) fn dismiss_banner(&mut self, dismissal: Dismissal, cx: &mut Context<Self>) {
+        self.dismissed.insert(dismissal);
+        cx.notify();
+    }
+
+    fn show_hook_scripts(&self, cx: &mut Context<Self>) {
+        let directory = self.services.hooks_directory();
+        cx.reveal_path(&directory);
+    }
+
+    fn agent_menu_clicked(&self, clicked: &AgentMenuClicked) {
+        self.services.agent_action(&clicked.harness, clicked.action);
     }
 
     /// Watches the selected terminal's log while Agent Activity is open, and nothing while it is closed.
@@ -550,13 +591,14 @@ impl WindowView {
 
     fn body(&self, drawn: &DrawnState, mark: Option<&DropMark>, cx: &mut Context<Self>) -> Div {
         let look = &self.look;
+        let middle = self.middle(drawn, cx);
         let mut center = div()
             .flex()
             .flex_col()
             .flex_1()
             .min_w_0()
             .min_h_0()
-            .child(self.middle());
+            .child(middle);
         if let Some((panel, place)) = open_on(&drawn.panels, Edge::Bottom) {
             center = center.child(self.panel(panel, place, drawn, mark, cx));
         }
@@ -620,9 +662,10 @@ impl WindowView {
     }
 
     // The selected terminal, with the banners as cards over it so they never change its size.
-    fn middle(&self) -> Div {
+    fn middle(&self, drawn: &DrawnState, cx: &mut Context<Self>) -> Div {
         let look = &self.look;
-        let banners = &self.shown.banners;
+        let workspace_problem = drawn.problem.as_deref();
+        let banners = banners_of(&self.shown.notices, workspace_problem, &self.dismissed);
         let mut terminal = div()
             .relative()
             .flex_1()
@@ -631,7 +674,8 @@ impl WindowView {
             .bg(look.terminal_background)
             .child(self.placeholder());
         if !banners.is_empty() {
-            terminal = terminal.child(banner_cards(banners, look));
+            let cards = banner_cards(&banners, look, cx);
+            terminal = terminal.child(cards);
         }
         terminal = mark(terminal, MIDDLE_MARK);
         div().flex().flex_col().flex_1().min_h_0().child(terminal)
@@ -706,6 +750,15 @@ impl Render for WindowView {
             .font_family(FONT_FAMILY)
             .text_size(px(TEXT_SIZE))
             .track_focus(&self.focus)
+            .on_action(|_: &Minimize, window, _| window.minimize_window())
+            .on_action(|_: &Zoom, window, _| window.zoom_window())
+            .on_action(cx.listener(|view, _: &RestartToUpdate, _, _| view.apply_update()))
+            .on_action(cx.listener(|view, _: &ShowHookScripts, _, cx| {
+                view.show_hook_scripts(cx);
+            }))
+            .on_action(cx.listener(|view, clicked: &AgentMenuClicked, _, _| {
+                view.agent_menu_clicked(clicked);
+            }))
             .capture_key_down(cx.listener(|view, event: &KeyDownEvent, _, cx| {
                 let ran = view.key_down(event, cx);
                 if ran {

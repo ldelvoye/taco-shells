@@ -12,7 +12,7 @@ use taco_services::{AgentSetupNotice, AgentSetupNoticeKind, AgentSetupView};
 use taco_settings::{Binding, ConfigTexts, resolve_config};
 
 use crate::activity::{MS_PER_MINUTE, now_ms};
-use crate::banners::Banner;
+use crate::banners::Notices;
 use crate::window::Shown;
 
 const CLAUDE: &str = "claude";
@@ -227,18 +227,15 @@ fn mixed() -> Shown {
         selected: 0,
         tab_groups: vec![billing],
     });
-    let update = Banner {
-        text: "Taco Shells 0.27.0 is ready.".to_string(),
-        action: Some("Restart to update".to_string()),
-    };
-    let problem = Banner {
-        text: "Could not read settings.json: line 4.".to_string(),
-        action: None,
+    let notices = Notices {
+        config_problems: vec!["Could not read settings.json: line 4.".to_string()],
+        update: Some("0.27.0".to_string()),
+        ..Notices::default()
     };
     let screen = PLACEHOLDER_SCREEN.iter().map(|line| line.to_string());
     Shown {
         drawn,
-        banners: vec![update, problem],
+        notices,
         placeholder_screen: screen.collect(),
         setups: offered_setup(),
         bindings: default_bindings(),
@@ -247,14 +244,14 @@ fn mixed() -> Shown {
 
 fn quiet() -> Shown {
     let mut shown = mixed();
-    shown.banners.clear();
+    shown.notices = Notices::default();
     shown
 }
 
 fn empty() -> Shown {
     Shown {
         drawn: empty_drawn(),
-        banners: Vec::new(),
+        notices: Notices::default(),
         placeholder_screen: Vec::new(),
         setups: AgentSetupView::default(),
         bindings: default_bindings(),

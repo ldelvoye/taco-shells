@@ -2,6 +2,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use futures::channel::mpsc::unbounded;
@@ -21,6 +22,7 @@ use crate::link::{
 use crate::window::Shown;
 
 const LOG_PAGE: usize = 6;
+const CHECKOUT_HOOKS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../hooks");
 const SET_UP_TEXT: &str = "Claude Code is set up. Its activity shows here from its next session.";
 
 pub struct StandIn {
@@ -238,6 +240,14 @@ impl ServicesPort for StandIn {
         setups.notices.retain(|notice| &notice.harness != harness);
         drop(setups);
         self.publish_setups();
+    }
+
+    fn apply_update(&self) {
+        self.publish(WindowOutput::Services(ServicesOutput::QuitForUpdate));
+    }
+
+    fn hooks_directory(&self) -> PathBuf {
+        PathBuf::from(CHECKOUT_HOOKS)
     }
 }
 

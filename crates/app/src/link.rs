@@ -1,5 +1,7 @@
 //! The window's side of its contracts: requests out to the workspace, and everything sent back to the window's thread.
 
+use std::path::PathBuf;
+
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use taco_protocol::{
     ActivityEvent, ActivityRequest, DrawnState, HarnessId, RequestReply, TerminalId,
@@ -23,6 +25,8 @@ pub trait WorkspacePort {
 pub trait ServicesPort {
     fn agent_action(&self, harness: &HarnessId, action: AgentMenuAction);
     fn dismiss_notice(&self, harness: &HarnessId);
+    fn apply_update(&self);
+    fn hooks_directory(&self) -> PathBuf;
 }
 
 /// What the services send the window.

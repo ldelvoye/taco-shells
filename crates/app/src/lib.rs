@@ -8,6 +8,7 @@ mod fixture;
 mod keys;
 pub mod link;
 mod look;
+mod menu;
 mod panels;
 mod platform;
 mod popups;
@@ -24,8 +25,8 @@ mod window;
 pub mod workspace_host;
 
 use gpui::{
-    AnyWindowHandle, App, AppContext, Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions,
-    WindowAppearance, WindowBounds, WindowOptions, actions, px, size,
+    AnyWindowHandle, App, AppContext, Bounds, TitlebarOptions, WindowAppearance, WindowBounds,
+    WindowOptions, px, size,
 };
 use taco_services::APPLICATION_NAME;
 use taco_settings::Appearance;
@@ -42,8 +43,6 @@ const WINDOW_WIDTH: f32 = 1100.;
 const WINDOW_HEIGHT: f32 = 720.;
 const MIN_WINDOW_WIDTH: f32 = 520.;
 const MIN_WINDOW_HEIGHT: f32 = 320.;
-
-actions!(taco_shells, [Quit]);
 
 /// Opens the window on a fixture and runs until it closes.
 pub fn run(fixture: Fixture) {
@@ -73,11 +72,7 @@ pub fn run(fixture: Fixture) {
 }
 
 fn install_menu(cx: &mut App) {
-    cx.on_action(|_: &Quit, cx| cx.quit());
-    cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
-    let quit = MenuItem::action("Quit", Quit);
-    let app_menu = Menu::new(APPLICATION_NAME).items([quit]);
-    cx.set_menus([app_menu]);
+    menu::install(cx);
     // A terminal manager with no window has nothing left to manage.
     let quit_when_closed = cx.on_window_closed(|cx, _| {
         if cx.windows().is_empty() {
