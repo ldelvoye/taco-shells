@@ -12,8 +12,8 @@ pub const ELECTRON_COPY_FILE: &str = "workspace.electron.json";
 pub trait Storage: Send {
     /// The save file's text, or none when there is none to read.
     fn read_save(&self) -> Option<String>;
-    /// Replaces the save file. A failure is swallowed: the next save tries again.
-    fn write_save(&mut self, text: &str);
+    /// Replaces the save file, and says whether it did; the workspace tries a failed save again.
+    fn write_save(&mut self, text: &str) -> bool;
 }
 
 /// Storage in the app's config directory.
@@ -33,8 +33,7 @@ impl Storage for FileStorage {
         fs::read_to_string(path).ok()
     }
 
-    // The rename makes the write whole or nothing, so a quit mid-write never leaves half a file.
-    fn write_save(&mut self, text: &str) {
+    fn write_save(&mut self, text: &str) -> bool {
         let path = self.directory.join(SAVE_FILE);
         if let Some(replaced) = self.read_save()
             && version_of(&replaced) == Some(ELECTRON_VERSION)
@@ -43,9 +42,11 @@ impl Storage for FileStorage {
             let _ = fs::write(copy, replaced);
         }
         let temporary = self.directory.join(TEMPORARY_FILE);
-        if fs::write(&temporary, text).is_ok() {
-            let _ = fs::rename(&temporary, path);
+        if fs::write(&temporary, text).is_err() {
+            return false;
         }
+        // the rename makes the write whole or nothing, so a quit mid-write never leaves half a file
+        fs::rename(&temporary, path).is_ok()
     }
 }
 
@@ -75,6 +76,8 @@ mod tests {
             electron,
             "only a version 1 file is copied"
         );
-        assert!(!directory.path().join(TEMPORARY_FILE).exists());
+
+        let mut gone = FileStorage::new(directory.path().join("missing"));
+        assert!(!gone.write_save("{}"), "a failed write says so");
     }
 }

@@ -94,11 +94,20 @@ impl AgentSessions {
         self.by_terminal.remove(terminal);
     }
 
-    /// Forgets restored sessions whose agent never started again.
-    pub fn drop_expired(&mut self, now_ms: u64) {
+    /// When the first restored session still waiting for its start is due to be forgotten.
+    pub fn next_expiry(&self) -> Option<u64> {
+        let entries = self.by_terminal.values().flatten();
+        let seeded = entries.filter_map(|entry| entry.provisional_since);
+        let earliest = seeded.min()?;
+        Some(earliest + PROVISIONAL_MS + 1)
+    }
+
+    /// Forgets restored sessions whose agent never started again. Says whether it forgot any.
+    pub fn drop_expired(&mut self, now_ms: u64) -> bool {
         if self.frozen {
-            return;
+            return false;
         }
+        let before = self.by_terminal.values().map(Vec::len).sum::<usize>();
         for entries in self.by_terminal.values_mut() {
             entries.retain(|entry| match entry.provisional_since {
                 Some(since) => now_ms.saturating_sub(since) <= PROVISIONAL_MS,
@@ -106,6 +115,8 @@ impl AgentSessions {
             });
         }
         self.by_terminal.retain(|_, entries| !entries.is_empty());
+        let after = self.by_terminal.values().map(Vec::len).sum::<usize>();
+        after != before
     }
 
     /// Nothing changes after this: what is saved has to stay as the terminals were.
@@ -170,7 +181,12 @@ mod tests {
         assert_eq!(resumed(&sessions, &restored).as_deref(), Some("kept"));
         assert_eq!(resumed(&sessions, &never_started), None);
 
+        let seeded_late = TerminalId("late".into());
+        sessions.seed(&seeded_late, session("waiting"), PROVISIONAL_MS);
+        assert_eq!(sessions.next_expiry(), Some(2 * PROVISIONAL_MS + 1));
         sessions.freeze();
+        sessions.drop_expired(10 * PROVISIONAL_MS);
+        assert_eq!(resumed(&sessions, &seeded_late).as_deref(), Some("waiting"));
         sessions.forget(&terminal);
         sessions.record_end(&restored, &claude, "kept");
         assert_eq!(resumed(&sessions, &terminal).as_deref(), Some("after"));

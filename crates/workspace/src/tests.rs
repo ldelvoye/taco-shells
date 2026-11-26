@@ -5,6 +5,7 @@ use taco_protocol::{
 
 use std::sync::{Arc, Mutex};
 
+use crate::sessions::PROVISIONAL_MS;
 use crate::{Options, Outbound, Storage, Workspace};
 
 const SESSION: &str = "123e4567-e89b-12d3-a456-426614174000";
@@ -14,6 +15,7 @@ const SESSION: &str = "123e4567-e89b-12d3-a456-426614174000";
 struct Disk {
     file: Arc<Mutex<Option<String>>>,
     writes: Arc<Mutex<usize>>,
+    failing: Arc<Mutex<bool>>,
 }
 
 impl Disk {
@@ -30,6 +32,10 @@ impl Disk {
     fn writes(&self) -> usize {
         *self.writes.lock().unwrap()
     }
+
+    fn fail(&self, failing: bool) {
+        *self.failing.lock().unwrap() = failing;
+    }
 }
 
 impl Storage for Disk {
@@ -37,9 +43,13 @@ impl Storage for Disk {
         self.text()
     }
 
-    fn write_save(&mut self, text: &str) {
+    fn write_save(&mut self, text: &str) -> bool {
+        if *self.failing.lock().unwrap() {
+            return false;
+        }
         *self.file.lock().unwrap() = Some(text.to_string());
         *self.writes.lock().unwrap() += 1;
+        true
     }
 }
 
@@ -507,8 +517,31 @@ fn a_save_brings_back_the_same_rows_ids_groups_and_panels_and_waits_out_its_debo
     assert_eq!(workspace.next_deadline(), Some(550));
     workspace.tick(550);
     assert_eq!(disk.writes(), 1);
+    // a title is not saved, so it neither writes nor pushes a write back
+    titled(&mut workspace, "t1", "vim");
+    assert_eq!(workspace.next_deadline(), None);
     workspace.tick(10_000);
+    workspace.flush(10_000);
     assert_eq!(disk.writes(), 1);
+
+    // a failed write is tried again, and a steady stream of changes still saves within two seconds
+    disk.fail(true);
+    let resize = |size: f32| WorkspaceRequest::PanelResized {
+        panel: taco_protocol::Panel::Terminals,
+        size,
+    };
+    workspace.request(resize(200.0), 20_000);
+    workspace.tick(20_250);
+    disk.fail(false);
+    workspace.tick(21_250);
+    assert_eq!(disk.writes(), 2);
+    // a change every 200 ms for three seconds, each pushing the debounce back
+    for step in 1..=15 {
+        let now = 30_000 + step * 200;
+        workspace.request(resize(200.0 + step as f32), now);
+        workspace.tick(now);
+    }
+    assert_eq!(disk.writes(), 3, "written once by the two-second limit");
 
     let (reopened, starts) = launched(&disk);
     let ids: Vec<TerminalId> = starts.iter().map(|start| start.id.clone()).collect();
@@ -563,12 +596,36 @@ fn quitting_or_losing_the_runtime_keeps_the_open_terminals_in_the_save() {
 fn a_restored_agent_that_never_starts_again_is_forgotten_and_one_that_does_is_kept() {
     let disk = Disk::holding(ELECTRON_FILE);
     let (mut workspace, _) = launched(&disk);
+    workspace.tick(1_000);
+    let first = disk.text().unwrap();
+    assert!(
+        first.contains("223e4567"),
+        "kept while its start may still come"
+    );
+
     agent_starts(&mut workspace, "t1");
-    workspace.tick(crate::PROVISIONAL_MS + 1_000);
+    workspace.tick(2_000);
+    // nothing else changes: the expiry is a deadline of its own
+    let expiry = workspace.next_deadline().unwrap();
+    assert_eq!(expiry, PROVISIONAL_MS + 1);
+    workspace.tick(expiry);
+    let due = workspace.next_deadline().unwrap();
+    workspace.tick(due);
 
     let saved = disk.text().unwrap();
     assert!(saved.contains(SESSION), "confirmed by its start");
     assert!(!saved.contains("223e4567"), "never started again");
+}
+
+#[test]
+fn a_restore_keeps_ids_apart_and_opens_the_selected_rows_tab_group() {
+    let file = r#"{"version":2,"selected":1,"tabGroups":[{"name":"g","collapsed":true}],
+        "rows":[{"id":"a","tabGroup":0},{"id":"a","tabGroup":0},{"id":"","tabGroup":0}]}"#;
+    let (workspace, _) = launched(&Disk::holding(file));
+
+    assert_eq!(listed(&workspace), "a [t1] t2");
+    let arrangement = workspace.drawn().arrangement.unwrap();
+    assert!(!arrangement.tab_groups[0].collapsed);
 }
 
 #[test]

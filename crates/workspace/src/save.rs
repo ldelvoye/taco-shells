@@ -1,6 +1,6 @@
 use serde_json::{Map, Value, json};
 use taco_agents::{Harness, harness_of, legacy_harness};
-use taco_protocol::{HarnessId, Panels, TerminalId};
+use taco_protocol::{Panels, TerminalId};
 
 use crate::sessions::AgentSession;
 
@@ -171,10 +171,10 @@ fn read_rows(file: &Map<String, Value>) -> Option<Saved> {
     Some(saved)
 }
 
-// A file saved before agents had ids holds a Claude session under "claude".
 fn electron_pane(record: &Map<String, Value>, tab_group: Option<usize>) -> SavedRow {
     let agent = match (record.get("agent"), record.get("claude")) {
         (Some(value), _) => agent_session_from(value),
+        // a file saved before agents had ids holds a Claude session under "claude"
         (None, Some(legacy)) => agent_session_for(legacy_harness(), legacy),
         (None, None) => None,
     };
@@ -186,7 +186,7 @@ fn electron_pane(record: &Map<String, Value>, tab_group: Option<usize>) -> Saved
     }
 }
 
-/// An Electron save, each pane of a split as its own row in the order it sat, and its colors dropped.
+/// An Electron save as rows, one per split pane in order; colors are dropped.
 fn read_electron(file: &Map<String, Value>) -> Option<Saved> {
     let Value::Array(groups) = file.get("groups")? else {
         return None;
@@ -232,13 +232,14 @@ fn clamped(index: Option<usize>, length: usize) -> usize {
     }
 }
 
-/// A hand-edited file made sane: rows of an unknown tab group, and the later pieces of one split across the list, load in none; unused tab groups go.
+/// A hand-edited file made sane: rows with an unknown or scattered tab group load ungrouped, and unused tab groups are dropped.
 fn repaired(mut saved: Saved) -> Saved {
     let known = saved.tab_groups.len();
     let mut seen = Vec::new();
     let mut previous = None;
     for row in &mut saved.rows {
         if let Some(index) = row.tab_group {
+            // a tab group's rows sit together, so only its first run keeps it
             let straggler = seen.contains(&index) && previous != Some(index);
             if index >= known || straggler {
                 row.tab_group = None;
@@ -264,12 +265,6 @@ fn repaired(mut saved: Saved) -> Saved {
     }
     saved.tab_groups = kept;
     saved
-}
-
-/// The harness a saved agent names, for resuming it.
-pub fn harness_for(agent: &AgentSession) -> Option<&'static Harness> {
-    let HarnessId(name) = &agent.harness;
-    harness_of(name)
 }
 
 #[cfg(test)]
@@ -311,6 +306,9 @@ mod tests {
             }]
         );
         assert_eq!(saved.rows[2].agent.as_ref().unwrap().cwd, "/Users/me/notes");
+
+        let later_group = r#"{"version":1,"activeGroup":1,"groups":[{"panes":[{},{}]},{"panes":[{},{}],"activePane":1}]}"#;
+        assert_eq!(read_saved(later_group).unwrap().selected, 3);
     }
 
     #[test]
@@ -318,18 +316,20 @@ mod tests {
         let edited = r#"{"version":2,"selected":9,"tabGroups":[{"name":"a"},{"name":"unused"},{"name":"b"}],
             "rows":[{"tabGroup":0},{"tabGroup":2},{"tabGroup":0},{"tabGroup":7},"not a row",
             {"agent":{"harness":"claude","sessionId":"$(rm -rf /)","cwd":"/x"}},
-            {"agent":{"harness":"gone","sessionId":"123e4567-e89b-12d3-a456-426614174000","cwd":"/x"}}]}"#;
+            {"agent":{"harness":"gone","sessionId":"123e4567-e89b-12d3-a456-426614174000","cwd":"/x"}},
+            {"id":"","agent":{"harness":"claude","sessionId":"123e4567-e89b-12d3-a456-426614174000","cwd":""}}]}"#;
         let saved = read_saved(edited).unwrap();
         let groups: Vec<Option<usize>> = saved.rows.iter().map(|row| row.tab_group).collect();
-        assert_eq!(groups, vec![Some(0), Some(1), None, None, None, None]);
+        assert_eq!(groups, vec![Some(0), Some(1), None, None, None, None, None]);
         let names: Vec<&str> = saved
             .tab_groups
             .iter()
             .map(|record| record.name.as_str())
             .collect();
         assert_eq!(names, vec!["a", "b"]);
-        assert_eq!(saved.selected, 5);
+        assert_eq!(saved.selected, 6);
         assert!(saved.rows.iter().all(|row| row.agent.is_none()));
+        assert_eq!(saved.rows[6].id, None, "an empty id is minted afresh");
 
         assert_eq!(read_saved("{"), None);
         assert_eq!(read_saved(r#"{"version":3,"rows":[]}"#), None);

@@ -1,7 +1,7 @@
 use taco_agents::harness_of;
 use taco_protocol::TerminalId;
 
-use crate::sessions::AgentSessions;
+use crate::sessions::{AgentSession, AgentSessions};
 
 /// Where a new shell starts and what is typed into it.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -23,6 +23,19 @@ pub fn fork_start(sessions: &AgentSessions, source: &TerminalId, name: &str) -> 
         command: Some(command),
     };
     Some(start)
+}
+
+/// A restored agent session resumed where it runs; a plain shell there when its agent is gone or will not resume the id.
+pub fn resume_start(session: &AgentSession) -> ShellStart {
+    let command = match harness_of(&session.harness.0) {
+        Some(harness) => harness.resume_command(&session.session_id),
+        None => None,
+    };
+    ShellStart {
+        directory: Some(session.cwd.clone()),
+        directory_of: None,
+        command,
+    }
 }
 
 /// The line that opens a file in the user's editor; the shell resolves EDITOR, since a GUI launch does not have it.
