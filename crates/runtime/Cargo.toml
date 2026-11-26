@@ -13,3 +13,4 @@ path = "src/main.rs"
 taco-protocol.workspace = true
 taco-wire.workspace = true
 taco-ghostty.workspace = true
+libc.workspace = true
