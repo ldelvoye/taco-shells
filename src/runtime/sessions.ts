@@ -32,8 +32,8 @@ interface Opening {
 
 // A pty in line-buffered mode emits roughly one chunk per line: `seq 1 200000`
 // arrives as ~78,000 chunks of about 19 bytes. Emitting each one separately
-// means an IPC message and an xterm write each, and past about a million of
-// those the renderer stops keeping up and its memory climbs without bound.
+// means a message to the window and a write to a screen each, and past about a
+// million of those the window stops keeping up and its memory climbs without bound.
 // Coalescing on a short timer turns a burst into a few hundred messages a
 // second, and 5ms is well inside a frame, so an echoed keystroke still looks
 // immediate.

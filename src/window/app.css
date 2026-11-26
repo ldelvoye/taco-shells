@@ -607,9 +607,9 @@ body {
   visibility: hidden;
 }
 
-/* flex-grow carries the pane's share of the group and is set from the model. */
-/* A view takes its new size when the runtime says so, a moment after its pane
-   has changed. Until then it must not lie over the divider or the next pane. */
+/* flex-grow carries the pane's share of the group and is set from the model.
+   A view takes its new size when the runtime says so, a moment after its pane
+   has changed: until then it must not lie over the divider or the next pane. */
 .terminal-view {
   flex-basis: 0;
   flex-shrink: 1;

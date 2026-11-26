@@ -2,7 +2,7 @@ import { evaluate, type Protocol } from './connection'
 import { pollFor } from './poll'
 
 // xterm gives a lost graphics context three seconds to come back before it falls
-// back to drawing rows as elements.
+// back to drawing rows as elements. Ten covers that with room to spare.
 const FALLBACK_TIMEOUT_MS = 10000
 
 // A terminal draws on a canvas, which holds no text to read. Losing its graphics
