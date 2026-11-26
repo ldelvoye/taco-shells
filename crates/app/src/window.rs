@@ -4,19 +4,22 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use gpui::{
-    AnyElement, AppContext, Context, Div, DragMoveEvent, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Pixels, Point, Render, Size, Styled, Task, Window, div, px,
+    AnyElement, AppContext, Context, Div, DragMoveEvent, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Pixels, Point, Render, Size,
+    Styled, Task, Window, div, px,
 };
 use taco_protocol::{
-    ActivityRequest, ConfigFile, Dragged, DrawnState, DropPlace, Edge, HarnessId, Panel,
+    ActivityRequest, ConfigFile, Dragged, DrawnState, DropPlace, Edge, FocusMove, HarnessId, Panel,
     PanelPlace, RequestReply, TabGroupId, TerminalId, WorkspaceRequest,
 };
-use taco_rules::{DropMark, DropPoint, drop_for, drop_mark_for, selected_terminal};
+use taco_rules::{DropMark, DropPoint, drop_for, drop_mark_for, focus_target, selected_terminal};
 use taco_services::{AgentMenuAction, AgentSetupView};
+use taco_settings::{Binding, CommandId, command_for};
 
 use crate::activity::{ActivityInput, ActivityLog, activity_panel, now_ms};
 use crate::banners::{Banner, banner_cards};
 use crate::drive::mark;
+use crate::keys::chord_of;
 use crate::link::{
     Ahead, ServicesOutput, ServicesPort, WindowOutput, WindowReceiver, WorkspacePort, drawn_with,
     next_move,
@@ -45,6 +48,7 @@ pub struct Shown {
     /// Lines drawn in the middle in place of a terminal.
     pub placeholder_screen: Vec<String>,
     pub setups: AgentSetupView,
+    pub bindings: Vec<Binding>,
 }
 
 /// The one window's root view.
@@ -70,6 +74,8 @@ pub struct WindowView {
     awaiting: HashMap<u64, Awaited>,
     _following: Task<()>,
     _clock: Task<()>,
+    /// The window's own focus, which keys reach when nothing inside it holds the keyboard.
+    focus: FocusHandle,
 }
 
 /// What the window does with a reply it asked for.
@@ -130,6 +136,7 @@ impl WindowView {
             awaiting: HashMap::new(),
             _following: following,
             _clock: clock,
+            focus: cx.focus_handle(),
         }
     }
 
@@ -149,6 +156,9 @@ impl WindowView {
             WindowOutput::Services(ServicesOutput::Setups(setups)) => {
                 self.shown.setups = setups;
                 cx.notify();
+            }
+            WindowOutput::Services(ServicesOutput::Config(config)) => {
+                self.shown.bindings = config.bindings;
             }
             // No other service output is drawn.
             WindowOutput::Services(_) => {}
@@ -302,10 +312,77 @@ impl WindowView {
     }
 
     pub(crate) fn open_settings(&self) {
-        let request = WorkspaceRequest::OpenTerminal {
-            file: Some(ConfigFile::Settings),
-        };
+        self.open_file(ConfigFile::Settings);
+    }
+
+    fn open_file(&self, file: ConfigFile) {
+        let request = WorkspaceRequest::OpenTerminal { file: Some(file) };
         self.port.send(request, None);
+    }
+
+    /// Runs the command a key-down's chord is bound to; false when the window has nothing to run for it, so the key goes on to the terminal.
+    fn key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        // The name field keeps every key while it is open.
+        if self.popup.is_some() {
+            return false;
+        }
+        let chord = chord_of(&event.keystroke);
+        let Some(command) = command_for(&self.shown.bindings, &chord) else {
+            return false;
+        };
+        if !self.runs(command) {
+            return false;
+        }
+        if !event.is_held {
+            self.run(command, cx);
+        }
+        true
+    }
+
+    fn runs(&self, command: CommandId) -> bool {
+        matches!(
+            command,
+            CommandId::TerminalNew
+                | CommandId::TerminalClose
+                | CommandId::TerminalFocusNextGroup
+                | CommandId::TerminalFocusPreviousGroup
+                | CommandId::SidebarToggle
+                | CommandId::ConfigOpenSettings
+                | CommandId::ConfigOpenKeybindings
+        )
+    }
+
+    fn run(&mut self, command: CommandId, cx: &mut Context<Self>) {
+        match command {
+            CommandId::TerminalNew => {
+                let request = WorkspaceRequest::OpenTerminal { file: None };
+                self.port.send(request, None);
+            }
+            CommandId::TerminalClose => {
+                let drawn = self.drawn();
+                let selected = selected_terminal(drawn.arrangement.as_ref());
+                if let Some(terminal) = selected {
+                    self.close(terminal);
+                }
+            }
+            CommandId::TerminalFocusNextGroup => self.move_focus(FocusMove::NextRow, cx),
+            CommandId::TerminalFocusPreviousGroup => self.move_focus(FocusMove::PreviousRow, cx),
+            CommandId::SidebarToggle => self.toggle_panel(Panel::Terminals),
+            CommandId::ConfigOpenSettings => self.open_file(ConfigFile::Settings),
+            CommandId::ConfigOpenKeybindings => self.open_file(ConfigFile::Keybindings),
+            _ => {}
+        }
+    }
+
+    fn move_focus(&mut self, focus_move: FocusMove, cx: &mut Context<Self>) {
+        let drawn = self.drawn();
+        let Some(arrangement) = &drawn.arrangement else {
+            return;
+        };
+        let Some(target) = focus_target(arrangement, focus_move) else {
+            return;
+        };
+        self.select(&target, cx);
     }
 
     fn resize_to(
@@ -612,6 +689,11 @@ impl Render for WindowView {
         }
 
         let look = &self.look;
+        // A key pressed with nothing focused reaches no listener, so the keyboard falls back to the window.
+        let focused = window.focused(cx);
+        if focused.is_none() {
+            window.focus(&self.focus, cx);
+        }
         let full_screen = window.is_fullscreen();
         let bar = title_bar(&drawn, look, full_screen, self.traffic_lights);
         let body = self.body(&drawn, mark.as_ref(), cx);
@@ -623,6 +705,13 @@ impl Render for WindowView {
             .text_color(look.text)
             .font_family(FONT_FAMILY)
             .text_size(px(TEXT_SIZE))
+            .track_focus(&self.focus)
+            .capture_key_down(cx.listener(|view, event: &KeyDownEvent, _, cx| {
+                let ran = view.key_down(event, cx);
+                if ran {
+                    cx.stop_propagation();
+                }
+            }))
             .on_drag_move(cx.listener(|view, _: &DragMoveEvent<PanelDrag>, _, cx| {
                 if !view.panel_dragging {
                     view.panel_dragging = true;

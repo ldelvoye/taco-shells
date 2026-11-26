@@ -9,6 +9,7 @@ use taco_protocol::{
 };
 use taco_rules::default_panels;
 use taco_services::{AgentSetupNotice, AgentSetupNoticeKind, AgentSetupView};
+use taco_settings::{Binding, ConfigTexts, resolve_config};
 
 use crate::activity::{MS_PER_MINUTE, now_ms};
 use crate::banners::Banner;
@@ -240,6 +241,7 @@ fn mixed() -> Shown {
         banners: vec![update, problem],
         placeholder_screen: screen.collect(),
         setups: offered_setup(),
+        bindings: default_bindings(),
     }
 }
 
@@ -255,6 +257,7 @@ fn empty() -> Shown {
         banners: Vec::new(),
         placeholder_screen: Vec::new(),
         setups: AgentSetupView::default(),
+        bindings: default_bindings(),
     }
 }
 
@@ -291,6 +294,15 @@ fn agent_row(index: usize, state: RowState) -> AgentRow {
         has_conversation: true,
         question,
     }
+}
+
+fn default_bindings() -> Vec<Binding> {
+    let no_files = ConfigTexts {
+        settings: None,
+        keybindings: None,
+    };
+    let config = resolve_config(&no_files, false);
+    config.bindings
 }
 
 fn offered_setup() -> AgentSetupView {

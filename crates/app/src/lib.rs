@@ -5,6 +5,7 @@ mod assets;
 mod banners;
 pub mod drive;
 mod fixture;
+mod keys;
 pub mod link;
 mod look;
 mod panels;
