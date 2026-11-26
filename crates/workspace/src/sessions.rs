@@ -2,6 +2,9 @@ use std::collections::BTreeMap;
 
 use taco_protocol::{HarnessId, TerminalId};
 
+// An agent killed without its end hook leaves its session behind, so the oldest go past this many.
+const MAX_SESSIONS_PER_TERMINAL: usize = 16;
+
 /// An agent session a terminal can resume: which agent, its id, and the directory it runs in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentSession {
@@ -26,8 +29,12 @@ impl AgentSessions {
         let known = sessions.iter().any(|known| {
             known.harness == session.harness && known.session_id == session.session_id
         });
-        if !known {
-            sessions.push(session);
+        if known {
+            return;
+        }
+        sessions.push(session);
+        if sessions.len() > MAX_SESSIONS_PER_TERMINAL {
+            sessions.remove(0);
         }
     }
 
@@ -44,7 +51,7 @@ impl AgentSessions {
         }
     }
 
-    // The newest, because an older session whose agent died without an end would otherwise pin the terminal to a dead id.
+    /// The newest session; an older one may belong to an agent that died without its end hook.
     pub fn session_of(&self, terminal: &TerminalId) -> Option<&AgentSession> {
         let sessions = self.by_terminal.get(terminal)?;
         sessions.last()

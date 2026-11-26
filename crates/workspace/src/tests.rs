@@ -59,7 +59,8 @@ fn listed(workspace: &Workspace) -> String {
         }
         name
     });
-    names.collect::<Vec<_>>().join(" ")
+    let listed: Vec<String> = names.collect();
+    listed.join(" ")
 }
 
 fn ask(workspace: &mut Workspace, request: WorkspaceRequest) -> Vec<Outbound> {
@@ -150,6 +151,9 @@ fn a_terminal_opens_under_a_minted_id_and_a_config_file_opens_in_the_shells_edit
         },
     );
     assert_eq!(listed(&workspace), "t1 [t3] t2");
+    let (second, _) =
+        workspace.request(WorkspaceRequest::TabGroupCreated { terminal: id("t2") }, 0);
+    assert_eq!(second.tab_group, Some(TabGroupId("tab-group-2".into())));
 }
 
 #[test]
@@ -182,6 +186,18 @@ fn a_fork_opens_under_its_source_with_the_agents_fork_line_or_as_a_plain_shell_b
         (Some(id("t2")), None)
     );
 
+    let ends = HookCall::AgentEnd {
+        harness: claude(),
+        session_id: SESSION.into(),
+    };
+    hook(&mut workspace, "t1", ends, 0);
+    let out = ask(
+        &mut workspace,
+        WorkspaceRequest::ForkTerminal { terminal: id("t1") },
+    );
+    let after_end = &opened(&out)[0];
+    assert_eq!(after_end.command, None, "an ended session is not forked");
+
     let (reply, out) = workspace.request(
         WorkspaceRequest::ForkTerminal {
             terminal: id("gone"),
@@ -209,8 +225,25 @@ fn a_close_goes_through_the_runtime_and_the_last_exit_ends_the_app_once() {
         vec![Outbound::Runtime(RuntimeCommand::Close { id: id("t1") })]
     );
     assert_eq!(listed(&workspace), "t1 [t2]");
+    agent_starts(&mut workspace, "t1");
+    let started = RuntimeReport::Started {
+        id: id("t1"),
+        directory: "/work".into(),
+    };
+    workspace.runtime_report(started, 0);
     exited(&mut workspace, "t1");
     assert_eq!(listed(&workspace), "[t2]");
+    let drawn = workspace.drawn();
+    assert!(!drawn.agent_rows.contains_key(&id("t1")));
+    assert!(!drawn.directories.contains_key(&id("t1")));
+
+    // reports for a terminal that is not open change nothing
+    let stray = RuntimeReport::DirectoryChanged {
+        id: id("t1"),
+        directory: "/elsewhere".into(),
+    };
+    assert!(workspace.runtime_report(stray, 0).is_empty());
+    assert!(hook(&mut workspace, "t1", HookCall::FocusTab, 0).is_empty());
     let out = ask(
         &mut workspace,
         WorkspaceRequest::CloseTerminal { terminal: id("t1") },
@@ -258,6 +291,7 @@ fn attention_waits_for_the_app_to_come_back_and_a_hook_can_take_the_keyboard() {
     );
 
     hook(&mut workspace, "t1", HookCall::Attention, 0);
+    hook(&mut workspace, "t2", HookCall::Attention, 0);
     let refocus = workspace.drawn().refocus;
     workspace.app_activated(0);
     assert_eq!(listed(&workspace), "[t1] t2");
@@ -296,14 +330,27 @@ fn the_windows_focus_count_is_published_and_a_request_that_changes_nothing_publi
     );
     assert_eq!(reply.revision, published(&out).unwrap().revision);
     assert_eq!(listed(&workspace), "[t1] t2");
+
+    let late = WorkspaceRequest::FocusReported {
+        terminal: id("t2"),
+        count: 2,
+    };
+    ask(&mut workspace, late);
+    assert_eq!(
+        workspace.drawn().focus_count,
+        4,
+        "a late report never lowers the count"
+    );
 }
 
 #[test]
 fn a_title_is_read_by_the_rows_agent_and_read_again_once_the_agent_starts() {
     let mut workspace = workspace();
     titled(&mut workspace, "t1", "✳ Tacos");
-    let title =
-        |workspace: &Workspace| workspace.drawn().arrangement.unwrap().rows[0].title.clone();
+    let title = |workspace: &Workspace| {
+        let arrangement = workspace.drawn().arrangement.unwrap();
+        arrangement.rows[0].title.clone()
+    };
     assert_eq!(title(&workspace), "✳ Tacos");
 
     agent_starts(&mut workspace, "t1");

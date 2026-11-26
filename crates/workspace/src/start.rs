@@ -7,33 +7,35 @@ use crate::sessions::AgentSessions;
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct ShellStart {
     pub directory: Option<String>,
+    /// A terminal whose directory to start in, read by the runtime when the shell starts; used only without `directory`.
     pub directory_of: Option<TerminalId>,
     pub command: Option<String>,
 }
 
-/// A fork of a terminal's agent session where that session lives, or a plain shell in the source's directory when it cannot fork.
+/// A fork of the terminal's agent session, or a plain shell beside it when it has none to fork.
 pub fn fork_start(sessions: &AgentSessions, source: &TerminalId, name: &str) -> ShellStart {
-    let plain = ShellStart {
+    let beside_source = ShellStart {
         directory_of: Some(source.clone()),
         ..ShellStart::default()
     };
     let Some(session) = sessions.session_of(source) else {
-        return plain;
+        return beside_source;
     };
     let Some(harness) = harness_of(&session.harness.0) else {
-        return plain;
+        return beside_source;
     };
-    let Some(command) = harness.fork_command(&session.session_id, name) else {
-        return plain;
-    };
+    if !harness.forks() {
+        return beside_source;
+    }
+    // an id the agent will not fork still names where its session runs
     ShellStart {
         directory: Some(session.cwd.clone()),
         directory_of: None,
-        command: Some(command),
+        command: harness.fork_command(&session.session_id, name),
     }
 }
 
-// The shell resolves EDITOR, not the app: a GUI launch does not have it, since it is set in the files an interactive shell reads.
+/// The line that opens a file in the user's editor; the shell resolves EDITOR, since a GUI launch does not have it.
 pub fn editor_command(path: &str) -> String {
     let quoted = path.replace('\'', "'\\''");
     format!("${{EDITOR:-vi}} '{quoted}'\n")
