@@ -45,7 +45,7 @@ jobs:
 
       - run: cargo test --workspace --locked --no-run
 
-      # TASKS.md holds the whole run under about 10 s once compiled. Twice that
+      # The whole run is meant to stay under about 10 s once compiled. Twice that
       # fails, which catches a test that sleeps or starts something, not a slow runner.
       - name: cargo test, within 20 s
         run: |
