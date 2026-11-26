@@ -176,13 +176,13 @@ The two runs at the new commit:
 
 ### After the runtime kept every screen
 
-One run on 2026-11-26, same machine and settings, at the commit that added `src/runtime/screens.ts`. The runtime now holds a screen for every terminal and the window still holds a view for every terminal, so each terminal's contents are in memory twice. The step that follows removes the window's copy for terminals that are not on screen.
+One run on 2026-11-25, same machine and settings, at the commit that added `src/runtime/screens.ts`. At that commit the runtime holds a screen for every terminal and the window holds a view for every terminal. The comparisons below are with the two runs in the section above.
 
 What it shows:
 
-- **Every scrollback is held twice.** After the scrollback fill the runtime holds 1,868 MB and the window 1,779 MB, and all processes together 3,918 MB, against about 2,800 MB in the two runs above.
-- **The runtime slows a shell that prints faster than it can read.** Output reached the window at 55 MB/s, against about 90 MB/s in the two runs above. The backlog after printing stopped is 7 ms, against 59 and 112 ms.
-- **Typing while four terminals print is close to typing when nothing prints**: 11 ms at the median and 20 ms at the 95th percentile, against about 100 and 115 ms in the two runs above. The frame gap while printing is 4.2 ms at the median, against 41.7 ms. One run, and the first run before the core rip out shows how much these rows move with the output rate, so read this as a direction and not as a size.
+- **The runtime holds about as much as the window.** After the scrollback fill the runtime is at 1,868 MB and the window at 1,779 MB, and all processes together at 3,918 MB, against about 2,800 MB.
+- **Less output reaches the window**: 55 MB/s, against about 90 MB/s. The backlog after printing stopped is 7 ms, against 59 and 112 ms. This commit pauses a shell while more than a million characters of its output wait to be parsed, which is the likely cause; the run does not measure the pauses.
+- **Typing while four terminals print is close to typing when nothing prints**: 11 ms at the median and 20 ms at the 95th percentile, against about 100 and 115 ms. The frame gap while printing is 4.2 ms at the median, against 41.7 ms. This is one run, and these rows move with the output rate, so read it as a direction and not as a size.
 - Switching and the 8 lost graphics contexts are as before.
 
 | Measure | One run |
