@@ -1,11 +1,15 @@
-//! The window's macOS chrome: the traffic lights, and the name it gives this machine.
+//! The window's macOS chrome: the traffic lights, the name it gives this machine, and keeping out of sight when asked.
 
-use gpui::{Pixels, Point, point, px};
+use gpui::{ActivationPolicy, App, Pixels, Point, point, px};
 
 use crate::look::TITLE_BAR_HEIGHT;
 
 /// The machine a local terminal runs on, as the title bar names it.
 pub const THIS_MACHINE: &str = "this Mac";
+
+/// Set to `1`, the app runs with its window never shown and no Dock icon, so it never takes anyone's focus.
+pub const BACKGROUND_WINDOW_VARIABLE: &str = "TACO_SHELLS_BACKGROUND_WINDOW";
+const BACKGROUND_WINDOW_ON: &str = "1";
 
 // Where macOS draws the three traffic lights, which the title bar leaves room for.
 const TRAFFIC_LIGHT_INSET: f32 = 14.;
@@ -19,6 +23,18 @@ pub const TRAFFIC_LIGHT_DIAMETER: f32 = TRAFFIC_LIGHT_HEIGHT - 2.;
 pub enum TrafficLights {
     Native,
     StandIns,
+}
+
+pub fn is_background_window() -> bool {
+    let Some(value) = std::env::var_os(BACKGROUND_WINDOW_VARIABLE) else {
+        return false;
+    };
+    value == BACKGROUND_WINDOW_ON
+}
+
+/// Takes the app out of the Dock and the app switcher.
+pub fn keep_out_of_the_dock(cx: &mut App) {
+    cx.set_activation_policy(ActivationPolicy::Accessory);
 }
 
 pub fn traffic_light_position() -> Point<Pixels> {
