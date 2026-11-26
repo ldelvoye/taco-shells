@@ -1,6 +1,6 @@
 import type { WallConfig } from './check'
 
-// What each part of the app may import. A line added here widens a wall for good: prefer a hole in holes.ts, which has to name the milestone that closes it.
+// What each part of the app may import. A line added here widens a wall for good.
 // An area is a package's folder or a part of one, and a file belongs to the area with the longest folder that holds it. app and window have no alias, so nothing outside them may import them; the one exception is the window's terminal engine, which the conformance suite reads.
 export const WALLS: WallConfig = {
   root: 'src/',
