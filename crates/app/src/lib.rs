@@ -17,7 +17,6 @@ mod strip;
 mod terminal_list;
 mod text_field;
 mod title_bar;
-mod trial;
 mod window;
 pub mod workspace_host;
 
@@ -29,7 +28,6 @@ use taco_services::APPLICATION_NAME;
 use taco_settings::Appearance;
 
 pub use fixture::Fixture;
-pub use trial::{BannerLayout, PlusPlace, Trial};
 
 use crate::assets::{Assets, load_fonts};
 use crate::look::Look;
@@ -116,9 +114,8 @@ fn open_window(fixture: Fixture, background: bool, cx: &mut App) -> Option<AnyWi
                     cx.notify();
                 });
             follow.detach();
-            let trial = Trial::default();
             let lights = TrafficLights::Native;
-            WindowView::new(shown, look, trial, lights, port, outputs, cx)
+            WindowView::new(shown, look, lights, port, outputs, cx)
         })
     });
     match opened {

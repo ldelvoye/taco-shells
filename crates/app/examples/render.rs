@@ -1,24 +1,23 @@
-//! `cargo run -p taco-app --features render --example render -- <mixed|quiet|empty> <light|dark> <out.png> [choice or gesture]...`
+//! `cargo run -p taco-app --features render --example render -- <mixed|quiet|empty> <light|dark> <out.png> [gesture]...`
 //!
-//! Choices: `cards`, `strips`, `title`, `head`, `foot`. Gestures, in window points, played in order:
-//! `click:X,Y`, `rightclick:X,Y`, `drag:X,Y:X,Y`, `hold:X,Y:X,Y` for a drag still under way when the
-//! window is drawn, `type:TEXT` to type each character, and `key:NAME` for one keystroke such as `enter`.
+//! Gestures, in window points, played in order: `click:X,Y`, `rightclick:X,Y`, `drag:X,Y:X,Y`,
+//! `hold:X,Y:X,Y` for a drag still under way when the window is drawn, `type:TEXT` to type each
+//! character, and `key:NAME` for one keystroke such as `enter`.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use gpui::{Pixels, Point, point, px};
+use taco_app::Fixture;
 use taco_app::render::{Gesture, render_png};
-use taco_app::{BannerLayout, Fixture, PlusPlace, Trial};
 use taco_settings::Appearance;
 
-const USAGE: &str = "usage: render <mixed|quiet|empty> <light|dark> <out.png> [cards|strips|title|head|foot|click:X,Y|rightclick:X,Y|drag:X,Y:X,Y|hold:X,Y:X,Y|type:TEXT|key:NAME]...";
+const USAGE: &str = "usage: render <mixed|quiet|empty> <light|dark> <out.png> [click:X,Y|rightclick:X,Y|drag:X,Y:X,Y|hold:X,Y:X,Y|type:TEXT|key:NAME]...";
 
 struct Request {
     fixture: Fixture,
     appearance: Appearance,
     out: PathBuf,
-    trial: Trial,
     gestures: Vec<Gesture>,
 }
 
@@ -31,7 +30,6 @@ fn main() -> ExitCode {
     let rendered = render_png(
         request.fixture,
         request.appearance,
-        request.trial,
         &request.gestures,
         &request.out,
     );
@@ -53,23 +51,14 @@ fn parsed(arguments: &[String]) -> Option<Request> {
         "dark" => Appearance::Dark,
         _ => return None,
     };
-    let mut trial = Trial::default();
     let mut gestures = Vec::new();
     for extra in extras {
-        match extra.as_str() {
-            "cards" => trial.banners = BannerLayout::Cards,
-            "strips" => trial.banners = BannerLayout::Strips,
-            "title" => trial.plus = PlusPlace::Title,
-            "head" => trial.plus = PlusPlace::Head,
-            "foot" => trial.plus = PlusPlace::Foot,
-            gesture => gestures.push(gesture_from(gesture)?),
-        }
+        gestures.push(gesture_from(extra)?);
     }
     let request = Request {
         fixture,
         appearance,
         out: PathBuf::from(out),
-        trial,
         gestures,
     };
     Some(request)

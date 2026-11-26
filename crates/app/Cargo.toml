@@ -40,6 +40,7 @@ crossbeam-channel.workspace = true
 uuid.workspace = true
 taco-wire.workspace = true
 libc.workspace = true
+unicode-segmentation.workspace = true
 image = { workspace = true, optional = true }
 taco-drive = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }

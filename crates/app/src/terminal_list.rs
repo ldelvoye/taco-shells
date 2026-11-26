@@ -14,7 +14,6 @@ use taco_rules::{DropMark, DropPoint, MarkEdge, MarkTarget, summary_state};
 use crate::assets::{DONE_ICON, PLUS_ICON, TRASH_ICON, WORKING_ICON};
 use crate::drive;
 use crate::look::{FONT_FAMILY, Look, MARK_SIZE, ROW_HEIGHT, ROW_RADIUS, TEXT_SIZE, TRAY_RADIUS};
-use crate::trial::PlusPlace;
 use crate::window::WindowView;
 
 const UNTITLED_ROW: &str = "Terminal";
@@ -48,7 +47,6 @@ pub struct ListInput<'a> {
     pub drawn: &'a DrawnState,
     pub mark: Option<&'a DropMark>,
     pub look: &'a Look,
-    pub plus: PlusPlace,
 }
 
 impl Render for DragPreview {
@@ -89,16 +87,11 @@ pub fn terminal_list(input: &ListInput, cx: &mut Context<WindowView>) -> Statefu
                 return;
             }
             view.leave_list(cx);
-        }));
-    if input.plus == PlusPlace::Head {
-        list = list.child(new_terminal_row(look, cx));
-    }
+        }))
+        .child(new_terminal_row(look, cx));
     if let Some(arrangement) = &input.drawn.arrangement {
         let entries = entries_of(arrangement, input, cx);
         list = list.children(entries);
-    }
-    if input.plus == PlusPlace::Foot {
-        list = list.child(new_terminal_row(look, cx));
     }
     let end = div()
         .id(LIST_END_ID)

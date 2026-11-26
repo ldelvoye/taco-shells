@@ -15,7 +15,6 @@ use crate::look::Look;
 use crate::platform::TrafficLights;
 use crate::stand_in::StandIn;
 use crate::text_field;
-use crate::trial::Trial;
 use crate::window::WindowView;
 use crate::{WINDOW_HEIGHT, WINDOW_WIDTH};
 
@@ -40,7 +39,6 @@ pub enum Gesture {
 pub fn render_png(
     fixture: Fixture,
     appearance: Appearance,
-    trial: Trial,
     gestures: &[Gesture],
     out: &Path,
 ) -> Result<()> {
@@ -60,7 +58,7 @@ pub fn render_png(
         let look = Look::new(appearance);
         let (port, outputs) = StandIn::start(shown.drawn.clone());
         let lights = TrafficLights::StandIns;
-        cx.new(|cx| WindowView::new(shown, look, trial, lights, port, outputs, cx))
+        cx.new(|cx| WindowView::new(shown, look, lights, port, outputs, cx))
     })?;
     let any_window = window.into();
     draw(&mut cx, any_window)?;
