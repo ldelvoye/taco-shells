@@ -12,27 +12,17 @@ pub struct ShellStart {
     pub command: Option<String>,
 }
 
-/// A fork of the terminal's agent session, or a plain shell beside it when it has none to fork.
-pub fn fork_start(sessions: &AgentSessions, source: &TerminalId, name: &str) -> ShellStart {
-    let beside_source = ShellStart {
-        directory_of: Some(source.clone()),
-        ..ShellStart::default()
-    };
-    let Some(session) = sessions.session_of(source) else {
-        return beside_source;
-    };
-    let Some(harness) = harness_of(&session.harness.0) else {
-        return beside_source;
-    };
-    if !harness.forks() {
-        return beside_source;
-    }
-    // an id the agent will not fork still names where its session runs
-    ShellStart {
+/// A fork of the terminal's newest agent session, in that session's directory, or none when it has no session the agent forks.
+pub fn fork_start(sessions: &AgentSessions, source: &TerminalId, name: &str) -> Option<ShellStart> {
+    let session = sessions.session_of(source)?;
+    let harness = harness_of(&session.harness.0)?;
+    let command = harness.fork_command(&session.session_id, name)?;
+    let start = ShellStart {
         directory: Some(session.cwd.clone()),
         directory_of: None,
-        command: harness.fork_command(&session.session_id, name),
-    }
+        command: Some(command),
+    };
+    Some(start)
 }
 
 /// The line that opens a file in the user's editor; the shell resolves EDITOR, since a GUI launch does not have it.
