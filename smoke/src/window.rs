@@ -22,6 +22,19 @@ const FIXED_PARTS: [&str; 6] = [
 ];
 const UNKNOWN_PART: &str = "row:no-such-terminal";
 const RIGHT_EDGE_INSET: f32 = 20.;
+const SHELL_DEADLINE: Duration = Duration::from_secs(15);
+const SHELL_POLL: Duration = Duration::from_millis(50);
+// The command holds `$((6*7))`, so the line `smoke-42` can only be the shell's answer, never the typed echo.
+const TYPED_COMMAND: &str = "echo smoke-$((6*7))";
+const TYPED_ANSWER: &str = "smoke-42";
+const NEXT_ROW: &str = "cmd-shift-]";
+const PREVIOUS_ROW: &str = "cmd-shift-[";
+// Nothing in the app binds ctrl-u, so the shell gets it and erases the line typed before it.
+const UNBOUND_CHORD: &str = "ctrl-u";
+const ERASED_TEXT: &str = "echo garbage";
+const CHORD_COMMAND: &str = "echo chord-$((3+3))";
+const CHORD_ANSWER: &str = "chord-6";
+const SECOND_RUN_WINDOW: Duration = Duration::from_millis(300);
 const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
 const PNG_HEADER_LENGTH: usize = 24;
 
@@ -119,6 +132,69 @@ pub fn a_dragged_panel_moves_to_the_edge_it_is_dropped_on(
     Ok(())
 }
 
+pub fn a_typed_command_is_answered_on_screen(_: &Smoke, driver: &mut Driver) -> Result<(), String> {
+    let state = drawn(driver)?;
+    let Some(arrangement) = &state.arrangement else {
+        return Err("the window drew no rows".to_string());
+    };
+    let Some(row) = arrangement.rows.get(arrangement.selected) else {
+        return Err("no row is selected".to_string());
+    };
+    let terminal = row.terminal.clone();
+
+    shown_lines(driver, &terminal, |lines| {
+        lines.iter().any(|line| !line.is_empty())
+    })?;
+    driver.text(TYPED_COMMAND)?;
+    driver.keys(&["enter"])?;
+    shown_lines(driver, &terminal, |lines| {
+        lines.iter().any(|line| line == TYPED_ANSWER)
+    })?;
+    Ok(())
+}
+
+/// A bound chord runs its command once and types nothing; an unbound one reaches the shell. If either bracket chord
+/// leaked its character, or ctrl-u never arrived, the shell would not answer `chord-6` on a line of its own.
+pub fn chords_reach_their_command_or_the_shell(
+    _: &Smoke,
+    driver: &mut Driver,
+) -> Result<(), String> {
+    let state = drawn(driver)?;
+    let Some(arrangement) = &state.arrangement else {
+        return Err("the window drew no rows".to_string());
+    };
+    let count = arrangement.rows.len();
+    if count < 2 {
+        return Err(format!("the list has {count} rows, two are needed"));
+    }
+    let start = arrangement.selected;
+    let terminal = arrangement.rows[start].terminal.clone();
+    let next = (start + 1) % count;
+
+    driver.text(ERASED_TEXT)?;
+    driver.keys(&[UNBOUND_CHORD])?;
+
+    driver.keys(&[NEXT_ROW])?;
+    selected_becomes(driver, next)?;
+    thread::sleep(SECOND_RUN_WINDOW);
+    let after = drawn(driver)?;
+    let still = selected_index(&after);
+    if still != Some(next) {
+        return Err(format!(
+            "{NEXT_ROW} moved the selection more than one row: {still:?}"
+        ));
+    }
+
+    driver.keys(&[PREVIOUS_ROW])?;
+    selected_becomes(driver, start)?;
+
+    driver.text(CHORD_COMMAND)?;
+    driver.keys(&["enter"])?;
+    shown_lines(driver, &terminal, |lines| {
+        lines.iter().any(|line| line == CHORD_ANSWER)
+    })
+}
+
 pub fn draws_in_light_and_dark(smoke: &Smoke, driver: &mut Driver) -> Result<(), String> {
     let Some(work) = smoke.config.parent() else {
         return Err(format!("{} has no parent folder", smoke.config.display()));
@@ -182,6 +258,57 @@ fn settled(driver: &mut Driver, revision: u64) -> Result<DrawnState, String> {
             ));
         }
         thread::sleep(SETTLE_POLL);
+    }
+}
+
+fn selected_index(state: &DrawnState) -> Option<usize> {
+    let arrangement = state.arrangement.as_ref()?;
+    Some(arrangement.selected)
+}
+
+fn selected_becomes(driver: &mut Driver, wanted: usize) -> Result<(), String> {
+    let started = Instant::now();
+    loop {
+        let state = drawn(driver)?;
+        let selected = selected_index(&state);
+        if selected == Some(wanted) {
+            return Ok(());
+        }
+        if started.elapsed() >= SETTLE_DEADLINE {
+            return Err(format!("the selection is {selected:?}, not row {wanted}"));
+        }
+        thread::sleep(SETTLE_POLL);
+    }
+}
+
+fn shown_lines(
+    driver: &mut Driver,
+    terminal: &TerminalId,
+    wanted: impl Fn(&[String]) -> bool,
+) -> Result<(), String> {
+    let started = Instant::now();
+    let mut last = None;
+    loop {
+        let lines = driver.screen_text(terminal)?;
+        if let Some(lines) = &lines
+            && wanted(lines)
+        {
+            return Ok(());
+        }
+        if lines.is_some() {
+            last = lines;
+        }
+        if started.elapsed() >= SHELL_DEADLINE {
+            let seen = match last {
+                Some(lines) => lines.join(" | "),
+                None => "no view".to_string(),
+            };
+            return Err(format!(
+                "terminal {} after {SHELL_DEADLINE:?}: {seen}",
+                terminal.0
+            ));
+        }
+        thread::sleep(SHELL_POLL);
     }
 }
 

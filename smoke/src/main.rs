@@ -19,10 +19,18 @@ const BEFORE_LAUNCH: [Check; 1] = [Check {
     run: bundle::holds_only_dev_names,
 }];
 
-const LAUNCHED: [LaunchedCheck; 5] = [
+const LAUNCHED: [LaunchedCheck; 7] = [
     LaunchedCheck {
         name: "the window draws rows",
         run: window::draws_rows,
+    },
+    LaunchedCheck {
+        name: "a command typed into the terminal is answered on screen",
+        run: window::a_typed_command_is_answered_on_screen,
+    },
+    LaunchedCheck {
+        name: "a bound chord runs its command once and types nothing; an unbound one reaches the shell",
+        run: window::chords_reach_their_command_or_the_shell,
     },
     LaunchedCheck {
         name: "every marked part of the window has bounds, and nothing else does",
