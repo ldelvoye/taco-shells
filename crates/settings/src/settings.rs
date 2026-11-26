@@ -91,6 +91,17 @@ impl Default for Settings {
     }
 }
 
+// A whole number is written as one ("fontSize": 20), the way a person writes it, not as 20.0.
+fn number_value(number: f64) -> Value {
+    let is_whole = number.is_finite() && number.fract() == 0.0;
+    let fits = number.abs() < 9_007_199_254_740_992.0;
+    if is_whole && fits {
+        let whole = number as i64;
+        return Value::from(whole);
+    }
+    Value::from(number)
+}
+
 impl SettingChange {
     pub fn key(&self) -> &'static str {
         match self {
@@ -118,9 +129,9 @@ impl SettingChange {
                 Value::from(text)
             }
             SettingChange::FontFamily(family) => Value::from(family.as_str()),
-            SettingChange::FontSize(size) => Value::from(*size),
+            SettingChange::FontSize(size) => number_value(*size),
             SettingChange::Scrollback(lines) => Value::from(*lines),
-            SettingChange::ScrollSensitivity(sensitivity) => Value::from(*sensitivity),
+            SettingChange::ScrollSensitivity(sensitivity) => number_value(*sensitivity),
             SettingChange::CursorBlink(on) => Value::from(*on),
             SettingChange::CursorStyle(style) => {
                 let text = match style {
@@ -428,6 +439,11 @@ mod tests {
             Ok(())
         );
         assert_eq!(SettingChange::Theme(ThemeChoice::Dark).check(), Ok(()));
+
+        let whole = SettingChange::FontSize(20.0).value();
+        assert_eq!(whole.to_string(), "20");
+        let fraction = SettingChange::FontSize(12.5).value();
+        assert_eq!(fraction.to_string(), "12.5");
         assert!(SettingChange::FontFamily(String::new()).check().is_err());
 
         let base = Settings::default();
