@@ -7,3 +7,5 @@ publish.workspace = true
 
 [dependencies]
 taco-protocol.workspace = true
+serde_json.workspace = true
+jsonc-parser.workspace = true

@@ -20,6 +20,9 @@ taco-terminal-view = { path = "crates/terminal-view" }
 taco-app = { path = "crates/app" }
 
 serde = { version = "1", features = ["derive"] }
+# preserve_order: key bindings layer, and problems are listed, in the order the user's file has them.
+serde_json = { version = "1", features = ["preserve_order"] }
+jsonc-parser = { version = "0.34", features = ["serde"] }
 
 # Debug info is most of a gpui build's size and link time; line tables keep backtraces readable.
 [profile.dev]
