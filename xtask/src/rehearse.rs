@@ -1,6 +1,6 @@
 use std::ffi::OsStr;
 use std::fs::{self, File};
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, IsTerminal, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -23,6 +23,7 @@ const READY_TIMEOUT: Duration = Duration::from_secs(120);
 const READY_POLL: Duration = Duration::from_millis(500);
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 const RUST_EXECUTABLE: &str = "Contents/MacOS/taco-shells";
+const NOT_A_TERMINAL: &str = "the click-through waits for you to press Enter, and this has no terminal to read it from; run it in a terminal window, or use --until-ready";
 
 pub struct Options {
     pub electron: Option<PathBuf>,
@@ -41,6 +42,10 @@ struct Rehearsal {
 }
 
 pub fn run(options: &Options) -> Result<(), String> {
+    let stdin_is_a_terminal = io::stdin().is_terminal();
+    if !options.until_ready && !stdin_is_a_terminal {
+        return Err(NOT_A_TERMINAL.to_string());
+    }
     let electron = check_electron(&options.electron)?;
 
     let target = repo::target_dir()?;
@@ -319,6 +324,12 @@ fn run_click_through(electron: &ElectronApp, rehearsal: &Rehearsal) -> Result<()
     println!("Press Enter here once you have looked.");
     let mut answer = String::new();
     let read = io::stdin().read_line(&mut answer);
+    let answered = matches!(read, Ok(count) if count > 0);
+    if !answered {
+        return Err(format!(
+            "no answer came: {REHEARSAL_APP} and the Electron copy are left as they are; quit the app and delete it by hand"
+        ));
+    }
 
     let electron_still_running = matches!(child.try_wait(), Ok(None));
     if electron_still_running {
@@ -335,10 +346,6 @@ fn run_click_through(electron: &ElectronApp, rehearsal: &Rehearsal) -> Result<()
         Ok(false) => remove_rehearsal_app(),
         Ok(true) => println!("{REHEARSAL_APP} is still running. Quit it, then delete it."),
         Err(error) => println!("{error}; delete {REHEARSAL_APP} by hand once it has quit."),
-    }
-
-    if let Err(error) = read {
-        return Err(format!("could not read from stdin: {error}"));
     }
     Ok(())
 }
