@@ -5,7 +5,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use taco_drive::{Appearance, Point, Rect};
-use taco_protocol::{DrawnState, TerminalId};
+use taco_protocol::{DrawnState, Edge, TerminalId};
 use taco_smoke::driver::Driver;
 
 use crate::Smoke;
@@ -21,6 +21,7 @@ const FIXED_PARTS: [&str; 6] = [
     "panel:terminals:title",
 ];
 const UNKNOWN_PART: &str = "row:no-such-terminal";
+const RIGHT_EDGE_INSET: f32 = 20.;
 const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
 const PNG_HEADER_LENGTH: usize = 24;
 
@@ -78,6 +79,42 @@ pub fn a_dragged_row_moves(_: &Smoke, driver: &mut Driver) -> Result<(), String>
             "{} is still the first row after the drag",
             dragged.0
         ));
+    }
+    Ok(())
+}
+
+pub fn a_dragged_panel_moves_to_the_edge_it_is_dropped_on(
+    _: &Smoke,
+    driver: &mut Driver,
+) -> Result<(), String> {
+    let before = drawn(driver)?;
+    if before.panels.terminals.edge == Edge::Right {
+        return Err("the Terminals panel already starts on the right".to_string());
+    }
+    let title = required(driver, "panel:terminals:title")?;
+    let middle = required(driver, "middle")?;
+    let right_of_window = match driver.bounds("panel:agent_activity")? {
+        Some(activity) => activity.origin.x + activity.width,
+        None => middle.origin.x + middle.width,
+    };
+    let from = center(&title);
+    let to = Point {
+        x: right_of_window - RIGHT_EDGE_INSET,
+        y: middle.origin.y + middle.height / 2.,
+    };
+    driver.drag(from, to)?;
+
+    let after = settled(driver, before.revision)?;
+    if after.panels.terminals.edge != Edge::Right {
+        return Err(format!(
+            "the Terminals panel is on {:?} after a drop on the right edge",
+            after.panels.terminals.edge
+        ));
+    }
+    let panel = required(driver, "panel:terminals")?;
+    let moved_middle = required(driver, "middle")?;
+    if panel.origin.x <= moved_middle.origin.x {
+        return Err("the Terminals panel is on the right but drawn left of the middle".to_string());
     }
     Ok(())
 }

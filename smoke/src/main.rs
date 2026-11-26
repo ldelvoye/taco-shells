@@ -19,7 +19,7 @@ const BEFORE_LAUNCH: [Check; 1] = [Check {
     run: bundle::holds_only_dev_names,
 }];
 
-const LAUNCHED: [LaunchedCheck; 4] = [
+const LAUNCHED: [LaunchedCheck; 5] = [
     LaunchedCheck {
         name: "the window draws rows",
         run: window::draws_rows,
@@ -31,6 +31,10 @@ const LAUNCHED: [LaunchedCheck; 4] = [
     LaunchedCheck {
         name: "a row dragged down the list moves",
         run: window::a_dragged_row_moves,
+    },
+    LaunchedCheck {
+        name: "a panel dragged to the right edge moves there",
+        run: window::a_dragged_panel_moves_to_the_edge_it_is_dropped_on,
     },
     LaunchedCheck {
         name: "the window draws in light and in dark",
