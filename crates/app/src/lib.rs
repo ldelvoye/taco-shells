@@ -43,13 +43,19 @@ actions!(taco_shells, [Quit]);
 pub fn run(fixture: Fixture) {
     let assets = Assets::for_this_build();
     let application = gpui_platform::application().with_assets(assets);
+    let background = platform::is_background_window();
     application.run(move |cx: &mut App| {
+        if background {
+            platform::keep_out_of_the_dock(cx);
+        }
         if let Err(error) = load_fonts(cx) {
             eprintln!("the window's fonts did not load: {error:#}");
         }
         install_menu(cx);
-        open_window(fixture, cx);
-        cx.activate(true);
+        open_window(fixture, background, cx);
+        if !background {
+            cx.activate(true);
+        }
     });
 }
 
@@ -68,7 +74,7 @@ fn install_menu(cx: &mut App) {
     quit_when_closed.detach();
 }
 
-fn open_window(fixture: Fixture, cx: &mut App) {
+fn open_window(fixture: Fixture, background: bool, cx: &mut App) {
     let window_size = size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT));
     let bounds = Bounds::centered(None, window_size, cx);
     let titlebar = TitlebarOptions {
@@ -81,6 +87,8 @@ fn open_window(fixture: Fixture, cx: &mut App) {
         titlebar: Some(titlebar),
         window_min_size: Some(size(px(MIN_WINDOW_WIDTH), px(MIN_WINDOW_HEIGHT))),
         app_owns_titlebar_drag: true,
+        focus: !background,
+        show: !background,
         ..Default::default()
     };
     let opened = cx.open_window(options, |window, cx| {
