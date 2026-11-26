@@ -839,4 +839,12 @@ fn a_log_whose_terminal_is_gone_at_launch_is_removed_once_the_restore_has_succee
 
     launched(&disk);
     assert_eq!(disk.logs(), vec![id("t1")]);
+
+    // with the restore turned off, no earlier terminal can come back, so none keeps its log
+    let mut fresh = Workspace::new(Options {
+        restore_on_launch: false,
+        ..options_on(&disk, 100)
+    });
+    fresh.start(0);
+    assert!(disk.logs().is_empty());
 }

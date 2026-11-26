@@ -16,6 +16,10 @@ pub const UNREADABLE_COPY_FILE: &str = "workspace.unreadable.json";
 pub const ACTIVITY_DIRECTORY: &str = "activity";
 const LOG_SUFFIX: &str = ".jsonl";
 const LOG_TEMPORARY_EXTENSION: &str = "jsonl.tmp";
+#[cfg(unix)]
+const PRIVATE_FILE_MODE: u32 = 0o600;
+#[cfg(unix)]
+const PRIVATE_FOLDER_MODE: u32 = 0o700;
 
 /// Where the workspace keeps what outlives a launch.
 pub trait Storage: Send {
@@ -49,6 +53,28 @@ fn log_file_name(terminal: &TerminalId) -> Option<String> {
         return None;
     }
     Some(format!("{id}{LOG_SUFFIX}"))
+}
+
+// A log holds what the user typed to an agent and the commands it ran, so on Unix only their own account can read it.
+fn private_file() -> OpenOptions {
+    let mut options = OpenOptions::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(PRIVATE_FILE_MODE);
+    }
+    options
+}
+
+fn create_private_folder(folder: &Path) -> std::io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(PRIVATE_FOLDER_MODE);
+    }
+    builder.create(folder)
 }
 
 fn ends_a_line(path: &Path) -> bool {
@@ -134,11 +160,13 @@ impl Storage for FileStorage {
         let Some(path) = self.log_path(terminal) else {
             return false;
         };
-        let mut opened = OpenOptions::new().create(true).append(true).open(&path);
+        let mut appending = private_file();
+        appending.create(true).append(true);
+        let mut opened = appending.open(&path);
         if opened.is_err() {
             let folder = self.directory.join(ACTIVITY_DIRECTORY);
-            let _ = fs::create_dir_all(folder);
-            opened = OpenOptions::new().create(true).append(true).open(&path);
+            let _ = create_private_folder(&folder);
+            opened = appending.open(&path);
         }
         let Ok(mut file) = opened else {
             return false;
@@ -158,14 +186,21 @@ impl Storage for FileStorage {
             return false;
         };
         let folder = self.directory.join(ACTIVITY_DIRECTORY);
-        let _ = fs::create_dir_all(folder);
+        let _ = create_private_folder(&folder);
         let temporary = path.with_extension(LOG_TEMPORARY_EXTENSION);
         let mut text = String::new();
         for line in lines {
             text.push_str(line);
             text.push('\n');
         }
-        if fs::write(&temporary, text).is_err() {
+        // a file's mode is set only when it is created, so a temporary file left by a crash goes first
+        let _ = fs::remove_file(&temporary);
+        let mut writing = private_file();
+        writing.write(true).create_new(true);
+        let Ok(mut file) = writing.open(&temporary) else {
+            return false;
+        };
+        if file.write_all(text.as_bytes()).is_err() {
             return false;
         }
         let renamed = fs::rename(&temporary, path).is_ok();
@@ -247,7 +282,25 @@ mod tests {
             .join("3fa9c1d2-b_7.jsonl");
 
         assert!(storage.append_log(&terminal, "one"));
+        #[cfg(unix)]
+        let modes = || {
+            use std::os::unix::fs::PermissionsExt;
+            let folder = fs::metadata(file.parent().unwrap()).unwrap();
+            let log = fs::metadata(&file).unwrap();
+            (
+                folder.permissions().mode() & 0o777,
+                log.permissions().mode() & 0o777,
+            )
+        };
+        #[cfg(unix)]
+        assert_eq!(
+            modes(),
+            (0o700, 0o600),
+            "readable by the user's own account only"
+        );
         assert!(storage.rewrite_log(&terminal, &["two".to_string()]));
+        #[cfg(unix)]
+        assert_eq!(modes(), (0o700, 0o600), "and still after a rewrite");
         assert!(storage.append_log(&terminal, "three"));
         assert_eq!(storage.read_log(&terminal), vec!["two", "three"]);
         assert_eq!(storage.logs(), vec![terminal.clone()]);
