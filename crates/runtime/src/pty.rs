@@ -544,8 +544,8 @@ mod tests {
     use std::time::Duration;
 
     const SIZE: TerminalSize = TerminalSize { cols: 80, rows: 24 };
-    /// Only a safety net: every wait below ends on output the shell prints.
-    const PATIENCE: Duration = Duration::from_secs(20);
+    /// Only a safety net: every wait below ends on output the shell prints. Well under the suite's 20 s budget.
+    const PATIENCE: Duration = Duration::from_secs(5);
     /// Prints whether SIGTERM is blocked in the process running it.
     const REPORT_MASK: &str = r#"my $old = POSIX::SigSet->new; sigprocmask(SIG_BLOCK, POSIX::SigSet->new, $old); print "sigterm blocked: ", ($old->ismember(SIGTERM) ? 1 : 0), "\n""#;
 
@@ -557,9 +557,10 @@ mod tests {
     ) -> Option<i32> {
         let mut seen = String::new();
         loop {
-            let input = received
-                .recv_timeout(PATIENCE)
-                .expect("the shell went quiet");
+            let input = received.recv_timeout(PATIENCE);
+            let Ok(input) = input else {
+                panic!("nothing more from {} after {seen:?}", watched.0);
+            };
             match input {
                 Input::Output { id, data } if id == *watched => {
                     let text = String::from_utf8_lossy(&data);
@@ -671,18 +672,26 @@ mod tests {
         assert_eq!(reported.trim(), "sigterm blocked: 0");
     }
 
-    /// The shell's output up to the first `marker`.
+    /// The shell's output up to the first `marker`. An exit before it fails at once, with what was seen.
     fn text_until(received: &Receiver<Input>, watched: &TerminalId, marker: &str) -> String {
         let mut seen = String::new();
         while !seen.contains(marker) {
-            let input = received
-                .recv_timeout(PATIENCE)
-                .expect("the shell went quiet");
-            if let Input::Output { id, data } = input
-                && id == *watched
-            {
-                let text = String::from_utf8_lossy(&data);
-                seen.push_str(&text);
+            let input = received.recv_timeout(PATIENCE);
+            let Ok(input) = input else {
+                panic!("nothing more from {} after {seen:?}", watched.0);
+            };
+            match input {
+                Input::Output { id, data } if id == *watched => {
+                    let text = String::from_utf8_lossy(&data);
+                    seen.push_str(&text);
+                }
+                Input::Exited { id, code } if id == *watched => {
+                    panic!(
+                        "{} exited with {code} before {marker:?}, after {seen:?}",
+                        watched.0
+                    );
+                }
+                _ => {}
             }
         }
         seen
