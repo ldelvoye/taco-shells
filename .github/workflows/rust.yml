@@ -40,6 +40,15 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # Ghostty's library, which crates/ghostty/build.rs fetches into TACO_GHOSTTY_DIR on a
+      # miss. Keyed on build.rs, which pins it, so a new pin is a new cache.
+      - run: echo "TACO_GHOSTTY_DIR=$RUNNER_TEMP/libghostty-vt" >> "$GITHUB_ENV"
+
+      - uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/libghostty-vt
+          key: libghostty-vt-${{ hashFiles('crates/ghostty/build.rs') }}
+
       - run: cargo fmt --all --check
 
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings

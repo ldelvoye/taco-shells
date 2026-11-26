@@ -1,0 +1,19 @@
+[package]
+name = "taco-ghostty"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+links = "ghostty-vt"
+
+[features]
+# Only for regenerating src/sys.rs; nothing else builds bindgen.
+bindings = ["dep:bindgen"]
+
+[[bin]]
+name = "ghostty-bindings"
+required-features = ["bindings"]
+
+[dependencies]
+taco-protocol.workspace = true
+bindgen = { workspace = true, optional = true }
