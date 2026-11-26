@@ -37,13 +37,14 @@ mod enabled {
         PlatformInput, SharedString, Styled, Window, canvas, point, px,
     };
     use taco_drive::{Appearance, DriveReply, DriveRequest, Point, Rect, SOCKET_VARIABLE};
+    use taco_protocol::TerminalId;
 
     use crate::appearance_of;
     use crate::look::Look;
     use crate::window::WindowView;
 
     const DRAG_STEPS: u16 = 8;
-    const NOT_YET: &str = "not available yet: the terminal view has no read-out";
+    const ON_FIXTURES: &str = "the window runs on fixtures, with no terminals";
 
     #[derive(Default)]
     struct BoundsTable {
@@ -159,7 +160,7 @@ mod enabled {
             DriveRequest::Drag { from, to } => drag(window, from, to, cx),
             DriveRequest::Bounds { target } => bounds(window, &target, cx),
             DriveRequest::DrawnState => drawn_state(window, cx),
-            DriveRequest::ScreenText { .. } => Err(NOT_YET.to_string()),
+            DriveRequest::ScreenText { terminal } => screen_text(window, &terminal, cx),
             DriveRequest::Render { path, appearance } => render(window, &path, appearance, cx),
         };
         match outcome {
@@ -276,6 +277,28 @@ mod enabled {
             origin,
             width: f32::from(bounds.size.width),
             height: f32::from(bounds.size.height),
+        }
+    }
+
+    // Drawn first, as a view attaches and takes in its output when the window draws.
+    fn screen_text(
+        window: AnyWindowHandle,
+        terminal: &TerminalId,
+        cx: &mut App,
+    ) -> Result<DriveReply, String> {
+        window
+            .update(cx, |_, window, cx| draw_now(window, cx))
+            .map_err(closed)?;
+        let views = window
+            .read::<WindowView, _, _>(cx, |view, cx| view.read(cx).terminals())
+            .map_err(closed)?;
+        let Some(views) = views else {
+            return Err(ON_FIXTURES.to_string());
+        };
+        let lines = views.update(cx, |views, _| views.visible_lines(terminal));
+        match lines {
+            Some(lines) => Ok(DriveReply::ScreenText(lines)),
+            None => Err(format!("terminal {} has no view on screen", terminal.0)),
         }
     }
 
