@@ -17,6 +17,7 @@ pub fn run(flags: &[String]) -> Result<(), String> {
         zip: false,
         icon: false,
         drive: true,
+        config_dir: None,
     };
     let bundled = bundle::create(&options)?;
 
