@@ -4,7 +4,7 @@ use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use taco_drive::{DriveReply, DriveRequest};
+use taco_drive::{Appearance, DriveReply, DriveRequest, Point, Rect};
 use taco_protocol::{DrawnState, TerminalId};
 
 const CONNECT_RETRY: Duration = Duration::from_millis(100);
@@ -101,6 +101,31 @@ impl Driver {
             DriveReply::Failed(_) => Ok(None),
             other => Err(format!("unexpected reply to screen_text: {other:?}")),
         }
+    }
+
+    pub fn bounds(&mut self, target: &str) -> Result<Option<Rect>, String> {
+        let request = DriveRequest::Bounds {
+            target: target.to_string(),
+        };
+        let reply = self.request(&request)?;
+        match reply {
+            DriveReply::Bounds(rect) => Ok(rect),
+            other => Err(format!("unexpected reply to bounds: {other:?}")),
+        }
+    }
+
+    pub fn drag(&mut self, from: Point, to: Point) -> Result<(), String> {
+        let reply = self.request(&DriveRequest::Drag { from, to })?;
+        expect_done(reply, "drag")
+    }
+
+    pub fn render(&mut self, path: &Path, appearance: Appearance) -> Result<(), String> {
+        let request = DriveRequest::Render {
+            path: path.display().to_string(),
+            appearance,
+        };
+        let reply = self.request(&request)?;
+        expect_done(reply, "render")
     }
 }
 
