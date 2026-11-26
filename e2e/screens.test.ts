@@ -56,7 +56,8 @@ async function sizeOf(pane: string, name: string): Promise<GridSize> {
     },
     SIZE_TIMEOUT_MS
   )
-  const [rows, cols] = reported.split(' ').map(Number)
+  const parts = reported.split(' ')
+  const [rows, cols] = parts.map(Number)
   return { rows, cols }
 }
 

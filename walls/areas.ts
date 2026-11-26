@@ -36,6 +36,7 @@ export const WALLS: WallConfig = {
       mayImport: ['protocol', 'runtime/engine'],
       modules: ['node:', 'node-pty']
     },
+    // The only part of the runtime that may load the terminal engine.
     {
       name: 'runtime/engine',
       folders: ['src/runtime/engine/'],
@@ -78,11 +79,12 @@ export const WALLS: WallConfig = {
       mayImport: ['protocol', 'rules', 'settings', 'window/terminal/engine'],
       modules: ['react', 'react-dom']
     },
+    // The only part of the window that may load the terminal engine, and only its browser half.
     {
       name: 'window/terminal/engine',
       folders: ['src/window/terminal/engine/'],
-      mayImport: ['protocol', 'rules', 'settings', 'window'],
-      modules: ['@xterm/']
+      mayImport: ['protocol', 'window'],
+      modules: ['@xterm/xterm', '@xterm/addon-fit', '@xterm/addon-web-links', '@xterm/addon-webgl']
     },
     {
       name: 'conformance',

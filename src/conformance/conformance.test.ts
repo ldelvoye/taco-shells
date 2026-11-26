@@ -104,10 +104,10 @@ describe('the runtime screen', () => {
     const snapshot = await snapshotOf(screen)
 
     const view = await loaded(snapshot, { cols: 20, rows: 5 })
-    const first = view.buffer.active.getLine(0)?.translateToString(true)
-    const second = view.buffer.active.getLine(1)?.translateToString(true)
-    expect(first).toBe('abcdefghij')
-    expect(second).toBe('klmno')
+    const lines = describeTerminal(view, false).normal
+    const firstTwo = lines.slice(0, 2)
+    // Written at 10 columns the letters take two lines. Written after the resize they would take one.
+    expect(firstTwo).toEqual(['abcdefghij', 'klmno'])
   })
 
   it('a view that places a resize and a clear in its output ends up as the screen does', async () => {
@@ -188,20 +188,19 @@ describe('the runtime screen', () => {
       output.push(`old ${n}`)
     }
     await parsed(screen, output.join('\r\n'))
-    screen.setScrollback(10)
-    screen.clear()
-    const snapshot = await snapshotOf(screen)
 
-    const view = await loaded(snapshot, small)
-    const lines: string[] = []
-    const buffer = view.buffer.normal
-    for (let y = 0; y < buffer.length; y += 1) {
-      const line = buffer.getLine(y)
-      if (line !== undefined) {
-        lines.push(line.translateToString(true))
-      }
-    }
-    const kept = lines.filter((line) => line.startsWith('old'))
+    screen.setScrollback(10)
+    const trimmedSnapshot = await snapshotOf(screen)
+    const trimmed = await loaded(trimmedSnapshot, small)
+    const afterTrim = describeTerminal(trimmed, false).normal
+    expect(afterTrim[0]).toBe('old 36')
+    expect(afterTrim).toHaveLength(15)
+
+    screen.clear()
+    const clearedSnapshot = await snapshotOf(screen)
+    const cleared = await loaded(clearedSnapshot, small)
+    const afterClear = describeTerminal(cleared, false).normal
+    const kept = afterClear.filter((line) => line.startsWith('old'))
     expect(kept).toEqual(['old 50'])
   })
 })

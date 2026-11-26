@@ -17,6 +17,11 @@ export const CASES: Case[] = [
   { name: 'plain text with scrollback', before: numberedLines(60), after: '\r\nline 61' },
   { name: 'colors', before: '\x1b[31;44mred\x1b[0m \x1b[1;38;5;200mbold\x1b[0m', after: ' more' },
   { name: 'the alternate screen', before: 'main\r\n\x1b[?1049hALT', after: 'more' },
+  {
+    name: 'a full-screen program that then exits',
+    before: 'one\r\ntwo\r\n$ vim\r\n\x1b[?1049h\x1b[2J\x1b[10;20Hmid',
+    after: '\x1b[?1049l$ next'
+  },
   { name: 'bracketed paste', before: '\x1b[?2004h', after: '' },
   { name: 'application cursor keys', before: '\x1b[?1h', after: '' },
   { name: 'mouse tracking', before: '\x1b[?1000h', after: '' },

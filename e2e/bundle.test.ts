@@ -31,10 +31,12 @@ describe('the dev build cannot reach the stable config', () => {
 describe('the terminal process stands alone', () => {
   it('its bundle loads the shells and the headless terminal, and nothing else from outside Node', () => {
     const bundle = readFileSync(RUNTIME_BUNDLE, 'utf8')
-    const required = [...bundle.matchAll(REQUIRE)].map((match) => match[1])
+    const matches = [...bundle.matchAll(REQUIRE)]
+    const required = matches.map((match) => match[1])
     const packages = required.filter((name) => !name.startsWith(NODE_BUILT_IN))
-    const distinct = [...new Set(packages)].sort()
+    const distinct = new Set(packages)
+    const sorted = [...distinct].sort()
 
-    expect(distinct).toEqual(RUNTIME_PACKAGES)
+    expect(sorted).toEqual(RUNTIME_PACKAGES)
   })
 })

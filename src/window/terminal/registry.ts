@@ -11,13 +11,14 @@ interface TerminalHandle {
   id: SessionId
   view: TerminalView
   observer: ResizeObserver | null
+  /** The size last asked of the runtime, so the same one is not asked for twice. Null until one is known. */
   asked: PtySize | null
   attachSent: boolean
 }
 
-// xterm instances live here rather than in React state. React owns the chrome
-// around a terminal; if a re-render ever owned the terminal itself, unmounting
-// would take the scrollback and the PTY connection with it.
+// Views live here rather than in React state. React owns the chrome around a
+// terminal; if a re-render ever owned the view itself, unmounting would throw it
+// away and the next mount would load the whole terminal again.
 const handles = new Map<SessionId, TerminalHandle>()
 
 // The session focusSession has just moved focus to. It is set there and consumed
@@ -43,7 +44,9 @@ function handleEvent(event: TerminalEvent): void {
 
   if (event.type === 'attached') {
     handle.view.load(event.snapshot, event.size)
-    handle.asked = event.size
+    if (handle.asked === null) {
+      handle.asked = event.size
+    }
     return
   }
   if (event.type === 'output') {
@@ -58,7 +61,9 @@ function handleEvent(event: TerminalEvent): void {
     handle.view.clear()
     return
   }
-  disposeSession(event.id)
+  if (event.type === 'end') {
+    disposeSession(event.id)
+  }
 }
 
 function handleFor(id: SessionId): TerminalHandle {
@@ -112,7 +117,7 @@ export function attachSession(id: SessionId, host: HTMLElement): void {
   const handle = handleFor(id)
 
   // Attaching twice would strand the first ResizeObserver, still connected and
-  // still fitting the terminal to a host it has left.
+  // still asking for the size of a host the view has left.
   detachSession(id)
   host.appendChild(handle.view.element)
   handle.view.mount()
@@ -124,6 +129,7 @@ export function attachSession(id: SessionId, host: HTMLElement): void {
   handle.observer = observer
 
   if (!handle.attachSent) {
+    // Null when the host has no layout yet: the runtime then keeps the size the terminal has.
     const size = handle.view.fittingSize()
     handle.attachSent = true
     handle.asked = size

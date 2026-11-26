@@ -204,6 +204,10 @@ describe('Screens', () => {
     expect(shell).toEqual(['resize t1 100x30'])
     expect(screen.calls).toEqual(['resize 100x30'])
     expect(events).toEqual([attached('', wider), attached('', wider)])
+
+    request({ type: 'attach', id: 't1', size: SMALL })
+    screen.runAll()
+    expect(events).toEqual([attached('', wider), attached('', wider), attached('', SMALL)])
   })
 
   it('posts nothing for an attach cancelled by a detach, a second attach or a new connection', () => {
