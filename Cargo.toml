@@ -29,6 +29,15 @@ notify = "9"
 tempfile = "3"
 bindgen = "0.72"
 
+# gpui has no release newer than 2025-10, so both crates pin one zed revision; move them together.
+gpui = { git = "https://github.com/zed-industries/zed", rev = "a3ce8d5e88e35697b2ba1cf9cb3c6816089b8281" }
+# font-kit: without it gpui draws no text. runtime_shaders: no Xcode `metal` compiler is needed.
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "a3ce8d5e88e35697b2ba1cf9cb3c6816089b8281", features = ["font-kit", "runtime_shaders"] }
+
+# zed's own patch at the pinned revision; keep it in step with gpui.
+[patch.crates-io]
+async-task = { git = "https://github.com/smol-rs/async-task", rev = "41fd3359c75e221bd8b187a8ee361aa309c1714c" }
+
 # Debug info is most of a gpui build's size and link time; line tables keep backtraces readable.
 [profile.dev]
 debug = "line-tables-only"
