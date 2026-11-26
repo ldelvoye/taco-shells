@@ -1,7 +1,8 @@
 //! `cargo run -p taco-app --features render --example render -- <mixed|quiet|empty> <light|dark> <out.png> [choice or gesture]...`
 //!
 //! Choices: `cards`, `strips`, `title`, `head`, `foot`. Gestures, in window points, played in order:
-//! `click:X,Y`, `drag:X,Y:X,Y`, and `hold:X,Y:X,Y` for a drag still under way when the window is drawn.
+//! `click:X,Y`, `rightclick:X,Y`, `drag:X,Y:X,Y`, `hold:X,Y:X,Y` for a drag still under way when the
+//! window is drawn, `type:TEXT` to type each character, and `key:NAME` for one keystroke such as `enter`.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -11,7 +12,7 @@ use taco_app::render::{Gesture, render_png};
 use taco_app::{BannerLayout, Fixture, PlusPlace, Trial};
 use taco_settings::Appearance;
 
-const USAGE: &str = "usage: render <mixed|quiet|empty> <light|dark> <out.png> [cards|strips|title|head|foot|click:X,Y|drag:X,Y:X,Y|hold:X,Y:X,Y]...";
+const USAGE: &str = "usage: render <mixed|quiet|empty> <light|dark> <out.png> [cards|strips|title|head|foot|click:X,Y|rightclick:X,Y|drag:X,Y:X,Y|hold:X,Y:X,Y|type:TEXT|key:NAME]...";
 
 struct Request {
     fixture: Fixture,
@@ -77,8 +78,16 @@ fn parsed(arguments: &[String]) -> Option<Request> {
 fn gesture_from(text: &str) -> Option<Gesture> {
     let (kind, points) = text.split_once(':')?;
     let parts: Vec<&str> = points.split(':').collect();
+    if kind == "type" {
+        let characters = points.chars().map(|character| character.to_string());
+        return Some(Gesture::Keys(characters.collect()));
+    }
+    if kind == "key" {
+        return Some(Gesture::Keys(vec![points.to_string()]));
+    }
     match (kind, parts.as_slice()) {
         ("click", [at]) => Some(Gesture::Click(point_from(at)?)),
+        ("rightclick", [at]) => Some(Gesture::RightClick(point_from(at)?)),
         ("drag", [from, to]) => Some(Gesture::Drag(point_from(from)?, point_from(to)?)),
         ("hold", [from, to]) => Some(Gesture::Hold(point_from(from)?, point_from(to)?)),
         _ => None,

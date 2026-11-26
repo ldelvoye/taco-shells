@@ -5,9 +5,13 @@ use std::rc::Rc;
 
 use futures::channel::mpsc::unbounded;
 use taco_protocol::{
-    ActivityRequest, Arrangement, DrawnState, RequestReply, TerminalId, WorkspaceRequest,
+    ActivityRequest, Arrangement, DrawnState, RequestReply, TabGroupId, TerminalId,
+    WorkspaceRequest,
 };
-use taco_rules::{add_row_to, apply_drop, close_row, select_row, toggle_tab_group};
+use taco_rules::{
+    add_row_to, apply_drop, close_row, create_tab_group, fork_row, rename_tab_group, select_row,
+    toggle_tab_group, ungroup_tab_group,
+};
 
 use crate::link::{WindowOutput, WindowReceiver, WindowSender, WorkspacePort};
 
@@ -36,8 +40,16 @@ impl StandIn {
         TerminalId(format!("opened-{number}"))
     }
 
-    fn apply(&self, request: WorkspaceRequest) -> bool {
+    fn new_tab_group(&self) -> TabGroupId {
+        let number = self.opened.get() + 1;
+        self.opened.set(number);
+        TabGroupId(format!("group-{number}"))
+    }
+
+    /// Whether the request changed anything, and the tab group it made, if it made one.
+    fn apply(&self, request: WorkspaceRequest) -> (bool, Option<TabGroupId>) {
         let mut state = self.state.borrow_mut();
+        let mut made = None;
         let changed = match request {
             WorkspaceRequest::FocusReported { terminal, count } => {
                 if count > state.focus_count {
@@ -65,6 +77,26 @@ impl StandIn {
             WorkspaceRequest::Dropped { dragged, place } => {
                 rearrange(&mut state, |before| apply_drop(before, &dragged, &place))
             }
+            WorkspaceRequest::ForkTerminal { terminal } => {
+                let fork = self.new_terminal();
+                rearrange(&mut state, |before| fork_row(before, &terminal, fork))
+            }
+            WorkspaceRequest::TabGroupCreated { terminal } => {
+                let id = self.new_tab_group();
+                let created = rearrange(&mut state, |before| {
+                    create_tab_group(before, &terminal, id.clone())
+                });
+                if created {
+                    made = Some(id);
+                }
+                created
+            }
+            WorkspaceRequest::TabGroupRenamed { id, name } => {
+                rearrange(&mut state, |before| rename_tab_group(before, &id, &name))
+            }
+            WorkspaceRequest::TabGroupUngrouped { id } => {
+                rearrange(&mut state, |before| ungroup_tab_group(before, &id))
+            }
             // The stand-in answers only what the list sends.
             _ => false,
         };
@@ -73,7 +105,7 @@ impl StandIn {
             let snapshot = state.clone();
             self.publish(WindowOutput::State(snapshot));
         }
-        changed
+        (changed, made)
     }
 
     // A send fails only once the window is gone, when there is nothing left to draw.
@@ -84,14 +116,14 @@ impl StandIn {
 
 impl WorkspacePort for StandIn {
     fn send(&self, request: WorkspaceRequest, token: Option<u64>) {
-        let ok = self.apply(request);
+        let (ok, tab_group) = self.apply(request);
         let Some(token) = token else {
             return;
         };
         let revision = self.state.borrow().revision;
         let reply = RequestReply {
             ok,
-            tab_group: None,
+            tab_group,
             revision,
         };
         self.publish(WindowOutput::Replied { token, reply });

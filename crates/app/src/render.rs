@@ -1,11 +1,11 @@
-//! The window drawn to an image with no window on screen, after any pointer gestures played into it.
+//! The window drawn to an image with no window on screen, after any gestures played into it.
 
 use std::path::Path;
 use std::sync::Arc;
 
 use gpui::{
-    AnyWindowHandle, AppContext, HeadlessAppContext, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Pixels, PlatformInput, Point, Result, px, size,
+    AnyWindowHandle, AppContext, HeadlessAppContext, Keystroke, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, PlatformInput, Point, Result, px, size,
 };
 use taco_settings::Appearance;
 
@@ -14,6 +14,7 @@ use crate::fixture::Fixture;
 use crate::look::Look;
 use crate::platform::TrafficLights;
 use crate::stand_in::StandIn;
+use crate::text_field;
 use crate::trial::Trial;
 use crate::window::WindowView;
 use crate::{WINDOW_HEIGHT, WINDOW_WIDTH};
@@ -23,13 +24,16 @@ const HEADLESS: bool = true;
 const DRAWS: usize = 3;
 const DRAG_STEPS: usize = 8;
 
-/// A pointer gesture, in window points.
-#[derive(Clone, Copy, Debug)]
+/// Something done to the window before it is drawn, with points in window points.
+#[derive(Clone, Debug)]
 pub enum Gesture {
     Click(Point<Pixels>),
+    RightClick(Point<Pixels>),
     Drag(Point<Pixels>, Point<Pixels>),
     /// A drag whose button is still down when the window is drawn.
     Hold(Point<Pixels>, Point<Pixels>),
+    /// Keystrokes in gpui's notation, such as `cmd-a` or `enter`, or a single character to type.
+    Keys(Vec<String>),
 }
 
 /// Writes the window, drawn from `fixture` in `appearance` after `gestures`, to a PNG at `out`.
@@ -48,6 +52,7 @@ pub fn render_png(
         gpui_platform::current_headless_renderer,
     );
     cx.update(|cx| load_fonts(cx))?;
+    cx.update(text_field::bind_keys);
 
     let image_size = size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT));
     let window = cx.open_window(image_size, |_, cx| {
@@ -60,7 +65,7 @@ pub fn render_png(
     let any_window = window.into();
     draw(&mut cx, any_window)?;
     for gesture in gestures {
-        play(&mut cx, any_window, *gesture)?;
+        play(&mut cx, any_window, gesture)?;
     }
     for _ in 0..DRAWS {
         draw(&mut cx, any_window)?;
@@ -80,22 +85,46 @@ fn draw(cx: &mut HeadlessAppContext, window: AnyWindowHandle) -> Result<()> {
     Ok(())
 }
 
-fn play(cx: &mut HeadlessAppContext, window: AnyWindowHandle, gesture: Gesture) -> Result<()> {
+fn play(cx: &mut HeadlessAppContext, window: AnyWindowHandle, gesture: &Gesture) -> Result<()> {
     match gesture {
         Gesture::Click(at) => {
-            send(cx, window, press(at))?;
-            send(cx, window, release(at))
+            send(cx, window, press(*at, MouseButton::Left))?;
+            send(cx, window, release(*at, MouseButton::Left))
+        }
+        Gesture::RightClick(at) => {
+            send(cx, window, press(*at, MouseButton::Right))?;
+            send(cx, window, release(*at, MouseButton::Right))
         }
         Gesture::Drag(from, to) => {
-            send(cx, window, press(from))?;
-            move_through(cx, window, from, to)?;
-            send(cx, window, release(to))
+            send(cx, window, press(*from, MouseButton::Left))?;
+            move_through(cx, window, *from, *to)?;
+            send(cx, window, release(*to, MouseButton::Left))
         }
         Gesture::Hold(from, to) => {
-            send(cx, window, press(from))?;
-            move_through(cx, window, from, to)
+            send(cx, window, press(*from, MouseButton::Left))?;
+            move_through(cx, window, *from, *to)
+        }
+        Gesture::Keys(keys) => {
+            for key in keys {
+                type_key(cx, window, key)?;
+            }
+            Ok(())
         }
     }
+}
+
+fn type_key(cx: &mut HeadlessAppContext, window: AnyWindowHandle, key: &str) -> Result<()> {
+    let is_character = key.chars().count() == 1;
+    cx.update_window(window, |_, window, cx| -> Result<()> {
+        let os = cx.platform_info().os;
+        let mut keystroke = Keystroke::parse_with_os(key, os)?;
+        if is_character {
+            keystroke.key_char = Some(key.to_string());
+        }
+        window.dispatch_keystroke(keystroke, cx);
+        Ok(())
+    })??;
+    draw(cx, window)
 }
 
 fn move_through(
@@ -117,9 +146,9 @@ fn move_through(
     Ok(())
 }
 
-fn press(at: Point<Pixels>) -> PlatformInput {
+fn press(at: Point<Pixels>, button: MouseButton) -> PlatformInput {
     let pressed = MouseDownEvent {
-        button: MouseButton::Left,
+        button,
         position: at,
         click_count: 1,
         ..Default::default()
@@ -127,9 +156,9 @@ fn press(at: Point<Pixels>) -> PlatformInput {
     PlatformInput::MouseDown(pressed)
 }
 
-fn release(at: Point<Pixels>) -> PlatformInput {
+fn release(at: Point<Pixels>, button: MouseButton) -> PlatformInput {
     let released = MouseUpEvent {
-        button: MouseButton::Left,
+        button,
         position: at,
         click_count: 1,
         ..Default::default()
