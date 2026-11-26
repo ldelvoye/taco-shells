@@ -23,7 +23,7 @@ taco-ghostty = { path = "crates/ghostty" }
 serde = { version = "1", features = ["derive"] }
 # preserve_order: key bindings layer, and problems are listed, in the order the user's file has them.
 serde_json = { version = "1", features = ["preserve_order", "raw_value"] }
-jsonc-parser = { version = "0.34", features = ["serde"] }
+jsonc-parser = { version = "0.34", features = ["serde", "cst"] }
 postcard = { version = "1", default-features = false, features = ["use-std"] }
 notify = "9"
 tempfile = "3"

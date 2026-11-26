@@ -4611,6 +4611,7 @@ dependencies = [
 name = "taco-services"
 version = "0.0.0"
 dependencies = [
+ "jsonc-parser",
  "notify",
  "serde_json",
  "taco-agents",
