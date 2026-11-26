@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -12,6 +12,7 @@ use taco_settings::{Config, resolve_config};
 use crate::config_files::{
     config_file_path, read_config_texts, seed_config_files, unreadable_problems,
 };
+use crate::sync::lock;
 
 const WATCH_QUIET: Duration = Duration::from_millis(100);
 const WATCH_LONGEST_WAIT: Duration = Duration::from_secs(1);
@@ -37,13 +38,6 @@ pub struct ConfigStore {
     shared: Arc<Shared>,
     watcher: Option<RecommendedWatcher>,
     thread: Option<JoinHandle<()>>,
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    match mutex.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => PoisonError::into_inner(poisoned),
-    }
 }
 
 fn resolve(directory: &Path, start_problems: &[String], system_is_dark: bool) -> Config {

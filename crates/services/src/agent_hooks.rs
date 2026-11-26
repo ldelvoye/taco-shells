@@ -306,11 +306,11 @@ fn remove_matching(text: &str, label: &str, test: &dyn Fn(&str) -> bool) -> Hook
     HookEdit::Changed(edited)
 }
 
-pub fn entry_key(entry: &HookEntry) -> String {
+pub(crate) fn entry_key(entry: &HookEntry) -> String {
     format!("{}:{}", entry.event, entry.script)
 }
 
-pub fn hook_wiring_of(
+pub(crate) fn hook_wiring_of(
     text: Option<&str>,
     setup: &HarnessSetup,
     hooks_directory: &Path,

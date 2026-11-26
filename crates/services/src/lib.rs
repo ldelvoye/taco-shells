@@ -12,12 +12,12 @@ mod config_store;
 mod hook_listener;
 mod identity;
 mod mac;
+mod sync;
 mod updater;
 
 pub use agent_flow::{copy_hook_scripts, hooks_directory};
 pub use agent_hooks::{
-    HookEdit, HookWiring, add_entries, entry_key, hook_wiring_of, remove_hand_entries,
-    remove_managed_entries,
+    HookEdit, HookWiring, add_entries, remove_hand_entries, remove_managed_entries,
 };
 pub use agent_record::{AgentRecord, RECORD_FILE, read_agent_record, write_agent_record};
 pub use agent_setup_state::{
