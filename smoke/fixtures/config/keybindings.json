@@ -1,0 +1,32 @@
+{
+  // A chord maps to a command id. Set one to null to unbind it: deleting the
+  // line only lets the default through again.
+  "cmd+t": "terminal.new",
+  "cmd+w": "terminal.close",
+  "cmd+\\": "terminal.split",
+  "cmd+opt+right": "terminal.focusNextPane",
+  "cmd+opt+left": "terminal.focusPreviousPane",
+  "cmd+shift+]": "terminal.focusNextGroup",
+  "cmd+shift+[": "terminal.focusPreviousGroup",
+  "cmd+c": "terminal.copy",
+  "cmd+v": "terminal.paste",
+  "cmd+k": null,
+  "cmd+backspace": "terminal.killLine",
+  "cmd+left": "terminal.lineStart",
+  "cmd+right": "terminal.lineEnd",
+  "opt+left": "terminal.wordLeft",
+  "opt+right": "terminal.wordRight",
+  "shift+enter": "terminal.insertNewline",
+  "cmd+opt+1": "terminal.colorRed",
+  "cmd+opt+2": "terminal.colorOrange",
+  "cmd+opt+3": "terminal.colorYellow",
+  "cmd+opt+4": "terminal.colorGreen",
+  "cmd+opt+5": "terminal.colorBlue",
+  "cmd+opt+6": "terminal.colorPurple",
+  "cmd+b": "sidebar.toggle",
+  "cmd+,": "config.openSettings",
+  "cmd+shift+,": "config.openKeybindings",
+
+  // Mine: clear on cmd+l, as in my other terminal.
+  "cmd+l": "terminal.clear"
+}
