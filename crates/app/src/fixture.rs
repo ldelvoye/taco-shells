@@ -10,7 +10,7 @@ use taco_protocol::{
 use taco_rules::default_panels;
 use taco_services::{AgentSetupNotice, AgentSetupNoticeKind, AgentSetupView};
 
-use crate::activity::now_ms;
+use crate::activity::{MS_PER_MINUTE, now_ms};
 use crate::banners::Banner;
 use crate::window::Shown;
 
@@ -77,7 +77,6 @@ const MIXED_ROWS: [FixtureRow; 7] = [
 
 const ASKED: &str = "asked";
 const CHANGED: &str = "changed";
-const MS_PER_MINUTE: u64 = 60_000;
 
 const WORKING_LOG: [FixtureEntry; 10] = [
     entry(42, ASKED, "rework the billing platform lock"),

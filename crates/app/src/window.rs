@@ -102,7 +102,11 @@ impl WindowView {
         let clock = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(CLOCK_TICK).await;
-                let ticked = this.update(cx, |_, cx| cx.notify());
+                let ticked = this.update(cx, |view, cx| {
+                    if view.shown.drawn.panels.agent_activity.open {
+                        cx.notify();
+                    }
+                });
                 if ticked.is_err() {
                     return;
                 }
@@ -146,12 +150,12 @@ impl WindowView {
                 self.shown.setups = setups;
                 cx.notify();
             }
-            // The window draws nothing else from the services yet.
+            // No other service output is drawn.
             WindowOutput::Services(_) => {}
         }
     }
 
-    // Watches the selected terminal's log while Agent Activity is open, and nothing while it is closed.
+    /// Watches the selected terminal's log while Agent Activity is open, and nothing while it is closed.
     fn watch_activity(&mut self, drawn: &DrawnState) {
         let mut wanted = None;
         if drawn.panels.agent_activity.open {
@@ -575,6 +579,7 @@ impl Render for WindowView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (drawn, kept) = drawn_with(&self.shown.drawn, self.ahead.as_ref());
         self.ahead = kept;
+        // Rendering is the one place the drawn selection is final, whether it came from the workspace or a move ahead of it.
         self.watch_activity(&drawn);
         // Once no drag is under way, there is nothing to mark and no panel on the move.
         if !cx.has_active_drag() {
