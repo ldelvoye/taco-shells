@@ -5067,10 +5067,12 @@ dependencies = [
 name = "taco-terminal-view"
 version = "0.0.0"
 dependencies = [
+ "futures",
  "gpui",
- "gpui_platform",
+ "taco-ghostty",
  "taco-protocol",
  "taco-settings",
+ "taco-wire",
 ]
 
 [[package]]
