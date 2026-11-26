@@ -1,13 +1,13 @@
 use crate::agent_hooks::HookWiring;
 
 const STATUS_NOT_INSTALLED: &str = "Not installed";
-const STATUS_OFF: &str = "Turned off in settings";
+pub(crate) const STATUS_OFF: &str = "Turned off in settings";
 const STATUS_BY_HAND: &str = "Set up by hand";
 const STATUS_SET_UP: &str = "Set up";
 const STATUS_NOT_SET_UP: &str = "Not set up";
 const LABEL_SWITCH: &str = "Switch to Managed Setup";
 const LABEL_REMOVE: &str = "Remove Setup";
-const NOTE_BUILD_MAY_NOT_WRITE: &str = "Development builds leave your settings alone";
+pub(crate) const NOTE_BUILD_MAY_NOT_WRITE: &str = "Development builds leave your settings alone";
 const SCRIPT_RUNNER: &str = "node";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
