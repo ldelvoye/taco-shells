@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[[bin]]
+name = "taco-shells"
+path = "src/main.rs"
+
 [dependencies]
 taco-protocol.workspace = true
 taco-rules.workspace = true
