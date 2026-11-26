@@ -1,6 +1,6 @@
 use taco_protocol::{Arrangement, FocusMove, Row, TabGroupId, TerminalId};
 
-use crate::arrangement::{block_of, changed, is_hidden, locate_row, open_at};
+use crate::arrangement::{block_of, is_hidden, locate_row, open_at, settled_if_changed};
 
 fn new_row(terminal: TerminalId, tab_group: Option<TabGroupId>) -> Row {
     Row {
@@ -36,10 +36,9 @@ pub fn add_row_to(
     after.rows.insert(index, new_row(terminal, placed_in));
     after.selected = index;
     open_at(&mut after, index);
-    changed(arrangement, after)
+    settled_if_changed(arrangement, after)
 }
 
-// Where a selected index lands once the row at `removed` is taken out.
 fn index_after_removal(selected: usize, removed: usize, remaining: usize) -> usize {
     if removed < selected {
         return selected - 1;
@@ -57,7 +56,7 @@ pub fn close_row(arrangement: &Arrangement, terminal: &TerminalId) -> Option<Arr
     let mut after = arrangement.clone();
     after.rows.remove(index);
     after.selected = index_after_removal(arrangement.selected, index, after.rows.len());
-    changed(arrangement, after)
+    settled_if_changed(arrangement, after)
 }
 
 pub fn rename_row(
@@ -68,7 +67,7 @@ pub fn rename_row(
     let index = locate_row(arrangement, terminal)?;
     let mut after = arrangement.clone();
     after.rows[index].title = title.to_string();
-    changed(arrangement, after)
+    settled_if_changed(arrangement, after)
 }
 
 /// The arrangement with this terminal's row selected, its tab group opened if it was collapsed.
@@ -77,7 +76,7 @@ pub fn select_row(arrangement: &Arrangement, terminal: &TerminalId) -> Option<Ar
     let mut after = arrangement.clone();
     after.selected = index;
     open_at(&mut after, index);
-    changed(arrangement, after)
+    settled_if_changed(arrangement, after)
 }
 
 /// A fork's row, right under its source in the source's tab group, and selected.
@@ -94,7 +93,7 @@ pub fn fork_row(
     after.rows.insert(fork_index, new_row(fork, tab_group));
     after.selected = fork_index;
     open_at(&mut after, fork_index);
-    changed(arrangement, after)
+    settled_if_changed(arrangement, after)
 }
 
 /// The terminal a focus move goes to, skipping rows hidden in collapsed tab groups and wrapping at the ends.
@@ -154,6 +153,9 @@ mod tests {
         assert_eq!(shown(&added_outside), "a g:b [n]");
         let added_to_gone = add_row_to(&list, id("n"), Some(tab("gone"))).unwrap();
         assert_eq!(shown(&added_to_gone), "a g:b g:c d [n]");
+        let folded = toggle_tab_group(&built("a g:b", "a"), &tab("g")).unwrap();
+        let added_to_folded = add_row_to(&folded, id("n"), Some(tab("g"))).unwrap();
+        assert_eq!(shown(&added_to_folded), "a g:b [g:n]");
 
         let forked = fork_row(&list, &id("b"), id("f")).unwrap();
         assert_eq!(shown(&forked), "a g:b [g:f] g:c d");
@@ -170,6 +172,9 @@ mod tests {
         assert_eq!(focus_target(&list, FocusMove::PreviousRow), Some(id("a")));
         let from_a = select_row(&list, &id("a")).unwrap();
         assert_eq!(focus_target(&from_a, FocusMove::NextRow), Some(id("d")));
+        let open = built("a b c d", "b");
+        assert_eq!(focus_target(&open, FocusMove::PreviousRow), Some(id("a")));
+        assert_eq!(focus_target(&open, FocusMove::NextRow), Some(id("c")));
         assert_eq!(focus_target(&built("a", "a"), FocusMove::NextRow), None);
     }
 }

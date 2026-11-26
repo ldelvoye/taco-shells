@@ -1,4 +1,4 @@
-//! Pure functions that read an arrangement and answer a question about it.
+//! Pure functions over an arrangement: questions about it, and the changes the window and the workspace make to it.
 //!
 //! Every change takes the arrangement as it is and gives back the one it becomes, or none
 //! when the change would do nothing or is refused.

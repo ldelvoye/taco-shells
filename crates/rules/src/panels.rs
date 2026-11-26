@@ -44,7 +44,7 @@ fn changed(before: &Panels, after: Panels) -> Option<Panels> {
     Some(after)
 }
 
-/// The panel opened on the edge it was last on.
+/// The panel opened on the edge it was last on, closing any other panel open there.
 pub fn open_panel(panels: &Panels, panel: Panel) -> Option<Panels> {
     let mut after = panels.clone();
     place_of(&mut after, panel).open = true;
@@ -69,7 +69,7 @@ pub fn move_panel(panels: &Panels, panel: Panel, edge: Edge) -> Option<Panels> {
     changed(panels, after)
 }
 
-/// A size that is not a positive number is refused.
+/// A size that is not a positive number is refused; the window clamps the size to its own bounds before sending it.
 pub fn resize_panel(panels: &Panels, panel: Panel, size: f32) -> Option<Panels> {
     if !size.is_finite() || size <= 0.0 {
         return None;
@@ -112,6 +112,7 @@ mod tests {
         assert!(moved_back_closed.terminals.open);
 
         assert_eq!(resize_panel(&start, Panel::Terminals, f32::NAN), None);
+        assert_eq!(resize_panel(&start, Panel::Terminals, 0.0), None);
         assert_eq!(open_panel(&start, Panel::Terminals), None);
     }
 }

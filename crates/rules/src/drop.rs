@@ -1,9 +1,9 @@
-use taco_protocol::{Arrangement, Dragged, DropPlace, TabGroupId};
+use taco_protocol::{Arrangement, Dragged, DropPlace, Row, TabGroupId};
 
-use crate::arrangement::{block_of, changed, locate_row};
+use crate::arrangement::{block_of, locate_row, reselect, selected_terminal, settled_if_changed};
 
 /// The band at the top and bottom of a tab group's header that counts as outside the group.
-pub const EDGE_BAND: f32 = 0.25;
+const EDGE_BAND: f32 = 0.25;
 
 /// What the pointer is over during a drag. `fraction` is how far down the row or header it is: 0 at its top, 1 at its bottom.
 #[derive(Clone, Debug, PartialEq)]
@@ -52,12 +52,18 @@ fn is_collapsed(arrangement: &Arrangement, tab_group: &TabGroupId) -> Option<boo
     Some(record.collapsed)
 }
 
+// A tab group's rows sit together, so a gap is inside one exactly when the rows on both sides share it.
 fn gap_inside_a_tab_group(arrangement: &Arrangement, gap: usize) -> bool {
-    let mut records = arrangement.tab_groups.iter();
-    records.any(|record| {
-        let block = block_of(arrangement, &record.id);
-        block.is_some_and(|(first, last)| first < gap && gap <= last)
-    })
+    let Some(before_index) = gap.checked_sub(1) else {
+        return false;
+    };
+    let (Some(before), Some(after)) = (
+        arrangement.rows.get(before_index),
+        arrangement.rows.get(gap),
+    ) else {
+        return false;
+    };
+    before.tab_group.is_some() && before.tab_group == after.tab_group
 }
 
 fn place_is_allowed(arrangement: &Arrangement, place: &DropPlace) -> bool {
@@ -73,13 +79,14 @@ fn place_is_allowed(arrangement: &Arrangement, place: &DropPlace) -> bool {
     first <= place.index && place.index <= last + 1
 }
 
-// A row dropped where it already is, in the group it is already in, is no move, so it does not take the selection either.
 fn drop_row(arrangement: &Arrangement, from: usize, place: &DropPlace) -> Option<Arrangement> {
-    let mut to = place.index;
+    let mut to_after_removal = place.index;
     if place.index > from {
-        to -= 1;
+        to_after_removal -= 1;
     }
+    let to = to_after_removal;
     let same_group = arrangement.rows[from].tab_group == place.tab_group;
+    // a row dropped where it already is takes no selection
     if to == from && same_group {
         return None;
     }
@@ -106,7 +113,7 @@ fn drop_tab_group(
         return None;
     }
 
-    let selected = arrangement.rows[arrangement.selected].terminal.clone();
+    let selected = selected_terminal(Some(arrangement)).cloned();
     let mut after = arrangement.clone();
     let block: Vec<_> = after.rows.drain(first..=last).collect();
     let mut to = place.index;
@@ -114,9 +121,7 @@ fn drop_tab_group(
         to -= block.len();
     }
     after.rows.splice(to..to, block);
-    if let Some(index) = locate_row(&after, &selected) {
-        after.selected = index;
-    }
+    reselect(&mut after, selected.as_ref());
     Some(after)
 }
 
@@ -136,11 +141,11 @@ pub fn apply_drop(
         }
         Dragged::TabGroup(id) => drop_tab_group(arrangement, id, place)?,
     };
-    changed(arrangement, after)
+    settled_if_changed(arrangement, after)
 }
 
-fn by_half(arrangement: &Arrangement, index: usize, fraction: f32) -> DropPlace {
-    let tab_group = arrangement.rows[index].tab_group.clone();
+fn by_half(row: &Row, index: usize, fraction: f32) -> DropPlace {
+    let tab_group = row.tab_group.clone();
     if fraction < 0.5 {
         return place(index, tab_group);
     }
@@ -176,8 +181,8 @@ fn candidate_for_row(arrangement: &Arrangement, point: &DropPoint) -> Option<Dro
             fraction,
         } => row_over_header(arrangement, tab_group, *fraction),
         DropPoint::Row { index, fraction } => {
-            arrangement.rows.get(*index)?;
-            Some(by_half(arrangement, *index, *fraction))
+            let row = arrangement.rows.get(*index)?;
+            Some(by_half(row, *index, *fraction))
         }
     }
 }
@@ -213,7 +218,7 @@ fn candidate_for_tab_group(arrangement: &Arrangement, point: &DropPoint) -> Opti
         DropPoint::Row { index, fraction } => {
             let row = arrangement.rows.get(*index)?;
             let Some(tab_group) = &row.tab_group else {
-                return Some(by_half(arrangement, *index, *fraction));
+                return Some(by_half(row, *index, *fraction));
             };
             let (first, _) = block_of(arrangement, tab_group)?;
             let line = 1 + index - first;
@@ -232,6 +237,7 @@ pub fn drop_for(
         Dragged::Row(_) => candidate_for_row(arrangement, point),
         Dragged::TabGroup(_) => candidate_for_tab_group(arrangement, point),
     }?;
+    // the drop is tried on a copy, so a place that would change nothing is never offered
     apply_drop(arrangement, dragged, &candidate)?;
     Some(candidate)
 }
@@ -242,6 +248,11 @@ fn mark(target: MarkTarget, edge: MarkEdge, tab_group: Option<TabGroupId>) -> Dr
         edge,
         tab_group,
     }
+}
+
+fn first_of_its_block(arrangement: &Arrangement, tab_group: &TabGroupId, index: usize) -> bool {
+    let block = block_of(arrangement, tab_group);
+    block.is_some_and(|(first, _)| first == index)
 }
 
 fn mark_in_no_group(arrangement: &Arrangement, index: usize) -> Option<DropMark> {
@@ -255,8 +266,9 @@ fn mark_in_no_group(arrangement: &Arrangement, index: usize) -> Option<DropMark>
         return Some(mark(mark_at, MarkEdge::Below, None));
     }
 
-    if let Some(tab_group) = &rows[index].tab_group
-        && block_of(arrangement, tab_group).is_some_and(|(first, _)| first == index)
+    let row = rows.get(index)?;
+    if let Some(tab_group) = &row.tab_group
+        && first_of_its_block(arrangement, tab_group, index)
     {
         return Some(mark(
             MarkTarget::Wrapper(tab_group.clone()),
@@ -289,6 +301,7 @@ fn mark_in_tab_group(
     Some(mark(MarkTarget::Row(index), MarkEdge::Above, inside))
 }
 
+/// Where to draw the line for a place `drop_for` gave, or none for an empty list or a place past its end.
 pub fn drop_mark_for(arrangement: &Arrangement, place: &DropPlace) -> Option<DropMark> {
     match &place.tab_group {
         None => mark_in_no_group(arrangement, place.index),

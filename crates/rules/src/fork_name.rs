@@ -17,14 +17,11 @@ fn fork_mark_of(name: &str) -> ForkMark<'_> {
 
     let digit_count = after_glyph.bytes().take_while(u8::is_ascii_digit).count();
     let (digits, rest) = after_glyph.split_at(digit_count);
-    let base;
-    if rest.is_empty() {
-        base = rest;
-    } else if let Some(stripped) = rest.strip_prefix(' ') {
-        base = stripped;
-    } else {
-        return original;
-    }
+    let base = match rest.strip_prefix(' ') {
+        Some(stripped) => stripped,
+        None if rest.is_empty() => "",
+        None => return original,
+    };
 
     if digits.is_empty() {
         return ForkMark { number: 1, base };

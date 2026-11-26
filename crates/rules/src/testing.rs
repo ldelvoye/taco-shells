@@ -2,8 +2,27 @@ use taco_protocol::{Arrangement, Dragged, DropPlace, Row, TabGroup, TabGroupId, 
 
 use crate::arrangement::{block_of, empty_arrangement, is_hidden};
 use crate::changes::{add_row, add_row_to, close_row, fork_row, select_row};
-use crate::drop::apply_drop;
+use crate::drop::{DropPoint, apply_drop, drop_for, drop_mark_for};
 use crate::tab_groups::{create_tab_group, toggle_tab_group, ungroup_tab_group};
+
+/// A seeded generator, so a failing run of the random test repeats exactly.
+struct Dice(u64);
+
+impl Dice {
+    fn below(&mut self, bound: usize) -> usize {
+        let multiplied = self.0.wrapping_mul(6364136223846793005);
+        self.0 = multiplied.wrapping_add(1442695040888963407);
+        let high = self.0 >> 33;
+        high as usize % bound.max(1)
+    }
+}
+
+fn dragged_for(drags_row: bool, row: TerminalId, group: Option<TabGroupId>) -> Dragged {
+    match (drags_row, group) {
+        (false, Some(group)) => Dragged::TabGroup(group),
+        _ => Dragged::Row(row),
+    }
+}
 
 pub fn id(name: &str) -> TerminalId {
     TerminalId(name.to_string())
@@ -110,62 +129,62 @@ fn invariant_breaks(arrangement: &Arrangement) -> Option<&'static str> {
     None
 }
 
-struct Dice(u64);
-
-impl Dice {
-    fn below(&mut self, bound: usize) -> usize {
-        self.0 = self
-            .0
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        let high = self.0 >> 33;
-        high as usize % bound.max(1)
-    }
-}
-
 #[test]
 fn random_changes_keep_every_invariant_of_the_arrangement() {
     let mut dice = Dice(7);
     let mut arrangement = empty_arrangement();
     for step in 0..2_000 {
         let row_count = arrangement.rows.len();
-        let picked_index = dice.below(row_count);
-        let picked = arrangement
-            .rows
-            .get(picked_index)
-            .map(|row| row.terminal.clone());
-        let group_count = arrangement.tab_groups.len();
-        let group_index = dice.below(group_count);
-        let group = arrangement
-            .tab_groups
-            .get(group_index)
-            .map(|record| record.id.clone());
+        let picked_index = dice.below(row_count + 1);
+        let picked_row = arrangement.rows.get(picked_index);
+        // one pick in a few is a terminal that is not open
+        let picked = match picked_row {
+            Some(row) => row.terminal.clone(),
+            None => id("gone"),
+        };
+        let group_index = dice.below(arrangement.tab_groups.len());
+        let group_record = arrangement.tab_groups.get(group_index);
+        let group = group_record.map(|record| record.id.clone());
         let fresh = id(&format!("t{step}"));
+        let drags_row = dice.below(2) == 0;
+        let names_group = dice.below(2) == 0;
+        let gap = dice.below(row_count + 2);
+        let fraction = dice.below(101) as f32 / 100.0;
 
-        let next = match (dice.below(9), picked, group) {
-            (0, _, _) => add_row(&arrangement, fresh),
-            (1, _, group) => add_row_to(&arrangement, fresh, group),
-            (2, Some(row), _) => close_row(&arrangement, &row),
-            (3, Some(row), _) => select_row(&arrangement, &row),
-            (4, Some(row), _) => fork_row(&arrangement, &row, fresh),
-            (5, Some(row), _) => create_tab_group(&arrangement, &row, tab(&format!("g{step}"))),
-            (6, _, Some(group)) => toggle_tab_group(&arrangement, &group),
-            (7, _, Some(group)) => ungroup_tab_group(&arrangement, &group),
-            (8, Some(row), group) => {
-                let dragged;
-                if dice.below(2) == 0 {
-                    dragged = Dragged::Row(row);
-                } else {
-                    match group.clone() {
-                        Some(group) => dragged = Dragged::TabGroup(group),
-                        None => dragged = Dragged::Row(row),
-                    }
+        let next = match (dice.below(10), group) {
+            (0, _) => add_row(&arrangement, fresh),
+            (1, group) => add_row_to(&arrangement, fresh, group),
+            (2, _) => close_row(&arrangement, &picked),
+            (3, _) => select_row(&arrangement, &picked),
+            (4, _) => fork_row(&arrangement, &picked, fresh),
+            (5, _) => create_tab_group(&arrangement, &picked, tab(&format!("g{step}"))),
+            (6, Some(group)) => toggle_tab_group(&arrangement, &group),
+            (7, Some(group)) => ungroup_tab_group(&arrangement, &group),
+            (8, group) => {
+                let dragged = dragged_for(drags_row, picked, group.clone());
+                let mut tab_group = None;
+                if names_group {
+                    tab_group = group;
                 }
                 let place = DropPlace {
-                    index: dice.below(row_count + 1),
-                    tab_group: group.filter(|_| dice.below(2) == 0),
+                    index: gap,
+                    tab_group,
                 };
+                drop_mark_for(&arrangement, &place);
                 apply_drop(&arrangement, &dragged, &place)
+            }
+            (9, group) => {
+                let dragged = dragged_for(drags_row, picked, group);
+                let point = DropPoint::Row {
+                    index: gap,
+                    fraction,
+                };
+                let offered = drop_for(&arrangement, &dragged, &point);
+                let Some(place) = offered else { continue };
+                assert!(drop_mark_for(&arrangement, &place).is_some());
+                let applied = apply_drop(&arrangement, &dragged, &place);
+                assert!(applied.is_some(), "an offered drop applies");
+                applied
             }
             _ => None,
         };

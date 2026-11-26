@@ -1,20 +1,21 @@
 use taco_protocol::{Arrangement, TabGroup, TabGroupId, TerminalId};
 
-use crate::arrangement::{changed, locate_row};
+use crate::arrangement::{locate_row, reselect, selected_terminal, settled_if_changed};
 
 pub const NEW_TAB_GROUP_NAME: &str = "New group";
 
 // A row that leaves a tab group to start its own lands right after the rest of it, so both stay in one piece.
+// `without_row` is the arrangement with the row already lifted out.
 fn slot_after_old_tab_group(
-    arrangement: &Arrangement,
+    without_row: &Arrangement,
     old: Option<&TabGroupId>,
     from: usize,
 ) -> usize {
     let Some(old) = old else {
         return from;
     };
-    let mut remaining = arrangement.rows.iter();
-    let last = remaining.rposition(|row| row.tab_group.as_ref() == Some(old));
+    let mut rows = without_row.rows.iter();
+    let last = rows.rposition(|row| row.tab_group.as_ref() == Some(old));
     match last {
         Some(last) => last + 1,
         None => from,
@@ -28,7 +29,7 @@ pub fn create_tab_group(
     id: TabGroupId,
 ) -> Option<Arrangement> {
     let from = locate_row(arrangement, terminal)?;
-    let selected = arrangement.rows[arrangement.selected].terminal.clone();
+    let selected = selected_terminal(Some(arrangement)).cloned();
 
     let mut after = arrangement.clone();
     let mut lifted = after.rows.remove(from);
@@ -42,10 +43,8 @@ pub fn create_tab_group(
         collapsed: false,
     };
     after.tab_groups.push(record);
-    if let Some(index) = locate_row(&after, &selected) {
-        after.selected = index;
-    }
-    changed(arrangement, after)
+    reselect(&mut after, selected.as_ref());
+    settled_if_changed(arrangement, after)
 }
 
 fn with_record_changed(
@@ -57,7 +56,7 @@ fn with_record_changed(
     let mut records = after.tab_groups.iter_mut();
     let record = records.find(|record| record.id == *id)?;
     change(record);
-    changed(arrangement, after)
+    settled_if_changed(arrangement, after)
 }
 
 pub fn rename_tab_group(
@@ -83,7 +82,7 @@ pub fn ungroup_tab_group(arrangement: &Arrangement, id: &TabGroupId) -> Option<A
             row.tab_group = None;
         }
     }
-    changed(arrangement, after)
+    settled_if_changed(arrangement, after)
 }
 
 #[cfg(test)]
@@ -102,6 +101,12 @@ mod tests {
         let alone = create_tab_group(&built("g:b", "g:b"), &id("b"), tab("h")).unwrap();
         assert_eq!(shown(&alone), "[h:b]");
         assert_eq!(alone.tab_groups.len(), 1);
+        let selection_moved = create_tab_group(&built("a g:b g:c g:d", "g:d"), &id("c"), tab("h"));
+        assert_eq!(shown(&selection_moved.unwrap()), "a g:b [g:d] h:c");
+
+        let collapsed = toggle_tab_group(&list, &tab("g")).unwrap();
+        let reopened = toggle_tab_group(&collapsed, &tab("g")).unwrap();
+        assert_eq!(shown(&reopened), shown(&list));
 
         let ungrouped = ungroup_tab_group(&list, &tab("g")).unwrap();
         assert_eq!(shown(&ungrouped), "a b c d [e]");
