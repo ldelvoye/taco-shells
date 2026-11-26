@@ -211,6 +211,22 @@ describe('the runtime screen', () => {
     await parsed(colored, colorQuery)
     expect(coloredAnswers).toEqual(['\x1b]11;rgb:1212/3434/5656\x1b\\'])
 
+    await parsed(colored, '\x1b]10;?;?\x07')
+    expect(coloredAnswers).toHaveLength(3)
+    expect(coloredAnswers[2]).toBe('\x1b]11;rgb:1212/3434/5656\x1b\\')
+
+    colored.setColors({ ...COLORS, background: '#abcdef' })
+    await parsed(colored, colorQuery)
+    expect(coloredAnswers[3]).toBe('\x1b]11;rgb:abab/cdcd/efef\x1b\\')
+
+    await parsed(colored, '\x1b]12;#fedcba\x07\x1b]4;3;#010203\x07')
+    const withColorsSet = await snapshotOf(colored)
+    expect(withColorsSet).toContain('\x1b]4;3;#010203\x1b\\\x1b]12;#fedcba\x1b\\')
+    await parsed(colored, '\x1b]112\x07\x1b]104;3\x07')
+    const afterReset = await snapshotOf(colored)
+    expect(afterReset).not.toContain('#fedcba')
+    expect(afterReset).not.toContain('#010203')
+
     const colorView = makeTerminal()
     const fromTheColorView: string[] = []
     leaveAnswersToTheRuntime(colorView.term)
