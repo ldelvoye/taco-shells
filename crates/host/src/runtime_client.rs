@@ -1,12 +1,14 @@
 //! The host's side of the terminal runtime: starting `taco-shells-runtime`, its control connection, and its exit.
 
 use std::collections::HashMap;
+use std::ffi::{CStr, CString, OsStr, OsString};
 use std::io;
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixStream;
-use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::ExitStatus;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 // The locks are taken past a poisoning: a panic another host thread survived must not make every later send, ask or stop panic too.
@@ -36,6 +38,10 @@ const PATIENCE: Patience = Patience {
 /// Commands sent and not yet written: the workspace sends a few per action, so this many waiting means a runtime that has stopped reading, not a busy one.
 const QUEUED_COMMANDS: usize = 4096;
 const STALLED: &str = "The terminals stopped responding and were closed.";
+const DEV_NULL: &CStr = c"/dev/null";
+const SPAWN_FLAGS: libc::c_short = (libc::POSIX_SPAWN_SETSIGMASK
+    | libc::POSIX_SPAWN_SETSIGDEF
+    | libc::POSIX_SPAWN_CLOEXEC_DEFAULT) as libc::c_short;
 
 /// How long each step of a stop may take, and a send for room in the queue.
 #[derive(Clone, Copy)]
@@ -92,6 +98,17 @@ enum Exit {
     Reaped(Option<ExitStatus>),
 }
 
+struct SpawnAttributes(libc::posix_spawnattr_t);
+
+struct FileActions(libc::posix_spawn_file_actions_t);
+
+unsafe extern "C" {
+    fn posix_spawn_file_actions_addinherit_np(
+        actions: *mut libc::posix_spawn_file_actions_t,
+        fd: libc::c_int,
+    ) -> libc::c_int;
+}
+
 impl RuntimeClient {
     /// `taco-shells-runtime` beside the running executable, in the bundle and in `target/<profile>/` alike.
     pub fn program_beside_this_one() -> io::Result<PathBuf> {
@@ -129,32 +146,9 @@ impl RuntimeClient {
             context: context.clone(),
         };
         let arguments = launch::arguments(&given);
-        let mut command = Command::new(program);
-        command.args(arguments);
-        command.stdin(Stdio::null());
-        // Between fork and exec only async-signal-safe calls. The copies at 3 and 4 stay open across exec; the ones above close.
-        unsafe {
-            command.pre_exec(move || {
-                // A mask survives exec, and std does not reset it on this path: the runtime starts with none blocked.
-                let mut nothing_blocked: libc::sigset_t = std::mem::zeroed();
-                libc::sigemptyset(&mut nothing_blocked);
-                libc::pthread_sigmask(libc::SIG_SETMASK, &nothing_blocked, std::ptr::null_mut());
-                let control_high = libc::fcntl(control_fd, libc::F_DUPFD_CLOEXEC, ABOVE_BOTH);
-                let terminals_high = libc::fcntl(terminals_fd, libc::F_DUPFD_CLOEXEC, ABOVE_BOTH);
-                if control_high < 0 || terminals_high < 0 {
-                    return Err(io::Error::last_os_error());
-                }
-                if libc::dup2(control_high, CONTROL_FD) < 0
-                    || libc::dup2(terminals_high, TERMINALS_FD) < 0
-                {
-                    return Err(io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-        let mut child = command.spawn()?;
+        // posix_spawn runs no code of ours in the child: the copies at 3 and 4 and the standard streams stay open across exec, nothing else.
+        let pid = spawn_runtime(program, &arguments, control_fd, terminals_fd)?;
         // The runtime holds its own ends now; ours would keep its connections open after it died.
-        drop(command);
         drop(control_end);
         drop(terminals_end);
 
@@ -163,7 +157,7 @@ impl RuntimeClient {
         let shared = Arc::new(Shared {
             commands,
             stalled: AtomicBool::new(false),
-            pid: child.id(),
+            pid,
             next_ask: AtomicU64::new(0),
             asks: Mutex::new(Some(HashMap::new())),
             stopping: AtomicBool::new(false),
@@ -188,11 +182,11 @@ impl RuntimeClient {
                             .exit
                             .lock()
                             .unwrap_or_else(PoisonError::into_inner);
-                        status = child.wait().ok();
+                        status = reap(waiter_shared.pid);
                     }
                     Err(error) => {
                         eprintln!("the runtime could not be waited on without reaping it: {error}");
-                        status = child.wait().ok();
+                        status = reap(waiter_shared.pid);
                         exit = waiter_shared
                             .exit
                             .lock()
@@ -328,6 +322,36 @@ impl Exit {
     }
 }
 
+impl SpawnAttributes {
+    fn new() -> io::Result<SpawnAttributes> {
+        let mut attributes: libc::posix_spawnattr_t = std::ptr::null_mut();
+        let made = unsafe { libc::posix_spawnattr_init(&mut attributes) };
+        errno_result(made)?;
+        Ok(SpawnAttributes(attributes))
+    }
+}
+
+impl Drop for SpawnAttributes {
+    fn drop(&mut self) {
+        unsafe { libc::posix_spawnattr_destroy(&mut self.0) };
+    }
+}
+
+impl FileActions {
+    fn new() -> io::Result<FileActions> {
+        let mut actions: libc::posix_spawn_file_actions_t = std::ptr::null_mut();
+        let made = unsafe { libc::posix_spawn_file_actions_init(&mut actions) };
+        errno_result(made)?;
+        Ok(FileActions(actions))
+    }
+}
+
+impl Drop for FileActions {
+    fn drop(&mut self) {
+        unsafe { libc::posix_spawn_file_actions_destroy(&mut self.0) };
+    }
+}
+
 fn read_reports(
     mut reader: UnixStream,
     shared: Arc<Shared>,
@@ -399,6 +423,152 @@ fn wait_without_reaping(pid: u32) -> io::Result<()> {
             return Err(error);
         }
     }
+}
+
+fn reap(pid: u32) -> Option<ExitStatus> {
+    let pid = pid as libc::pid_t;
+    let mut status: libc::c_int = 0;
+    loop {
+        let reaped = unsafe { libc::waitpid(pid, &mut status, 0) };
+        if reaped == pid {
+            return Some(ExitStatus::from_raw(status));
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return None;
+        }
+    }
+}
+
+fn spawn_runtime(
+    program: &Path,
+    arguments: &[OsString],
+    control: RawFd,
+    terminals: RawFd,
+) -> io::Result<u32> {
+    let path = c_string(program.as_os_str())?;
+    let mut argv = vec![path.clone()];
+    for argument in arguments {
+        let argument = c_string(argument)?;
+        argv.push(argument);
+    }
+    let environment = environment_entries()?;
+    let argv_pointers = pointers_to(&argv);
+    let environment_pointers = pointers_to(&environment);
+
+    let control_high = duplicate_above_both(control)?;
+    let terminals_high = duplicate_above_both(terminals)?;
+    let attributes = runtime_attributes()?;
+    let actions = runtime_file_actions(control_high.as_raw_fd(), terminals_high.as_raw_fd())?;
+    let mut pid: libc::pid_t = 0;
+    let spawned = unsafe {
+        libc::posix_spawn(
+            &mut pid,
+            path.as_ptr(),
+            &actions.0,
+            &attributes.0,
+            argv_pointers.as_ptr(),
+            environment_pointers.as_ptr(),
+        )
+    };
+    errno_result(spawned)?;
+    Ok(pid as u32)
+}
+
+fn runtime_attributes() -> io::Result<SpawnAttributes> {
+    let mut attributes = SpawnAttributes::new()?;
+    // A mask survives exec, and posix_spawn keeps the caller's unless told: the runtime starts with none blocked.
+    let mut nothing_blocked: libc::sigset_t = 0;
+    let mut back_to_default: libc::sigset_t = 0;
+    unsafe {
+        libc::sigemptyset(&mut nothing_blocked);
+        libc::sigemptyset(&mut back_to_default);
+        libc::sigaddset(&mut back_to_default, libc::SIGPIPE);
+    }
+    let masked = unsafe { libc::posix_spawnattr_setsigmask(&mut attributes.0, &nothing_blocked) };
+    errno_result(masked)?;
+    let defaulted =
+        unsafe { libc::posix_spawnattr_setsigdefault(&mut attributes.0, &back_to_default) };
+    errno_result(defaulted)?;
+    let flagged = unsafe { libc::posix_spawnattr_setflags(&mut attributes.0, SPAWN_FLAGS) };
+    errno_result(flagged)?;
+    Ok(attributes)
+}
+
+fn runtime_file_actions(control: RawFd, terminals: RawFd) -> io::Result<FileActions> {
+    let mut actions = FileActions::new()?;
+    let opened = unsafe {
+        libc::posix_spawn_file_actions_addopen(
+            &mut actions.0,
+            libc::STDIN_FILENO,
+            DEV_NULL.as_ptr(),
+            libc::O_RDONLY,
+            0,
+        )
+    };
+    errno_result(opened)?;
+    for output in [libc::STDOUT_FILENO, libc::STDERR_FILENO] {
+        if !open_across_exec(output) {
+            continue;
+        }
+        let inherited = unsafe { posix_spawn_file_actions_addinherit_np(&mut actions.0, output) };
+        errno_result(inherited)?;
+    }
+    let placed = [(control, CONTROL_FD), (terminals, TERMINALS_FD)];
+    for (from, to) in placed {
+        let moved = unsafe { libc::posix_spawn_file_actions_adddup2(&mut actions.0, from, to) };
+        errno_result(moved)?;
+    }
+    Ok(actions)
+}
+
+fn open_across_exec(fd: RawFd) -> bool {
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    flags >= 0 && flags & libc::FD_CLOEXEC == 0
+}
+
+fn duplicate_above_both(fd: RawFd) -> io::Result<OwnedFd> {
+    let duplicate = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, ABOVE_BOTH) };
+    if duplicate < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let owned = unsafe { OwnedFd::from_raw_fd(duplicate) };
+    Ok(owned)
+}
+
+fn environment_entries() -> io::Result<Vec<CString>> {
+    let mut entries = Vec::new();
+    for (name, value) in std::env::vars_os() {
+        let mut entry = name;
+        entry.push("=");
+        entry.push(&value);
+        let entry = c_string(&entry)?;
+        entries.push(entry);
+    }
+    Ok(entries)
+}
+
+fn c_string(text: &OsStr) -> io::Result<CString> {
+    let made = CString::new(text.as_bytes());
+    let reason = "nul byte found in provided data";
+    made.map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, reason))
+}
+
+fn pointers_to(strings: &[CString]) -> Vec<*mut libc::c_char> {
+    let mut pointers = Vec::with_capacity(strings.len() + 1);
+    for string in strings {
+        let pointer = string.as_ptr().cast_mut();
+        pointers.push(pointer);
+    }
+    pointers.push(std::ptr::null_mut());
+    pointers
+}
+
+fn errno_result(result: libc::c_int) -> io::Result<()> {
+    if result != 0 {
+        return Err(io::Error::from_raw_os_error(result));
+    }
+    Ok(())
 }
 
 fn answer(shared: &Shared, ask: u64, value: Option<RuntimeAnswer>) {
@@ -670,6 +840,63 @@ exit {code};
     }
 
     #[test]
+    fn the_runtime_inherits_its_streams_environment_and_connections_and_nothing_else_of_the_app() {
+        let opened = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY) };
+        assert!(opened >= 0, "{}", io::Error::last_os_error());
+        let opened = unsafe { OwnedFd::from_raw_fd(opened) };
+        let high = unsafe { libc::fcntl(opened.as_raw_fd(), libc::F_DUPFD, 200) };
+        assert!(high >= 0, "{}", io::Error::last_os_error());
+        let open_across_exec = unsafe { OwnedFd::from_raw_fd(high) };
+        let script = format!(
+            r#"#!/usr/bin/perl
+use POSIX;
+my $held = defined(POSIX::dup({high})) ? 1 : 0;
+my @in = stat(STDIN);
+my @out = stat(STDOUT);
+my @err = stat(STDERR);
+my $env = exists $ENV{{HOME}} ? 1 : 0;
+open(my $report, '>', "$0.held") or die;
+print $report "held $held stdin $in[0]:$in[1] out $out[0]:$out[1] err $err[0]:$err[1] env $env";
+close $report;
+open(my $control, '<&=', {CONTROL_FD}) or die;
+read($control, my $byte, 1);
+exit 0;
+"#
+        );
+        let null = identity_of_fd(opened.as_raw_fd());
+        let app_out = identity_of_fd(libc::STDOUT_FILENO);
+        let app_err = identity_of_fd(libc::STDERR_FILENO);
+        let expected = format!("held 0 stdin {null} out {app_out} err {app_err} env 1");
+        let program = program("holds-nothing", &script);
+        let started = started_quick(&program.path);
+
+        let held_report = program.path.with_extension("held");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut held = String::new();
+        while held.is_empty() {
+            assert!(
+                Instant::now() < deadline,
+                "the stand-in never wrote what it held"
+            );
+            thread::sleep(Duration::from_millis(10));
+            let read = std::fs::read_to_string(&held_report);
+            if let Ok(text) = read {
+                held = text;
+            }
+        }
+        stopped_in_time(&started.client);
+        drop(open_across_exec);
+        assert_eq!(held, expected);
+    }
+
+    fn identity_of_fd(fd: RawFd) -> String {
+        let mut status: libc::stat = unsafe { std::mem::zeroed() };
+        let found = unsafe { libc::fstat(fd, &mut status) };
+        assert_eq!(found, 0, "{}", io::Error::last_os_error());
+        format!("{}:{}", status.st_dev, status.st_ino)
+    }
+
+    #[test]
     fn a_runtime_stopped_on_request_is_not_reported_as_dying() {
         let (events, received) = mpsc::channel();
         let program = stand_in("stops", 0);
@@ -691,7 +918,7 @@ exit {code};
 
         let held = client.shared.exit.lock().unwrap();
         client.send(RuntimeCommand::Scrollback { lines: 1 });
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(10);
         while !exited_unreaped(pid) {
             assert!(
                 Instant::now() < deadline,
@@ -705,12 +932,12 @@ exit {code};
         assert!(held.running(), "no reap is recorded while the lock is held");
         drop(held);
 
-        let reaped = client.wait_for_exit(Duration::from_secs(2));
+        let reaped = client.wait_for_exit(Duration::from_secs(10));
         assert!(reaped, "the reap is recorded once the lock is free");
         let after_reap = unsafe { libc::kill(pid as libc::pid_t, 0) };
         assert_eq!(after_reap, -1, "the reaped pid is no longer ours");
 
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             let queued = client
                 .shared

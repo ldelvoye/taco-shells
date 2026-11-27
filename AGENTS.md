@@ -222,6 +222,8 @@ Work lands through a pull request against `main`, rebase-merged so each commit k
 
 **An agent's own Claude Code variables leak into what it runs.** Smoke runs the plugin with an empty environment for that reason; anything that starts the plugin or `claude` from an agent's shell must decide which variables it passes.
 
+**A fork in a process with other threads can die in libSystem's atfork handlers before exec.** If another thread is in the middle of libnotify's one-time setup when the fork happens, the child waits on a setup whose thread it does not have and macOS kills it, while `spawn` still returns Ok. Start programs with `posix_spawn`, which runs no atfork handlers: std uses it unless a `pre_exec` closure, a uid, gid, groups or chroot, a changed `PATH` with a bare program name, or a `current_dir` with a relative program path makes it fork. Clippy refuses `pre_exec` through `clippy.toml`. The one fork left is the runtime's shell start in `crates/runtime/src/pty.rs`, which needs it for `setsid`, the controlling terminal and the open-file limit, and finishes libnotify's setup with `notify_is_valid_token` just before it.
+
 ## Known limits
 
 Known and not bugs to chase without reading this first.
@@ -233,6 +235,7 @@ Known and not bugs to chase without reading this first.
 - A screen of about 3 million styled cells (3000 by 1000) is too large for one frame, so a view of it never attaches; the runtime logs it. Real windows are about 100,000 cells.
 - The plugin folder cannot be put in `CLAUDE_CODE_PLUGIN_DIRS` if its path holds a `:`, as a home folder named with one would.
 - A shell startup file that sets `CLAUDE_CODE_PLUGIN_DIRS` outright, rather than appending to it, takes the plugin away from that user's terminals without a word.
+- A shell's start still forks, so it stays exposed to any other one-time setup in libSystem that is done lazily and that an atfork child handler waits on. None has been seen; libnotify's is the one observed, and it is finished before each fork.
 
 **Terminal view.**
 - Only the left button and the vertical wheel are reported to a program tracking the mouse.
