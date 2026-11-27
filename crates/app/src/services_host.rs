@@ -238,6 +238,7 @@ fn route_hooks(
     resolve: impl Fn(Vec<u32>) -> mpsc::Receiver<Option<RuntimeAnswer>>,
     deliver: impl Fn(HookEvent),
     ask: impl Fn(TerminalId, Question),
+    activity_on: impl Fn() -> bool,
 ) {
     for routed in messages {
         match routed {
@@ -253,6 +254,11 @@ fn route_hooks(
                 }
             }
             Routed::Question(question) => {
+                // A shell started while Agent Activity was on still loads the plugin; once it is off, no agent is told about the panel.
+                if !activity_on() {
+                    let _ = question.reply.send(AnswerPart::Placed(false));
+                    continue;
+                }
                 let pids = question.message.pids.clone();
                 let answered = resolve(pids);
                 let answer = answered.recv_timeout(place_wait);
@@ -346,6 +352,7 @@ fn ask_workspace(
 fn start_hook_route(
     runtime: RuntimeClient,
     workspace: WorkspaceHost,
+    activity_on: Arc<AtomicBool>,
     ask_notes_on: Arc<AtomicBool>,
     window: &WindowSender,
 ) -> Sender<Routed> {
@@ -360,6 +367,7 @@ fn start_hook_route(
         let notes_on = ask_notes_on.load(Ordering::SeqCst);
         ask_workspace(question, terminal, notes_on, &asking);
     };
+    let is_on = move || activity_on.load(Ordering::SeqCst);
     let spawned = thread::Builder::new()
         .name("hook-route".into())
         .spawn(move || {
@@ -370,6 +378,7 @@ fn start_hook_route(
                 resolve,
                 deliver,
                 ask,
+                is_on,
             )
         });
     if spawned.is_err() {
@@ -424,10 +433,16 @@ impl ServicesHost {
         let updater = start_updater(&directory, &window);
         let updater: Arc<Slot<Updater>> = Arc::new(Mutex::new(Some(updater)));
 
-        let inbox = start_hook_route(runtime, workspace, ask_notes_on, &window);
+        let routed_activity_on = Arc::clone(&activity_on);
+        let inbox = start_hook_route(
+            runtime,
+            workspace,
+            routed_activity_on,
+            ask_notes_on,
+            &window,
+        );
         let hook_inbox: Arc<Slot<Sender<Routed>>> = Arc::new(Mutex::new(Some(inbox)));
         let routed_inbox = Arc::clone(&hook_inbox);
-        let asked_activity_on = Arc::clone(&activity_on);
         let checked_updater = Arc::clone(&updater);
         let on_event = move |event| match event {
             ListenerEvent::Hook(message) => {
@@ -437,11 +452,6 @@ impl ServicesHost {
                 }
             }
             ListenerEvent::Question(question) => {
-                // A shell started while Agent Activity was on still loads the plugin; once it is off, no agent is told about the panel.
-                if !asked_activity_on.load(Ordering::SeqCst) {
-                    let _ = question.reply.send(AnswerPart::Placed(false));
-                    return;
-                }
                 let inbox = locked(&routed_inbox);
                 if let Some(inbox) = inbox.as_ref() {
                     let _ = inbox.send(Routed::Question(question));
@@ -685,6 +695,7 @@ mod tests {
                 resolve,
                 deliver,
                 no_ask,
+                || true,
             )
         });
         let first_answer = first_ask.recv_timeout(WAIT).unwrap();
@@ -728,6 +739,7 @@ mod tests {
             placed_unless_pid_is_12,
             |_| {},
             ask,
+            || true,
         );
 
         let first = placed_replies.recv_timeout(WAIT).unwrap();
@@ -736,6 +748,28 @@ mod tests {
         assert!(matches!(second, AnswerPart::Placed(false)));
         let asked = asked.lock().unwrap().clone();
         assert_eq!(asked, vec![(terminal("terminal-11"), vec![11])]);
+    }
+
+    #[test]
+    fn with_agent_activity_off_a_placed_session_is_answered_not_mine_and_never_asked() {
+        let (inbox, messages) = unbounded();
+        let (placed, placed_replies) = question(11);
+        inbox.send(Routed::Question(placed)).unwrap();
+        drop(inbox);
+
+        let ask = |_: TerminalId, _: Question| panic!("the workspace was asked");
+        route_hooks(
+            messages,
+            SHORT_ANSWER_WAIT,
+            SHORT_ANSWER_WAIT,
+            placed_unless_pid_is_12,
+            |_| {},
+            ask,
+            || false,
+        );
+
+        let answer = placed_replies.recv_timeout(WAIT).unwrap();
+        assert!(matches!(answer, AnswerPart::Placed(false)));
     }
 
     #[test]
@@ -765,6 +799,7 @@ mod tests {
             placed_unless_pid_is_12,
             deliver,
             ask,
+            || true,
         );
 
         let expected = vec!["deliver terminal-1", "ask terminal-2", "deliver terminal-3"];
