@@ -26,7 +26,6 @@ struct FakeShells {
     busy: HashSet<TerminalId>,
     refuse: HashSet<TerminalId>,
     pids: HashMap<TerminalId, u32>,
-    agent_plugin: Option<bool>,
 }
 
 impl Shells for FakeShells {
@@ -67,9 +66,7 @@ impl Shells for FakeShells {
     fn shell_pid(&self, id: &TerminalId) -> Option<u32> {
         self.pids.get(id).copied()
     }
-    fn set_agent_plugin(&mut self, on: bool) {
-        self.agent_plugin = Some(on);
-    }
+    fn set_agent_plugin(&mut self, _on: bool) {}
 }
 
 fn id(name: &str) -> TerminalId {
@@ -340,7 +337,7 @@ fn output_goes_back_to_the_shell_budget_now_only_when_no_view_will_write_it() {
 }
 
 #[test]
-fn an_exit_ends_the_view_after_the_last_output_and_the_terminal_is_gone() {
+fn an_exit_ends_the_view_after_the_last_output_and_a_later_attach_is_ended_at_once() {
     let (mut core, now) = opened(&["a"]);
     request(
         &mut core,
@@ -368,17 +365,20 @@ fn an_exit_ends_the_view_after_the_last_output_and_the_terminal_is_gone() {
         code: 3
     }));
 
-    let late = request(
-        &mut core,
-        TerminalRequest::Attach {
-            id: id("a"),
-            attachment: 2,
-            size: None,
-            cell: NO_CELL,
-        },
-        now,
-    );
-    assert!(late.is_empty());
+    // "a" has exited; "never-opened" never existed.
+    for name in ["a", "never-opened"] {
+        let late = request(
+            &mut core,
+            TerminalRequest::Attach {
+                id: id(name),
+                attachment: 2,
+                size: None,
+                cell: NO_CELL,
+            },
+            now,
+        );
+        assert_eq!(late, [Effect::Event(TerminalEvent::End { id: id(name) })]);
+    }
 }
 
 #[test]
@@ -439,6 +439,52 @@ fn a_title_is_reported_only_when_it_changes() {
         title: "claude: tests".into(),
     };
     assert_eq!(reports(&renamed), [&expected]);
+}
+
+#[test]
+fn settings_pushed_while_a_terminal_is_open_reach_it_as_if_pushed_before_it_opened() {
+    let (mut core, now) = opened(&["open-first"]);
+    let mut colors = TerminalColors {
+        foreground: Rgb { r: 1, g: 2, b: 3 },
+        background: Rgb {
+            r: 0x19,
+            g: 0x19,
+            b: 0x18,
+        },
+        cursor: Rgb { r: 4, g: 5, b: 6 },
+        cursor_text: Rgb { r: 7, g: 8, b: 9 },
+        selection: Rgb { r: 1, g: 1, b: 1 },
+        ansi: [Rgb { r: 0, g: 0, b: 0 }; 16],
+    };
+    colors.ansi[1] = Rgb {
+        r: 0xf0,
+        g: 0x64,
+        b: 0x6c,
+    };
+    core.handle(Input::Command(RuntimeCommand::Colors(colors)), now);
+    let scrollback = RuntimeCommand::Scrollback { lines: 100 };
+    core.handle(Input::Command(scrollback), now);
+    core.handle(
+        Input::Command(RuntimeCommand::Open(start("open-after"))),
+        now,
+    );
+
+    // Far more history than either limit keeps, so a terminal still on the first limit holds more of it.
+    let mut history = Vec::new();
+    for n in 0..5_000 {
+        history.extend_from_slice(format!("\x1b[31mline {n}\x1b[0m\r\n").as_bytes());
+    }
+    for name in ["open-first", "open-after"] {
+        output(&mut core, name, &history, now);
+    }
+    let first = core.terminal(&id("open-first")).unwrap();
+    let after = core.terminal(&id("open-after")).unwrap();
+    assert_eq!(encoded(first), encoded(after));
+
+    output(&mut core, "open-first", b"\x1b]11;?\x07", now);
+    let (to, answer) = core.shells_mut().written.last().unwrap().clone();
+    assert_eq!(to, id("open-first"));
+    assert_eq!(answer, b"\x1b]11;rgb:1919/1919/1818\x07".to_vec());
 }
 
 #[test]
@@ -629,16 +675,6 @@ fn cursor_of(terminal: &Terminal) -> (taco_ghostty::render::CursorShape, bool) {
     (cursor.shape, cursor.blinking)
 }
 
-#[test]
-fn the_agent_plugin_switch_reaches_the_shells_as_sent() {
-    let mut core = Core::new(FakeShells::default());
-    let now = Instant::now();
-    for on in [true, false] {
-        core.handle(Input::Command(RuntimeCommand::AgentPlugin { on }), now);
-        assert_eq!(core.shells_mut().agent_plugin, Some(on));
-    }
-}
-
 fn push_cursor_defaults(
     core: &mut Core<FakeShells>,
     shape: CursorShape,
@@ -668,15 +704,28 @@ fn attached_with_defaults(shape: CursorShape) -> (Core<FakeShells>, Instant, Opt
 }
 
 #[test]
-fn a_shape_a_program_chose_survives_a_restore_a_switch_back_and_a_settings_change() {
+fn the_cursor_follows_the_settings_until_a_program_chooses_a_shape_and_again_once_it_gives_it_back()
+{
     use taco_ghostty::render::CursorShape as Shown;
+    let runtime_cursor = |core: &Core<FakeShells>| cursor_of(core.terminal(&id("a")).unwrap());
     let (mut core, now, mut view) = attached_with_defaults(CursorShape::Bar);
-    // The program picks a steady block.
-    let chose = output(&mut core, "a", b"\x1b[2 q", now);
-    apply(&events(&chose), &mut view);
-    assert_eq!(cursor_of(view.as_ref().unwrap()).0, Shown::Block);
+    assert_eq!(runtime_cursor(&core), (Shown::Bar, false));
+    assert_eq!(cursor_of(view.as_ref().unwrap()), (Shown::Bar, false));
 
     let changed = push_cursor_defaults(&mut core, CursorShape::Underline, true, now);
+    apply(&events(&changed), &mut view);
+    assert_eq!(runtime_cursor(&core), (Shown::Underline, true));
+    assert_eq!(cursor_of(view.as_ref().unwrap()), (Shown::Underline, true));
+
+    // A shape chosen and given back follows the settings again.
+    let chose_and_gave_back = output(&mut core, "a", b"\x1b[2 q\x1b[0 q", now);
+    apply(&events(&chose_and_gave_back), &mut view);
+    assert_eq!(cursor_of(view.as_ref().unwrap()).0, Shown::Underline);
+
+    // A steady block the program keeps outlasts a settings change, on both sides.
+    let chose = output(&mut core, "a", b"\x1b[2 q", now);
+    apply(&events(&chose), &mut view);
+    let changed = push_cursor_defaults(&mut core, CursorShape::Bar, false, now);
     let sent = events(&changed);
     let kinds: Vec<&str> = sent.iter().map(|event| kind(event)).collect();
     assert_eq!(
@@ -685,10 +734,10 @@ fn a_shape_a_program_chose_survives_a_restore_a_switch_back_and_a_settings_chang
         "no reset for a terminal whose program chose"
     );
     apply(&sent, &mut view);
+    assert_eq!(runtime_cursor(&core).0, Shown::Block);
     assert_eq!(cursor_of(view.as_ref().unwrap()).0, Shown::Block);
-    assert_eq!(cursor_of(core.terminal(&id("a")).unwrap()).0, Shown::Block);
 
-    // Switching back: a fresh view from a new snapshot.
+    // A fresh view, as on switching back. Once the program gives its shape back it shows Bar, not the library's own block, so a view that missed the defaults would show.
     let again = TerminalRequest::Attach {
         id: id("a"),
         attachment: 2,
@@ -699,50 +748,7 @@ fn a_shape_a_program_chose_survives_a_restore_a_switch_back_and_a_settings_chang
     let mut fresh = None;
     apply(&events(&reattached), &mut fresh);
     assert_eq!(cursor_of(fresh.as_ref().unwrap()).0, Shown::Block);
-}
-
-#[test]
-fn a_terminal_whose_program_chose_no_shape_shows_the_defaults_and_follows_them() {
-    use taco_ghostty::render::CursorShape as Shown;
-    let (mut core, now, mut view) = attached_with_defaults(CursorShape::Bar);
-    assert_eq!(
-        cursor_of(core.terminal(&id("a")).unwrap()),
-        (Shown::Bar, false)
-    );
-    assert_eq!(cursor_of(view.as_ref().unwrap()), (Shown::Bar, false));
-
-    let changed = push_cursor_defaults(&mut core, CursorShape::Underline, true, now);
-    apply(&events(&changed), &mut view);
-    assert_eq!(
-        cursor_of(core.terminal(&id("a")).unwrap()),
-        (Shown::Underline, true)
-    );
-    assert_eq!(cursor_of(view.as_ref().unwrap()), (Shown::Underline, true));
-
-    // A program that chose a shape and gave it back follows the settings again, on both sides.
-    let chose_and_gave_back = output(&mut core, "a", b"\x1b[2 q\x1b[0 q", now);
-    apply(&events(&chose_and_gave_back), &mut view);
-    assert_eq!(cursor_of(view.as_ref().unwrap()).0, Shown::Underline);
-    // Bar again, not the library's own block, so a view that missed the defaults would show.
-    let changed = push_cursor_defaults(&mut core, CursorShape::Bar, false, now);
-    apply(&events(&changed), &mut view);
-    assert_eq!(
-        cursor_of(core.terminal(&id("a")).unwrap()),
-        (Shown::Bar, false)
-    );
-    assert_eq!(cursor_of(view.as_ref().unwrap()), (Shown::Bar, false));
-
-    // A fresh view learns the defaults with its snapshot, so a later reset by the program lands on them.
-    let again = TerminalRequest::Attach {
-        id: id("a"),
-        attachment: 2,
-        size: None,
-        cell: NO_CELL,
-    };
-    let reattached = request(&mut core, again, now);
-    let mut fresh = None;
-    apply(&events(&reattached), &mut fresh);
-    let chose_and_gave_back = output(&mut core, "a", b"\x1b[4 q\x1b[0 q", now);
-    apply(&events(&chose_and_gave_back), &mut fresh);
+    let gave_back = output(&mut core, "a", b"\x1b[0 q", now);
+    apply(&events(&gave_back), &mut fresh);
     assert_eq!(cursor_of(fresh.as_ref().unwrap()).0, Shown::Bar);
 }
