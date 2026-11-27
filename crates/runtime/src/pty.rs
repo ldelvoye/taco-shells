@@ -215,17 +215,13 @@ impl PtyShells {
                 let status;
                 match waited {
                     Ok(()) => {
-                        reaped = waiter_reaped
-                            .lock()
-                            .unwrap_or_else(PoisonError::into_inner);
+                        reaped = waiter_reaped.lock().unwrap_or_else(PoisonError::into_inner);
                         status = child.wait();
                     }
                     Err(error) => {
                         eprintln!("a shell could not be waited on without reaping it: {error}");
                         status = child.wait();
-                        reaped = waiter_reaped
-                            .lock()
-                            .unwrap_or_else(PoisonError::into_inner);
+                        reaped = waiter_reaped.lock().unwrap_or_else(PoisonError::into_inner);
                     }
                 }
                 let code = match status {
