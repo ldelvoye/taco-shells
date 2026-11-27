@@ -2,21 +2,28 @@ use std::collections::VecDeque;
 
 use taco_protocol::{ActivityEntry, ActivityKind, Author, Step};
 
-/// How many entries a terminal's log keeps; older ones go as new ones come.
+/// How many entries other than steps a terminal's log keeps; older ones go as new ones come.
 pub const KEPT_ENTRIES: usize = 1_000;
+/// How many steps it keeps, counted apart so a long run of steps never pushes the agent's notes out.
+pub const KEPT_STEPS: usize = 2_000;
 /// How many entries the window is sent at a time.
 pub const PAGE: usize = 200;
-// The file is rewritten down to the kept entries once it passes this many lines.
-const REWRITE_AT_LINES: usize = 2 * KEPT_ENTRIES;
+/// The file is rewritten down to the kept entries once it passes this many lines, twice what is kept.
+pub const REWRITE_AT_LINES: usize = 2 * (KEPT_ENTRIES + KEPT_STEPS);
 
 /// One terminal's Agent Activity, oldest first.
 #[derive(Debug, Default)]
 pub struct Log {
     entries: VecDeque<ActivityEntry>,
+    steps_kept: usize,
     next_seq: u64,
     lines_in_file: usize,
     /// The file holds lines the log does not keep, or lacks one a failed write lost.
     out_of_step: bool,
+    /// The stretch the next step joins, numbered by the seq of its first step: the steps since the last note or the start of a turn.
+    open_stretch: Option<u64>,
+    /// The `prompt_id` of the agent's current turn; a message that arrives during the turn carries the same one.
+    turn: Option<String>,
 }
 
 /// A page of entries, oldest first, and whether nothing older is kept.
@@ -27,6 +34,10 @@ pub struct Page {
 
 pub fn line_of(entry: &ActivityEntry) -> Option<String> {
     serde_json::to_string(entry).ok()
+}
+
+fn is_step(entry: &ActivityEntry) -> bool {
+    matches!(entry.kind, ActivityKind::Step { .. })
 }
 
 impl Log {
@@ -46,17 +57,74 @@ impl Log {
     }
 
     fn keep(&mut self, entry: ActivityEntry) {
+        let adds_a_step = is_step(&entry);
         self.entries.push_back(entry);
-        if self.entries.len() > KEPT_ENTRIES {
-            self.entries.pop_front();
+        if adds_a_step {
+            self.steps_kept += 1;
+        }
+        let written_kept = self.entries.len() - self.steps_kept;
+        if self.steps_kept > KEPT_STEPS {
+            self.drop_oldest_step();
+        } else if written_kept > KEPT_ENTRIES {
+            self.drop_oldest_written();
         }
     }
 
-    /// A step at the end, as a stretch of its own.
+    fn drop_oldest_step(&mut self) {
+        let mut entries = self.entries.iter();
+        let Some(index) = entries.position(is_step) else {
+            return;
+        };
+        self.entries.remove(index);
+        self.steps_kept -= 1;
+    }
+
+    fn drop_oldest_written(&mut self) {
+        let mut entries = self.entries.iter();
+        let Some(index) = entries.position(|entry| !is_step(entry)) else {
+            return;
+        };
+        self.entries.remove(index);
+    }
+
+    /// A step at the end, joining the open stretch or opening one.
     pub fn append_step(&mut self, step: Step, at_ms: u64) -> ActivityEntry {
-        let stretch = self.next_seq;
+        let stretch = match self.open_stretch {
+            Some(open) => open,
+            None => self.next_seq,
+        };
+        self.open_stretch = Some(stretch);
         let kind = ActivityKind::Step { stretch, step };
         self.append(Author::App, kind, at_ms)
+    }
+
+    /// The agent's note, which takes the open stretch's steps and closes it.
+    pub fn append_note(&mut self, text: String, at_ms: u64) -> ActivityEntry {
+        let stretch = self.open_stretch.take();
+        let kind = ActivityKind::Note { text, stretch };
+        self.append(Author::Agent, kind, at_ms)
+    }
+
+    /// The user's prompt. One that starts a new turn closes the open stretch with no note, and one with no turn id always starts one; one within the turn leaves it open.
+    pub fn append_prompt(
+        &mut self,
+        text: String,
+        turn: Option<String>,
+        at_ms: u64,
+    ) -> ActivityEntry {
+        let same_turn = turn.is_some() && turn == self.turn;
+        if !same_turn {
+            self.open_stretch = None;
+            self.turn = turn;
+        }
+        let kind = ActivityKind::Asked { text };
+        self.append(Author::User, kind, at_ms)
+    }
+
+    /// A new agent session in the terminal: the open stretch ends with no note, and so does the turn.
+    pub fn session_started(&mut self) {
+        self.open_stretch = None;
+        self.turn = None;
     }
 
     /// A new entry at the end, numbered after every earlier one.
@@ -179,6 +247,39 @@ mod tests {
             entry.seq, appended as u64,
             "numbering carries on after a relaunch"
         );
+    }
+
+    #[test]
+    fn steps_and_written_entries_are_kept_up_to_their_own_counts() {
+        let mut log = Log::default();
+        for index in 0..KEPT_ENTRIES {
+            log.append_note(index.to_string(), 0);
+        }
+        let step = || Step::Did {
+            tool: "Bash".into(),
+            summary: "ls".into(),
+        };
+        for _ in 0..(KEPT_STEPS + 10) {
+            log.append_step(step(), 0);
+        }
+        let counts = |log: &Log| {
+            let steps = log.entries.iter().filter(|entry| is_step(entry)).count();
+            (log.entries.len() - steps, steps)
+        };
+        assert_eq!(
+            counts(&log),
+            (KEPT_ENTRIES, KEPT_STEPS),
+            "a long run of steps leaves every note"
+        );
+        let oldest_step = log.entries.iter().find(|entry| is_step(entry)).unwrap();
+        assert_eq!(oldest_step.seq, (KEPT_ENTRIES + 10) as u64);
+
+        log.append_prompt("next".into(), None, 0);
+        assert_eq!(counts(&log), (KEPT_ENTRIES, KEPT_STEPS));
+        let ActivityKind::Note { text, .. } = &log.entries[0].kind else {
+            panic!("the oldest entry kept is a note");
+        };
+        assert_eq!(text, "1", "the oldest note went first");
     }
 
     #[test]

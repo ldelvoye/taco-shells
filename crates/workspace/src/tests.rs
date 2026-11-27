@@ -780,7 +780,7 @@ fn a_log_file_stays_small_and_a_failed_write_is_made_good_by_the_next_one() {
     workspace.start(0);
     let lines = |disk: &Disk| disk.read_log(&id("t1")).len();
 
-    for index in 0..(2 * crate::KEPT_ENTRIES) {
+    for index in 0..crate::log::REWRITE_AT_LINES {
         prompted(&mut workspace, "t1", SESSION, &index.to_string());
     }
     assert_eq!(
@@ -796,6 +796,104 @@ fn a_log_file_stays_small_and_a_failed_write_is_made_good_by_the_next_one() {
     let on_disk = disk.read_log(&id("t1"));
     assert_eq!(on_disk.len(), crate::KEPT_ENTRIES);
     assert!(on_disk[on_disk.len() - 2].contains("lost on the disk"));
+}
+
+fn tool_used(workspace: &mut Workspace, terminal: &str, payload: serde_json::Value) {
+    let call = HookCall::AgentHook {
+        harness: claude(),
+        session_id: SESSION.into(),
+        event: "PostToolUse".into(),
+        payload: payload.to_string(),
+    };
+    hook(workspace, terminal, call, 0);
+}
+
+fn ran(workspace: &mut Workspace, terminal: &str, command: &str) {
+    let payload = serde_json::json!({ "tool_name": "Bash", "tool_input": { "command": command } });
+    tool_used(workspace, terminal, payload);
+}
+
+fn noted(workspace: &mut Workspace, terminal: &str, text: &str) {
+    let tool = "mcp__plugin_taco-shells_activity__note";
+    let payload = serde_json::json!({ "tool_name": tool, "tool_input": { "text": text } });
+    tool_used(workspace, terminal, payload);
+}
+
+fn prompted_in(workspace: &mut Workspace, terminal: &str, turn: &str, prompt: &str) {
+    let payload = serde_json::json!({ "prompt": prompt, "prompt_id": turn }).to_string();
+    let call = HookCall::AgentHook {
+        harness: claude(),
+        session_id: SESSION.into(),
+        event: "UserPromptSubmit".into(),
+        payload,
+    };
+    hook(workspace, terminal, call, 0);
+}
+
+/// Each entry of a terminal's log as a short line: "step 3 in 2", "note in 2", "note alone", "asked".
+fn stretches(workspace: &mut Workspace, terminal: &str) -> Vec<String> {
+    let watch = ActivityRequest::Watch {
+        terminal: Some(id(terminal)),
+    };
+    let out = workspace.activity(watch);
+    let Some(ActivityEvent::Loaded { entries, .. }) = activity(&out).pop() else {
+        panic!("watching {terminal} loads its log");
+    };
+    let lines = entries.into_iter().map(|entry| match entry.kind {
+        ActivityKind::Step { stretch, .. } => format!("step {} in {stretch}", entry.seq),
+        ActivityKind::Note {
+            stretch: Some(stretch),
+            ..
+        } => format!("note in {stretch}"),
+        ActivityKind::Note { stretch: None, .. } => "note alone".to_string(),
+        ActivityKind::Asked { .. } => "asked".to_string(),
+        other => format!("{other:?}"),
+    });
+    lines.collect()
+}
+
+#[test]
+fn a_note_takes_the_steps_since_the_last_one_and_a_new_turn_or_session_leaves_them_unnoted() {
+    let mut workspace = workspace();
+    prompted_in(&mut workspace, "t1", "turn-a", "Find the bug");
+    ran(&mut workspace, "t1", "cargo test");
+    // a message from another agent mid-turn carries the turn's id and leaves the stretch open
+    prompted_in(&mut workspace, "t1", "turn-a", "Also check the logo");
+    ran(&mut workspace, "t1", "cargo clippy");
+    noted(&mut workspace, "t1", "Found it");
+    noted(&mut workspace, "t1", "Nothing more to do");
+    ran(&mut workspace, "t1", "git status");
+    prompted_in(&mut workspace, "t1", "turn-b", "Next");
+    ran(&mut workspace, "t1", "ls");
+    agent_starts(&mut workspace, "t1");
+    ran(&mut workspace, "t1", "pwd");
+    // a new session starts its own turns, even one whose id repeats the last session's
+    prompted_in(&mut workspace, "t1", "turn-b", "Again");
+    ran(&mut workspace, "t1", "date");
+    prompted(&mut workspace, "t1", SESSION, "No turn id");
+    ran(&mut workspace, "t1", "whoami");
+    prompted(&mut workspace, "t1", SESSION, "Still no turn id");
+    ran(&mut workspace, "t1", "uptime");
+
+    let expected = [
+        "asked",
+        "step 1 in 1",
+        "asked",
+        "step 3 in 1",
+        "note in 1",
+        "note alone",
+        "step 6 in 6",
+        "asked",
+        "step 8 in 8",
+        "step 9 in 9",
+        "asked",
+        "step 11 in 11",
+        "asked",
+        "step 13 in 13",
+        "asked",
+        "step 15 in 15",
+    ];
+    assert_eq!(stretches(&mut workspace, "t1"), expected);
 }
 
 #[test]

@@ -22,8 +22,16 @@ const MAX_NAME_CHARACTERS: usize = 200;
 
 // A question is pinned above the log, so a longer one is cut rather than carried whole in every published state.
 const MAX_QUESTION_CHARACTERS: usize = 1000;
-// A prompt, command or path is cut to this many characters in a log entry.
+// A command or path is cut to this many characters in a log entry.
 const MAX_ENTRY_CHARACTERS: usize = 1000;
+// A prompt or a note keeps this many characters, then CUT_MARK.
+const MAX_WRITTEN_CHARACTERS: usize = 8_000;
+const CUT_MARK: &str = "… (cut)";
+// The tool-name prefixes of the app's activity server, for the stable app and for Dev.
+const ACTIVITY_SERVERS: &[&str] = &[
+    "mcp__plugin_taco-shells_activity__",
+    "mcp__plugin_taco-shells-dev_activity__",
+];
 
 const CHANGING_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit"];
 const CHANGED_PATHS: &[&str] = &["/tool_input/file_path", "/tool_input/notebook_path"];
@@ -222,16 +230,57 @@ fn summary_of(tool: &str, parsed: &Value) -> String {
     }
 }
 
+// Prose someone wrote (a prompt, a note): trimmed, none when blank, and ending in CUT_MARK when cut.
+fn written_at(parsed: &Value, pointer: &str) -> Option<String> {
+    let text = parsed.pointer(pointer)?.as_str()?;
+    let kept = cut_to(text, MAX_WRITTEN_CHARACTERS + 1);
+    if kept.is_empty() {
+        return None;
+    }
+    let length = kept.chars().count();
+    if length <= MAX_WRITTEN_CHARACTERS {
+        return Some(kept);
+    }
+    let shortened: String = kept.chars().take(MAX_WRITTEN_CHARACTERS).collect();
+    Some(format!("{shortened}{CUT_MARK}"))
+}
+
+// "note" from "mcp__plugin_taco-shells_activity__note"; none for any other tool.
+fn activity_tool(tool: &str) -> Option<&str> {
+    let mut servers = ACTIVITY_SERVERS.iter();
+    servers.find_map(|server| tool.strip_prefix(server))
+}
+
+fn activity_entry(name: &str, parsed: &Value) -> Option<EntryRead> {
+    let is_error = parsed.pointer("/tool_response/isError");
+    if is_error == Some(&Value::Bool(true)) {
+        return None;
+    }
+    match name {
+        "note" => {
+            let text = written_at(parsed, "/tool_input/text")?;
+            Some(EntryRead::Note { text })
+        }
+        // the other activity tools add no log entry
+        _ => None,
+    }
+}
+
 fn entry_of(event: &str, payload: &str) -> Option<EntryRead> {
     let parsed: Value = serde_json::from_str(payload).ok()?;
     match event {
         "UserPromptSubmit" => {
-            let text = text_at(&parsed, "/prompt")?;
-            Some(EntryRead::Asked { text })
+            let text = written_at(&parsed, "/prompt")?;
+            let turn = text_at(&parsed, "/prompt_id");
+            Some(EntryRead::Asked { text, turn })
         }
         // logged once a tool has run, so one the user refused never shows as done
         "PostToolUse" => {
             let tool = text_at(&parsed, "/tool_name")?;
+            // the agent's own activity calls are what it wrote, never steps
+            if let Some(name) = activity_tool(&tool) {
+                return activity_entry(name, &parsed);
+            }
             let mut paths = CHANGED_PATHS.iter();
             let path = paths.find_map(|pointer| text_at(&parsed, pointer));
             let changes_files = CHANGING_TOOLS.contains(&tool.as_str());
@@ -418,9 +467,45 @@ mod tests {
             r#"{"hook_event_name":"UserPromptSubmit","prompt":"  Fix the tacos\nplease  "}"#;
         let asked = EntryRead::Asked {
             text: "Fix the tacos\nplease".into(),
+            turn: None,
         };
         assert_eq!(entry("UserPromptSubmit", prompt), Some(asked));
         assert_eq!(entry("UserPromptSubmit", r#"{"prompt":"  "}"#), None);
+        let in_a_turn = r#"{"prompt":"Also this","prompt_id":"3ff9bab6"}"#;
+        let Some(EntryRead::Asked { turn, .. }) = entry("UserPromptSubmit", in_a_turn) else {
+            panic!("a prompt makes an entry");
+        };
+        assert_eq!(turn.as_deref(), Some("3ff9bab6"));
+        let prompt_of = |length: usize| format!(r#"{{"prompt":"{}"}}"#, "p".repeat(length));
+        let at_the_limit = prompt_of(MAX_WRITTEN_CHARACTERS);
+        let Some(EntryRead::Asked { text, .. }) = entry("UserPromptSubmit", &at_the_limit) else {
+            panic!("a prompt makes an entry");
+        };
+        assert!(!text.ends_with(CUT_MARK), "a prompt that fits is whole");
+        let over = prompt_of(MAX_WRITTEN_CHARACTERS + 1);
+        let Some(EntryRead::Asked { text, .. }) = entry("UserPromptSubmit", &over) else {
+            panic!("a long prompt makes an entry");
+        };
+        assert!(text.ends_with(CUT_MARK), "a cut prompt says so");
+        let kept = text.chars().count() - CUT_MARK.chars().count();
+        assert_eq!(kept, MAX_WRITTEN_CHARACTERS);
+
+        // the app's own activity tools are what the agent wrote, never steps
+        let note = r#"{"tool_name":"mcp__plugin_taco-shells_activity__note","tool_input":{"text":" Found it "},"tool_response":{"content":[]}}"#;
+        let written = EntryRead::Note {
+            text: "Found it".into(),
+        };
+        assert_eq!(entry("PostToolUse", note), Some(written));
+        let refused = r#"{"tool_name":"mcp__plugin_taco-shells-dev_activity__note","tool_input":{"text":"Found it"},"tool_response":{"isError":true}}"#;
+        assert_eq!(entry("PostToolUse", refused), None);
+        let now = r#"{"tool_name":"mcp__plugin_taco-shells-dev_activity__now","tool_input":{"text":"Reading"}}"#;
+        assert_eq!(entry("PostToolUse", now), None);
+        let someone_elses =
+            r#"{"tool_name":"mcp__plugin_other_activity__note","tool_input":{"text":"x"}}"#;
+        assert_eq!(
+            entry("PostToolUse", someone_elses),
+            Some(did("mcp__plugin_other_activity__note", ""))
+        );
 
         let bash = r#"{"tool_name":"Bash","tool_input":{"command":"cargo test\n--locked"}}"#;
         assert_eq!(entry("PostToolUse", bash), Some(did("Bash", "cargo test")));

@@ -2,10 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use taco_agents::{EntryRead, HARNESSES, default_harness, harness_of};
 use taco_protocol::{
-    ActivityEntry, ActivityEvent, ActivityKind, ActivityRequest, AgentLabel, AgentSignal,
-    Arrangement, Author, Board, ConfigFile, DrawnState, HarnessId, HookCall, HookEvent, Panels,
-    RequestReply, Row, RowState, RuntimeCommand, RuntimeReport, TabGroup, TabGroupId, TerminalId,
-    TerminalSize, TerminalStart, WorkspaceRequest,
+    ActivityEntry, ActivityEvent, ActivityRequest, AgentLabel, AgentSignal, Arrangement, Board,
+    ConfigFile, DrawnState, HarnessId, HookCall, HookEvent, Panels, RequestReply, Row, RowState,
+    RuntimeCommand, RuntimeReport, TabGroup, TabGroupId, TerminalId, TerminalSize, TerminalStart,
+    WorkspaceRequest,
 };
 use taco_rules::{
     add_row, add_row_to, apply_drop, can_fork, close_panel, close_row, create_tab_group,
@@ -679,6 +679,10 @@ impl Workspace {
                     cwd,
                 };
                 self.sessions.record_start(terminal, session);
+                // a log not loaded yet has no stretch open
+                if let Some(log) = self.logs.get_mut(terminal) {
+                    log.session_started();
+                }
                 let mut signal = AgentSignal::Start;
                 if has_conversation {
                     signal = AgentSignal::Resume;
@@ -728,11 +732,9 @@ impl Workspace {
     ) {
         let log = loaded_log(&mut self.logs, self.options.storage.as_ref(), terminal);
         let entry = match read {
-            EntryRead::Asked { text } => {
-                let asked = ActivityKind::Asked { text };
-                log.append(Author::User, asked, now_ms)
-            }
+            EntryRead::Asked { text, turn } => log.append_prompt(text, turn, now_ms),
             EntryRead::Step(step) => log.append_step(step, now_ms),
+            EntryRead::Note { text } => log.append_note(text, now_ms),
         };
         let rewrite = log.needs_rewrite();
         let storage = self.options.storage.as_mut();
