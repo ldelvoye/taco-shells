@@ -1,3 +1,4 @@
+mod signature;
 mod system;
 pub(crate) mod version;
 
@@ -11,10 +12,13 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
-use taco_identity::{IS_STABLE, UPDATE_FEED_VARIABLE, UPDATE_HELPER_PATH, release_zip_name};
+use taco_identity::{
+    IS_STABLE, UPDATE_FEED_VARIABLE, UPDATE_HELPER_PATH, release_signature_name, release_zip_name,
+};
 
 use crate::mac;
 use crate::sync::lock;
+use signature::{SignatureRefusal, release_keys, verify_release};
 use system::{extract_zip, spawn_update_helper};
 use version::{is_newer_version, is_version};
 
@@ -55,6 +59,13 @@ pub(crate) struct ReleaseInfo {
     pub(crate) asset_url: String,
     pub(crate) asset_size: u64,
     pub(crate) digest: Option<String>,
+    pub(crate) signature_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum UpdateError {
+    Failed(String),
+    Refused(SignatureRefusal),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,6 +109,8 @@ struct Shared {
     ready: Mutex<Option<ReadyApp>>,
     applying: AtomicBool,
     stopping: AtomicBool,
+    refused_signature: Mutex<Option<String>>,
+    keys: Vec<String>,
     host: UpdaterHost,
 }
 
@@ -108,11 +121,13 @@ pub struct Updater {
 }
 
 impl Shared {
-    fn new(ready: Option<ReadyApp>, host: UpdaterHost) -> Shared {
+    fn new(ready: Option<ReadyApp>, host: UpdaterHost, keys: Vec<String>) -> Shared {
         Shared {
             ready: Mutex::new(ready),
             applying: AtomicBool::new(false),
             stopping: AtomicBool::new(false),
+            refused_signature: Mutex::new(None),
+            keys,
             host,
         }
     }
@@ -131,6 +146,24 @@ fn parse_digest(asset: &serde_json::Value) -> Option<String> {
     Some(hex.to_string())
 }
 
+fn find_asset_url(assets: &[serde_json::Value], wanted: &str) -> Option<String> {
+    for asset in assets {
+        let Some(name_value) = asset.get("name") else {
+            continue;
+        };
+        let Some(name) = name_value.as_str() else {
+            continue;
+        };
+        if name != wanted {
+            continue;
+        }
+        let url_value = asset.get("browser_download_url")?;
+        let url = url_value.as_str()?;
+        return Some(url.to_string());
+    }
+    None
+}
+
 pub(crate) fn parse_release(payload: &serde_json::Value) -> Option<ReleaseInfo> {
     let release = payload.as_object()?;
     let prerelease = release.get("prerelease");
@@ -146,6 +179,8 @@ pub(crate) fn parse_release(payload: &serde_json::Value) -> Option<ReleaseInfo> 
     let assets_value = release.get("assets")?;
     let assets = assets_value.as_array()?;
     let wanted = release_zip_name(version);
+    let signature_name = release_signature_name(version);
+    let signature_url = find_asset_url(assets, &signature_name);
     for asset in assets {
         let Some(name_value) = asset.get("name") else {
             continue;
@@ -169,6 +204,7 @@ pub(crate) fn parse_release(payload: &serde_json::Value) -> Option<ReleaseInfo> 
             asset_url: url.to_string(),
             asset_size: size,
             digest,
+            signature_url,
         });
     }
     None
@@ -315,33 +351,40 @@ pub(crate) fn prune_and_adopt(updates: &Path, current: &str) -> Option<ReadyApp>
     adopted
 }
 
-fn fetch_and_unpack(release: &ReleaseInfo, staging: &Path, feed: &dyn Feed) -> Result<(), String> {
+fn fetch_and_unpack(
+    release: &ReleaseInfo,
+    staging: &Path,
+    feed: &dyn Feed,
+    keys: &[String],
+) -> Result<(), UpdateError> {
     remove_path(staging);
     let created = fs::create_dir_all(staging);
     if let Err(error) = created {
-        return Err(format!("the staging folder could not be created ({error})"));
+        let message = format!("the staging folder could not be created ({error})");
+        return Err(UpdateError::Failed(message));
     }
 
     let zip = staging.join(ZIP_NAME);
     let downloaded = feed.download(&release.asset_url, &zip);
     let download = match downloaded {
         Ok(download) => download,
-        Err(error) => return Err(format!("the download failed ({error})")),
+        Err(error) => {
+            let message = format!("the download failed ({error})");
+            return Err(UpdateError::Failed(message));
+        }
     };
     if download.bytes != release.asset_size {
         let bytes = download.bytes;
         let expected = release.asset_size;
-        return Err(format!(
-            "the download was {bytes} bytes, expected {expected}"
-        ));
+        let message = format!("the download was {bytes} bytes, expected {expected}");
+        return Err(UpdateError::Failed(message));
     }
     match &release.digest {
         Some(expected) => {
             if &download.sha256 != expected {
                 let actual = &download.sha256;
-                return Err(format!(
-                    "the download's sha256 was {actual}, expected {expected}"
-                ));
+                let message = format!("the download's sha256 was {actual}, expected {expected}");
+                return Err(UpdateError::Failed(message));
             }
         }
         None => {
@@ -350,14 +393,21 @@ fn fetch_and_unpack(release: &ReleaseInfo, staging: &Path, feed: &dyn Feed) -> R
         }
     }
 
+    let verified = verify_release(release, &zip, staging, feed, keys);
+    if let Err(refusal) = verified {
+        return Err(UpdateError::Refused(refusal));
+    }
+
     let extracted = extract_zip(&zip, staging);
     if let Err(error) = extracted {
-        return Err(format!("the download could not be unpacked ({error})"));
+        let message = format!("the download could not be unpacked ({error})");
+        return Err(UpdateError::Failed(message));
     }
     let _ = fs::remove_file(&zip);
     let app = app_in(staging);
     if app.is_none() {
-        return Err("the download did not hold exactly one app".to_string());
+        let message = "the download did not hold exactly one app".to_string();
+        return Err(UpdateError::Failed(message));
     }
     Ok(())
 }
@@ -366,13 +416,14 @@ pub(crate) fn download_and_extract(
     release: &ReleaseInfo,
     updates: &Path,
     feed: &dyn Feed,
-) -> Result<PathBuf, String> {
+    keys: &[String],
+) -> Result<PathBuf, UpdateError> {
     let version_directory = updates.join(&release.version);
     // Unpacked under a name that is not a version, so a crash midway leaves nothing a later launch could adopt.
     let staging_name = format!("{}{STAGING_SUFFIX}", release.version);
     let staging = updates.join(staging_name);
 
-    let unpacked = fetch_and_unpack(release, &staging, feed);
+    let unpacked = fetch_and_unpack(release, &staging, feed, keys);
     if let Err(reason) = unpacked {
         remove_path(&staging);
         return Err(reason);
@@ -382,14 +433,16 @@ pub(crate) fn download_and_extract(
     let renamed = fs::rename(&staging, &version_directory);
     if let Err(error) = renamed {
         remove_path(&staging);
-        return Err(format!(
-            "the unpacked update could not be moved into place ({error})"
-        ));
+        let message = format!("the unpacked update could not be moved into place ({error})");
+        return Err(UpdateError::Failed(message));
     }
     let app = app_in(&version_directory);
     match app {
         Some(path) => Ok(path),
-        None => Err("the unpacked update held no app after the move".to_string()),
+        None => {
+            let message = "the unpacked update held no app after the move".to_string();
+            Err(UpdateError::Failed(message))
+        }
     }
 }
 
@@ -542,11 +595,29 @@ fn run_check(shared: &Shared, updates: &Path, current: &str, feed: &dyn Feed) {
         return;
     }
 
-    let downloaded = download_and_extract(&release, updates, feed);
+    let downloaded = download_and_extract(&release, updates, feed, &shared.keys);
     let path = match downloaded {
         Ok(path) => path,
-        Err(message) => {
+        Err(UpdateError::Failed(message)) => {
             report_failure(&message);
+            return;
+        }
+        Err(UpdateError::Refused(refusal)) => {
+            report_failure(&refusal.reason);
+            let is_new_refusal = {
+                let mut refused = lock(&shared.refused_signature);
+                // Shown once per version: the six-hourly check would otherwise repeat it.
+                let is_new = refused.as_ref() != Some(&release.version);
+                *refused = Some(release.version.clone());
+                is_new
+            };
+            if is_new_refusal {
+                let version = &release.version;
+                let text = format!(
+                    "An update to {version} was refused because its signature did not check out, so nothing was installed."
+                );
+                emit(shared, UpdateEvent::Problem(text));
+            }
             return;
         }
     };
@@ -624,7 +695,8 @@ impl Updater {
 
         let updates = config_directory.join(UPDATES_DIRECTORY_NAME);
         let feed = HttpFeed { feed_url };
-        Updater::start_with(updates, current, Box::new(feed), host, Instant::now())
+        let keys = release_keys();
+        Updater::start_with(updates, current, Box::new(feed), host, Instant::now(), keys)
     }
 
     pub(crate) fn start_with(
@@ -633,10 +705,11 @@ impl Updater {
         feed: Box<dyn Feed>,
         host: UpdaterHost,
         started: Instant,
+        keys: Vec<String>,
     ) -> Updater {
         let adopted = prune_and_adopt(&updates, &current);
         let adopted_version = adopted.as_ref().map(|app| app.version.clone());
-        let shared = Arc::new(Shared::new(adopted, host));
+        let shared = Arc::new(Shared::new(adopted, host, keys));
         if let Some(version) = adopted_version {
             emit(&shared, UpdateEvent::Ready(version));
         }
@@ -654,7 +727,7 @@ impl Updater {
     }
 
     fn idle(host: UpdaterHost) -> Updater {
-        let shared = Shared::new(None, host);
+        let shared = Shared::new(None, host, Vec::new());
         Updater {
             shared: Arc::new(shared),
             sender: None,
@@ -710,18 +783,57 @@ mod test_support {
     use crate::sync::lock;
     use serde_json::json;
     use std::fs;
+    use std::os::unix::fs::OpenOptionsExt;
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::mpsc::{self, Receiver, Sender};
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, OnceLock};
     use std::time::{Duration, Instant};
+    use taco_identity::RELEASE_SIGNING_NAMESPACE;
+
+    const SIGNATURE_SUFFIX: &str = ".sig";
+    const SIGNING_TOOL: &str = "/usr/bin/ssh-keygen";
+
+    static SHARED_KEY: OnceLock<(String, String)> = OnceLock::new();
+
+    fn signing_tool() -> Command {
+        let mut command = Command::new(SIGNING_TOOL);
+        // A cleared environment keeps the user's SSH agent out: signing through it can wait forever on an approval prompt.
+        command
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .stdin(std::process::Stdio::null());
+        command
+    }
 
     pub(super) struct ZipFeed {
         pub(super) release: Arc<Mutex<serde_json::Value>>,
         zip: PathBuf,
+        signature: Option<PathBuf>,
         latest_calls: Mutex<Sender<()>>,
         pub(super) downloads: Arc<AtomicUsize>,
+    }
+
+    pub(super) struct TestKey {
+        private: PathBuf,
+        pub(super) keys: Vec<String>,
+    }
+
+    fn copy_file(from: &Path, to: &Path) -> Result<Download, String> {
+        let opened = fs::File::open(from);
+        let mut source = opened.map_err(|error| error.to_string())?;
+        let created = fs::File::create(to);
+        let mut target = created.map_err(|error| error.to_string())?;
+        let copied = copy_and_hash(&mut source, &mut target);
+        copied.map_err(|error| error.to_string())
+    }
+
+    impl ZipFeed {
+        pub(super) fn with_signature(mut self, signature: &Path) -> ZipFeed {
+            self.signature = Some(signature.to_path_buf());
+            self
+        }
     }
 
     impl Feed for ZipFeed {
@@ -732,14 +844,15 @@ mod test_support {
             Ok(release.clone())
         }
 
-        fn download(&self, _url: &str, to: &Path) -> Result<Download, String> {
+        fn download(&self, url: &str, to: &Path) -> Result<Download, String> {
+            if url.ends_with(SIGNATURE_SUFFIX) {
+                let Some(signature) = &self.signature else {
+                    return Err("no such asset".to_string());
+                };
+                return copy_file(signature, to);
+            }
             self.downloads.fetch_add(1, Ordering::SeqCst);
-            let opened = fs::File::open(&self.zip);
-            let mut source = opened.map_err(|error| error.to_string())?;
-            let created = fs::File::create(to);
-            let mut target = created.map_err(|error| error.to_string())?;
-            let copied = copy_and_hash(&mut source, &mut target);
-            copied.map_err(|error| error.to_string())
+            copy_file(&self.zip, to)
         }
     }
 
@@ -751,9 +864,69 @@ mod test_support {
         ZipFeed {
             release: Arc::new(Mutex::new(release)),
             zip: zip.to_path_buf(),
+            signature: None,
             latest_calls: Mutex::new(latest_calls),
             downloads: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    fn generate_key(directory: &Path, name: &str) -> (String, String) {
+        let private = directory.join(name);
+        let status = signing_tool()
+            .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+            .arg(&private)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let private_text = fs::read_to_string(&private).unwrap();
+        let public_path = directory.join(format!("{name}.pub"));
+        let public_text = fs::read_to_string(public_path).unwrap();
+        (private_text, public_text.trim().to_string())
+    }
+
+    fn write_private(path: &Path, text: &str) {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true).mode(0o600);
+        let mut file = options.open(path).unwrap();
+        std::io::Write::write_all(&mut file, text.as_bytes()).unwrap();
+    }
+
+    pub(super) fn shared_key(directory: &Path) -> TestKey {
+        let material = SHARED_KEY.get_or_init(|| {
+            let temp = tempfile::TempDir::new().unwrap();
+            generate_key(temp.path(), "key")
+        });
+        let (private_text, public) = material;
+        let private = directory.join("shared-key");
+        write_private(&private, private_text);
+        TestKey {
+            private,
+            keys: vec![public.clone()],
+        }
+    }
+
+    pub(super) fn fresh_key(directory: &Path) -> TestKey {
+        let (_, public) = generate_key(directory, "fresh-key");
+        TestKey {
+            private: directory.join("fresh-key"),
+            keys: vec![public],
+        }
+    }
+
+    pub(super) fn sign(key: &TestKey, file: &Path) -> PathBuf {
+        let status = signing_tool()
+            .args(["-Y", "sign", "-f"])
+            .arg(&key.private)
+            .args(["-n", RELEASE_SIGNING_NAMESPACE])
+            .arg(file)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let mut signature = file.as_os_str().to_os_string();
+        signature.push(SIGNATURE_SUFFIX);
+        PathBuf::from(signature)
     }
 
     pub(super) fn recording_host(
@@ -795,7 +968,8 @@ mod test_support {
             "prerelease": false,
             "assets": [
                 { "name": "other.dmg", "size": 5, "browser_download_url": "https://example.test/other" },
-                { "name": asset_name, "size": size, "browser_download_url": "https://example.test/zip" }
+                { "name": asset_name, "size": size, "browser_download_url": "https://example.test/zip" },
+                { "name": format!("{asset_name}.sig"), "size": 100, "browser_download_url": "https://example.test/zip.sig" }
             ]
         })
     }
@@ -838,8 +1012,8 @@ mod test_support {
 #[cfg(test)]
 mod tests {
     use super::test_support::{
-        file_size, long_ago, make_app, make_zip, ready_version, recording_host, release_payload,
-        zip_feed,
+        file_size, fresh_key, long_ago, make_app, make_zip, ready_version, recording_host,
+        release_payload, shared_key, sign, zip_feed,
     };
     use super::*;
     use serde_json::json;
@@ -862,6 +1036,7 @@ mod tests {
             asset_url: "https://example.test/zip".to_string(),
             asset_size: size,
             digest: None,
+            signature_url: Some("https://example.test/zip.sig".to_string()),
         }
     }
 
@@ -884,8 +1059,14 @@ mod tests {
         let feed = zip_feed(not_newer, &zip, silent);
         let (host, received, quit_called) = recording_host(executable);
         let started = long_ago();
-        let updater =
-            Updater::start_with(updates, "1.0.0".to_string(), Box::new(feed), host, started);
+        let updater = Updater::start_with(
+            updates,
+            "1.0.0".to_string(),
+            Box::new(feed),
+            host,
+            started,
+            Vec::new(),
+        );
         let wait = Duration::from_secs(5);
         let first = received.recv_timeout(wait).unwrap();
         assert_eq!(first, UpdateEvent::Ready("1.0.1".to_string()));
@@ -901,8 +1082,15 @@ mod tests {
             asset_url: "https://example.test/zip".to_string(),
             asset_size: 1234,
             digest: None,
+            signature_url: Some("https://example.test/zip.sig".to_string()),
         };
         assert_eq!(parsed, Some(expected));
+
+        let mut unsigned = good.clone();
+        let assets = unsigned["assets"].as_array_mut().unwrap();
+        assets.pop();
+        let parsed = parse_release(&unsigned).unwrap();
+        assert_eq!(parsed.signature_url, None);
 
         let mut prerelease = good.clone();
         prerelease["prerelease"] = json!(true);
@@ -1046,7 +1234,11 @@ mod tests {
         let two_directory = temp.path().join("two");
         let two = make_zip(&two_directory, &["Foo.app", "Bar.app"]);
         let (silent, _calls) = mpsc::channel();
-        let feed = |zip: &Path| zip_feed(json!(null), zip, silent.clone());
+        let key = shared_key(temp.path());
+        let feed = |zip: &Path| {
+            let signature = sign(&key, zip);
+            zip_feed(json!(null), zip, silent.clone()).with_signature(&signature)
+        };
         let size = file_size(&one);
 
         let leftover = updates.join("1.2.3.partial");
@@ -1057,19 +1249,19 @@ mod tests {
         make_app(&older, "Old.app");
 
         let release = release_info("1.2.3", size);
-        let whole = download_and_extract(&release, &updates, &feed(&one));
+        let whole = download_and_extract(&release, &updates, &feed(&one), &key.keys);
         let replaced = updates.join("1.2.3").join("Foo.app");
         assert_eq!(whole, Ok(replaced));
         assert_eq!(child_names(&updates), vec!["1.2.3"]);
 
         let release = release_info("1.2.4", size + 1);
-        let short = download_and_extract(&release, &updates, &feed(&one));
+        let short = download_and_extract(&release, &updates, &feed(&one), &key.keys);
         assert!(short.is_err());
         assert_eq!(child_names(&updates), vec!["1.2.3"]);
 
         let two_size = file_size(&two);
         let release = release_info("1.2.5", two_size);
-        let doubled = download_and_extract(&release, &updates, &feed(&two));
+        let doubled = download_and_extract(&release, &updates, &feed(&two), &key.keys);
         assert!(doubled.is_err());
         assert_eq!(child_names(&updates), vec!["1.2.3"]);
     }
@@ -1081,23 +1273,25 @@ mod tests {
         let zip_directory = temp.path().join("zip");
         let zip = make_zip(&zip_directory, &["Foo.app"]);
         let (silent, _calls) = mpsc::channel();
-        let feed = zip_feed(json!(null), &zip, silent);
+        let key = shared_key(temp.path());
+        let signature = sign(&key, &zip);
+        let feed = zip_feed(json!(null), &zip, silent).with_signature(&signature);
         let size = file_size(&zip);
         let real = sha256_of(&zip);
 
         let mut wrong = release_info("1.2.3", size);
         wrong.digest = Some("0".repeat(64));
-        let refused = download_and_extract(&wrong, &updates, &feed);
+        let refused = download_and_extract(&wrong, &updates, &feed, &key.keys);
         assert!(refused.is_err());
         assert_eq!(child_names(&updates), Vec::<String>::new());
 
         let mut matching = release_info("1.2.3", size);
         matching.digest = Some(real);
-        let accepted = download_and_extract(&matching, &updates, &feed);
+        let accepted = download_and_extract(&matching, &updates, &feed, &key.keys);
         assert!(accepted.is_ok());
 
         let without = release_info("1.2.4", size);
-        let on_size_alone = download_and_extract(&without, &updates, &feed);
+        let on_size_alone = download_and_extract(&without, &updates, &feed, &key.keys);
         assert!(on_size_alone.is_ok());
     }
 
@@ -1110,11 +1304,13 @@ mod tests {
         let size = file_size(&zip);
         let (silent, _calls) = mpsc::channel();
         let first = release_payload("v1.0.1", "taco-shells-1.0.1-arm64.zip", json!(size));
-        let feed = zip_feed(first, &zip, silent);
+        let key = shared_key(temp.path());
+        let signature = sign(&key, &zip);
+        let feed = zip_feed(first, &zip, silent).with_signature(&signature);
         let release = Arc::clone(&feed.release);
         let downloads = Arc::clone(&feed.downloads);
         let (host, received, _quit_called) = recording_host(temp.path().join("taco"));
-        let shared = Shared::new(None, host);
+        let shared = Shared::new(None, host, key.keys.clone());
 
         run_check(&shared, &updates, "1.0.0", &feed);
         run_check(&shared, &updates, "1.0.0", &feed);
@@ -1154,7 +1350,7 @@ mod tests {
         let temp = tempfile::TempDir::new().unwrap();
         let updates = temp.path().join("updates");
         let (host, received, _quit_called) = recording_host(temp.path().join("taco"));
-        let shared = Shared::new(None, host);
+        let shared = Shared::new(None, host, Vec::new());
 
         run_check(&shared, &updates, "1.0.0", &FailingFeed);
 
@@ -1174,9 +1370,17 @@ mod tests {
         let (calls, call_log) = mpsc::channel();
         let (host, received, quit_called) = recording_host(temp.path().join("taco"));
         let newer = release_payload("v1.0.1", "taco-shells-1.0.1-arm64.zip", json!(size));
-        let feed = zip_feed(newer, &zip, calls);
-        let updater =
-            Updater::start_with(updates, "1.0.0".to_string(), Box::new(feed), host, started);
+        let key = shared_key(temp.path());
+        let signature = sign(&key, &zip);
+        let feed = zip_feed(newer, &zip, calls).with_signature(&signature);
+        let updater = Updater::start_with(
+            updates,
+            "1.0.0".to_string(),
+            Box::new(feed),
+            host,
+            started,
+            key.keys.clone(),
+        );
 
         let wait = Duration::from_secs(5);
         let first = received.recv_timeout(wait).unwrap();
@@ -1236,7 +1440,7 @@ mod tests {
     fn a_helper_that_fails_to_spawn_leaves_the_app_free_to_apply_again() {
         let temp = tempfile::TempDir::new().unwrap();
         let (host, _received, _quit_called) = recording_host(temp.path().join("taco"));
-        let shared = Shared::new(None, host);
+        let shared = Shared::new(None, host, Vec::new());
         let failing = |_helper: &Path, _installed: &Path, _extracted: &Path| {
             assert!(shared.applying.load(Ordering::SeqCst));
             Err(io::Error::other("no such shell"))
@@ -1250,5 +1454,101 @@ mod tests {
         };
         assert!(message.contains("no such shell"), "{message}");
         assert!(!shared.applying.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_release_is_installed_only_when_its_zip_carries_a_signature_from_an_allowed_key() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let updates = temp.path().join("updates");
+        let zip_directory = temp.path().join("zip");
+        let zip = make_zip(&zip_directory, &["Foo.app"]);
+        let key = shared_key(temp.path());
+        let (silent, _calls) = mpsc::channel();
+        let size = file_size(&zip);
+        let release = release_info("1.2.3", size);
+        let signed = |signature: &Path| {
+            zip_feed(json!(null), &zip, silent.clone()).with_signature(signature)
+        };
+
+        let other_directory = temp.path().join("other");
+        fs::create_dir_all(&other_directory).unwrap();
+        let other = fresh_key(&other_directory);
+        let written_by_other = sign(&other, &zip);
+        let by_other = other_directory.join("by-other.sig");
+        fs::rename(written_by_other, &by_other).unwrap();
+        let signature = sign(&key, &zip);
+        let wrong_key = download_and_extract(&release, &updates, &signed(&by_other), &key.keys);
+        assert!(matches!(wrong_key, Err(UpdateError::Refused(_))));
+
+        let mut unsigned = release_info("1.2.3", size);
+        unsigned.signature_url = None;
+        let no_asset = download_and_extract(&unsigned, &updates, &signed(&signature), &key.keys);
+        assert!(matches!(no_asset, Err(UpdateError::Refused(_))));
+
+        let no_download = zip_feed(json!(null), &zip, silent.clone());
+        let missing = download_and_extract(&release, &updates, &no_download, &key.keys);
+        assert!(matches!(missing, Err(UpdateError::Refused(_))));
+
+        let no_keys = download_and_extract(&release, &updates, &signed(&signature), &[]);
+        assert!(matches!(no_keys, Err(UpdateError::Refused(_))));
+
+        let mut appended = fs::OpenOptions::new().append(true).open(&zip).unwrap();
+        appended.write_all(b"changed after signing").unwrap();
+        let changed_size = file_size(&zip);
+        let changed = release_info("1.2.3", changed_size);
+        let tampered = download_and_extract(&changed, &updates, &signed(&signature), &key.keys);
+        let Err(UpdateError::Refused(refusal)) = tampered else {
+            panic!("a zip changed after signing must be refused");
+        };
+        assert!(!refusal.reason.is_empty());
+        assert_eq!(child_names(&updates), Vec::<String>::new());
+
+        let clean_directory = temp.path().join("clean");
+        let clean_zip = make_zip(&clean_directory, &["Foo.app"]);
+        let clean_signature = sign(&key, &clean_zip);
+        let clean_feed =
+            zip_feed(json!(null), &clean_zip, silent.clone()).with_signature(&clean_signature);
+        let clean_size = file_size(&clean_zip);
+        let clean_release = release_info("1.2.3", clean_size);
+        let installed = download_and_extract(&clean_release, &updates, &clean_feed, &key.keys);
+        let app = updates.join("1.2.3").join("Foo.app");
+        assert_eq!(installed, Ok(app));
+        assert_eq!(child_names(&updates), vec!["1.2.3"]);
+    }
+
+    #[test]
+    fn a_refused_signature_is_shown_once_per_version() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let updates = temp.path().join("updates");
+        let zip_directory = temp.path().join("zip");
+        let zip = make_zip(&zip_directory, &["Taco.app"]);
+        let size = file_size(&zip);
+        let (silent, _calls) = mpsc::channel();
+        let first = release_payload("v1.0.1", "taco-shells-1.0.1-arm64.zip", json!(size));
+        let feed = zip_feed(first, &zip, silent);
+        let release = Arc::clone(&feed.release);
+        let key = shared_key(temp.path());
+        let (host, received, _quit_called) = recording_host(temp.path().join("taco"));
+        let shared = Shared::new(None, host, key.keys.clone());
+
+        run_check(&shared, &updates, "1.0.0", &feed);
+        run_check(&shared, &updates, "1.0.0", &feed);
+
+        let events: Vec<UpdateEvent> = received.try_iter().collect();
+        let refused = "An update to 1.0.1 was refused because its signature did not check out, so nothing was installed.";
+        assert_eq!(events, vec![UpdateEvent::Problem(refused.to_string())]);
+        assert_eq!(child_names(&updates), Vec::<String>::new());
+        assert_eq!(ready_version(&shared), None);
+
+        {
+            let mut slot = lock(&release);
+            *slot = release_payload("v1.0.2", "taco-shells-1.0.2-arm64.zip", json!(size));
+        }
+        run_check(&shared, &updates, "1.0.0", &feed);
+        run_check(&shared, &updates, "1.0.0", &feed);
+
+        let events: Vec<UpdateEvent> = received.try_iter().collect();
+        let refused = "An update to 1.0.2 was refused because its signature did not check out, so nothing was installed.";
+        assert_eq!(events, vec![UpdateEvent::Problem(refused.to_string())]);
     }
 }
