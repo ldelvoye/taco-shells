@@ -5,9 +5,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use crossbeam_channel::{Receiver, Sender, unbounded};
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, bounded, unbounded};
 use taco_identity::PLUGIN_PROGRAM;
 use taco_protocol::{
     ConfigFile, HarnessId, HookCall, HookEvent, HookMessage, RuntimeAnswer, RuntimeQuery,
@@ -30,16 +30,42 @@ const PORTS_TAKEN: &str = "Every focus port is taken, so agents' hooks cannot re
 const ROUTE_NOT_STARTED: &str =
     "Agents' hooks cannot reach the terminals: the thread that routes them did not start.";
 const ROUTE_STOPPED: &str = "Agents' hooks stopped reaching the terminals after an internal error. Quit and reopen Taco Shells.";
+const SERVICES_NOT_STARTED: &str =
+    "Agent setups and updates did not start: the thread that runs them did not start.";
+const SERVICES_STOPPED: &str =
+    "Agent setups and updates stopped after an internal error. Quit and reopen Taco Shells.";
 // A runtime that is alive but never answers must not hold a hook, a setup check or quitting for ever.
 const RUNTIME_ANSWER_WAIT: Duration = Duration::from_secs(2);
 const FORWARD_WAIT: Duration = Duration::from_secs(1);
+const SLOW_SETUP: Duration = Duration::from_millis(300);
+const SERVICES_PATIENCE: Duration = Duration::from_secs(2);
 
 type Slot<T> = Mutex<Option<T>>;
 type Work = Box<dyn FnOnce() + Send>;
+type SendSettings = Arc<dyn Fn(&Config) + Send + Sync>;
+type OnConfigChange = Box<dyn Fn(Config) + Send + Sync>;
 
 enum Routed {
     Post(HookMessage),
     Question(Question),
+}
+
+enum ServicesCommand {
+    Settle(Config),
+    SetSystemDark(bool),
+    ConfigChanged {
+        activity_on: bool,
+    },
+    AgentAction(HarnessId, AgentMenuAction),
+    DismissNotice(HarnessId),
+    ApplyUpdate,
+    CheckForUpdate,
+    AppActivated,
+    Submitted(TerminalId),
+    Exited(TerminalId),
+    Stop,
+    #[cfg(test)]
+    Run(Box<dyn FnOnce() + Send>),
 }
 
 #[derive(Clone)]
@@ -48,17 +74,32 @@ pub struct ServicesHost {
 }
 
 struct Inner {
+    commands: Sender<ServicesCommand>,
+    ended: Slot<Receiver<()>>,
     store: Arc<Slot<ConfigStore>>,
     writer: Arc<Slot<ConfigWriter>>,
-    setups: Arc<Slot<AgentSetups>>,
-    updater: Arc<Slot<Updater>>,
     listener: Slot<HookListener>,
     hook_inbox: Arc<Slot<Sender<Routed>>>,
-    last_config: Mutex<Config>,
+}
+
+struct ServicesThread {
+    setups: AgentSetups,
+    updater: Updater,
+    store: Arc<Slot<ConfigStore>>,
+    send_order: Arc<Mutex<()>>,
+    send_settings: SendSettings,
+    window: WindowSender,
+    activity_on: Arc<AtomicBool>,
+    ask_notes_on: Arc<AtomicBool>,
 }
 
 fn locked<T>(slot: &Mutex<T>) -> MutexGuard<'_, T> {
     slot.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn taken<T>(slot: &Slot<T>) -> Option<T> {
+    let mut held = locked(slot);
+    held.take()
 }
 
 fn send_to_window(window: &WindowSender, output: ServicesOutput) {
@@ -346,53 +387,204 @@ fn start_hook_route(
     inbox
 }
 
+/// The store's change callback. It runs while the store holds its refresh lock, sometimes on the services thread itself, so it only stores, sends and posts.
+fn config_callback(
+    activity_on: Arc<AtomicBool>,
+    ask_notes_on: Arc<AtomicBool>,
+    send_order: Arc<Mutex<()>>,
+    send_settings: SendSettings,
+    window: WindowSender,
+    commands: Sender<ServicesCommand>,
+) -> OnConfigChange {
+    let on_change = move |config: Config| {
+        let is_on = config.settings.agent_activity;
+        activity_on.store(is_on, Ordering::SeqCst);
+        let asks_notes = config.settings.ask_for_activity_notes;
+        ask_notes_on.store(asks_notes, Ordering::SeqCst);
+        {
+            let _order = locked(&send_order);
+            // New terminals start with these settings; the start's resend takes the same lock, so the runtime ends on the latest.
+            send_settings(&config);
+        }
+        send_to_window(&window, ServicesOutput::Config(config));
+        let changed = ServicesCommand::ConfigChanged { activity_on: is_on };
+        let _ = commands.send(changed);
+    };
+    Box::new(on_change)
+}
+
+fn serve(commands: Receiver<ServicesCommand>, mut handle: impl FnMut(ServicesCommand)) {
+    for command in commands {
+        match command {
+            ServicesCommand::Stop => return,
+            #[cfg(test)]
+            ServicesCommand::Run(work) => work(),
+            other => handle(other),
+        }
+    }
+}
+
+/// The store's config if the files changed since `first` was read, with its settings resent and the window told.
+fn settled_config(
+    store: &Slot<ConfigStore>,
+    send_order: &Mutex<()>,
+    send_settings: &SendSettings,
+    window: &WindowSender,
+    first: &Config,
+) -> Option<Config> {
+    // Every path takes these in one order: the store slot, the store's own refresh lock, then send_order.
+    let store = locked(store);
+    let _order = locked(send_order);
+    let store = store.as_ref()?;
+    let current = store.current();
+    if current == *first {
+        return None;
+    }
+    send_settings(&current);
+    let shown = current.clone();
+    send_to_window(window, ServicesOutput::Config(shown));
+    Some(current)
+}
+
+fn settle(services: &ServicesThread, first: Config) {
+    let settled = settled_config(
+        &services.store,
+        &services.send_order,
+        &services.send_settings,
+        &services.window,
+        &first,
+    );
+    let Some(current) = settled else {
+        return;
+    };
+    let is_on = current.settings.agent_activity;
+    services.activity_on.store(is_on, Ordering::SeqCst);
+    let asks_notes = current.settings.ask_for_activity_notes;
+    services.ask_notes_on.store(asks_notes, Ordering::SeqCst);
+    services.setups.activity_changed(is_on);
+    services.setups.refresh();
+}
+
+fn set_up_timed(setups: &AgentSetups, harness: &HarnessId, action: AgentMenuAction) {
+    let began = Instant::now();
+    setups.act(harness, action);
+    let took = began.elapsed();
+    if took > SLOW_SETUP {
+        let millis = took.as_millis();
+        eprintln!("the agent setup took {millis} ms");
+    }
+}
+
+fn handle(services: &ServicesThread, command: ServicesCommand) {
+    let setups = &services.setups;
+    match command {
+        ServicesCommand::Settle(first) => settle(services, first),
+        ServicesCommand::SetSystemDark(dark) => {
+            let store = locked(&services.store);
+            if let Some(store) = store.as_ref() {
+                store.set_system_dark(dark);
+            }
+        }
+        ServicesCommand::ConfigChanged { activity_on } => {
+            setups.activity_changed(activity_on);
+            setups.refresh();
+        }
+        ServicesCommand::AgentAction(harness, action) => set_up_timed(setups, &harness, action),
+        ServicesCommand::DismissNotice(harness) => setups.dismiss(&harness),
+        ServicesCommand::ApplyUpdate => services.updater.apply_ready(),
+        ServicesCommand::CheckForUpdate => services.updater.check_now(),
+        ServicesCommand::AppActivated => {
+            setups.recheck_if_too_old();
+            setups.refresh();
+        }
+        ServicesCommand::Submitted(terminal) => setups.note_submit(terminal),
+        ServicesCommand::Exited(terminal) => setups.note_exit(&terminal),
+        // serve handles these two itself.
+        ServicesCommand::Stop => {}
+        #[cfg(test)]
+        ServicesCommand::Run(_) => {}
+    }
+}
+
+fn start_services_thread(
+    services: ServicesThread,
+    commands: Receiver<ServicesCommand>,
+    window: &WindowSender,
+) -> Receiver<()> {
+    // Never sent on: the thread's end, or its panic's unwind, drops `alive`, which closes `ended`.
+    let (alive, ended) = bounded::<()>(0);
+    let body = move || {
+        serve(commands, |command| handle(&services, command));
+        let ServicesThread {
+            setups, updater, ..
+        } = services;
+        updater.stop();
+        setups.stop();
+        drop(alive);
+    };
+    let spawned = spawn_supervised("services", SERVICES_STOPPED, window.clone(), body);
+    if spawned.is_err() {
+        let problem = SERVICES_NOT_STARTED.to_string();
+        send_to_window(window, ServicesOutput::Problem(problem));
+    }
+    ended
+}
+
 impl ServicesHost {
     pub fn start(
         directory: PathBuf,
         system_is_dark: bool,
+        first: Config,
         runtime: RuntimeClient,
         workspace: WorkspaceHost,
         window: WindowSender,
     ) -> ServicesHost {
+        // Unbounded: the store's callback posts here while the store holds its lock, sometimes from the services thread itself.
+        let (commands, inbox) = unbounded();
+        let _ = commands.send(ServicesCommand::Settle(first));
         // Copied from each config, so the setups can read it without calling back into the store.
         let activity_on = Arc::new(AtomicBool::new(false));
         let ask_notes_on = Arc::new(AtomicBool::new(false));
-        let setups: Arc<Slot<AgentSetups>> = Arc::new(Mutex::new(None));
+        let send_order = Arc::new(Mutex::new(()));
+        let settings_runtime = runtime.clone();
+        let send_settings: SendSettings =
+            Arc::new(move |config: &Config| send_terminal_settings(&settings_runtime, config));
 
         let changed_activity_on = Arc::clone(&activity_on);
         let changed_ask_notes_on = Arc::clone(&ask_notes_on);
-        let changed_setups = Arc::clone(&setups);
-        let changed_window = window.clone();
-        let changed_runtime = runtime.clone();
-        let on_change = move |config: Config| {
-            let is_on = config.settings.agent_activity;
-            changed_activity_on.store(is_on, Ordering::SeqCst);
-            let asks_notes = config.settings.ask_for_activity_notes;
-            changed_ask_notes_on.store(asks_notes, Ordering::SeqCst);
-            // New terminals start with this config's settings. Queued for the runtime: this thread waits only if the runtime has stopped reading, for at most `Patience::stalled`, once.
-            send_terminal_settings(&changed_runtime, &config);
-            send_to_window(&changed_window, ServicesOutput::Config(config));
-            let setups = locked(&changed_setups);
-            if let Some(setups) = setups.as_ref() {
-                setups.activity_changed(is_on);
-                setups.refresh();
-            }
-        };
-        let store = ConfigStore::start(directory.clone(), system_is_dark, Box::new(on_change));
-        let first = store.current();
-        activity_on.store(first.settings.agent_activity, Ordering::SeqCst);
-        ask_notes_on.store(first.settings.ask_for_activity_notes, Ordering::SeqCst);
+        let changed_send_order = Arc::clone(&send_order);
+        let changed_send_settings = Arc::clone(&send_settings);
+        let on_change = config_callback(
+            changed_activity_on,
+            changed_ask_notes_on,
+            changed_send_order,
+            changed_send_settings,
+            window.clone(),
+            commands.clone(),
+        );
+        let store = ConfigStore::start(directory.clone(), system_is_dark, on_change);
+        let current = store.current();
+        activity_on.store(current.settings.agent_activity, Ordering::SeqCst);
+        ask_notes_on.store(current.settings.ask_for_activity_notes, Ordering::SeqCst);
 
         let store: Arc<Slot<ConfigStore>> = Arc::new(Mutex::new(Some(store)));
         let started_writer = start_writer(&directory, &store, &window);
         let writer: Arc<Slot<ConfigWriter>> = Arc::new(Mutex::new(Some(started_writer)));
 
-        let started = start_setups(&directory, &activity_on, &writer, &runtime, &window);
-        let plugin_heard = started.plugin_heard();
-        *locked(&setups) = Some(started);
-
+        let setups = start_setups(&directory, &activity_on, &writer, &runtime, &window);
+        let plugin_heard = setups.plugin_heard();
         let updater = start_updater(&directory, &window);
-        let updater: Arc<Slot<Updater>> = Arc::new(Mutex::new(Some(updater)));
+        let services = ServicesThread {
+            setups,
+            updater,
+            store: Arc::clone(&store),
+            send_order,
+            send_settings,
+            window: window.clone(),
+            activity_on: Arc::clone(&activity_on),
+            ask_notes_on: Arc::clone(&ask_notes_on),
+        };
+        let ended = start_services_thread(services, inbox, &window);
 
         let routed_activity_on = Arc::clone(&activity_on);
         let inbox = start_hook_route(
@@ -405,7 +597,7 @@ impl ServicesHost {
         );
         let hook_inbox: Arc<Slot<Sender<Routed>>> = Arc::new(Mutex::new(Some(inbox)));
         let routed_inbox = Arc::clone(&hook_inbox);
-        let checked_updater = Arc::clone(&updater);
+        let checked_commands = commands.clone();
         let on_event = move |event| match event {
             ListenerEvent::Hook(message) => {
                 let inbox = locked(&routed_inbox);
@@ -420,10 +612,7 @@ impl ServicesHost {
                 }
             }
             ListenerEvent::UpdateCheck => {
-                let updater = locked(&checked_updater);
-                if let Some(updater) = updater.as_ref() {
-                    updater.check_now();
-                }
+                let _ = checked_commands.send(ServicesCommand::CheckForUpdate);
             }
         };
         let port_file = focus_port_path(&directory);
@@ -433,33 +622,25 @@ impl ServicesHost {
         }
 
         let inner = Inner {
+            commands,
+            ended: Mutex::new(Some(ended)),
             store,
             writer,
-            setups,
-            updater,
             listener: Mutex::new(Some(listener)),
             hook_inbox,
-            last_config: Mutex::new(first),
         };
         ServicesHost {
             inner: Arc::new(inner),
         }
     }
 
-    pub fn config(&self) -> Config {
-        let store = locked(&self.inner.store);
-        let mut last = locked(&self.inner.last_config);
-        if let Some(store) = store.as_ref() {
-            *last = store.current();
-        }
-        last.clone()
+    /// Queues a command for the services thread; never waits.
+    fn post(&self, command: ServicesCommand) {
+        let _ = self.inner.commands.send(command);
     }
 
     pub fn set_system_dark(&self, dark: bool) {
-        let store = locked(&self.inner.store);
-        if let Some(store) = store.as_ref() {
-            store.set_system_dark(dark);
-        }
+        self.post(ServicesCommand::SetSystemDark(dark));
     }
 
     pub fn write_setting(&self, change: SettingChange) {
@@ -477,90 +658,215 @@ impl ServicesHost {
     }
 
     pub fn submitted(&self, terminal: TerminalId) {
-        let setups = locked(&self.inner.setups);
-        if let Some(setups) = setups.as_ref() {
-            setups.note_submit(terminal);
-        }
+        self.post(ServicesCommand::Submitted(terminal));
     }
 
     pub fn exited(&self, terminal: &TerminalId) {
-        let setups = locked(&self.inner.setups);
-        if let Some(setups) = setups.as_ref() {
-            setups.note_exit(terminal);
-        }
+        let exited = ServicesCommand::Exited(terminal.clone());
+        self.post(exited);
     }
 
     pub fn agent_action(&self, harness: &HarnessId, action: AgentMenuAction) {
-        let setups = locked(&self.inner.setups);
-        if let Some(setups) = setups.as_ref() {
-            setups.act(harness, action);
-        }
+        let acted = ServicesCommand::AgentAction(harness.clone(), action);
+        self.post(acted);
     }
 
     pub fn dismiss_notice(&self, harness: &HarnessId) {
-        let setups = locked(&self.inner.setups);
-        if let Some(setups) = setups.as_ref() {
-            setups.dismiss(harness);
-        }
+        let dismissed = ServicesCommand::DismissNotice(harness.clone());
+        self.post(dismissed);
     }
 
     pub fn apply_update(&self) {
-        let updater = locked(&self.inner.updater);
-        if let Some(updater) = updater.as_ref() {
-            updater.apply_ready();
-        }
+        self.post(ServicesCommand::ApplyUpdate);
     }
 
     pub fn app_activated(&self) {
-        let setups = locked(&self.inner.setups);
-        if let Some(setups) = setups.as_ref() {
-            setups.recheck_if_too_old();
-            setups.refresh();
-        }
+        self.post(ServicesCommand::AppActivated);
     }
 
-    // The listener first, so nothing feeds the hook route; dropping its inbox last is what ends the route's thread.
+    // The listener first, so nothing feeds the hook route; then the services thread, which finishes what was queued; the hook inbox last, which ends the route's thread.
     pub fn stop(&self) {
-        let listener = locked(&self.inner.listener).take();
+        let listener = taken(&self.inner.listener);
         if let Some(listener) = listener {
             listener.stop();
         }
-        let updater = locked(&self.inner.updater).take();
-        if let Some(updater) = updater {
-            updater.stop();
+        self.post(ServicesCommand::Stop);
+        let ended = taken(&self.inner.ended);
+        if let Some(ended) = ended {
+            let waited = ended.recv_timeout(SERVICES_PATIENCE);
+            if let Err(RecvTimeoutError::Timeout) = waited {
+                eprintln!("the services thread had not stopped; stopping the rest anyway");
+            }
         }
-        let setups = locked(&self.inner.setups).take();
-        if let Some(setups) = setups {
-            setups.stop();
-        }
-        let writer = locked(&self.inner.writer).take();
+        let writer = taken(&self.inner.writer);
         if let Some(writer) = writer {
             writer.stop();
         }
-        let store = locked(&self.inner.store).take();
+        let store = taken(&self.inner.store);
         if let Some(store) = store {
             store.stop();
         }
-        let inbox = locked(&self.inner.hook_inbox).take();
+        let inbox = taken(&self.inner.hook_inbox);
         drop(inbox);
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::AtomicBool;
     use std::sync::mpsc;
     use std::sync::{Arc, Mutex};
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
-    use crossbeam_channel::unbounded;
-    use taco_protocol::{HarnessId, HookCall, HookEvent, HookMessage, RuntimeAnswer, TerminalId};
-    use taco_services::{AnswerPart, Question, QuestionKind};
+    use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
+    use futures::channel::mpsc::UnboundedReceiver;
+    use taco_protocol::{
+        ConfigFile, HarnessId, HookCall, HookEvent, HookMessage, RuntimeAnswer, TerminalId,
+    };
+    use taco_services::{
+        AgentMenuAction, AnswerPart, ConfigStore, ConfigWriter, Question, QuestionKind,
+        config_file_path,
+    };
+    use taco_settings::{Config, ConfigTexts, SettingChange, resolve_config};
 
-    use super::{Routed, route_hooks, stop_work};
+    use super::{
+        Inner, Routed, SERVICES_PATIENCE, SendSettings, ServicesCommand, ServicesHost, Slot, Work,
+        config_callback, locked, route_hooks, serve, settled_config, start_writer, stop_work,
+        taken,
+    };
+    use crate::ports::{ServicesOutput, WindowOutput, WindowSender};
 
     const WAIT: Duration = Duration::from_secs(2);
     const SHORT_ANSWER_WAIT: Duration = Duration::from_millis(50);
+    const AT_ONCE: Duration = Duration::from_millis(250);
+
+    struct TempFolder {
+        directory: PathBuf,
+    }
+
+    impl Drop for TempFolder {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.directory);
+        }
+    }
+
+    fn temp_folder(name: &str) -> TempFolder {
+        let folder = format!("taco-services-host-{}-{name}", std::process::id());
+        let directory = std::env::temp_dir().join(folder);
+        std::fs::create_dir_all(&directory).unwrap();
+        TempFolder { directory }
+    }
+
+    fn host_serving(
+        commands: Sender<ServicesCommand>,
+        inbox: Receiver<ServicesCommand>,
+        handle: impl FnMut(ServicesCommand) + Send + 'static,
+        store: Arc<Slot<ConfigStore>>,
+        writer: Arc<Slot<ConfigWriter>>,
+    ) -> ServicesHost {
+        let (alive, ended) = bounded::<()>(0);
+        thread::spawn(move || {
+            serve(inbox, handle);
+            drop(alive);
+        });
+        let inner = Inner {
+            commands,
+            ended: Mutex::new(Some(ended)),
+            store,
+            writer,
+            listener: Mutex::new(None),
+            hook_inbox: Arc::new(Mutex::new(None)),
+        };
+        ServicesHost {
+            inner: Arc::new(inner),
+        }
+    }
+
+    fn config_services(
+        directory: &Path,
+        window: &WindowSender,
+        commands: &Sender<ServicesCommand>,
+    ) -> (Arc<Slot<ConfigStore>>, Arc<Slot<ConfigWriter>>) {
+        let activity_on = Arc::new(AtomicBool::new(false));
+        let ask_notes_on = Arc::new(AtomicBool::new(false));
+        let send_order = Arc::new(Mutex::new(()));
+        let send_settings: SendSettings = Arc::new(|_: &Config| {});
+        let on_change = config_callback(
+            activity_on,
+            ask_notes_on,
+            send_order,
+            send_settings,
+            window.clone(),
+            commands.clone(),
+        );
+        let started_store = ConfigStore::start(directory.to_path_buf(), false, on_change);
+        let store = Arc::new(Mutex::new(Some(started_store)));
+        let started_writer = start_writer(directory, &store, window);
+        let writer = Arc::new(Mutex::new(Some(started_writer)));
+        (store, writer)
+    }
+
+    fn hold(commands: &Sender<ServicesCommand>) -> mpsc::Sender<()> {
+        let (held, holding) = mpsc::channel();
+        let (release, released) = mpsc::channel::<()>();
+        let work: Work = Box::new(move || {
+            held.send(()).unwrap();
+            let _ = released.recv();
+        });
+        commands.send(ServicesCommand::Run(work)).unwrap();
+        holding.recv_timeout(WAIT).unwrap();
+        release
+    }
+
+    fn wait_until_queued(commands: &Sender<ServicesCommand>, count: usize) {
+        let deadline = Instant::now() + WAIT;
+        while commands.len() < count {
+            assert!(
+                Instant::now() < deadline,
+                "{count} commands were never queued"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn assert_at_once(what: &str, call: impl FnOnce()) {
+        let began = Instant::now();
+        call();
+        let took = began.elapsed();
+        assert!(took < AT_ONCE, "{what} took {took:?}");
+    }
+
+    fn label_of(command: &ServicesCommand) -> &'static str {
+        match command {
+            ServicesCommand::AgentAction(..) => "agent action",
+            ServicesCommand::DismissNotice(_) => "dismiss notice",
+            ServicesCommand::ApplyUpdate => "apply update",
+            ServicesCommand::SetSystemDark(_) => "system dark",
+            ServicesCommand::AppActivated => "app activated",
+            ServicesCommand::Submitted(_) => "submitted",
+            ServicesCommand::Exited(_) => "exited",
+            _ => "unexpected",
+        }
+    }
+
+    fn shows_font_size(shown: &mut UnboundedReceiver<WindowOutput>, size: f64) -> bool {
+        let deadline = Instant::now() + WAIT;
+        while Instant::now() < deadline {
+            let next = shown.try_recv();
+            match next {
+                Ok(WindowOutput::Services(ServicesOutput::Config(config))) => {
+                    if config.settings.font_size == size {
+                        return true;
+                    }
+                }
+                Ok(_) => {}
+                Err(_) => thread::sleep(Duration::from_millis(5)),
+            }
+        }
+        false
+    }
 
     fn no_ask(_: TerminalId, _: Question) {}
 
@@ -779,5 +1085,154 @@ mod tests {
         assert!(!*recorded.lock().unwrap());
         on_delivered();
         assert!(*recorded.lock().unwrap());
+    }
+
+    #[test]
+    fn calls_never_wait_on_a_busy_services_thread_and_a_stop_drains_them_in_order() {
+        let (commands, inbox) = unbounded();
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        let recording = Arc::clone(&recorded);
+        let handle = move |command: ServicesCommand| {
+            let label = label_of(&command);
+            let mut labels = recording.lock().unwrap();
+            labels.push(label);
+        };
+        let no_store = Arc::new(Mutex::new(None));
+        let no_writer = Arc::new(Mutex::new(None));
+        let host = host_serving(commands.clone(), inbox, handle, no_store, no_writer);
+        let release = hold(&commands);
+
+        let harness = HarnessId("claude".to_string());
+        let shell = terminal("terminal-1");
+        assert_at_once("an agent action", || {
+            host.agent_action(&harness, AgentMenuAction::SetUp)
+        });
+        assert_at_once("a dismissal", || host.dismiss_notice(&harness));
+        assert_at_once("an update", || host.apply_update());
+        assert_at_once("the system's appearance", || host.set_system_dark(true));
+        assert_at_once("an activation", || host.app_activated());
+        assert_at_once("a submit", || host.submitted(shell.clone()));
+        assert_at_once("an exit", || host.exited(&shell));
+
+        let stopping = host.clone();
+        let stopper = thread::spawn(move || stopping.stop());
+        wait_until_queued(&commands, 8);
+        thread::sleep(Duration::from_millis(50));
+        assert!(
+            !stopper.is_finished(),
+            "the stop returned while the services thread was still busy"
+        );
+        release.send(()).unwrap();
+        let released = Instant::now();
+        stopper.join().unwrap();
+        let took = released.elapsed();
+        assert!(
+            took < SERVICES_PATIENCE / 2,
+            "the services thread did not end on the stop: {took:?}"
+        );
+
+        let expected = [
+            "agent action",
+            "dismiss notice",
+            "apply update",
+            "system dark",
+            "app activated",
+            "submitted",
+            "exited",
+        ];
+        assert_eq!(*recorded.lock().unwrap(), expected);
+
+        assert_at_once("a call after the stop", || host.apply_update());
+        thread::sleep(Duration::from_millis(100));
+        assert_eq!(*recorded.lock().unwrap(), expected);
+    }
+
+    #[test]
+    fn a_config_changed_while_everything_started_is_resent_and_shown_and_an_unchanged_one_is_not() {
+        let folder = temp_folder("settled");
+        let settings_path = config_file_path(&folder.directory, ConfigFile::Settings);
+        std::fs::write(&settings_path, "{\"fontSize\": 19}").unwrap();
+        let no_files = ConfigTexts {
+            settings: None,
+            keybindings: None,
+        };
+        let read_before_the_edit = resolve_config(&no_files, false);
+        let started_store = ConfigStore::start(folder.directory.clone(), false, Box::new(|_| {}));
+        let current = started_store.current();
+        let store = Mutex::new(Some(started_store));
+        let send_order = Mutex::new(());
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&sent);
+        let send_settings: SendSettings = Arc::new(move |config: &Config| {
+            let mut configs = recorded.lock().unwrap();
+            configs.push(config.clone());
+        });
+        let (window, mut shown) = futures::channel::mpsc::unbounded();
+
+        // The files changed after the first read: the settings are resent and the window is told.
+        let settled = settled_config(
+            &store,
+            &send_order,
+            &send_settings,
+            &window,
+            &read_before_the_edit,
+        );
+        assert_eq!(settled.as_ref(), Some(&current));
+        let resent = sent.lock().unwrap().clone();
+        assert_eq!(resent, std::slice::from_ref(&current));
+        assert!(shows_font_size(&mut shown, 19.0), "the window was not told");
+
+        // Nothing changed: nothing is sent.
+        let unchanged = settled_config(&store, &send_order, &send_settings, &window, &current);
+        assert_eq!(unchanged, None);
+        let sends = sent.lock().unwrap().len();
+        assert_eq!(sends, 1);
+
+        let stopped_store = taken(&store);
+        if let Some(stopped_store) = stopped_store {
+            stopped_store.stop();
+        }
+    }
+
+    #[test]
+    fn a_setting_written_while_the_services_thread_is_held_reaches_the_window_without_it() {
+        let folder = temp_folder("written-while-held");
+        let (window, mut shown) = futures::channel::mpsc::unbounded();
+        let (commands, inbox) = unbounded();
+        let (store, writer) = config_services(&folder.directory, &window, &commands);
+        let host = host_serving(commands.clone(), inbox, |_| {}, store, writer);
+        let release = hold(&commands);
+
+        host.write_setting(SettingChange::FontSize(19.0));
+        let arrived = shows_font_size(&mut shown, 19.0);
+        assert!(arrived, "the written font size never reached the window");
+
+        release.send(()).unwrap();
+        host.stop();
+    }
+
+    #[test]
+    fn a_write_queued_at_quit_lands_before_stop_returns() {
+        let folder = temp_folder("queued-at-quit");
+        let (window, _shown) = futures::channel::mpsc::unbounded();
+        let (commands, inbox) = unbounded();
+        let (store, writer) = config_services(&folder.directory, &window, &commands);
+        let host = host_serving(commands.clone(), inbox, |_| {}, store, writer);
+
+        let held_store = locked(&host.inner.store);
+        host.write_setting(SettingChange::FontSize(14.0));
+        host.write_setting(SettingChange::FontSize(15.0));
+        let stopping = host.clone();
+        let stopper = thread::spawn(move || stopping.stop());
+        thread::sleep(Duration::from_millis(50));
+        drop(held_store);
+        stopper.join().unwrap();
+
+        let settings_path = config_file_path(&folder.directory, ConfigFile::Settings);
+        let written = std::fs::read_to_string(&settings_path).unwrap();
+        assert!(written.contains("\"fontSize\": 15"), "{written}");
+        assert_at_once("a write after the stop", || {
+            host.write_setting(SettingChange::FontSize(16.0))
+        });
     }
 }

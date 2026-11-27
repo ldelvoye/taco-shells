@@ -97,6 +97,7 @@ pub fn start(system_is_dark: bool) -> Result<Started, String> {
     let started =
         started.map_err(|error| format!("The terminal runtime did not start: {error}"))?;
     let runtime = started.client;
+    // A runtime just started has an empty queue, so this send on gpui's thread cannot wait.
     send_terminal_settings(&runtime, &first);
 
     let (window, outputs) = mpsc::unbounded();
@@ -105,6 +106,7 @@ pub fn start(system_is_dark: bool) -> Result<Started, String> {
     let services = ServicesHost::start(
         directory,
         system_is_dark,
+        first.clone(),
         runtime.clone(),
         workspace.clone(),
         window.clone(),
@@ -115,15 +117,10 @@ pub fn start(system_is_dark: bool) -> Result<Started, String> {
         services,
     };
     forward_runtime_events(received, hosts.clone(), window);
-    // The files can change while everything starts; the window and the runtime start from the same config.
-    let first_config = hosts.services.config();
-    if first_config != first {
-        send_terminal_settings(&hosts.runtime, &first_config);
-    }
     Ok(Started {
         hosts,
         outputs,
-        first_config,
+        first_config: first,
         terminals: started.terminals,
     })
 }
@@ -204,7 +201,6 @@ fn forward_runtime_events(events: Receiver<RuntimeEvent>, hosts: Hosts, window: 
         for event in events {
             match event {
                 RuntimeEvent::Report(report) => {
-                    // The workspace first: the services' refresh reads files, and the window waits on the workspace.
                     let for_services = report.clone();
                     hosts.workspace.runtime_report(report);
                     tell_services(&hosts.services, &for_services);

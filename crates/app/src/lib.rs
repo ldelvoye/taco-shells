@@ -289,14 +289,11 @@ fn open_window(started: Started, background: bool, cx: &mut App) -> Option<AnyWi
                 });
             follow_appearance.detach();
             let follow_activation =
-                cx.observe_window_activation(window, move |_: &mut WindowView, window, cx| {
+                cx.observe_window_activation(window, move |_: &mut WindowView, window, _| {
                     if !window.is_window_active() {
                         return;
                     }
-                    // The setups re-read the agents' config files, which gpui's thread must not wait on.
-                    let services = activated.clone();
-                    let refreshed = cx.background_spawn(async move { services.app_activated() });
-                    refreshed.detach();
+                    activated.app_activated();
                 });
             follow_activation.detach();
             WindowView::new(shown, look, lights, ports, cx)

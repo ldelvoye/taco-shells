@@ -69,12 +69,13 @@ Two processes live as long as the app: the app itself (`taco-shells`) and the ru
 
 `crates/host` keeps the window's thread from waiting on anything that can stall:
 - **The runtime's commands** go through a bounded queue of 4096. A runtime that leaves it full for 5 s has stopped reading, so it is killed and the window says "The terminals stopped responding and were closed." Once the runtime is gone, a question to it gets `None`.
-- **Quitting** sends `Stop`, then SIGTERM, then SIGKILL, about 4 s at worst, and shows no banner. The final save runs on its own thread, with 1.5 s of patience, before the services and then the runtime stop.
+- **Quitting** sends `Stop`, then SIGTERM, then SIGKILL, about 4 s at worst, and shows no banner. The final save runs on its own thread, with 1.5 s of patience, before the services and then the runtime stop. The services thread gets 2 s to finish what was queued before the rest stops anyway.
 - **Hook posts and questions have deadlines**, named in `taco_protocol::deadlines` (`crates/protocol/src/hooks.rs`), where a compile-time assert keeps them in order. A post waits 2 s for the runtime to place it.
-- **A panic** in the workspace thread, the hook route or the runtime-events forwarder is caught (`supervised.rs`, `workspace_host.rs`) and shown as a banner. After a workspace panic, callers waiting on it are answered without a save.
+- **The services** (agent setups and the updater) are owned by one `services` thread. A window call to them is a message to it, so no window call waits on file work, and calls are handled in the order sent. An appearance change waits behind a slow setup; a setup over 300 ms is logged. Setting and key-binding writes skip that thread and go straight to the config writer's own thread, so a write never waits behind a setup. The config store's change callback runs on whichever thread refreshed it, while the store holds its refresh lock: it only stores, sends and posts, and must never call back into the store or wait on the services thread. Every path takes the locks in one order: the store's slot, the store's refresh lock, then the lock that orders terminal-settings sends.
+- **A panic** in the workspace thread, the services thread, the hook route or the runtime-events forwarder is caught (`supervised.rs`, `workspace_host.rs`) and shown as a banner. After a workspace panic, callers waiting on it are answered without a save.
 - **The four terminal settings** (scrollback, colors, cursor, the agent plugin) go to the runtime from the host, not from the window.
 
-Only the runtime's commands are bounded. The workspace's inputs, the window's stream and the runtime's events are not.
+Only the runtime's commands are bounded. The workspace's inputs, the services thread's inbox, the window's stream and the runtime's events are not.
 
 ## The runtime
 
