@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use crate::agent_hooks::HookWiring;
 use crate::claude_version::is_too_old;
 
@@ -5,13 +7,25 @@ const STATUS_NOT_INSTALLED: &str = "Not installed";
 const STATUS_OFF: &str = "Off";
 const STATUS_OLD_SETUP: &str = "Set up the old way";
 const STATUS_ON: &str = "On";
+const STATUS_PLUGIN_DIRS_HIDDEN: &str = "Its settings hide the plugin";
+const STATUS_PLUGIN_DIRS_MANAGED: &str = "Blocked by managed settings";
 const SCRIPT_RUNNER: &str = "node";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PluginDirs {
+    Unset,
+    Lists,
+    Hides { file: PathBuf },
+    ManagedHides,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AgentSetupState {
     NotInstalled,
     Off,
     OldSetup,
+    PluginDirsHidden { file: String },
+    PluginDirsManaged,
     TooOld { version: String },
     On,
 }
@@ -21,6 +35,8 @@ pub struct AgentSetupFacts {
     pub installed: bool,
     pub activity_on: bool,
     pub wiring: HookWiring,
+    pub plugin_dirs: PluginDirs,
+    pub home: PathBuf,
     pub version: Option<(u32, u32, u32)>,
 }
 
@@ -42,12 +58,27 @@ fn version_text(version: (u32, u32, u32)) -> String {
     format!("{major}.{minor}.{patch}")
 }
 
+fn shown_with_tilde(file: &Path, home: &Path) -> String {
+    let Ok(rest) = file.strip_prefix(home) else {
+        return file.display().to_string();
+    };
+    let shown_rest = rest.display();
+    format!("~/{shown_rest}")
+}
+
 pub fn agent_setup_state_of(facts: &AgentSetupFacts) -> AgentSetupState {
     if !facts.installed {
         return AgentSetupState::NotInstalled;
     }
+    if facts.plugin_dirs == PluginDirs::ManagedHides {
+        return AgentSetupState::PluginDirsManaged;
+    }
     if facts.wiring == HookWiring::Managed {
         return AgentSetupState::OldSetup;
+    }
+    if let PluginDirs::Hides { file } = &facts.plugin_dirs {
+        let shown = shown_with_tilde(file, &facts.home);
+        return AgentSetupState::PluginDirsHidden { file: shown };
     }
     if !facts.activity_on {
         return AgentSetupState::Off;
@@ -67,6 +98,8 @@ pub fn agent_menu_of(state: &AgentSetupState, product_name: &str) -> AgentMenu {
         AgentSetupState::NotInstalled => (STATUS_NOT_INSTALLED.to_string(), false),
         AgentSetupState::Off => (STATUS_OFF.to_string(), true),
         AgentSetupState::OldSetup => (STATUS_OLD_SETUP.to_string(), true),
+        AgentSetupState::PluginDirsHidden { .. } => (STATUS_PLUGIN_DIRS_HIDDEN.to_string(), true),
+        AgentSetupState::PluginDirsManaged => (STATUS_PLUGIN_DIRS_MANAGED.to_string(), false),
         AgentSetupState::TooOld { .. } => (format!("Needs a newer {product_name}"), false),
         AgentSetupState::On => (STATUS_ON.to_string(), false),
     };
@@ -132,7 +165,16 @@ mod tests {
             installed,
             activity_on,
             wiring,
+            plugin_dirs: PluginDirs::Unset,
+            home: PathBuf::from("/h"),
             version,
+        }
+    }
+
+    fn with_plugin_dirs(facts: AgentSetupFacts, plugin_dirs: PluginDirs) -> AgentSetupFacts {
+        AgentSetupFacts {
+            plugin_dirs,
+            ..facts
         }
     }
 
@@ -141,7 +183,26 @@ mod tests {
         let too_old = AgentSetupState::TooOld {
             version: "2.1.279".to_string(),
         };
+        let hides = PluginDirs::Hides {
+            file: PathBuf::from("/h/.claude/settings.json"),
+        };
+        let hidden = AgentSetupState::PluginDirsHidden {
+            file: "~/.claude/settings.json".to_string(),
+        };
+        let managed_over_old = with_plugin_dirs(
+            facts(true, HookWiring::Managed, true, OLD),
+            PluginDirs::ManagedHides,
+        );
+        let old_over_hidden =
+            with_plugin_dirs(facts(true, HookWiring::Managed, true, OLD), hides.clone());
+        let hidden_while_off =
+            with_plugin_dirs(facts(true, HookWiring::ByHand, false, OLD), hides.clone());
+        let hidden_while_on = with_plugin_dirs(facts(true, HookWiring::ByHand, true, NEW), hides);
         let cases = [
+            (managed_over_old, AgentSetupState::PluginDirsManaged),
+            (old_over_hidden, AgentSetupState::OldSetup),
+            (hidden_while_off, hidden.clone()),
+            (hidden_while_on, hidden),
             (
                 facts(false, HookWiring::Managed, false, OLD),
                 AgentSetupState::NotInstalled,

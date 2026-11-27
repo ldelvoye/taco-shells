@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 use taco_protocol::{HarnessId, TerminalId};
 
 use crate::agent_flow::{
-    Agent, agents_of, copy_hook_scripts, hooks_directory, read_state, remove_old_setup,
-    stub_hook_scripts,
+    Agent, add_plugin_folder, agents_of, copy_hook_scripts, hides_plugin_folder, hooks_directory,
+    read_state, remove_old_setup, remove_plugin_folder, stub_hook_scripts,
 };
 use crate::agent_setup_state::{
     AgentMenu, AgentMenuAction, AgentSetupState, agent_menu_of, runs_agent,
@@ -24,6 +24,7 @@ use crate::sync::lock;
 const SUBMIT_CHECK_DELAY: Duration = Duration::from_secs(1);
 const DONE_TEXT: &str =
     "Agents already running stop reporting until you start them in a new terminal.";
+const APPENDED_TEXT: &str = "Your Claude Code settings now also list this app's plugin folder, so every Claude Code session shows the plugin; outside this app's terminals it does nothing.";
 const OLD_HOOKS_PROBLEM: &str = "settings.json still has the app's old hooks";
 const NO_TOKEN_PROBLEM: &str =
     "The app couldn't write its token file, so agents' activity can't reach it.";
@@ -81,7 +82,7 @@ pub(crate) struct SetupFiles {
 #[derive(Clone)]
 enum Recorded {
     Problem(String),
-    Done,
+    Done { appended: bool },
 }
 
 enum TimerMessage {
@@ -141,7 +142,26 @@ fn installed_claude_version(home: Option<&Path>) -> Option<Version> {
 }
 
 fn is_awaiting(state: &AgentSetupState) -> bool {
-    matches!(state, AgentSetupState::Off | AgentSetupState::OldSetup)
+    matches!(
+        state,
+        AgentSetupState::Off | AgentSetupState::OldSetup | AgentSetupState::PluginDirsHidden { .. }
+    )
+}
+
+fn plugin_dirs_hidden_text(product_name: &str, file: &str) -> String {
+    format!(
+        "{product_name} can't load this app's plugin, because {file} sets CLAUDE_CODE_PLUGIN_DIRS. Set up adds this app's folder to it."
+    )
+}
+
+fn plugin_dirs_managed_reason(product_name: &str) -> String {
+    format!(
+        "{product_name}'s managed settings set CLAUDE_CODE_PLUGIN_DIRS, so this app's plugin can't load."
+    )
+}
+
+fn plugin_dirs_managed_text(product_name: &str) -> String {
+    format!("{product_name} is running here but can't load this app's plugin.")
 }
 
 fn offer_text(product_name: &str) -> String {
@@ -161,9 +181,9 @@ fn too_old_reason(product_name: &str, version: &str) -> String {
     )
 }
 
-fn recorded_of(problems: Vec<String>) -> Recorded {
+fn recorded_of(problems: Vec<String>, appended: bool) -> Recorded {
     if problems.is_empty() {
-        return Recorded::Done;
+        return Recorded::Done { appended };
     }
     let text = problems.join(" ");
     Recorded::Problem(text)
@@ -193,13 +213,20 @@ fn notice_of(
     if let Some(Recorded::Problem(problem)) = recorded {
         return notice(AgentSetupNoticeKind::Problem, problem.clone());
     }
-    let is_done = matches!(recorded, Some(Recorded::Done));
     let hides_done = matches!(
         reading.state,
-        AgentSetupState::NotInstalled | AgentSetupState::TooOld { .. }
+        AgentSetupState::NotInstalled
+            | AgentSetupState::TooOld { .. }
+            | AgentSetupState::PluginDirsManaged
     );
-    if is_done && !hides_done {
-        return notice(AgentSetupNoticeKind::Done, DONE_TEXT.to_string());
+    if let Some(Recorded::Done { appended }) = recorded
+        && !hides_done
+    {
+        let mut text = DONE_TEXT.to_string();
+        if *appended {
+            text = format!("{DONE_TEXT} {APPENDED_TEXT}");
+        }
+        return notice(AgentSetupNoticeKind::Done, text);
     }
     match &reading.state {
         AgentSetupState::Off => {
@@ -213,6 +240,17 @@ fn notice_of(
                 action: AgentMenuAction::SetUp,
             };
             notice(kind, old_setup_text(product_name))
+        }
+        AgentSetupState::PluginDirsHidden { file } => {
+            let kind = AgentSetupNoticeKind::Offer {
+                action: AgentMenuAction::SetUp,
+            };
+            notice(kind, plugin_dirs_hidden_text(product_name, file))
+        }
+        AgentSetupState::PluginDirsManaged => {
+            let reason = plugin_dirs_managed_reason(product_name);
+            let kind = AgentSetupNoticeKind::Unavailable { reason };
+            notice(kind, plugin_dirs_managed_text(product_name))
         }
         AgentSetupState::TooOld { version } => {
             let reason = too_old_reason(product_name, version);
@@ -433,16 +471,28 @@ fn prepare_hooks(shared: &Shared, activity_on: bool) -> Vec<String> {
     problems
 }
 
-fn set_up(shared: &Arc<Shared>, agent: &Agent, state: &AgentSetupState) -> Vec<String> {
+fn set_up(shared: &Arc<Shared>, agent: &Agent, state: &AgentSetupState) -> (Vec<String>, bool) {
     let mut problems = prepare_hooks(shared, true);
     if !problems.is_empty() {
-        return problems;
+        return (problems, false);
     }
     // The click is the user's own consent, so a development build may make this one write into the agent's settings.
     if *state == AgentSetupState::OldSetup {
         let removed = remove_old_setup(agent);
         if let Err(reason) = removed {
             problems.push(format!("{OLD_HOOKS_PROBLEM}: {reason}"));
+        }
+    }
+    let mut appended = false;
+    if hides_plugin_folder(agent) {
+        // Claude Code applies a settings env block over the shell's, so the folder must be in the user's own value to load.
+        let added = add_plugin_folder(agent, &shared.files.config_directory);
+        match added {
+            Ok(did_append) => appended = did_append,
+            Err(problem) => {
+                problems.push(problem);
+                return (problems, false);
+            }
         }
     }
     {
@@ -456,7 +506,7 @@ fn set_up(shared: &Arc<Shared>, agent: &Agent, state: &AgentSetupState) -> Vec<S
         problems.push(NO_TOKEN_PROBLEM.to_string());
     }
     check_version(shared);
-    problems
+    (problems, appended)
 }
 
 impl AgentSetups {
@@ -554,14 +604,19 @@ impl AgentSetups {
             }
             *prepared = on;
         }
-        let problems = prepare_hooks(&self.shared, on);
+        let mut problems = prepare_hooks(&self.shared, on);
         if on {
             check_version(&self.shared);
         } else {
+            // Only the entry this app appended, and only while it is still there exactly as written.
+            let taken_out = remove_plugin_folder(&self.shared.files.config_directory);
+            if let Err(problem) = taken_out {
+                problems.push(problem);
+            }
             let mut state = lock(&self.shared.state);
             state
                 .recorded
-                .retain(|_, recorded| !matches!(recorded, Recorded::Done));
+                .retain(|_, recorded| !matches!(recorded, Recorded::Done { .. }));
         }
         if problems.is_empty() {
             return;
@@ -640,8 +695,8 @@ impl AgentSetups {
         let fresh = agent_menu_of(&state, product_name);
         // The menu may have changed since it was drawn, so a click acts only if it would still be offered.
         if fresh.enabled && fresh.action == clicked {
-            let problems = set_up(&self.shared, agent, &state);
-            let recorded = recorded_of(problems);
+            let (problems, appended) = set_up(&self.shared, agent, &state);
+            let recorded = recorded_of(problems, appended);
             let mut shared_state = lock(&self.shared.state);
             shared_state.recorded.insert(harness.clone(), recorded);
         }
@@ -688,9 +743,13 @@ mod tests {
     use tempfile::TempDir;
 
     use crate::agent_hooks::{HookEdit, add_entries};
+    use crate::plugin_dirs::read_record;
 
     use super::*;
 
+    const HIDDEN: &str = "{\n  // mine\n  \"env\": {\n    \"CLAUDE_CODE_PLUGIN_DIRS\": \"~/.claude/mods/face-band\"\n  },\n  \"model\": \"opus\"\n}\n";
+    const UNEDITABLE: &str =
+        "{\"env\": {\"A\": \"1\"}, \"env\": {\"CLAUDE_CODE_PLUGIN_DIRS\": \"/a\"}}";
     const WAIT: Duration = Duration::from_secs(2);
     const MINE: &str = "{\n  // mine\n  \"model\": \"opus\"\n}\n";
     const STUB: &str = "#!/bin/sh\nexit 0\n";
@@ -748,7 +807,10 @@ mod tests {
             }
             Some(variable.clone())
         };
-        let agents = agents_of(&config, &env, &home);
+        let mut agents = agents_of(&config, &env, &home);
+        for agent in &mut agents {
+            agent.paths.managed_settings_path = temp.path().join("managed-settings.json");
+        }
         let agent = agents[0].clone();
         Environment {
             temp,
@@ -966,6 +1028,100 @@ mod tests {
         let after = fs::read(&settings_path).unwrap();
         assert_eq!(after, before);
         assert_eq!(only_notice(&fixture).kind, AgentSetupNoticeKind::Done);
+    }
+
+    fn hidden_environment() -> Environment {
+        let environment = environment();
+        let settings_path = environment.agent.paths.settings_path.clone();
+        fs::write(&settings_path, HIDDEN).unwrap();
+        environment
+    }
+
+    fn appended_settings(environment: &Environment) -> String {
+        let folder = plugin_directory_path(&environment.config);
+        let shown = folder.display();
+        HIDDEN.replace("face-band\"", &format!("face-band:{shown}\""))
+    }
+
+    #[test]
+    fn a_hidden_plugin_is_offered_while_on_and_the_click_adds_the_folder_until_off() {
+        let environment = hidden_environment();
+        let settings_path = environment.agent.paths.settings_path.clone();
+        let switch = switch(true);
+        let checked: Arc<Mutex<Vec<TerminalId>>> = Arc::default();
+        let (setups, views) = start_timed(&environment, &switch, running_claude(&checked));
+        let id = terminal("one");
+
+        setups.note_submit(id.clone());
+
+        let offer_view = next_offer_covering(&views, &id);
+        let product_name = environment.agent.setup.product_name;
+        let shown = settings_path.display().to_string();
+        let expected = plugin_dirs_hidden_text(product_name, &shown);
+        assert_eq!(offer_view.notices[0].text, expected);
+        let menu = &offer_view.menus[0].menu;
+        assert_eq!(menu.status, "Its settings hide the plugin");
+        assert!(menu.enabled);
+
+        setups.act(&claude(), AgentMenuAction::SetUp);
+
+        let after_click = fs::read_to_string(&settings_path).unwrap();
+        assert_eq!(after_click, appended_settings(&environment));
+        let folder = plugin_directory_path(&environment.config);
+        let record = read_record(&environment.config).unwrap();
+        assert_eq!(record.entry, folder.display().to_string());
+        assert_eq!(switch.turned_on.load(Ordering::SeqCst), 1);
+        let done = setups.view().notices[0].clone();
+        assert_eq!(done.kind, AgentSetupNoticeKind::Done);
+        assert!(done.text.contains(APPENDED_TEXT), "{}", done.text);
+        setups.refresh();
+        assert_eq!(setups.view().menus[0].menu.status, "On");
+
+        switch.on.store(false, Ordering::SeqCst);
+        setups.activity_changed(false);
+
+        let after_off = fs::read_to_string(&settings_path).unwrap();
+        assert_eq!(after_off, HIDDEN);
+        assert_eq!(read_record(&environment.config), None);
+    }
+
+    #[test]
+    fn off_leaves_a_line_the_user_edited_alone_and_drops_the_record() {
+        let environment = hidden_environment();
+        let settings_path = environment.agent.paths.settings_path.clone();
+        let fixture = fixture_with(environment, false);
+        seen_claude(&fixture, "one");
+        fixture.setups.act(&claude(), AgentMenuAction::SetUp);
+        let edited = HIDDEN.replace("face-band", "other");
+        fs::write(&settings_path, &edited).unwrap();
+
+        fixture.setups.activity_changed(false);
+
+        let after = fs::read_to_string(&settings_path).unwrap();
+        assert_eq!(after, edited);
+        assert_eq!(read_record(&fixture.environment.config), None);
+    }
+
+    #[test]
+    fn a_refused_append_stops_the_click_before_turning_on() {
+        let environment = environment();
+        let settings_path = environment.agent.paths.settings_path.clone();
+        fs::write(&settings_path, UNEDITABLE).unwrap();
+        let fixture = fixture_with(environment, false);
+        seen_claude(&fixture, "one");
+
+        fixture.setups.act(&claude(), AgentMenuAction::SetUp);
+
+        let turned_on = fixture.switch.turned_on.load(Ordering::SeqCst);
+        assert_eq!(turned_on, 0);
+        let problem = only_notice(&fixture);
+        assert_eq!(problem.kind, AgentSetupNoticeKind::Problem);
+        assert!(
+            problem.text.contains("could not be added to"),
+            "{}",
+            problem.text
+        );
+        assert_eq!(read_record(&fixture.environment.config), None);
     }
 
     #[test]

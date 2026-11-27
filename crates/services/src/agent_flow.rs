@@ -8,8 +8,15 @@ use taco_agents::{HARNESSES, HarnessSetup};
 use taco_protocol::HarnessId;
 
 use crate::agent_hooks::{HookEdit, hook_wiring_of, remove_managed_entries};
-use crate::agent_setup_state::{AgentSetupFacts, AgentSetupState, agent_setup_state_of};
+use crate::agent_setup_state::{
+    AgentSetupFacts, AgentSetupState, PluginDirs, agent_setup_state_of,
+};
+use crate::config_files::plugin_directory_path;
 use crate::file_write::{read_text, write_if_unchanged};
+use crate::plugin_dirs::{
+    MANAGED_SETTINGS_PATH, PluginDirsRecord, append_folder, plugin_dirs_of, read_record,
+    remove_folder, remove_record, write_record,
+};
 
 const HOOKS_DIRECTORY_NAME: &str = "hooks";
 const SCRIPT_MODE: u32 = 0o755;
@@ -27,6 +34,9 @@ pub(crate) struct AgentPaths {
     pub(crate) hooks_directory: PathBuf,
     pub(crate) agent_directory: PathBuf,
     pub(crate) settings_path: PathBuf,
+    pub(crate) managed_settings_path: PathBuf,
+    pub(crate) plugin_folder: PathBuf,
+    pub(crate) home: PathBuf,
 }
 
 #[derive(Clone, Debug)]
@@ -122,6 +132,9 @@ fn agent_paths_of(
         hooks_directory: hooks_directory(config_directory),
         agent_directory,
         settings_path,
+        managed_settings_path: PathBuf::from(MANAGED_SETTINGS_PATH),
+        plugin_folder: plugin_directory_path(config_directory),
+        home: home.to_path_buf(),
     }
 }
 
@@ -167,6 +180,19 @@ fn label_of(agent: &Agent) -> String {
     agent.paths.settings_path.display().to_string()
 }
 
+fn plugin_dirs_reading(agent: &Agent, user_text: Option<&str>) -> PluginDirs {
+    let managed_read = read_settings(&agent.paths.managed_settings_path);
+    let managed_readable = managed_read.ok();
+    let managed_text = managed_readable.flatten();
+    plugin_dirs_of(
+        user_text,
+        &agent.paths.settings_path,
+        managed_text.as_deref(),
+        &agent.paths.plugin_folder,
+        &agent.paths.home,
+    )
+}
+
 pub(crate) fn read_state(
     agent: &Agent,
     activity_on: bool,
@@ -177,13 +203,85 @@ pub(crate) fn read_state(
     let readable = read.ok();
     let text = readable.flatten();
     let wiring = hook_wiring_of(text.as_deref(), agent.setup, &agent.paths.hooks_directory);
+    let plugin_dirs = plugin_dirs_reading(agent, text.as_deref());
     let facts = AgentSetupFacts {
         installed,
         activity_on,
         wiring,
+        plugin_dirs,
+        home: agent.paths.home.clone(),
         version,
     };
     agent_setup_state_of(&facts)
+}
+
+pub(crate) fn hides_plugin_folder(agent: &Agent) -> bool {
+    let read = read_settings(&agent.paths.settings_path);
+    let readable = read.ok();
+    let text = readable.flatten();
+    let reading = plugin_dirs_reading(agent, text.as_deref());
+    matches!(reading, PluginDirs::Hides { .. })
+}
+
+fn not_added_problem(file: &str, reason: &str) -> String {
+    format!("This app's plugin folder could not be added to {file}: {reason}")
+}
+
+fn not_taken_out_problem(file: &str, reason: &str) -> String {
+    format!("This app's plugin folder could not be taken out of {file}: {reason}")
+}
+
+pub(crate) fn add_plugin_folder(agent: &Agent, config_directory: &Path) -> Result<bool, String> {
+    let file = label_of(agent);
+    let read = read_settings(&agent.paths.settings_path);
+    let found = read.map_err(|reason| not_added_problem(&file, &reason))?;
+    let Some(text) = found else {
+        return Ok(false);
+    };
+    let folder = &agent.paths.plugin_folder;
+    let home = &agent.paths.home;
+    let edit = append_folder(&text, folder, home, &file);
+    let changed = match edit {
+        HookEdit::Changed(changed) => changed,
+        HookEdit::Unchanged => return Ok(false),
+        HookEdit::Refused(reason) => return Err(not_added_problem(&file, &reason)),
+    };
+    let record = PluginDirsRecord {
+        settings: agent.paths.settings_path.clone(),
+        entry: folder.to_string_lossy().into_owned(),
+    };
+    let recorded = write_record(config_directory, &record);
+    recorded.map_err(|error| not_added_problem(&file, &error.to_string()))?;
+    let original = Some(text.as_str());
+    let written = write_settings(&agent.paths.settings_path, original, &changed);
+    if let Err(reason) = written {
+        let _ = remove_record(config_directory);
+        return Err(not_added_problem(&file, &reason));
+    }
+    Ok(true)
+}
+
+pub(crate) fn remove_plugin_folder(config_directory: &Path) -> Result<(), String> {
+    let Some(record) = read_record(config_directory) else {
+        return Ok(());
+    };
+    let file = record.settings.display().to_string();
+    let read = read_settings(&record.settings);
+    let found = read.map_err(|reason| not_taken_out_problem(&file, &reason))?;
+    let mut written = Ok(());
+    if let Some(text) = found {
+        let edit = remove_folder(&text, &record.entry, &file);
+        match edit {
+            HookEdit::Changed(changed) => {
+                written = write_settings(&record.settings, Some(text.as_str()), &changed);
+            }
+            HookEdit::Unchanged => {}
+            HookEdit::Refused(reason) => return Err(not_taken_out_problem(&file, &reason)),
+        }
+    }
+    written.map_err(|reason| not_taken_out_problem(&file, &reason))?;
+    let removed = remove_record(config_directory);
+    removed.map_err(|error| not_taken_out_problem(&file, &error.to_string()))
 }
 
 pub(crate) fn remove_old_setup(agent: &Agent) -> Result<(), String> {
