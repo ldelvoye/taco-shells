@@ -653,7 +653,8 @@ fn full_board() -> Board {
 
 fn narrow_activity() -> Shown {
     let mut shown = quiet();
-    shown.drawn.panels.agent_activity.size = NARROW_PANEL;
+    let place = shown.drawn.panels.place_mut(Panel::AgentActivity);
+    place.size = NARROW_PANEL;
     shown
 }
 
@@ -856,7 +857,8 @@ fn plugin_dirs_offer_text() -> String {
 
 fn narrow_plugin_dirs_offer() -> Shown {
     let mut shown = setup_beside_agent(offer_kind(), &plugin_dirs_offer_text());
-    shown.drawn.panels.agent_activity.size = NARROW_PANEL;
+    let place = shown.drawn.panels.place_mut(Panel::AgentActivity);
+    place.size = NARROW_PANEL;
     shown
 }
 

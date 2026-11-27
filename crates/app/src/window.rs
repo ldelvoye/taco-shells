@@ -198,7 +198,8 @@ impl WindowView {
             loop {
                 cx.background_executor().timer(CLOCK_TICK).await;
                 let ticked = this.update(cx, |view, cx| {
-                    if view.shown.drawn.panels.agent_activity.open {
+                    let panels = &view.shown.drawn.panels;
+                    if panels.place(taco_protocol::Panel::AgentActivity).open {
                         cx.notify();
                     }
                 });

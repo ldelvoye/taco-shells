@@ -30,8 +30,10 @@ pub fn strip(
     look: &Look,
     cx: &mut Context<WindowView>,
 ) -> Div {
-    let terminals = panel_button(Panel::Terminals, &panels.terminals, look, cx);
-    let agent_activity = panel_button(Panel::AgentActivity, &panels.agent_activity, look, cx);
+    let terminals_place = panels.place(Panel::Terminals);
+    let terminals = panel_button(Panel::Terminals, terminals_place, look, cx);
+    let agent_activity_place = panels.place(Panel::AgentActivity);
+    let agent_activity = panel_button(Panel::AgentActivity, agent_activity_place, look, cx);
     let settings_button = button(SETTINGS_ICON, settings_open, look);
     let marked = mark(settings_button, SETTINGS_MARK);
     let settings = marked
