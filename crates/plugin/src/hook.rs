@@ -1,40 +1,18 @@
 use std::path::Path;
 
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
+use taco_agents::reduced_payload;
 use taco_protocol::routes::{AGENT_HOOK, CONTEXT, SESSION_END, SESSION_START, SESSION_STATE, STOP};
 use taco_protocol::{
     AgentHookBody, ContextAnswer, HarnessId, SessionEndBody, SessionStartBody, SessionStateBody,
     StopAnswer, TOKEN_FILE_NAME,
 };
 
-use crate::identity::tool_name_prefix;
 use crate::panel_text::PANEL_TEXT;
 use crate::post::PostError;
-use crate::tools::TOOL_NAMES;
 
 const HARNESS: &str = "claude";
 const FAILURE_EVENT: &str = "PostToolUseFailure";
-// One character over the largest limit the readers keep (a shared body), so a text cut here still shows as cut.
-const STRING_CAP: usize = 20_001;
-const COMMON_KEYS: [&str; 6] = [
-    "hook_event_name",
-    "session_id",
-    "prompt_id",
-    "agent_id",
-    "cwd",
-    "source",
-];
-const TOOL_SUMMARY_KEYS: [&str; 7] = [
-    "file_path",
-    "notebook_path",
-    "command",
-    "pattern",
-    "url",
-    "query",
-    "description",
-];
-const POST_TOOL_KEYS: [&str; 3] = ["tool_name", "tool_use_id", "scratchpad_dir"];
-const ACTIVITY_INPUT_KEYS: [&str; 5] = ["text", "kind", "title", "target", "body"];
 const STATE_EVENTS: [&str; 6] = [
     "UserPromptSubmit",
     "PreToolUse",
@@ -128,132 +106,6 @@ fn event_post(payload: &Value, event: &str, session_id: &str, pids: &[u32]) -> O
         route: SESSION_STATE,
         body: text,
     })
-}
-
-fn copy_keys(source: Option<&Value>, keys: &[&str], into: &mut Map<String, Value>) {
-    let Some(source) = source else {
-        return;
-    };
-    for key in keys {
-        if let Some(value) = source.get(*key) {
-            into.insert(key.to_string(), value.clone());
-        }
-    }
-}
-
-fn attach(kept: &mut Map<String, Value>, key: &str, fields: Map<String, Value>) {
-    if fields.is_empty() {
-        return;
-    }
-    kept.insert(key.to_string(), Value::Object(fields));
-}
-
-fn is_activity_tool(tool_name: &str) -> bool {
-    let prefix = tool_name_prefix();
-    TOOL_NAMES.iter().any(|name| {
-        let activity_tool = format!("{prefix}{name}");
-        activity_tool == tool_name
-    })
-}
-
-fn first_question(payload: &Value) -> Option<Value> {
-    let input = payload.get("tool_input")?;
-    let questions = input.get("questions")?;
-    let first = questions.as_array()?.first()?;
-    let question = first.get("question")?;
-    Some(json!({ "question": question }))
-}
-
-fn keep_pre_tool(payload: &Value, kept: &mut Map<String, Value>) {
-    copy_keys(Some(payload), &["tool_name"], kept);
-    let Some(tool_name) = text_field(payload, "tool_name") else {
-        return;
-    };
-    if tool_name != "AskUserQuestion" {
-        return;
-    }
-    if let Some(question) = first_question(payload) {
-        let kept_input = json!({ "questions": [question] });
-        kept.insert(String::from("tool_input"), kept_input);
-    }
-}
-
-fn keep_post_tool(payload: &Value, kept: &mut Map<String, Value>) {
-    copy_keys(Some(payload), &POST_TOOL_KEYS, kept);
-
-    let mut input = Map::new();
-    let mut response = Map::new();
-    let tool_input = payload.get("tool_input");
-    let tool_response = payload.get("tool_response");
-    copy_keys(tool_input, &TOOL_SUMMARY_KEYS, &mut input);
-
-    let tool_name = text_field(payload, "tool_name");
-    if let Some(tool_name) = tool_name {
-        match tool_name.as_str() {
-            "SendMessage" => {
-                copy_keys(tool_input, &["to", "message"], &mut input);
-                copy_keys(tool_response, &["success", "display"], &mut response);
-            }
-            "Bash" => copy_keys(tool_response, &["gitOperation"], &mut response),
-            "Write" => copy_keys(tool_response, &["type", "filePath"], &mut response),
-            "Artifact" => {
-                copy_keys(tool_input, &["action", "asset"], &mut input);
-                copy_keys(tool_response, &["url", "title", "updated"], &mut response);
-            }
-            name if is_activity_tool(name) => {
-                copy_keys(tool_input, &ACTIVITY_INPUT_KEYS, &mut input);
-                copy_keys(tool_response, &["isError"], &mut response);
-            }
-            _ => {}
-        }
-    }
-
-    attach(kept, "tool_input", input);
-    attach(kept, "tool_response", response);
-}
-
-fn cap_strings(value: Value) -> Value {
-    match value {
-        Value::String(text) => {
-            let cut: String = text.chars().take(STRING_CAP).collect();
-            Value::String(cut)
-        }
-        Value::Array(items) => {
-            let capped: Vec<Value> = items.into_iter().map(cap_strings).collect();
-            Value::Array(capped)
-        }
-        Value::Object(fields) => {
-            let pairs = fields.into_iter();
-            let capped_pairs = pairs.map(|(key, field)| (key, cap_strings(field)));
-            let capped: Map<String, Value> = capped_pairs.collect();
-            Value::Object(capped)
-        }
-        other => other,
-    }
-}
-
-pub fn reduced_payload(payload: &Value) -> Value {
-    let mut kept = Map::new();
-    copy_keys(Some(payload), &COMMON_KEYS, &mut kept);
-
-    let event = text_field(payload, "hook_event_name");
-    if let Some(event) = event {
-        match event.as_str() {
-            "UserPromptSubmit" => copy_keys(Some(payload), &["prompt"], &mut kept),
-            "Notification" => {
-                copy_keys(Some(payload), &["notification_type", "message"], &mut kept);
-            }
-            "PreToolUse" => keep_pre_tool(payload, &mut kept),
-            "PostToolUse" => keep_post_tool(payload, &mut kept),
-            FAILURE_EVENT => {
-                keep_post_tool(payload, &mut kept);
-                copy_keys(Some(payload), &["error", "is_interrupt"], &mut kept);
-            }
-            _ => {}
-        }
-    }
-
-    cap_strings(Value::Object(kept))
 }
 
 pub fn posts_for(payload: &Value, pids: &[u32]) -> Vec<Post> {
@@ -368,7 +220,6 @@ pub fn read_port(path: &Path) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::PLUGIN_NAME;
     use taco_protocol::PORT_FILE_NAME;
 
     const PIDS: [u32; 2] = [42, 7];
@@ -457,82 +308,6 @@ mod tests {
         );
         assert_eq!(routes(&failed), [AGENT_HOOK]);
         assert_eq!(failed[0].1["payload"]["error"], "boom");
-    }
-
-    #[test]
-    fn the_reduced_payload_keeps_what_the_app_reads() {
-        let activity_tool = format!("mcp__plugin_{PLUGIN_NAME}_activity__note");
-
-        let write = reduced_payload(&json!({
-            "hook_event_name": "PostToolUse",
-            "session_id": "s1",
-            "tool_name": "Write",
-            "tool_input": {"file_path": "/a.rs", "content": "secret body"},
-            "tool_response": {"type": "create", "filePath": "/a.rs", "content": "secret body"},
-        }));
-        let expected_write = json!({
-            "hook_event_name": "PostToolUse",
-            "session_id": "s1",
-            "tool_name": "Write",
-            "tool_input": {"file_path": "/a.rs"},
-            "tool_response": {"type": "create", "filePath": "/a.rs"},
-        });
-        assert_eq!(write, expected_write);
-
-        let bash = reduced_payload(&json!({
-            "hook_event_name": "PostToolUse",
-            "tool_name": "Bash",
-            "tool_input": {"command": "git push"},
-            "tool_response": {"stdout": "lots", "gitOperation": {"kind": "push"}},
-        }));
-        assert_eq!(bash["tool_input"]["command"], "git push");
-        assert_eq!(
-            bash["tool_response"],
-            json!({"gitOperation": {"kind": "push"}})
-        );
-
-        let note = reduced_payload(&json!({
-            "hook_event_name": "PostToolUse",
-            "tool_name": activity_tool,
-            "tool_input": {"text": "did a thing", "other": 1},
-            "tool_response": {"isError": false, "content": "x"},
-        }));
-        assert_eq!(note["tool_input"], json!({"text": "did a thing"}));
-        assert_eq!(note["tool_response"], json!({"isError": false}));
-
-        let question = reduced_payload(&json!({
-            "hook_event_name": "PreToolUse",
-            "tool_name": "AskUserQuestion",
-            "tool_input": {"questions": [
-                {"question": "First?", "options": ["a"]},
-                {"question": "Second?"},
-            ]},
-        }));
-        assert_eq!(
-            question["tool_input"],
-            json!({"questions": [{"question": "First?"}]})
-        );
-
-        let long_prompt = "é".repeat(STRING_CAP + 500);
-        let prompt = reduced_payload(&json!({
-            "hook_event_name": "UserPromptSubmit",
-            "prompt": long_prompt,
-        }));
-        assert_eq!(
-            prompt["prompt"].as_str().unwrap().chars().count(),
-            STRING_CAP
-        );
-
-        let failure = reduced_payload(&json!({
-            "hook_event_name": "PostToolUseFailure",
-            "tool_name": "Bash",
-            "error": "boom",
-            "is_interrupt": true,
-            "tool_input": {"command": "ls", "timeout": 5},
-        }));
-        assert_eq!(failure["error"], "boom");
-        assert_eq!(failure["is_interrupt"], true);
-        assert!(failure["tool_input"].get("timeout").is_none());
     }
 
     #[test]

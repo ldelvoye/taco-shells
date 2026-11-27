@@ -2,7 +2,9 @@ use std::io::{BufRead, Write};
 
 use serde_json::{Value, json};
 
-use crate::tools::{NOTE, NOW, SHARE, SHARE_KINDS, TOOL_NAMES, tools};
+use taco_agents::{ACTIVITY_TOOLS, NOTE_TOOL, NOW_TOOL, SHARE_KINDS, SHARE_TOOL};
+
+use crate::tools::tools;
 
 const DEFAULT_PROTOCOL_VERSION: &str = "2025-06-18";
 const SUPPORTED_PROTOCOL_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
@@ -175,14 +177,14 @@ fn share_problem(arguments: Option<&Value>) -> Option<String> {
 
 fn argument_problem(name: &str, arguments: Option<&Value>) -> Option<String> {
     match name {
-        NOTE | NOW => {
+        NOTE_TOOL | NOW_TOOL => {
             let text = arguments.and_then(|arguments| arguments.get("text"));
             if is_non_empty_string(text) {
                 return None;
             }
             Some(format!("{name} needs a text"))
         }
-        SHARE => share_problem(arguments),
+        SHARE_TOOL => share_problem(arguments),
         _ => None,
     }
 }
@@ -197,7 +199,7 @@ fn call_result(params: &Value, serving: bool) -> Result<Value, Failure> {
         });
     };
 
-    let is_known = TOOL_NAMES.contains(&name);
+    let is_known = ACTIVITY_TOOLS.contains(&name);
     if !(serving && is_known) {
         return Err(Failure {
             code: INVALID_PARAMS,
@@ -269,7 +271,7 @@ mod tests {
             let name = tool["name"].as_str().unwrap();
             names.push(name);
         }
-        assert_eq!(names, TOOL_NAMES);
+        assert_eq!(names, ACTIVITY_TOOLS);
         assert_eq!(replies[3]["result"]["content"][0]["text"], "Noted.");
         assert_eq!(replies[4]["error"]["code"], -32602);
         assert_eq!(replies[5]["result"]["protocolVersion"], "2025-06-18");

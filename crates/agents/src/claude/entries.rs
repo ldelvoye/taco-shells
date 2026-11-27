@@ -11,23 +11,21 @@ use super::shared::{
 use super::text::{text_at, whole_text_at, written, written_at};
 use crate::harness::{EntryRead, StepContext};
 
+pub const ACTIVITY_SERVER: &str = "activity";
+pub const NOTE_TOOL: &str = "note";
+pub const NOW_TOOL: &str = "now";
+pub const SHARE_TOOL: &str = "share";
+pub const ACTIVITY_TOOLS: [&str; 3] = [NOTE_TOOL, NOW_TOOL, SHARE_TOOL];
+pub const SHARE_KINDS: [&str; 5] = ["document", "image", "pull_request", "artifact", "other"];
 // A prompt or a note keeps this many characters, then CUT_MARK.
-const MAX_WRITTEN_CHARACTERS: usize = 8_000;
+pub(super) const MAX_WRITTEN_CHARACTERS: usize = 8_000;
 // The agent's line on what it is doing now is shown above the log, so it stays short.
-const MAX_NOW_CHARACTERS: usize = 300;
+pub(super) const MAX_NOW_CHARACTERS: usize = 300;
 // A failed step shows the first line of its error, this long at most.
-const MAX_FAILURE_CHARACTERS: usize = 200;
+pub(super) const MAX_FAILURE_CHARACTERS: usize = 200;
 const FAILED_WITHOUT_ERROR: &str = "Failed";
 // How a failed command's error starts, before its own message on the next line.
 const EXIT_CODE_PREFIX: &str = "Exit code ";
-// The share tool's kinds, as the Shared list labels them; any other kind is labelled as a note.
-const SHARE_KINDS: &[(&str, &str)] = &[
-    ("document", DOCUMENT_KIND),
-    ("image", IMAGE_KIND),
-    ("pull_request", PULL_REQUEST_KIND),
-    ("artifact", ARTIFACT_KIND),
-    ("other", NOTE_KIND),
-];
 // Another session's message, as Claude Code hands it to the agent in a prompt.
 const MESSAGE_OPEN: &str = "<cross-session-message";
 const MESSAGE_CLOSE: &str = "</cross-session-message>";
@@ -35,11 +33,6 @@ const MESSAGE_CLOSE: &str = "</cross-session-message>";
 const MESSAGE_TOOLS: &[&str] = &["SendMessage", "CrossSessionMessage"];
 // How a session's address starts, as opposed to a name.
 const SESSION_ADDRESS_PREFIX: &str = "uds:";
-// The tool-name prefixes of the app's activity server, for the stable app and for Dev.
-const ACTIVITY_SERVERS: &[&str] = &[
-    "mcp__plugin_taco-shells_activity__",
-    "mcp__plugin_taco-shells-dev_activity__",
-];
 
 const CHANGING_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit"];
 const CHANGED_PATHS: &[&str] = &["/tool_input/file_path", "/tool_input/notebook_path"];
@@ -73,35 +66,54 @@ fn summary_of(tool: &str, parsed: &Value) -> String {
     }
 }
 
-// "note" from "mcp__plugin_taco-shells_activity__note"; none for any other tool.
-fn activity_tool(tool: &str) -> Option<&str> {
-    let mut servers = ACTIVITY_SERVERS.iter();
-    servers.find_map(|server| tool.strip_prefix(server))
+pub fn activity_tool_prefix() -> String {
+    format!(
+        "mcp__plugin_{}_{ACTIVITY_SERVER}__",
+        taco_identity::CURRENT.agent_app_name
+    )
+}
+
+/// The activity tool a tool name calls: "note" for this build's "mcp__plugin_<app>_activity__note", none for any other tool, the other build's included.
+pub fn activity_tool_of(tool_name: &str) -> Option<&'static str> {
+    let prefix = activity_tool_prefix();
+    let rest = tool_name.strip_prefix(prefix.as_str())?;
+    let mut tools = ACTIVITY_TOOLS.iter();
+    let found = tools.find(|name| **name == rest)?;
+    Some(*found)
 }
 
 // A call the server refused never gets here: Claude Code sends it as PostToolUseFailure.
 fn activity_entry(name: &str, parsed: &Value) -> Option<EntryRead> {
     match name {
-        "note" => {
+        NOTE_TOOL => {
             let text = written_at(parsed, "/tool_input/text", MAX_WRITTEN_CHARACTERS)?;
             Some(EntryRead::Note { text })
         }
-        "now" => {
+        NOW_TOOL => {
             let text = written_at(parsed, "/tool_input/text", MAX_NOW_CHARACTERS)?;
             Some(EntryRead::Now { text })
         }
-        "share" => share_entry(parsed),
+        SHARE_TOOL => share_entry(parsed),
         _ => None,
+    }
+}
+
+// The Shared list's label for a share tool kind; any other kind is labelled as a note.
+fn share_label(kind: &str) -> &'static str {
+    match kind {
+        "document" => DOCUMENT_KIND,
+        "image" => IMAGE_KIND,
+        "pull_request" => PULL_REQUEST_KIND,
+        "artifact" => ARTIFACT_KIND,
+        _ => NOTE_KIND,
     }
 }
 
 fn share_entry(parsed: &Value) -> Option<EntryRead> {
     let title = written_at(parsed, "/tool_input/title", MAX_TITLE_CHARACTERS)?;
     let named = text_at(parsed, "/tool_input/kind");
-    let mut kinds = SHARE_KINDS.iter();
-    let label = kinds.find(|(name, _)| Some(*name) == named.as_deref());
-    let kind = match label {
-        Some((_, label)) => label.to_string(),
+    let kind = match named {
+        Some(name) => share_label(&name).to_string(),
         None => NOTE_KIND.to_string(),
     };
     let mut target = None;
@@ -241,7 +253,7 @@ fn message_out(parsed: &Value, context: StepContext) -> Option<EntryRead> {
 fn tool_entry(parsed: &Value) -> Option<EntryRead> {
     let tool = text_at(parsed, "/tool_name")?;
     // the agent's own activity calls are what it wrote, never steps
-    if let Some(name) = activity_tool(&tool) {
+    if let Some(name) = activity_tool_of(&tool) {
         return activity_entry(name, parsed);
     }
     let context = step_context(parsed);
@@ -295,7 +307,7 @@ fn failed_entry(parsed: &Value) -> Option<EntryRead> {
         return None;
     }
     let tool = text_at(parsed, "/tool_name")?;
-    if activity_tool(&tool).is_some() {
+    if activity_tool_of(&tool).is_some() {
         return None;
     }
     let reason = match first_error_line(parsed) {
@@ -398,18 +410,23 @@ mod tests {
         assert_eq!(kept, MAX_WRITTEN_CHARACTERS);
 
         // the app's own activity tools are what the agent wrote, never steps
-        let note = r#"{"tool_name":"mcp__plugin_taco-shells_activity__note","tool_input":{"text":" Found it "},"tool_response":{"content":[]}}"#;
+        let prefix = activity_tool_prefix();
+        let note = format!(
+            r#"{{"tool_name":"{prefix}note","tool_input":{{"text":" Found it "}},"tool_response":{{"content":[]}}}}"#
+        );
         let written = EntryRead::Note {
             text: "Found it".into(),
         };
-        assert_eq!(entry("PostToolUse", note), Some(written));
-        let now = r#"{"tool_name":"mcp__plugin_taco-shells-dev_activity__now","tool_input":{"text":"Reading the PTY code"}}"#;
+        assert_eq!(entry("PostToolUse", &note), Some(written));
+        let now = format!(
+            r#"{{"tool_name":"{prefix}now","tool_input":{{"text":"Reading the PTY code"}}}}"#
+        );
         let line = EntryRead::Now {
             text: "Reading the PTY code".into(),
         };
-        assert_eq!(entry("PostToolUse", now), Some(line));
+        assert_eq!(entry("PostToolUse", &now), Some(line));
         let long_now = format!(
-            r#"{{"tool_name":"mcp__plugin_taco-shells_activity__now","tool_input":{{"text":"{}"}}}}"#,
+            r#"{{"tool_name":"{prefix}now","tool_input":{{"text":"{}"}}}}"#,
             "n".repeat(MAX_NOW_CHARACTERS + 1)
         );
         let Some(EntryRead::Now { text }) = entry("PostToolUse", &long_now) else {
@@ -421,6 +438,20 @@ mod tests {
         assert_eq!(
             entry("PostToolUse", someone_elses),
             Some(did("mcp__plugin_other_activity__note", ""))
+        );
+        let other_app_name =
+            if taco_identity::CURRENT.agent_app_name == taco_identity::STABLE.agent_app_name {
+                taco_identity::DEVELOPMENT.agent_app_name
+            } else {
+                taco_identity::STABLE.agent_app_name
+            };
+        let other_builds_tool =
+            format!("mcp__plugin_{other_app_name}_{ACTIVITY_SERVER}__{NOTE_TOOL}");
+        let other_builds =
+            format!(r#"{{"tool_name":"{other_builds_tool}","tool_input":{{"text":"x"}}}}"#);
+        assert_eq!(
+            entry("PostToolUse", &other_builds),
+            Some(did(&other_builds_tool, ""))
         );
 
         let bash = r#"{"tool_name":"Bash","tool_input":{"command":"cargo test\n--locked"}}"#;
@@ -596,16 +627,19 @@ mod tests {
         assert!(long.ends_with(CUT_MARK), "a long error line is cut");
         assert_eq!(failed_with("  ").as_deref(), Some(FAILED_WITHOUT_ERROR));
         assert!(read_entries("PostToolUseFailure", &failure("Interrupted", true)).is_empty());
-        let refused =
-            r#"{"tool_name":"mcp__plugin_taco-shells_activity__note","error":"note needs a text"}"#;
-        assert!(read_entries("PostToolUseFailure", refused).is_empty());
+        let refused = format!(
+            r#"{{"tool_name":"{}note","error":"note needs a text"}}"#,
+            activity_tool_prefix()
+        );
+        assert!(read_entries("PostToolUseFailure", &refused).is_empty());
     }
 
     #[test]
     fn a_share_opens_a_link_a_pull_request_an_absolute_file_or_its_text() {
+        let share_tool_name = format!("{}{SHARE_TOOL}", activity_tool_prefix());
         let share = |input: serde_json::Value| {
             let payload = serde_json::json!({
-                "tool_name": "mcp__plugin_taco-shells_activity__share",
+                "tool_name": share_tool_name,
                 "tool_input": input,
                 "cwd": "/work/tacos",
             });

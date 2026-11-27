@@ -474,7 +474,10 @@ mod tests {
         let terminal = terminal.expect("the first terminal is published");
         let claude = HarnessId("claude".into());
         let session = "123e4567-e89b-12d3-a456-426614174000".to_string();
-        let note = r#"{"tool_name":"mcp__plugin_taco-shells-dev_activity__note","tool_input":{"text":"Found the cause"}}"#;
+        let app_name = taco_identity::CURRENT.agent_app_name;
+        let note = format!(
+            r#"{{"tool_name":"mcp__plugin_{app_name}_activity__note","tool_input":{{"text":"Found the cause"}}}}"#
+        );
         host.hook(HookEvent {
             terminal: terminal.clone(),
             call: HookCall::AgentHook {

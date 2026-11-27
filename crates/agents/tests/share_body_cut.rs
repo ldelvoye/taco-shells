@@ -1,11 +1,8 @@
 use serde_json::json;
-use taco_agents::{CLAUDE, EntryRead};
-use taco_plugin::{PLUGIN_NAME, SERVER_NAME, reduced_payload};
-
-const CUT_MARK: &str = "… (cut)";
+use taco_agents::{CLAUDE, CUT_MARK, EntryRead, SHARE_TOOL, activity_tool_prefix, reduced_payload};
 
 fn shared_body_after_the_trip(body: &str) -> Option<String> {
-    let tool_name = format!("mcp__plugin_{PLUGIN_NAME}_{SERVER_NAME}__share");
+    let tool_name = format!("{}{SHARE_TOOL}", activity_tool_prefix());
     let payload = json!({
         "hook_event_name": "PostToolUse",
         "session_id": "s1",

@@ -11,8 +11,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::value::RawValue;
 use serde_json::{Map, Value};
-use taco_agents::{Harness, harness_of};
-use taco_plugin::{SERVER_NAME, TOOL_NAMES};
+use taco_agents::{ACTIVITY_SERVER, ACTIVITY_TOOLS, Harness, harness_of};
 use taco_protocol::routes::{AGENT_HOOK, CONTEXT, SESSION_END, SESSION_START, SESSION_STATE, STOP};
 use taco_protocol::{
     AgentHookBody, ContextAnswer, HookCall, HookMessage, SessionEndBody, SessionStartBody,
@@ -213,8 +212,8 @@ fn is_any_channels_activity_call(tool_name: &str) -> bool {
     if !tool_name.starts_with(PLUGIN_TOOL_PREFIX) {
         return false;
     }
-    TOOL_NAMES.iter().any(|name| {
-        let suffix = format!("_{SERVER_NAME}__{name}");
+    ACTIVITY_TOOLS.iter().any(|name| {
+        let suffix = format!("_{ACTIVITY_SERVER}__{name}");
         tool_name.ends_with(&suffix)
     })
 }

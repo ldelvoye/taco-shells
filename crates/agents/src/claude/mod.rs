@@ -4,8 +4,15 @@ use crate::harness::{AgentTitle, Harness, HarnessSetup};
 
 mod entries;
 mod found;
+mod payload;
 mod shared;
 mod text;
+
+pub use entries::{
+    ACTIVITY_SERVER, ACTIVITY_TOOLS, NOTE_TOOL, NOW_TOOL, SHARE_KINDS, SHARE_TOOL,
+    activity_tool_of, activity_tool_prefix,
+};
+pub use payload::reduced_payload;
 
 const ASKING_TOOL: &str = "AskUserQuestion";
 // ExitPlanMode needs you too, but asks no question in words: the window says a plan waits.

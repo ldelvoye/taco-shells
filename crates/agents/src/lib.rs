@@ -4,6 +4,10 @@ mod claude;
 mod harness;
 
 pub use claude::CLAUDE;
+pub use claude::{
+    ACTIVITY_SERVER, ACTIVITY_TOOLS, NOTE_TOOL, NOW_TOOL, SHARE_KINDS, SHARE_TOOL,
+    activity_tool_of, activity_tool_prefix, reduced_payload,
+};
 pub use harness::{
     AgentTitle, EntryRead, Found, Harness, HarnessSetup, PullRequestSeen, StepContext,
 };
