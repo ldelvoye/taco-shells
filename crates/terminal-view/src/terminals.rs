@@ -277,6 +277,8 @@ impl Terminals {
         if self.blink.is_some() {
             return;
         }
+        // A cursor that starts blinking again, such as after a program hid it to redraw, starts shown.
+        self.blink_on = true;
         let blink = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(BLINK_PHASE).await;
