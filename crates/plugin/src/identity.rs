@@ -1,10 +1,11 @@
+use taco_protocol::APP_VARIABLE;
+
 #[cfg(taco_stable)]
 pub const PLUGIN_NAME: &str = "taco-shells";
 #[cfg(not(taco_stable))]
 pub const PLUGIN_NAME: &str = "taco-shells-dev";
 
 pub const SERVER_NAME: &str = "activity";
-pub const APP_VARIABLE: &str = "TACO_SHELLS_APP";
 pub const ENTRYPOINT_VARIABLE: &str = "CLAUDE_CODE_ENTRYPOINT";
 
 pub struct Surroundings {
