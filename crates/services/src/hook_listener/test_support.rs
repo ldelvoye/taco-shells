@@ -1,9 +1,10 @@
 use std::fs;
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{Shutdown, TcpStream};
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -73,18 +74,33 @@ pub(super) fn post_for_reply(
     (status.parse().unwrap(), reply_body.to_string())
 }
 
-pub(super) fn start_collecting() -> Collecting {
-    let directory = tempfile::tempdir().unwrap();
-    let (sender, receiver) = mpsc::channel();
-    let listener = HookListener::start_on(
+pub(super) fn raw_exchange(port: u16, request: &[u8]) -> Vec<u8> {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream.set_read_timeout(Some(WAIT)).unwrap();
+    let _ = stream.write_all(request);
+    let _ = stream.shutdown(Shutdown::Write);
+
+    let mut reply = Vec::new();
+    let _ = stream.read_to_end(&mut reply);
+    reply
+}
+
+pub(super) fn start_sending(port_file: PathBuf, sender: Sender<ListenerEvent>) -> HookListener {
+    HookListener::start_on(
         &[0],
-        directory.path().join(PORT_FILE_NAME),
+        port_file,
         TEST_DEADLINE,
         deadlines::ANSWER_WINDOW,
         Box::new(move |event| {
             let _ = sender.send(event);
         }),
-    );
+    )
+}
+
+pub(super) fn start_collecting() -> Collecting {
+    let directory = tempfile::tempdir().unwrap();
+    let (sender, receiver) = mpsc::channel();
+    let listener = start_sending(directory.path().join(PORT_FILE_NAME), sender);
     let port = listener.port().unwrap();
     let token = fs::read_to_string(directory.path().join(TOKEN_FILE_NAME)).unwrap();
     Collecting {
@@ -164,12 +180,19 @@ pub(super) fn every_hook_route_body() -> Vec<(&'static str, String)> {
 pub(super) fn start_questioned(
     on_event: impl Fn(ListenerEvent) + Send + Sync + 'static,
 ) -> Questioned {
+    start_questioned_with_window(QUESTION_WINDOW, on_event)
+}
+
+pub(super) fn start_questioned_with_window(
+    window: Duration,
+    on_event: impl Fn(ListenerEvent) + Send + Sync + 'static,
+) -> Questioned {
     let directory = tempfile::tempdir().unwrap();
     let listener = HookListener::start_on(
         &[0],
         directory.path().join(PORT_FILE_NAME),
         TEST_DEADLINE,
-        QUESTION_WINDOW,
+        window,
         Box::new(on_event),
     );
     let port = listener.port().unwrap();

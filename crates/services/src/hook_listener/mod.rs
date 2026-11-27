@@ -271,6 +271,8 @@ mod tests {
     use super::test_support::*;
     use super::*;
 
+    type AnsweredAtOnce = (fn() -> Vec<AnswerPart>, &'static str, &'static str);
+
     #[test]
     fn routes_accept_what_the_scripts_send_and_drop_the_rest() {
         let collecting = start_collecting();
@@ -411,15 +413,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let token_file = directory.path().join(TOKEN_FILE_NAME);
         let (sender, receiver) = mpsc::channel();
-        let listener = HookListener::start_on(
-            &[0],
-            directory.path().join(PORT_FILE_NAME),
-            TEST_DEADLINE,
-            deadlines::ANSWER_WINDOW,
-            Box::new(move |event| {
-                let _ = sender.send(event);
-            }),
-        );
+        let listener = start_sending(directory.path().join(PORT_FILE_NAME), sender);
         let port = listener.port().unwrap();
 
         let mode = fs::metadata(&token_file).unwrap().permissions().mode();
@@ -473,15 +467,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let token_file = directory.path().join(TOKEN_FILE_NAME);
         let (sender, receiver) = mpsc::channel();
-        let listener = HookListener::start_on(
-            &[0],
-            directory.path().join(PORT_FILE_NAME),
-            TEST_DEADLINE,
-            deadlines::ANSWER_WINDOW,
-            Box::new(move |event| {
-                let _ = sender.send(event);
-            }),
-        );
+        let listener = start_sending(directory.path().join(PORT_FILE_NAME), sender);
         let port = listener.port().unwrap();
         let token = fs::read_to_string(&token_file).unwrap();
         let with_token = format!("{TOKEN_HEADER}: {token}\r\n");
@@ -673,7 +659,8 @@ mod tests {
         let held = Arc::new(Mutex::new(Vec::new()));
         let keeper = Arc::clone(&held);
         let (sender, receiver) = mpsc::channel();
-        let questioned = start_questioned(move |event| match event {
+        let window = Duration::from_millis(1500);
+        let questioned = start_questioned_with_window(window, move |event| match event {
             ListenerEvent::Question(question) => keeper.lock().unwrap().push(question.reply),
             other => {
                 let _ = sender.send(other);
@@ -690,7 +677,6 @@ mod tests {
         });
         thread::sleep(Duration::from_millis(100));
 
-        let sent = Instant::now();
         let end = end_body("[3]");
         let status = post_with(
             port,
@@ -699,58 +685,88 @@ mod tests {
             &questioned.token_header,
             end.as_bytes(),
         );
-        let post_took = sent.elapsed();
         assert_eq!(status, 200);
-        assert!(post_took < Duration::from_millis(150), "{post_took:?}");
         assert_eq!(next_event(&receiver), ended(vec![3]));
+        assert!(!asker.is_finished(), "the post waited for the question");
 
         let (reply, waited) = asker.join().unwrap();
         assert_eq!(reply, "{}");
-        let window = Duration::from_millis(200)..Duration::from_millis(800);
-        assert!(window.contains(&waited), "{waited:?}");
+        let margin = Duration::from_millis(50);
+        assert!(waited >= window - margin, "{waited:?}");
     }
 
     #[test]
-    fn a_context_question_is_answered_as_soon_as_it_is_complete() {
-        let with_context = start_questioned(answering(|| {
-            vec![
-                AnswerPart::Placed(true),
-                AnswerPart::Context(Some("hello".to_string())),
-            ]
-        }));
-        let (reply, waited) = ask(&with_context, CONTEXT);
-        assert_eq!(reply, r#"{"yours":true,"context":"hello"}"#);
-        assert!(waited < Duration::from_millis(200), "{waited:?}");
+    fn a_question_is_answered_as_soon_as_it_is_complete_in_any_order() {
+        let answered_at_once: [AnsweredAtOnce; 4] = [
+            (
+                || {
+                    vec![
+                        AnswerPart::Placed(true),
+                        AnswerPart::Context(Some("hello".to_string())),
+                    ]
+                },
+                CONTEXT,
+                r#"{"yours":true,"context":"hello"}"#,
+            ),
+            (|| vec![AnswerPart::Placed(false)], CONTEXT, "{}"),
+            (
+                || {
+                    vec![
+                        AnswerPart::Context(Some("hello".to_string())),
+                        AnswerPart::Placed(true),
+                    ]
+                },
+                CONTEXT,
+                r#"{"yours":true,"context":"hello"}"#,
+            ),
+            (
+                || vec![AnswerPart::Placed(true), AnswerPart::Nudge(None, None)],
+                STOP,
+                "{}",
+            ),
+        ];
+        let window = Duration::from_secs(3);
+        for (parts, route, expected) in answered_at_once {
+            let questioned = start_questioned_with_window(window, answering(parts));
+            let (reply, waited) = ask(&questioned, route);
+            assert_eq!(reply, expected, "{route}");
+            assert!(waited < Duration::from_secs(1), "{route} {waited:?}");
+        }
 
         let placed_only = start_questioned(answering(|| vec![AnswerPart::Placed(true)]));
         let (reply, waited) = ask(&placed_only, CONTEXT);
         assert_eq!(reply, r#"{"yours":true}"#);
         assert!(waited > Duration::from_millis(250), "{waited:?}");
-
-        let elsewhere = start_questioned(answering(|| vec![AnswerPart::Placed(false)]));
-        let (reply, waited) = ask(&elsewhere, CONTEXT);
-        assert_eq!(reply, "{}");
-        assert!(waited < Duration::from_millis(200), "{waited:?}");
     }
 
     #[test]
-    fn a_question_is_answered_at_once_whatever_order_its_parts_arrive_in() {
-        let context_first = start_questioned(answering(|| {
-            vec![
-                AnswerPart::Context(Some("hello".to_string())),
-                AnswerPart::Placed(true),
-            ]
-        }));
-        let (reply, waited) = ask(&context_first, CONTEXT);
-        assert_eq!(reply, r#"{"yours":true,"context":"hello"}"#);
-        assert!(waited < Duration::from_millis(200), "{waited:?}");
+    fn a_malformed_request_is_refused_before_its_body_is_read() {
+        let collecting = start_collecting();
+        let port = collecting.port;
+        let token_header = &collecting.token_header;
+        let request_line = format!("POST {AGENT_HOOK} HTTP/1.1\r\n");
 
-        let nothing_to_say = start_questioned(answering(|| {
-            vec![AnswerPart::Placed(true), AnswerPart::Nudge(None, None)]
-        }));
-        let (reply, waited) = ask(&nothing_to_say, STOP);
-        assert_eq!(reply, "{}");
-        assert!(waited < Duration::from_millis(200), "{waited:?}");
+        let chunked = format!("{request_line}{token_header}Transfer-Encoding: chunked\r\n\r\n");
+        let reply = raw_exchange(port, chunked.as_bytes());
+        assert!(reply.starts_with(b"HTTP/1.1 400"), "{reply:?}");
+
+        let bad_length = format!("{request_line}{token_header}Content-Length: abc\r\n\r\n");
+        let reply = raw_exchange(port, bad_length.as_bytes());
+        assert!(reply.starts_with(b"HTTP/1.1 400"), "{reply:?}");
+
+        let filler = format!("X-Filler: {}\r\n", "a".repeat(1000));
+        let mut long_head = format!("{request_line}{token_header}");
+        while long_head.len() <= http::HEAD_CAP {
+            long_head.push_str(&filler);
+        }
+        let ended_head = format!("{long_head}Content-Length: 0\r\n\r\n");
+        let reply = raw_exchange(port, ended_head.as_bytes());
+        assert!(reply.is_empty(), "{reply:?}");
+
+        let marker = end_body("[9]");
+        let marked = post_with(port, "POST", SESSION_END, token_header, marker.as_bytes());
+        assert_eq!(marked, 200);
+        assert_eq!(next_event(&collecting.receiver), ended(vec![9]));
     }
 
     #[test]
