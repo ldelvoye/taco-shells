@@ -1,15 +1,21 @@
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, ErrorKind, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::Instant;
 
-use taco_protocol::{RuntimeCommand, RuntimeReport, TerminalEvent, TerminalRequest};
+use taco_protocol::{RuntimeCommand, RuntimeReport, TerminalEvent, TerminalId, TerminalRequest};
 
 use crate::budget::Budgets;
 use crate::core::{Core, Effect, Input};
 use crate::pty::{PtyShells, ShellProgram};
+
+enum Waited {
+    Input(Input),
+    Deadline,
+    Closed,
+}
 
 /// The runtime, running until it is told to stop, the app's connection closes, or SIGTERM arrives; SIGTERM must already be blocked in every thread.
 pub fn run(
@@ -40,31 +46,19 @@ fn drive(
     budgets: &Budgets,
 ) {
     loop {
-        let input = match core.next_deadline() {
-            Some(deadline) => {
-                let wait = deadline.saturating_duration_since(Instant::now());
-                match received.recv_timeout(wait) {
-                    Ok(input) => Some(input),
-                    Err(RecvTimeoutError::Timeout) => None,
-                    Err(RecvTimeoutError::Disconnected) => return,
-                }
-            }
-            None => match received.recv() {
-                Ok(input) => Some(input),
-                Err(_) => return,
-            },
-        };
-
+        let deadline = core.next_deadline();
+        let waited = next_input(received, deadline);
         let now = Instant::now();
         let mut exited = None;
-        let effects = match input {
-            Some(input) => {
+        let effects = match waited {
+            Waited::Input(input) => {
                 if let Input::Exited { id, .. } = &input {
                     exited = Some(id.clone());
                 }
                 core.handle(input, now)
             }
-            None => core.tick(now),
+            Waited::Deadline => core.tick(now),
+            Waited::Closed => return,
         };
 
         for effect in effects {
@@ -85,6 +79,21 @@ fn drive(
         if let Some(id) = exited {
             core.shells_mut().forget(&id);
         }
+    }
+}
+
+fn next_input(received: &Receiver<Input>, deadline: Option<Instant>) -> Waited {
+    let Some(deadline) = deadline else {
+        return match received.recv() {
+            Ok(input) => Waited::Input(input),
+            Err(_) => Waited::Closed,
+        };
+    };
+    let wait = deadline.saturating_duration_since(Instant::now());
+    match received.recv_timeout(wait) {
+        Ok(input) => Waited::Input(input),
+        Err(RecvTimeoutError::Timeout) => Waited::Deadline,
+        Err(RecvTimeoutError::Disconnected) => Waited::Closed,
     }
 }
 
@@ -157,8 +166,14 @@ fn spawn_event_writer(
                 }
                 let merged = merge_output(batch);
                 for event in merged {
-                    // A window that has gone is not an error here: its shells keep running.
-                    let _ = taco_wire::write_frame(&mut writer, &event);
+                    let written = taco_wire::write_frame(&mut writer, &event);
+                    // A window that has gone is not an error here: its shells keep running. An event over the frame limit is, and is reported, since its view would wait for it in silence.
+                    if let Err(error) = written
+                        && error.kind() == ErrorKind::InvalidInput
+                    {
+                        let id = terminal_of(&event);
+                        eprintln!("an event for {} was not sent: {error}", id.0);
+                    }
                     // Bytes sent to a view return to their shell's budget even when unwritten, so a gone window cannot stall a shell.
                     if let TerminalEvent::Output { id, data } = &event {
                         budgets.give_back(id, data.len());
@@ -187,6 +202,18 @@ fn merge_output(batch: Vec<TerminalEvent>) -> Vec<TerminalEvent> {
         merged.push(event);
     }
     merged
+}
+
+fn terminal_of(event: &TerminalEvent) -> &TerminalId {
+    match event {
+        TerminalEvent::Attached { id, .. }
+        | TerminalEvent::History { id, .. }
+        | TerminalEvent::Output { id, .. }
+        | TerminalEvent::Resized { id, .. }
+        | TerminalEvent::Cleared { id }
+        | TerminalEvent::CursorDefaults { id, .. }
+        | TerminalEvent::End { id } => id,
+    }
 }
 
 fn spawn_signal_waiter(inputs: Sender<Input>) -> std::io::Result<()> {

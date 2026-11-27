@@ -7,8 +7,8 @@ use taco_protocol::{CursorShape, Rgb, TerminalColors, TerminalSize};
 use crate::restore::{Restore, Step};
 use crate::sys;
 
-/// The longest unfinished sequence a snapshot can carry: 65 MiB, the library's own limit for one.
-const CONTINUATION_BYTES: usize = 65 * 1024 * 1024;
+/// The longest unfinished sequence a snapshot can carry, kept well under the runtime's frame limit (`taco_wire::MAX_FRAME`). A snapshot inside a longer one fails until the sequence ends.
+const CONTINUATION_BYTES: usize = 16 * 1024 * 1024;
 pub(crate) const PALETTE_SIZE: usize = 256;
 
 /// A call into the library that did not succeed.
@@ -311,7 +311,8 @@ impl Terminal {
             return Ok(String::new());
         }
         let bytes = unsafe { std::slice::from_raw_parts(title.ptr, title.len) };
-        let text = String::from_utf8_lossy(bytes);
+        let whole = whole_characters(bytes);
+        let text = String::from_utf8_lossy(whole);
         Ok(text.into_owned())
     }
 
@@ -363,6 +364,14 @@ impl Drop for Terminal {
         unsafe { sys::ghostty_terminal_free(self.raw) };
         let effects = unsafe { Box::from_raw(self.effects) };
         drop(effects);
+    }
+}
+
+/// The text without a character cut off at its end: the library cuts a long title at its byte limit, which can split the last one.
+fn whole_characters(bytes: &[u8]) -> &[u8] {
+    match std::str::from_utf8(bytes) {
+        Err(error) if error.error_len().is_none() => &bytes[..error.valid_up_to()],
+        _ => bytes,
     }
 }
 
@@ -459,6 +468,12 @@ mod tests {
         let title = terminal.take_title().unwrap();
         assert_eq!(title.as_deref(), Some("claude: fixing the tests"));
         assert_eq!(terminal.take_title().unwrap(), None);
+
+        // The library keeps 1,024 bytes of a title, so this one is cut inside its first `é`: it ends at a whole character, not a replacement character.
+        let ascii = "x".repeat(1_023);
+        let long = format!("\x1b]2;{ascii}éé\x07");
+        terminal.write(long.as_bytes());
+        assert_eq!(terminal.take_title().unwrap(), Some(ascii));
     }
 
     #[test]
