@@ -5,7 +5,7 @@ use serde_json::{Map, Value};
 use crate::commands::CommandId;
 use crate::config::DEFAULT_KEYBINDINGS_TEXT;
 use crate::jsonc::{TopLevelEdit, edit_top_level, parse_jsonc};
-use crate::keys::{Binding, Chord, command_for, parse_chord, resolve_keymap};
+use crate::keys::{Binding, Chord, command_for, file_chord_text, parse_chord, resolve_keymap};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum KeymapChange {
@@ -55,24 +55,6 @@ impl KeymapChange {
     }
 }
 
-fn file_chord_text(chord: &Chord) -> String {
-    let mut parts: Vec<&str> = Vec::new();
-    if chord.cmd {
-        parts.push("cmd");
-    }
-    if chord.ctrl {
-        parts.push("ctrl");
-    }
-    if chord.alt {
-        parts.push("opt");
-    }
-    if chord.shift {
-        parts.push("shift");
-    }
-    parts.push(&chord.key);
-    parts.join("+")
-}
-
 fn same_chord(line_key: &str, edit_key: &str) -> bool {
     let line_chord = parse_chord(line_key);
     let edit_chord = parse_chord(edit_key);
@@ -102,10 +84,13 @@ fn read_user(text: Option<&str>, label: &str) -> Result<Option<Map<String, Value
 fn give_edit(command: CommandId, chord: &Chord, default_bindings: &[Binding]) -> TopLevelEdit {
     let shown = file_chord_text(chord);
     let default_command = command_for(default_bindings, chord);
+    // Removed rather than set when the defaults already give the chord to this command.
     if default_command == Some(command) {
         return TopLevelEdit::Remove(shown);
     }
-    TopLevelEdit::Set(shown, Value::String(command.id().to_string()))
+    let id = command.id().to_string();
+    let value = Value::String(id);
+    TopLevelEdit::Set(shown, value)
 }
 
 fn take_edit(chord: &Chord, default_bindings: &[Binding]) -> TopLevelEdit {
@@ -121,19 +106,14 @@ fn take_edit(chord: &Chord, default_bindings: &[Binding]) -> TopLevelEdit {
 
 fn reset_edits(
     command: CommandId,
-    user: Option<&Map<String, Value>>,
+    current_bindings: &[Binding],
     default_bindings: &[Binding],
 ) -> Vec<TopLevelEdit> {
     let mut keys: Vec<String> = Vec::new();
 
-    if let Some(user_layer) = user {
-        for (line_key, value) in user_layer {
-            let Some(chord) = parse_chord(line_key) else {
-                continue;
-            };
-            if value.as_str() == Some(command.id()) {
-                keys.push(file_chord_text(&chord));
-            }
+    for binding in current_bindings {
+        if binding.command == command {
+            keys.push(file_chord_text(&binding.chord));
         }
     }
 
@@ -170,11 +150,19 @@ fn came_out_as_asked(
 ) -> bool {
     let command = change.command();
     match change {
-        KeymapChange::Add { chord, .. } => command_for(bindings, chord) == Some(command),
-        KeymapChange::Remove { chord, .. } => command_for(bindings, chord) != Some(command),
+        KeymapChange::Add { chord, .. } => {
+            let owner = command_for(bindings, chord);
+            owner == Some(command)
+        }
+        KeymapChange::Remove { chord, .. } => {
+            let owner = command_for(bindings, chord);
+            owner != Some(command)
+        }
         KeymapChange::Replace { from, to, .. } => {
-            let from_gone = command_for(bindings, from) != Some(command);
-            let to_held = command_for(bindings, to) == Some(command);
+            let from_owner = command_for(bindings, from);
+            let to_owner = command_for(bindings, to);
+            let from_gone = from_owner != Some(command);
+            let to_held = to_owner == Some(command);
             from_gone && to_held
         }
         KeymapChange::Reset { .. } => {
@@ -201,15 +189,17 @@ pub fn edit_keymap(
     }
 
     let default_parsed = parse_jsonc(DEFAULT_KEYBINDINGS_TEXT, label);
-    let defaults = match default_parsed.value {
-        Some(map) => map,
-        None => Map::new(),
+    let Some(defaults) = default_parsed.value else {
+        return Err(format!(
+            "The shipped keybindings could not be read, so {label} was not changed."
+        ));
     };
-    let default_bindings = resolve_keymap(&defaults, None, label).bindings;
+    let default_resolution = resolve_keymap(&defaults, None, label);
+    let default_bindings = default_resolution.bindings;
 
     let user = read_user(text, label)?;
     let current = resolve_keymap(&defaults, user.as_ref(), label);
-    let problems_before = current.problems.len();
+    let problems_before = current.problems.clone();
 
     if let Some(held) = change.held_chord() {
         let held_command = command_for(&current.bindings, held);
@@ -229,14 +219,16 @@ pub fn edit_keymap(
             take_edit(from, &default_bindings),
             give_edit(command, to, &default_bindings),
         ],
-        KeymapChange::Reset { .. } => reset_edits(command, user.as_ref(), &default_bindings),
+        KeymapChange::Reset { .. } => reset_edits(command, &current.bindings, &default_bindings),
     };
 
     let new_text = edit_top_level(text, &edits, label, &same_chord)?;
 
     let new_user = read_user(Some(&new_text), label)?;
     let after = resolve_keymap(&defaults, new_user.as_ref(), label);
-    if after.problems.len() > problems_before {
+    let mut new_problems = after.problems.iter();
+    let added_problem = new_problems.any(|problem| !problems_before.contains(problem));
+    if added_problem {
         return Err(format!(
             "{label} could not be changed without breaking another line, so nothing was changed."
         ));
@@ -353,6 +345,14 @@ mod tests {
         assert_eq!(text, "{\n  // keep one\n  // keep two\n}\n");
         let expected: HashSet<Chord> = HashSet::from([chord("cmd+k")]);
         assert_eq!(chords_after(&text, clear), expected);
+
+        let two_spellings = "{\n  \"cmd+k\": null,\n  \"Cmd+K\": \"terminal.new\"\n}\n";
+        let both_gone = edited(two_spellings, &reset);
+        assert_eq!(both_gone, Ok("{}\n".to_string()));
+
+        let dead_line = "{\n  \"cmd+d\": \"terminal.clear\",\n  \"Cmd+D\": \"terminal.paste\"\n}\n";
+        let kept_live = edited(dead_line, &reset);
+        assert_eq!(kept_live, Ok(dead_line.to_string()));
     }
 
     #[test]

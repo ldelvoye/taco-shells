@@ -23,7 +23,7 @@ pub struct JsoncResult {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum TopLevelEdit {
+pub(crate) enum TopLevelEdit {
     Set(String, Value),
     Remove(String),
 }
@@ -119,19 +119,44 @@ fn properties_matching(
     matching
 }
 
-fn text_from_sets(edits: &[TopLevelEdit]) -> String {
-    let mut lines: Vec<String> = Vec::new();
+fn text_from_edits(
+    blank: Option<&str>,
+    edits: &[TopLevelEdit],
+    same_key: &dyn Fn(&str, &str) -> bool,
+) -> String {
+    let mut entries: Vec<(String, Value)> = Vec::new();
     for edit in edits {
-        if let TopLevelEdit::Set(key, value) = edit {
-            let name = Value::from(key.as_str());
-            lines.push(format!("  {name}: {value}"));
+        match edit {
+            TopLevelEdit::Set(key, value) => {
+                let mut existing = entries.iter_mut();
+                let found = existing.find(|(name, _)| same_key(name, key));
+                match found {
+                    Some(entry) => entry.1 = value.clone(),
+                    None => entries.push((key.clone(), value.clone())),
+                }
+            }
+            TopLevelEdit::Remove(key) => entries.retain(|(name, _)| !same_key(name, key)),
         }
+    }
+
+    if entries.is_empty() {
+        let unchanged = match blank {
+            Some(text) => text.to_string(),
+            None => String::new(),
+        };
+        return unchanged;
+    }
+
+    let mut lines: Vec<String> = Vec::new();
+    for (key, value) in &entries {
+        let name = Value::from(key.as_str());
+        lines.push(format!("  {name}: {value}"));
     }
     let body = lines.join(",\n");
     format!("{{\n{body}\n}}\n")
 }
 
-pub fn edit_top_level(
+pub(crate) fn edit_top_level(
     text: Option<&str>,
     edits: &[TopLevelEdit],
     label: &str,
@@ -140,16 +165,8 @@ pub fn edit_top_level(
     let source = match text {
         Some(source) if !source.trim().is_empty() => source,
         _ => {
-            let has_set = edits
-                .iter()
-                .any(|edit| matches!(edit, TopLevelEdit::Set(..)));
-            if !has_set {
-                return match text {
-                    Some(blank) => Ok(blank.to_string()),
-                    None => Ok(String::new()),
-                };
-            }
-            return Ok(text_from_sets(edits));
+            let built = text_from_edits(text, edits, same_key);
+            return Ok(built);
         }
     };
 
