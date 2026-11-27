@@ -22,6 +22,8 @@ use crate::plugin_folder::refresh_plugin_folder;
 use crate::sync::lock;
 
 const SUBMIT_CHECK_DELAY: Duration = Duration::from_secs(1);
+const NOT_LOADED_DELAY: Duration = Duration::from_secs(5);
+const NOT_LOADED_REASON: &str = "It may have been started before Agent Activity was on, or with its own plugin settings. Start it again in a new terminal.";
 const DONE_TEXT: &str =
     "Agents already running stop reporting until you start them in a new terminal.";
 const APPENDED_TEXT: &str = "Your Claude Code settings now also list this app's plugin folder, so every Claude Code session shows the plugin; outside this app's terminals it does nothing.";
@@ -107,6 +109,9 @@ struct State {
     recorded: BTreeMap<HarnessId, Recorded>,
     view: AgentSetupView,
     awaiting: bool,
+    watching: bool,
+    heard: BTreeSet<TerminalId>,
+    unloaded: BTreeMap<HarnessId, BTreeSet<TerminalId>>,
 }
 
 struct Shared {
@@ -127,6 +132,7 @@ pub struct AgentSetups {
     shared: Arc<Shared>,
     hooks_directory: PathBuf,
     submit_delay: Duration,
+    not_loaded_delay: Duration,
     timer: Option<Sender<TimerMessage>>,
     thread: Option<JoinHandle<()>>,
 }
@@ -162,6 +168,10 @@ fn plugin_dirs_managed_reason(product_name: &str) -> String {
 
 fn plugin_dirs_managed_text(product_name: &str) -> String {
     format!("{product_name} is running here but can't load this app's plugin.")
+}
+
+fn not_loaded_text(product_name: &str) -> String {
+    format!("{product_name} here didn't load this app's plugin.")
 }
 
 fn offer_text(product_name: &str) -> String {
@@ -261,6 +271,32 @@ fn notice_of(
     }
 }
 
+fn not_loaded_notice_of(
+    reading: &Reading,
+    recorded: Option<&Recorded>,
+    unloaded: Option<&BTreeSet<TerminalId>>,
+) -> Option<AgentSetupNotice> {
+    if reading.state != AgentSetupState::On {
+        return None;
+    }
+    let unloaded = unloaded?;
+    if unloaded.is_empty() {
+        return None;
+    }
+    if let Some(Recorded::Done { .. }) = recorded {
+        return None;
+    }
+    let product_name = reading.agent.setup.product_name;
+    let text = not_loaded_text(product_name);
+    let reason = NOT_LOADED_REASON.to_string();
+    Some(AgentSetupNotice {
+        harness: reading.agent.harness_id.clone(),
+        kind: AgentSetupNoticeKind::Unavailable { reason },
+        text,
+        terminals: unloaded.iter().cloned().collect(),
+    })
+}
+
 fn current_version(shared: &Shared) -> Option<Version> {
     let version = lock(&shared.version);
     *version
@@ -277,16 +313,21 @@ fn read_all(shared: &Shared) -> Vec<Reading<'_>> {
     readings
 }
 
-fn compute(shared: &Shared) -> (AgentSetupView, bool) {
+fn compute(shared: &Shared) -> (AgentSetupView, bool, bool) {
     let readings = read_all(shared);
-    let (seen, recorded) = {
+    let (seen, recorded, unloaded) = {
         let state = lock(&shared.state);
-        (state.seen.clone(), state.recorded.clone())
+        (
+            state.seen.clone(),
+            state.recorded.clone(),
+            state.unloaded.clone(),
+        )
     };
 
     let mut menus = Vec::new();
     let mut notices = Vec::new();
     let mut awaiting = false;
+    let mut watching = false;
     for reading in &readings {
         let product_name = reading.agent.setup.product_name;
         let menu = agent_menu_of(&reading.state, product_name);
@@ -298,21 +339,29 @@ fn compute(shared: &Shared) -> (AgentSetupView, bool) {
         if is_awaiting(&reading.state) {
             awaiting = true;
         }
+        if reading.state == AgentSetupState::On {
+            watching = true;
+        }
         let id = &reading.agent.harness_id;
         let notice = notice_of(reading, recorded.get(id), seen.get(id));
         if let Some(notice) = notice {
             notices.push(notice);
         }
+        let not_loaded = not_loaded_notice_of(reading, recorded.get(id), unloaded.get(id));
+        if let Some(not_loaded) = not_loaded {
+            notices.push(not_loaded);
+        }
     }
-    (AgentSetupView { menus, notices }, awaiting)
+    (AgentSetupView { menus, notices }, awaiting, watching)
 }
 
 fn refresh(shared: &Shared) {
     let _order = lock(&shared.refresh_order);
-    let (view, awaiting) = compute(shared);
+    let (view, awaiting, watching) = compute(shared);
     {
         let mut state = lock(&shared.state);
         state.awaiting = awaiting;
+        state.watching = watching;
         if state.view == view {
             return;
         }
@@ -339,15 +388,24 @@ fn check_terminal(shared: &Shared, terminal: &TerminalId) {
         if state.exited.contains(terminal) {
             return;
         }
+        let heard = state.heard.contains(terminal);
         for reading in &readings {
-            if !is_awaiting(&reading.state) {
-                continue;
-            }
             let commands = reading.agent.setup.commands;
-            if !runs_agent(&command_lines, commands) {
+            let runs = runs_agent(&command_lines, commands);
+            if !runs {
                 continue;
             }
             let id = reading.agent.harness_id.clone();
+            if reading.state == AgentSetupState::On && !heard {
+                let terminals = state.unloaded.entry(id.clone()).or_default();
+                let is_new = terminals.insert(terminal.clone());
+                if is_new {
+                    added = true;
+                }
+            }
+            if !is_awaiting(&reading.state) {
+                continue;
+            }
             let terminals = state.seen.entry(id).or_default();
             let is_new = terminals.insert(terminal.clone());
             if is_new {
@@ -530,7 +588,14 @@ impl AgentSetups {
             plugin_program,
             app_version,
         };
-        AgentSetups::start_with(agents, files, find_version, host, SUBMIT_CHECK_DELAY)
+        AgentSetups::start_with(
+            agents,
+            files,
+            find_version,
+            host,
+            SUBMIT_CHECK_DELAY,
+            NOT_LOADED_DELAY,
+        )
     }
 
     pub(crate) fn start_with(
@@ -539,6 +604,7 @@ impl AgentSetups {
         find_version: VersionFinder,
         host: AgentSetupsHost,
         submit_delay: Duration,
+        not_loaded_delay: Duration,
     ) -> (AgentSetups, Vec<String>) {
         let hooks = hooks_directory(&files.config_directory);
         let state = State {
@@ -547,6 +613,9 @@ impl AgentSetups {
             recorded: BTreeMap::new(),
             view: AgentSetupView::default(),
             awaiting: false,
+            watching: false,
+            heard: BTreeSet::new(),
+            unloaded: BTreeMap::new(),
         };
         let activity_on = (host.is_on)();
         let shared = Shared {
@@ -563,11 +632,12 @@ impl AgentSetups {
         };
 
         let problems = prepare_hooks(&shared, activity_on);
-        let (view, awaiting) = compute(&shared);
+        let (view, awaiting, watching) = compute(&shared);
         {
             let mut state = lock(&shared.state);
             state.view = view;
             state.awaiting = awaiting;
+            state.watching = watching;
         }
 
         let shared = Arc::new(shared);
@@ -581,6 +651,7 @@ impl AgentSetups {
             shared,
             hooks_directory: hooks,
             submit_delay,
+            not_loaded_delay,
             timer: Some(sender),
             thread: Some(thread),
         };
@@ -603,6 +674,11 @@ impl AgentSetups {
                 return;
             }
             *prepared = on;
+        }
+        {
+            let mut state = lock(&self.shared.state);
+            state.heard.clear();
+            state.unloaded.clear();
         }
         let mut problems = prepare_hooks(&self.shared, on);
         if on {
@@ -646,25 +722,50 @@ impl AgentSetups {
     }
 
     pub fn note_submit(&self, terminal: TerminalId) {
-        let awaiting = {
+        let (awaiting, watching) = {
             let state = lock(&self.shared.state);
-            state.awaiting
+            (state.awaiting, state.watching)
         };
-        if !awaiting {
+        if !awaiting && !watching {
             return;
+        }
+        let mut delay = self.not_loaded_delay;
+        if awaiting {
+            delay = self.submit_delay;
         }
         let Some(timer) = &self.timer else {
             return;
         };
-        let due = Instant::now() + self.submit_delay;
+        let due = Instant::now() + delay;
         let _ = timer.send(TimerMessage::Schedule(terminal, due));
+    }
+
+    pub fn note_plugin_heard(&self, terminal: TerminalId) {
+        let removed = {
+            let mut state = lock(&self.shared.state);
+            state.heard.insert(terminal.clone());
+            let mut removed = false;
+            for terminals in state.unloaded.values_mut() {
+                if terminals.remove(&terminal) {
+                    removed = true;
+                }
+            }
+            removed
+        };
+        if removed {
+            refresh(&self.shared);
+        }
     }
 
     pub fn note_exit(&self, terminal: &TerminalId) {
         {
             let mut state = lock(&self.shared.state);
             state.exited.insert(terminal.clone());
+            state.heard.remove(terminal);
             for terminals in state.seen.values_mut() {
+                terminals.remove(terminal);
+            }
+            for terminals in state.unloaded.values_mut() {
                 terminals.remove(terminal);
             }
         }
@@ -843,6 +944,7 @@ mod tests {
         foreground_commands: ForegroundCommands,
         on_change: Box<dyn Fn(AgentSetupView) + Send + Sync>,
         submit_delay: Duration,
+        not_loaded_delay: Duration,
     ) -> AgentSetups {
         let is_on_flag = Arc::clone(&switch.on);
         let turn_on_flag = Arc::clone(&switch.on);
@@ -864,6 +966,7 @@ mod tests {
             find_version,
             host,
             submit_delay,
+            not_loaded_delay,
         );
         setups
     }
@@ -886,6 +989,7 @@ mod tests {
             foreground_commands,
             Box::new(|_| {}),
             SUBMIT_CHECK_DELAY,
+            NOT_LOADED_DELAY,
         );
         Fixture {
             environment,
@@ -910,6 +1014,7 @@ mod tests {
             switch,
             foreground_commands,
             on_change,
+            Duration::ZERO,
             Duration::ZERO,
         );
         (setups, views)
@@ -942,6 +1047,38 @@ mod tests {
                 return view;
             }
         }
+    }
+
+    fn is_not_loaded(notice: &AgentSetupNotice) -> bool {
+        matches!(notice.kind, AgentSetupNoticeKind::Unavailable { .. })
+    }
+
+    fn next_not_loaded_covering(
+        views: &Receiver<AgentSetupView>,
+        covered: &TerminalId,
+    ) -> AgentSetupNotice {
+        loop {
+            let received = views.recv_timeout(WAIT);
+            let view = received.expect("no not-loaded notice arrived in time");
+            let found = view
+                .notices
+                .iter()
+                .find(|notice| is_not_loaded(notice) && notice.terminals.contains(covered));
+            if let Some(notice) = found {
+                return notice.clone();
+            }
+        }
+    }
+
+    fn wait_until_checked(checked: &Arc<Mutex<Vec<TerminalId>>>, id: &TerminalId) {
+        let deadline = Instant::now() + WAIT;
+        while Instant::now() < deadline {
+            if lock(checked).contains(id) {
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        panic!("the check never ran");
     }
 
     fn seen_claude(fixture: &Fixture, name: &str) -> TerminalId {
@@ -1174,17 +1311,17 @@ mod tests {
 
         let turned_on = fixture.switch.turned_on.load(Ordering::SeqCst);
         assert_eq!(turned_on, 0);
-        assert!(fixture.setups.view().notices.is_empty());
+        let notices = fixture.setups.view().notices;
+        assert!(notices.iter().all(is_not_loaded), "{notices:?}");
     }
 
     #[test]
-    fn the_timer_checks_only_terminals_submitted_while_something_awaits() {
+    fn the_timer_checks_the_terminals_submitted_while_something_awaits() {
         let environment = environment();
         let switch = switch(false);
         let checked: Arc<Mutex<Vec<TerminalId>>> = Arc::default();
         let (setups, views) = start_timed(&environment, &switch, running_claude(&checked));
         let first = terminal("first");
-        let skipped = terminal("skipped");
         let last = terminal("last");
 
         setups.note_submit(first.clone());
@@ -1193,7 +1330,6 @@ mod tests {
         assert_eq!(offer.terminals, vec![first.clone()]);
 
         setups.act(&claude(), AgentMenuAction::SetUp);
-        setups.note_submit(skipped.clone());
 
         switch.on.store(false, Ordering::SeqCst);
         setups.activity_changed(false);
@@ -1205,6 +1341,21 @@ mod tests {
 
         let log = lock(&checked);
         assert_eq!(*log, vec![first, last]);
+    }
+
+    #[test]
+    fn a_submit_while_nothing_awaits_or_watches_is_never_checked() {
+        let environment = environment();
+        fs::remove_dir_all(&environment.agent.paths.agent_directory).unwrap();
+        let switch = switch(true);
+        let checked: Arc<Mutex<Vec<TerminalId>>> = Arc::default();
+        let (setups, _views) = start_timed(&environment, &switch, running_claude(&checked));
+
+        setups.note_submit(terminal("skipped"));
+        thread::sleep(Duration::from_millis(200));
+
+        let log = lock(&checked);
+        assert!(log.is_empty(), "{log:?}");
     }
 
     #[test]
@@ -1261,6 +1412,65 @@ mod tests {
         let view = next_offer_covering(&views, &good);
         let offer = &view.notices[0];
         assert_eq!(offer.terminals, vec![good]);
+    }
+
+    #[test]
+    fn a_running_agent_that_never_reported_gets_a_notice_until_its_plugin_is_heard() {
+        let environment = environment();
+        let switch = switch(true);
+        let checked: Arc<Mutex<Vec<TerminalId>>> = Arc::default();
+        let (setups, views) = start_timed(&environment, &switch, running_claude(&checked));
+        let id = terminal("one");
+
+        setups.note_submit(id.clone());
+
+        let notice = next_not_loaded_covering(&views, &id);
+        let product_name = environment.agent.setup.product_name;
+        let expected = not_loaded_text(product_name);
+        assert_eq!(notice.text, expected);
+        let reason = NOT_LOADED_REASON.to_string();
+        assert_eq!(notice.kind, AgentSetupNoticeKind::Unavailable { reason });
+        assert_eq!(notice.terminals, vec![id.clone()]);
+
+        setups.note_plugin_heard(id);
+
+        assert!(setups.view().notices.is_empty());
+    }
+
+    #[test]
+    fn a_plugin_heard_before_the_check_never_gets_a_notice() {
+        let environment = environment();
+        let switch = switch(true);
+        let checked: Arc<Mutex<Vec<TerminalId>>> = Arc::default();
+        let (setups, views) = start_timed(&environment, &switch, running_claude(&checked));
+        let heard = terminal("heard");
+        let silent = terminal("silent");
+
+        setups.note_plugin_heard(heard.clone());
+        setups.note_submit(heard.clone());
+        wait_until_checked(&checked, &heard);
+        setups.note_submit(silent.clone());
+
+        let notice = next_not_loaded_covering(&views, &silent);
+        assert_eq!(notice.terminals, vec![silent]);
+        assert_eq!(setups.view().notices.len(), 1);
+    }
+
+    #[test]
+    fn switching_off_clears_a_not_loaded_notice() {
+        let environment = environment();
+        let switch = switch(true);
+        let checked: Arc<Mutex<Vec<TerminalId>>> = Arc::default();
+        let (setups, views) = start_timed(&environment, &switch, running_claude(&checked));
+        let id = terminal("one");
+        setups.note_submit(id.clone());
+        next_not_loaded_covering(&views, &id);
+
+        switch.on.store(false, Ordering::SeqCst);
+        setups.activity_changed(false);
+        setups.refresh();
+
+        assert!(setups.view().notices.is_empty());
     }
 
     #[test]
