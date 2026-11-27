@@ -1279,14 +1279,17 @@ mod tests {
     }
 
     #[test]
-    fn a_click_that_cannot_prepare_the_hooks_leaves_the_agents_settings_alone() {
-        let environment = environment();
+    fn a_click_that_cannot_prepare_the_plugin_leaves_the_agents_settings_alone() {
+        let environment = hidden_environment();
+        let settings_path = environment.agent.paths.settings_path.clone();
         fs::remove_file(&environment.program).unwrap();
         let fixture = fixture_with(environment, false);
         seen_claude(&fixture, "one");
 
         fixture.setups.act(&claude(), AgentMenuAction::SetUp);
 
+        let after = fs::read_to_string(&settings_path).unwrap();
+        assert_eq!(after, HIDDEN);
         let turned_on = fixture.switch.turned_on.load(Ordering::SeqCst);
         assert_eq!(turned_on, 0);
         assert_eq!(only_notice(&fixture).kind, AgentSetupNoticeKind::Problem);
