@@ -18,7 +18,7 @@ pub use arrangement::{block_of, empty_arrangement, is_hidden, locate_row, select
 pub use changes::{add_row, add_row_to, close_row, focus_target, fork_row, rename_row, select_row};
 pub use drop::{DropMark, DropPoint, MarkEdge, MarkTarget, apply_drop, drop_for, drop_mark_for};
 pub use fork_name::fork_name_for;
-pub use panels::{close_panel, default_panels, move_panel, open_panel, resize_panel};
+pub use panels::{close_panel, default_panels, move_panel, open_on, open_panel, resize_panel};
 pub use rows::{can_fork, summary_state, waiting_count};
 pub use tab_groups::{
     NEW_TAB_GROUP_NAME, create_tab_group, rename_tab_group, toggle_tab_group, ungroup_tab_group,

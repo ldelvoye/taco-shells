@@ -70,7 +70,11 @@ pub fn render_png(
     let window = cx.open_window(image_size, |_, cx| {
         let mut shown = fixture.shown();
         if let Some(panel_size) = panel {
-            shown.drawn.panels.agent_activity.size = panel_size;
+            let place = shown
+                .drawn
+                .panels
+                .place_mut(taco_protocol::Panel::AgentActivity);
+            place.size = panel_size;
         }
         let look = Look::new(appearance);
         let mut writes = None;
