@@ -51,6 +51,13 @@ pub struct HookListener {
     thread: Option<JoinHandle<()>>,
 }
 
+struct Serving {
+    read_deadline: Duration,
+    answer_window: Duration,
+    token: String,
+    on_event: OnEvent,
+}
+
 impl HookListener {
     pub fn start(port_file: PathBuf, on_event: OnEvent) -> HookListener {
         let ports: Vec<u16> = FOCUS_PORTS.collect();
@@ -88,16 +95,15 @@ impl HookListener {
         let port_text = port.to_string();
         let _ = fs::write(&unbound.port_file, port_text);
 
-        let serving = Arc::clone(&stopping);
+        let serving = Serving {
+            read_deadline,
+            answer_window,
+            token,
+            on_event,
+        };
+        let thread_stopping = Arc::clone(&stopping);
         let thread = thread::spawn(move || {
-            serve(
-                &listener,
-                &serving,
-                read_deadline,
-                answer_window,
-                &token,
-                &*on_event,
-            );
+            serve(&listener, &thread_stopping, &serving);
         });
         let mut bound = unbound;
         bound.port = Some(port);
@@ -183,14 +189,7 @@ fn bind_first_free(ports: &[u16]) -> Option<TcpListener> {
     None
 }
 
-fn serve(
-    listener: &TcpListener,
-    stopping: &AtomicBool,
-    read_deadline: Duration,
-    answer_window: Duration,
-    token: &str,
-    on_event: &(dyn Fn(ListenerEvent) + Send + Sync),
-) {
+fn serve(listener: &TcpListener, stopping: &AtomicBool, serving: &Serving) {
     // One request at a time, so the app hears a session's start before its first state.
     for incoming in listener.incoming() {
         if stopping.load(Ordering::SeqCst) {
@@ -199,22 +198,18 @@ fn serve(
         let Ok(stream) = incoming else {
             continue;
         };
-        let deadline = Instant::now() + read_deadline;
-        handle(stream, deadline, answer_window, token, on_event);
+        let deadline = Instant::now() + serving.read_deadline;
+        handle(stream, deadline, serving);
     }
 }
 
-fn handle(
-    mut stream: TcpStream,
-    deadline: Instant,
-    answer_window: Duration,
-    token: &str,
-    on_event: &(dyn Fn(ListenerEvent) + Send + Sync),
-) {
+fn handle(mut stream: TcpStream, deadline: Instant, serving: &Serving) {
+    let token = serving.token.as_str();
+    let on_event = &serving.on_event;
     let Some((head_bytes, leftover)) = read_head(&mut stream, deadline) else {
         return;
     };
-    let answer_by = Instant::now() + answer_window;
+    let answer_by = Instant::now() + serving.answer_window;
     let Some(head) = parse_head(&head_bytes) else {
         respond(&mut stream, 400);
         return;
@@ -264,15 +259,7 @@ fn handle(
     let sent_token = head.token.as_deref();
     let is_question = head.route == CONTEXT || head.route == STOP;
     if is_question {
-        ask_question(
-            stream,
-            &head.route,
-            sent_token,
-            &body,
-            answer_by,
-            token,
-            on_event,
-        );
+        ask_question(stream, &head.route, sent_token, &body, answer_by, serving);
         return;
     }
 
