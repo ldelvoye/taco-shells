@@ -66,7 +66,8 @@ pub struct Terminals {
     font_size: f32,
     cell: CellMetrics,
     _events: Task<()>,
-    _blink: Task<()>,
+    /// Runs only while the view has focus and its cursor blinks, so an idle app does not wake.
+    blink: Option<Task<()>>,
 }
 
 /// The terminal channel, connected, from `Terminals::connect`.
@@ -116,21 +117,6 @@ impl Terminals {
             }
         });
 
-        let blink = cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(BLINK_PHASE).await;
-                let blinked = this.update(cx, |terminals, cx| {
-                    if terminals.focused && terminals.cursor_blinks {
-                        terminals.blink_on = !terminals.blink_on;
-                        cx.notify();
-                    }
-                });
-                if blinked.is_err() {
-                    break;
-                }
-            }
-        });
-
         let installed = cx.text_system().all_font_names();
         let family = font_family(&settings.font_family, &installed);
         let font_size = settings.font_size as f32;
@@ -157,7 +143,7 @@ impl Terminals {
             font_size,
             cell,
             _events: task,
-            _blink: blink,
+            blink: None,
         }
     }
 
@@ -251,7 +237,12 @@ impl Terminals {
     }
 
     /// The frame for the terminal on screen, after the work every frame does first.
-    fn before_paint(&mut self, bounds: Bounds<Pixels>, window: &mut Window) -> Option<Prepared> {
+    fn before_paint(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Terminals>,
+    ) -> Option<Prepared> {
         let width = f32::from(bounds.size.width);
         let height = f32::from(bounds.size.height);
         let fits = grid_that_fits(width, height, self.cell);
@@ -272,12 +263,38 @@ impl Terminals {
         self.focused = focused;
         self.views.report_focus(focused);
         let prepared = self.draw_on_screen();
+        self.blink_while_wanted(cx);
         self.send_requests();
         prepared
     }
 
+    fn blink_while_wanted(&mut self, cx: &mut Context<Terminals>) {
+        let wanted = self.focused && self.cursor_blinks;
+        if !wanted {
+            self.blink = None;
+            return;
+        }
+        if self.blink.is_some() {
+            return;
+        }
+        let blink = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(BLINK_PHASE).await;
+                let blinked = this.update(cx, |terminals, cx| {
+                    terminals.blink_on = !terminals.blink_on;
+                    cx.notify();
+                });
+                if blinked.is_err() {
+                    break;
+                }
+            }
+        });
+        self.blink = Some(blink);
+    }
+
     fn draw_on_screen(&mut self) -> Option<Prepared> {
         self.cursor_cell = None;
+        self.cursor_blinks = false;
         let id = self.views.on_screen().cloned()?;
         let selection = self.views.config().colors.selection;
         let view = self.views.view(&id)?;
@@ -343,8 +360,9 @@ impl Render for Terminals {
         let background = hsla(self.views.config().colors.background);
         let terminal = canvas(
             move |bounds, window, cx| {
-                before_paint_entity
-                    .update(cx, |terminals, _| terminals.before_paint(bounds, window))
+                before_paint_entity.update(cx, |terminals, cx| {
+                    terminals.before_paint(bounds, window, cx)
+                })
             },
             move |bounds, prepared: Option<Prepared>, window, cx| {
                 let handler = ElementInputHandler::new(bounds, input_entity.clone());
