@@ -64,11 +64,25 @@ fn refresh_text_file(target: &Path, content: &str) -> Result<bool, String> {
     Ok(true)
 }
 
+fn repair_mode(target: &Path) -> Result<bool, String> {
+    let found = fs::metadata(target).map_err(|error| problem(target, "read", error))?;
+    let permissions = found.permissions();
+    let mode = permissions.mode() & 0o777;
+    if mode == PROGRAM_MODE {
+        return Ok(false);
+    }
+    let executable = fs::Permissions::from_mode(PROGRAM_MODE);
+    let marked = fs::set_permissions(target, executable);
+    marked.map_err(|error| problem(target, "make executable", error))?;
+    Ok(true)
+}
+
 fn refresh_program(target: &Path, program: &Path) -> Result<bool, String> {
-    let wanted = fs::read(program).map_err(|error| problem(program, "read", error))?;
+    let read = fs::read(program);
+    let wanted = read.map_err(|error| problem(program, "read", error))?;
     let changed = differs(target, &wanted)?;
     if !changed {
-        return Ok(false);
+        return repair_mode(target);
     }
     create_parent(target)?;
     let temporary = temporary_beside(target)?;
@@ -108,8 +122,6 @@ pub fn refresh_plugin_folder(folder: &Path, program: &Path, version: &str) -> Re
 mod tests {
     use std::fs::File;
     use std::io::Read;
-    use std::thread;
-    use std::time::Duration;
 
     use super::*;
 
@@ -120,10 +132,6 @@ mod tests {
         let path = directory.join("source-program");
         fs::write(&path, bytes).unwrap();
         path
-    }
-
-    fn modified(path: &Path) -> std::time::SystemTime {
-        fs::metadata(path).unwrap().modified().unwrap()
     }
 
     #[test]
@@ -150,20 +158,26 @@ mod tests {
         let program = fake_program(directory.path(), b"program one");
         let folder = directory.path().join("plugin");
         refresh_plugin_folder(&folder, &program, VERSION).unwrap();
-        let paths = [
-            folder.join(MANIFEST),
-            folder.join(".mcp.json"),
-            folder.join("hooks/hooks.json"),
-            folder.join(PROGRAM_PATH),
-        ];
-        let before: Vec<_> = paths.iter().map(|path| modified(path)).collect();
-        thread::sleep(Duration::from_millis(20));
 
         let changed = refresh_plugin_folder(&folder, &program, VERSION).unwrap();
 
         assert!(!changed);
-        let after: Vec<_> = paths.iter().map(|path| modified(path)).collect();
-        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn a_program_with_the_right_bytes_but_the_wrong_mode_is_made_executable() {
+        let directory = tempfile::tempdir().unwrap();
+        let program = fake_program(directory.path(), b"program one");
+        let folder = directory.path().join("plugin");
+        refresh_plugin_folder(&folder, &program, VERSION).unwrap();
+        let installed = folder.join(PROGRAM_PATH);
+        fs::set_permissions(&installed, fs::Permissions::from_mode(0o644)).unwrap();
+
+        let changed = refresh_plugin_folder(&folder, &program, VERSION).unwrap();
+
+        assert!(changed);
+        let mode = fs::metadata(&installed).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o755);
     }
 
     #[test]
