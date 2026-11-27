@@ -18,8 +18,5 @@
   "cursorStyle": "block",
 
   // Reopen the terminals you had, each in its directory, when the app starts.
-  "restoreOnLaunch": true,
-
-  // Let the app offer and keep up the hooks coding agents need. Turn off to wire them by hand.
-  "manageAgentHooks": true
+  "restoreOnLaunch": true
 }
