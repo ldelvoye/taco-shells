@@ -46,7 +46,8 @@ use crate::settings_page::{
     SettingsFields, SettingsInput, Typed, TypedSetting, published_text, settings_page, typed,
 };
 use crate::shortcuts_page::{
-    Capture, Pressed, SEARCH_PLACEHOLDER, ShortcutsInput, change_for, pressed, shortcuts_page,
+    Capture, Pressed, SEARCH_PLACEHOLDER, ShortcutsInput, capture_still_open, change_for, pressed,
+    shortcuts_page,
 };
 use crate::slot::{Slot, SlotLine, opened_height, slot_line_for};
 use crate::strip::strip;
@@ -299,6 +300,7 @@ impl WindowView {
                 self.shown.unread = config.unread_settings;
                 notices.config_problems = config.problems;
                 self.refresh_fields(cx);
+                self.close_stale_capture();
             }
             ServicesOutput::UpdateReady { version } => {
                 notices.update = Some(version);
@@ -615,7 +617,7 @@ impl WindowView {
             pending: None,
             problem: None,
         });
-        // The page holds the keyboard, so no field types the keys pressed next.
+        // Keys go to the page, not to the search field.
         self.page_wants_keyboard = Some(PageKeyboard::Page);
         cx.notify();
     }
@@ -626,31 +628,28 @@ impl WindowView {
     }
 
     fn capture_key(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) {
-        let escaped = keystroke.key == ESCAPE && !keystroke.modifiers.modified();
-        if escaped {
-            self.cancel_capture(cx);
-            return;
-        }
-        let Some(capture) = self.capture.as_mut() else {
+        let Some(mut capture) = self.capture.take() else {
             return;
         };
+        if is_bare_escape(keystroke) {
+            cx.notify();
+            return;
+        }
         let chord = chord_of(keystroke);
-        let result = pressed(capture, chord.clone(), &self.shown.bindings);
+        let result = pressed(&capture, chord.clone(), &self.shown.bindings);
         match result {
-            Pressed::Write(change) => {
-                self.capture = None;
-                self.write_shortcut(change);
-            }
-            Pressed::Unchanged => self.capture = None,
+            Pressed::Write(change) => self.write_shortcut(change),
+            Pressed::Unchanged => {}
             Pressed::Ask(problem) => {
                 capture.pending = Some(chord);
                 capture.problem = Some(problem);
+                self.capture = Some(capture);
             }
         }
         cx.notify();
     }
 
-    /// "Use it here": the keys the row asked about are written, taking them from the command that had them.
+    /// "Use it here": the keys the row asked about are written for it; the writer takes them from the command that had them.
     pub(crate) fn take_pending(&mut self, cx: &mut Context<Self>) {
         let Some(capture) = self.capture.take() else {
             return;
@@ -682,6 +681,18 @@ impl WindowView {
         let command = change.command();
         self.keymap_refused.remove(&command);
         self.services.write_keybinding(change);
+    }
+
+    /// A new config can take away the chip a capture is changing, or the file it would write to.
+    fn close_stale_capture(&mut self) {
+        let Some(capture) = &self.capture else {
+            return;
+        };
+        let bindings = &self.shown.bindings;
+        let unread = self.shown.unread_keybindings;
+        if !capture_still_open(capture, bindings, unread) {
+            self.capture = None;
+        }
     }
 
     pub(crate) fn change_setting(&mut self, change: SettingChange) {
@@ -806,7 +817,7 @@ impl WindowView {
 
     /// Runs the command a key-down's chord is bound to; false when the window has nothing to run for it, so the key goes on to the terminal.
     fn key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
-        // A shortcut being set takes every key first, so pressing cmd+w sets cmd+w rather than closing anything.
+        // A shortcut being set takes every key first, so cmd+w sets cmd+w instead of closing anything.
         if self.capture.is_some() {
             self.capture_key(&event.keystroke, cx);
             return true;
@@ -816,7 +827,7 @@ impl WindowView {
             return false;
         }
         let page_open = !self.pages.is_empty();
-        let escaped = event.keystroke.key == ESCAPE && !event.keystroke.modifiers.modified();
+        let escaped = is_bare_escape(&event.keystroke);
         if page_open && escaped {
             self.move_pages(PageMove::Back, cx);
             return true;
@@ -1445,6 +1456,10 @@ impl Render for WindowView {
         }
         root
     }
+}
+
+fn is_bare_escape(keystroke: &Keystroke) -> bool {
+    keystroke.key == ESCAPE && !keystroke.modifiers.modified()
 }
 
 // The shortcuts page opens on its search, so typing finds a command at once.
