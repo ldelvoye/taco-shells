@@ -29,8 +29,8 @@ const BEFORE_LAUNCH: [Check; 4] = [
         run: plugin::lists_no_tools_outside_the_dev_app,
     },
     Check {
-        name: "the plugin program's hook approves its own tool and gives no decision for another under its prefix",
-        run: plugin::approves_its_own_tool_and_no_other,
+        name: "the plugin program's hook approves its own tool, denies it to a subagent, and gives no decision for another under its prefix",
+        run: plugin::approves_its_own_tool_for_the_main_agent_only,
     },
 ];
 
