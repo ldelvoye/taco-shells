@@ -115,3 +115,55 @@ pub(crate) fn write_if_unchanged(
         Err(error) => Err(format!("{shown} could not be written: {error}")),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::symlink;
+
+    use tempfile::TempDir;
+
+    use super::*;
+
+    const BEFORE: &str = "{}\n";
+    const AFTER: &str = "{\n  \"model\": \"opus\"\n}\n";
+
+    fn leftover_temporaries(directory: &Path) -> Vec<String> {
+        let mut found = Vec::new();
+        let entries = fs::read_dir(directory).unwrap();
+        for entry in entries {
+            let name = entry.unwrap().file_name();
+            let shown = name.to_string_lossy().to_string();
+            if shown.ends_with("taco-tmp") {
+                found.push(shown);
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn a_write_through_two_links_keeps_both_links_and_leaves_nothing_beside_them() {
+        let temp = TempDir::new().unwrap();
+        let dotfiles = temp.path().join("dotfiles");
+        let agent_directory = temp.path().join("agent");
+        fs::create_dir_all(&dotfiles).unwrap();
+        fs::create_dir_all(&agent_directory).unwrap();
+        let target = dotfiles.join("settings.json");
+        fs::write(&target, BEFORE).unwrap();
+        let middle = dotfiles.join("middle.json");
+        symlink("settings.json", &middle).unwrap();
+        let outer = agent_directory.join("settings.json");
+        symlink(&middle, &outer).unwrap();
+
+        let written = write_if_unchanged(&outer, "settings.json", Some(BEFORE), AFTER);
+
+        assert_eq!(written, Ok(()));
+        let outer_kind = fs::symlink_metadata(&outer).unwrap().file_type();
+        assert!(outer_kind.is_symlink());
+        let middle_kind = fs::symlink_metadata(&middle).unwrap().file_type();
+        assert!(middle_kind.is_symlink());
+        let held = fs::read_to_string(&target).unwrap();
+        assert_eq!(held, AFTER);
+        assert!(leftover_temporaries(&dotfiles).is_empty());
+        assert!(leftover_temporaries(&agent_directory).is_empty());
+    }
+}
