@@ -62,6 +62,9 @@ jobs:
 
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      # The code only tooling turns on: app's render and drive, terminal-view's capture, ghostty's bindings.
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
       - run: cargo test --workspace --locked --no-run
 
       # The whole run is meant to stay under about 10 s once compiled. Twice that
