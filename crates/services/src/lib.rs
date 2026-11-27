@@ -27,7 +27,7 @@ pub use agent_setup_state::{
 };
 pub use agent_setups::{
     AgentMenuEntry, AgentSetupNotice, AgentSetupNoticeKind, AgentSetupView, AgentSetups,
-    AgentSetupsHost,
+    AgentSetupsHost, PluginHeard,
 };
 pub use claude_version::{MINIMUM_VERSION, claude_version, find_claude, is_too_old, parse_version};
 pub use config_files::{
