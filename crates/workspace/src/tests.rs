@@ -855,17 +855,30 @@ fn stretches(workspace: &mut Workspace, terminal: &str) -> Vec<String> {
 #[test]
 fn a_note_takes_the_steps_since_the_last_one_and_a_new_turn_or_session_leaves_them_unnoted() {
     let mut workspace = workspace();
+    let session_starts = |workspace: &mut Workspace, session_id: &str| {
+        let call = HookCall::AgentStart {
+            harness: claude(),
+            session_id: session_id.into(),
+            cwd: "/work/tacos".into(),
+            has_conversation: false,
+        };
+        hook(workspace, "t1", call, 0);
+    };
+    session_starts(&mut workspace, SESSION);
     prompted_in(&mut workspace, "t1", "turn-a", "Find the bug");
     ran(&mut workspace, "t1", "cargo test");
     // a message from another agent mid-turn carries the turn's id and leaves the stretch open
     prompted_in(&mut workspace, "t1", "turn-a", "Also check the logo");
     ran(&mut workspace, "t1", "cargo clippy");
+    // a compaction starts the same session again, mid-turn
+    session_starts(&mut workspace, SESSION);
+    ran(&mut workspace, "t1", "cargo build");
     noted(&mut workspace, "t1", "Found it");
     noted(&mut workspace, "t1", "Nothing more to do");
     ran(&mut workspace, "t1", "git status");
     prompted_in(&mut workspace, "t1", "turn-b", "Next");
     ran(&mut workspace, "t1", "ls");
-    agent_starts(&mut workspace, "t1");
+    session_starts(&mut workspace, "223e4567-e89b-12d3-a456-426614174000");
     ran(&mut workspace, "t1", "pwd");
     // a new session starts its own turns, even one whose id repeats the last session's
     prompted_in(&mut workspace, "t1", "turn-b", "Again");
@@ -880,18 +893,19 @@ fn a_note_takes_the_steps_since_the_last_one_and_a_new_turn_or_session_leaves_th
         "step 1 in 1",
         "asked",
         "step 3 in 1",
+        "step 4 in 1",
         "note in 1",
         "note alone",
-        "step 6 in 6",
+        "step 7 in 7",
         "asked",
-        "step 8 in 8",
         "step 9 in 9",
+        "step 10 in 10",
         "asked",
-        "step 11 in 11",
+        "step 12 in 12",
         "asked",
-        "step 13 in 13",
+        "step 14 in 14",
         "asked",
-        "step 15 in 15",
+        "step 16 in 16",
     ];
     assert_eq!(stretches(&mut workspace, "t1"), expected);
 }
