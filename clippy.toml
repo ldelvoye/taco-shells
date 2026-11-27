@@ -1,0 +1,3 @@
+disallowed-methods = [
+    { path = "std::os::unix::process::CommandExt::pre_exec", reason = "it makes std fork, and a fork with other threads alive can die in libSystem's atfork handlers before exec; start the program with posix_spawn" },
+]

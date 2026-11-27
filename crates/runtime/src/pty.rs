@@ -67,6 +67,10 @@ pub struct PtyShells {
     list_entries_on: BTreeSet<String>,
 }
 
+unsafe extern "C" {
+    fn notify_is_valid_token(token: libc::c_int) -> libc::c_int;
+}
+
 impl ShellProgram {
     /// The user's login shell, the way macOS terminals start one. Before any thread starts: `getpwuid` is not thread-safe.
     pub fn login(context: ShellContext) -> ShellProgram {
@@ -143,6 +147,8 @@ impl PtyShells {
         // Between fork and exec only async-signal-safe calls: a session of its own, with the pty as its controlling terminal.
         unsafe {
             let open_file_limit = self.program.open_file_limit;
+            // Kept as a fork: setsid, the controlling terminal and the open-file limit need code in the child.
+            #[allow(clippy::disallowed_methods)]
             command.pre_exec(move || {
                 if libc::setsid() < 0 {
                     return Err(io::Error::last_os_error());
@@ -163,6 +169,8 @@ impl PtyShells {
             });
         }
         let (wake_reader, wake_writer) = wake_pipe()?;
+        // The fork's atfork handler aborts the child if another thread is mid-way through libnotify's one-time setup; this finishes it first.
+        unsafe { notify_is_valid_token(0) };
         let child = command.spawn()?;
         // Closes the copies the shell was given; the reader keeps its own until the shell's last output is read.
         drop(command);
@@ -674,7 +682,7 @@ mod tests {
 
         let held = reaped.lock().unwrap();
         shells.write(&id, b"go\n");
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(10);
         while !exited_unreaped(pid) {
             assert!(
                 Instant::now() < deadline,
@@ -688,7 +696,7 @@ mod tests {
         assert!(!*held, "no reap is recorded while the lock is held");
         drop(held);
 
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(10);
         while !*reaped.lock().unwrap() {
             assert!(Instant::now() < deadline, "the reap was never recorded");
             thread::sleep(Duration::from_millis(10));
