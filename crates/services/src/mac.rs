@@ -1,15 +1,9 @@
-use std::io;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
 
-use crate::updater::is_version;
+use crate::updater::version::is_version;
 
 const APPLICATIONS_DIRECTORY: &str = "/Applications";
 const VERSION_KEY: &str = "CFBundleShortVersionString";
-const EXTRACT_POLL: Duration = Duration::from_millis(50);
 const UNBUNDLED_VERSION: &str = "dev";
 
 fn bundle_of(executable: &Path) -> Option<PathBuf> {
@@ -56,59 +50,6 @@ pub(crate) fn installed_bundle(executable: &Path) -> Option<PathBuf> {
         return None;
     }
     Some(bundle)
-}
-
-pub(crate) fn extract_zip(zip: &Path, into: &Path, timeout: Duration) -> io::Result<()> {
-    let mut child = Command::new("ditto")
-        .arg("-x")
-        .arg("-k")
-        .arg(zip)
-        .arg(into)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?;
-
-    let deadline = Instant::now() + timeout;
-    loop {
-        let status = child.try_wait()?;
-        if let Some(status) = status {
-            if status.success() {
-                return Ok(());
-            }
-            return Err(io::Error::other(format!("ditto exited with {status}")));
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "ditto overran its timeout",
-            ));
-        }
-        thread::sleep(EXTRACT_POLL);
-    }
-}
-
-pub(crate) fn spawn_update_helper(
-    helper: &Path,
-    pid: u32,
-    installed: &Path,
-    extracted: &Path,
-) -> io::Result<()> {
-    let mut command = Command::new("/bin/sh");
-    command
-        .arg(helper)
-        .arg(pid.to_string())
-        .arg(installed)
-        .arg(extracted)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        // A process group of its own, so the helper outlives the app it is about to replace.
-        .process_group(0);
-    command.spawn()?;
-    Ok(())
 }
 
 #[cfg(test)]

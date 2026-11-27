@@ -1,16 +1,22 @@
+mod system;
+pub(crate) mod version;
+
 use std::fs::{self, File};
-use std::io;
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use sha2::{Digest, Sha256};
+
 use crate::identity::IS_STABLE;
 use crate::mac;
 use crate::sync::lock;
+use system::{extract_zip, spawn_update_helper};
+use version::{is_newer_version, is_version};
 
 pub(crate) const FIRST_CHECK_DELAY: Duration = Duration::from_secs(10);
 pub(crate) const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
@@ -22,7 +28,7 @@ const FEED_VARIABLE: &str = "TACO_SHELLS_UPDATE_FEED";
 const USER_AGENT: &str = "taco-shells";
 const FEED_TIMEOUT: Duration = Duration::from_secs(30);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
-const EXTRACT_TIMEOUT: Duration = Duration::from_secs(120);
+const DOWNLOAD_STALL_TIMEOUT: Duration = Duration::from_secs(60);
 const UPDATES_DIRECTORY_NAME: &str = "updates";
 const ZIP_NAME: &str = "taco-shells.zip";
 const STAGING_SUFFIX: &str = ".partial";
@@ -50,6 +56,13 @@ pub(crate) struct ReleaseInfo {
     pub(crate) version: String,
     pub(crate) asset_url: String,
     pub(crate) asset_size: u64,
+    pub(crate) digest: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Download {
+    pub(crate) bytes: u64,
+    pub(crate) sha256: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,7 +73,7 @@ pub(crate) struct ReadyApp {
 
 pub(crate) trait Feed: Send + Sync {
     fn latest(&self) -> Result<serde_json::Value, String>;
-    fn download(&self, url: &str, to: &Path) -> Result<u64, String>;
+    fn download(&self, url: &str, to: &Path) -> Result<Download, String>;
 }
 
 pub(crate) struct HttpFeed {
@@ -96,42 +109,33 @@ pub struct Updater {
     thread: Option<JoinHandle<()>>,
 }
 
-fn version_parts(text: &str) -> Option<[u64; 3]> {
-    let pieces: Vec<&str> = text.split('.').collect();
-    if pieces.len() != 3 {
-        return None;
-    }
-    let mut parts = [0u64; 3];
-    for (slot, piece) in parts.iter_mut().zip(pieces) {
-        if piece.is_empty() || !piece.bytes().all(|byte| byte.is_ascii_digit()) {
-            return None;
+impl Shared {
+    fn new(ready: Option<ReadyApp>, host: UpdaterHost) -> Shared {
+        Shared {
+            ready: Mutex::new(ready),
+            applying: AtomicBool::new(false),
+            stopping: AtomicBool::new(false),
+            host,
         }
-        let parsed = piece.parse::<u64>();
-        let Ok(number) = parsed else {
-            return None;
-        };
-        *slot = number;
     }
-    Some(parts)
-}
-
-pub(crate) fn is_version(text: &str) -> bool {
-    version_parts(text).is_some()
-}
-
-pub(crate) fn is_newer_version(candidate: &str, current: &str) -> bool {
-    let Some(candidate_parts) = version_parts(candidate) else {
-        return false;
-    };
-    let Some(current_parts) = version_parts(current) else {
-        return false;
-    };
-    candidate_parts > current_parts
 }
 
 // Must match the zip name xtask produces, or no release ever offers an update.
 fn asset_name_for(version: &str) -> String {
     format!("taco-shells-{version}-arm64.zip")
+}
+
+fn parse_digest(asset: &serde_json::Value) -> Option<String> {
+    let value = asset.get("digest")?;
+    let text = value.as_str()?;
+    let hex = text.strip_prefix("sha256:")?;
+    let is_lowercase_hex = hex
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+    if hex.len() != 64 || !is_lowercase_hex {
+        return None;
+    }
+    Some(hex.to_string())
 }
 
 pub(crate) fn parse_release(payload: &serde_json::Value) -> Option<ReleaseInfo> {
@@ -166,19 +170,49 @@ pub(crate) fn parse_release(payload: &serde_json::Value) -> Option<ReleaseInfo> 
         if size == 0 {
             return None;
         }
+        let digest = parse_digest(asset);
         return Some(ReleaseInfo {
             version: version.to_string(),
             asset_url: url.to_string(),
             asset_size: size,
+            digest,
         });
     }
     None
 }
 
+pub(crate) fn copy_and_hash(reader: &mut dyn Read, writer: &mut dyn Write) -> io::Result<Download> {
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    let mut bytes = 0u64;
+    loop {
+        let read = reader.read(&mut buffer);
+        let count = match read {
+            Ok(count) => count,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        if count == 0 {
+            break;
+        }
+        let chunk = &buffer[..count];
+        hasher.update(chunk);
+        writer.write_all(chunk)?;
+        bytes += count as u64;
+    }
+    let digest = hasher.finalize();
+    let mut sha256 = String::new();
+    for byte in digest.iter() {
+        sha256.push_str(&format!("{byte:02x}"));
+    }
+    Ok(Download { bytes, sha256 })
+}
+
 impl HttpFeed {
-    fn agent(timeout: Duration) -> ureq::Agent {
+    fn agent(timeout: Duration, stall_timeout: Option<Duration>) -> ureq::Agent {
         let config = ureq::Agent::config_builder()
             .timeout_global(Some(timeout))
+            .timeout_per_read(stall_timeout)
             .user_agent(USER_AGENT)
             .build();
         ureq::Agent::new_with_config(config)
@@ -187,7 +221,7 @@ impl HttpFeed {
 
 impl Feed for HttpFeed {
     fn latest(&self) -> Result<serde_json::Value, String> {
-        let agent = HttpFeed::agent(FEED_TIMEOUT);
+        let agent = HttpFeed::agent(FEED_TIMEOUT, None);
         let request = agent.get(&self.feed_url);
         let called = request.call();
         let mut response = called.map_err(|error| error.to_string())?;
@@ -198,8 +232,8 @@ impl Feed for HttpFeed {
         parsed.map_err(|error| error.to_string())
     }
 
-    fn download(&self, url: &str, to: &Path) -> Result<u64, String> {
-        let agent = HttpFeed::agent(DOWNLOAD_TIMEOUT);
+    fn download(&self, url: &str, to: &Path) -> Result<Download, String> {
+        let agent = HttpFeed::agent(DOWNLOAD_TIMEOUT, Some(DOWNLOAD_STALL_TIMEOUT));
         let request = agent.get(url);
         let called = request.call();
         let response = called.map_err(|error| error.to_string())?;
@@ -207,7 +241,7 @@ impl Feed for HttpFeed {
         let mut reader = body.into_reader();
         let created = File::create(to);
         let mut file = created.map_err(|error| error.to_string())?;
-        let copied = io::copy(&mut reader, &mut file);
+        let copied = copy_and_hash(&mut reader, &mut file);
         copied.map_err(|error| error.to_string())
     }
 }
@@ -288,54 +322,82 @@ pub(crate) fn prune_and_adopt(updates: &Path, current: &str) -> Option<ReadyApp>
     adopted
 }
 
-fn fetch_and_unpack(release: &ReleaseInfo, staging: &Path, feed: &dyn Feed) -> Option<()> {
+fn fetch_and_unpack(release: &ReleaseInfo, staging: &Path, feed: &dyn Feed) -> Result<(), String> {
     remove_path(staging);
     let created = fs::create_dir_all(staging);
-    if created.is_err() {
-        return None;
+    if let Err(error) = created {
+        return Err(format!("the staging folder could not be created ({error})"));
     }
 
     let zip = staging.join(ZIP_NAME);
     let downloaded = feed.download(&release.asset_url, &zip);
-    let Ok(bytes) = downloaded else {
-        return None;
+    let download = match downloaded {
+        Ok(download) => download,
+        Err(error) => return Err(format!("the download failed ({error})")),
     };
-    if bytes != release.asset_size {
-        return None;
+    if download.bytes != release.asset_size {
+        let bytes = download.bytes;
+        let expected = release.asset_size;
+        return Err(format!(
+            "the download was {bytes} bytes, expected {expected}"
+        ));
+    }
+    match &release.digest {
+        Some(expected) => {
+            if &download.sha256 != expected {
+                let actual = &download.sha256;
+                return Err(format!(
+                    "the download's sha256 was {actual}, expected {expected}"
+                ));
+            }
+        }
+        None => {
+            let asset = asset_name_for(&release.version);
+            eprintln!("the update check found no digest for {asset}, so only its size was checked");
+        }
     }
 
-    let extracted = mac::extract_zip(&zip, staging, EXTRACT_TIMEOUT);
-    if extracted.is_err() {
-        return None;
+    let extracted = extract_zip(&zip, staging);
+    if let Err(error) = extracted {
+        return Err(format!("the download could not be unpacked ({error})"));
     }
     let _ = fs::remove_file(&zip);
-    app_in(staging)?;
-    Some(())
+    let app = app_in(staging);
+    if app.is_none() {
+        return Err("the download did not hold exactly one app".to_string());
+    }
+    Ok(())
 }
 
 pub(crate) fn download_and_extract(
     release: &ReleaseInfo,
     updates: &Path,
     feed: &dyn Feed,
-) -> Option<PathBuf> {
+) -> Result<PathBuf, String> {
     let version_directory = updates.join(&release.version);
     // Unpacked under a name that is not a version, so a crash midway leaves nothing a later launch could adopt.
     let staging_name = format!("{}{STAGING_SUFFIX}", release.version);
     let staging = updates.join(staging_name);
 
     let unpacked = fetch_and_unpack(release, &staging, feed);
-    if unpacked.is_none() {
+    if let Err(reason) = unpacked {
         remove_path(&staging);
-        return None;
+        return Err(reason);
     }
 
     remove_path(&version_directory);
     let renamed = fs::rename(&staging, &version_directory);
-    if renamed.is_err() {
+    if let Err(error) = renamed {
         remove_path(&staging);
-        return None;
+        return Err(format!(
+            "the unpacked update could not be moved into place ({error})"
+        ));
     }
-    app_in(&version_directory)
+    let app = app_in(&version_directory);
+    match app {
+        Some(path) => Ok(path),
+        None => Err("the unpacked update held no app after the move".to_string()),
+    }
 }
 
 impl Schedule {
@@ -411,6 +473,22 @@ fn emit(shared: &Shared, event: UpdateEvent) {
     on_event(event);
 }
 
+fn start_helper(
+    shared: &Shared,
+    helper: &Path,
+    installed: &Path,
+    extracted: &Path,
+    spawn: &dyn Fn(&Path, &Path, &Path) -> io::Result<()>,
+) -> Applying {
+    shared.applying.store(true, Ordering::SeqCst);
+    let spawned = spawn(helper, installed, extracted);
+    if let Err(error) = spawned {
+        shared.applying.store(false, Ordering::SeqCst);
+        return Applying::Refused(format!("Taco Shells could not start the update: {error}"));
+    }
+    Applying::Started
+}
+
 fn begin_apply(shared: &Shared, slot: &mut Option<ReadyApp>) -> Applying {
     let Some(ready) = slot.clone() else {
         return Applying::NothingReady;
@@ -429,21 +507,33 @@ fn begin_apply(shared: &Shared, slot: &mut Option<ReadyApp>) -> Applying {
         return Applying::Refused(message.to_string());
     }
 
-    shared.applying.store(true, Ordering::SeqCst);
-    let pid = process::id();
-    let spawned = mac::spawn_update_helper(&helper, pid, &installed, &ready.path);
-    if let Err(error) = spawned {
-        shared.applying.store(false, Ordering::SeqCst);
-        return Applying::Refused(format!("Taco Shells could not start the update: {error}"));
-    }
-    Applying::Started
+    start_helper(
+        shared,
+        &helper,
+        &installed,
+        &ready.path,
+        &spawn_update_helper,
+    )
+}
+
+fn report_failure(message: &str) {
+    eprintln!("the update check failed: {message}");
 }
 
 fn run_check(shared: &Shared, updates: &Path, current: &str, feed: &dyn Feed) {
-    let Ok(payload) = feed.latest() else {
-        return;
+    let latest = feed.latest();
+    let payload = match latest {
+        Ok(payload) => payload,
+        Err(reason) => {
+            let message = format!("the feed could not be read ({reason})");
+            report_failure(&message);
+            return;
+        }
     };
-    let Some(release) = parse_release(&payload) else {
+    let parsed = parse_release(&payload);
+    let Some(release) = parsed else {
+        let message = "the latest release was not usable (not a stable plain version with its zip)";
+        report_failure(message);
         return;
     };
     if !is_newer_version(&release.version, current) {
@@ -459,12 +549,17 @@ fn run_check(shared: &Shared, updates: &Path, current: &str, feed: &dyn Feed) {
         return;
     }
 
-    let Some(path) = download_and_extract(&release, updates, feed) else {
-        return;
+    let downloaded = download_and_extract(&release, updates, feed);
+    let path = match downloaded {
+        Ok(path) => path,
+        Err(message) => {
+            report_failure(&message);
+            return;
+        }
     };
     {
         let mut ready = lock(&shared.ready);
-        // Swapped and pruned under the lock apply_ready holds, and not at all once an apply has started, so the folder it hands the helper is never removed.
+        // Not replaced once an apply has started, so the folder handed to the helper stays.
         let is_applying = shared.applying.load(Ordering::SeqCst);
         if is_applying {
             return;
@@ -478,7 +573,7 @@ fn run_check(shared: &Shared, updates: &Path, current: &str, feed: &dyn Feed) {
     emit(shared, UpdateEvent::Ready(release.version));
 }
 
-// A check asked for while one runs is folded into it, but its 75-second recheck still has to come, or a release just promoted waits for the next six-hourly check.
+// A check asked for mid-check still gets its recheck.
 fn drain_after_check(messages: &Receiver<Message>, schedule: &mut Schedule) -> bool {
     while let Ok(message) = messages.try_recv() {
         match message {
@@ -548,12 +643,7 @@ impl Updater {
     ) -> Updater {
         let adopted = prune_and_adopt(&updates, &current);
         let adopted_version = adopted.as_ref().map(|app| app.version.clone());
-        let shared = Arc::new(Shared {
-            ready: Mutex::new(adopted),
-            applying: AtomicBool::new(false),
-            stopping: AtomicBool::new(false),
-            host,
-        });
+        let shared = Arc::new(Shared::new(adopted, host));
         if let Some(version) = adopted_version {
             emit(&shared, UpdateEvent::Ready(version));
         }
@@ -571,12 +661,7 @@ impl Updater {
     }
 
     fn idle(host: UpdaterHost) -> Updater {
-        let shared = Shared {
-            ready: Mutex::new(None),
-            applying: AtomicBool::new(false),
-            stopping: AtomicBool::new(false),
-            host,
-        };
+        let shared = Shared::new(None, host);
         Updater {
             shared: Arc::new(shared),
             sender: None,
@@ -588,11 +673,6 @@ impl Updater {
         if let Some(sender) = &self.sender {
             let _ = sender.send(Message::CheckNow);
         }
-    }
-
-    pub fn ready_version(&self) -> Option<String> {
-        let ready = lock(&self.shared.ready);
-        ready.as_ref().map(|app| app.version.clone())
     }
 
     pub fn apply_ready(&self) {
@@ -632,17 +712,23 @@ impl Drop for Updater {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+mod test_support {
+    use super::{Download, Feed, Shared, UpdateEvent, UpdaterHost, copy_and_hash};
+    use crate::sync::lock;
     use serde_json::json;
+    use std::fs;
+    use std::path::{Path, PathBuf};
     use std::process::Command;
-    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::mpsc::{self, Receiver, Sender};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
 
-    struct ZipFeed {
-        release: Arc<Mutex<serde_json::Value>>,
+    pub(super) struct ZipFeed {
+        pub(super) release: Arc<Mutex<serde_json::Value>>,
         zip: PathBuf,
         latest_calls: Mutex<Sender<()>>,
-        downloads: Arc<AtomicUsize>,
+        pub(super) downloads: Arc<AtomicUsize>,
     }
 
     impl Feed for ZipFeed {
@@ -653,14 +739,22 @@ mod tests {
             Ok(release.clone())
         }
 
-        fn download(&self, _url: &str, to: &Path) -> Result<u64, String> {
+        fn download(&self, _url: &str, to: &Path) -> Result<Download, String> {
             self.downloads.fetch_add(1, Ordering::SeqCst);
-            let copied = fs::copy(&self.zip, to);
+            let opened = fs::File::open(&self.zip);
+            let mut source = opened.map_err(|error| error.to_string())?;
+            let created = fs::File::create(to);
+            let mut target = created.map_err(|error| error.to_string())?;
+            let copied = copy_and_hash(&mut source, &mut target);
             copied.map_err(|error| error.to_string())
         }
     }
 
-    fn zip_feed(release: serde_json::Value, zip: &Path, latest_calls: Sender<()>) -> ZipFeed {
+    pub(super) fn zip_feed(
+        release: serde_json::Value,
+        zip: &Path,
+        latest_calls: Sender<()>,
+    ) -> ZipFeed {
         ZipFeed {
             release: Arc::new(Mutex::new(release)),
             zip: zip.to_path_buf(),
@@ -669,7 +763,7 @@ mod tests {
         }
     }
 
-    fn recording_host(
+    pub(super) fn recording_host(
         executable: PathBuf,
     ) -> (UpdaterHost, Receiver<UpdateEvent>, Arc<AtomicBool>) {
         let (events, received) = mpsc::channel();
@@ -685,7 +779,12 @@ mod tests {
         (host, received, quit_called)
     }
 
-    fn long_ago() -> Instant {
+    pub(super) fn ready_version(shared: &Shared) -> Option<String> {
+        let ready = lock(&shared.ready);
+        ready.as_ref().map(|app| app.version.clone())
+    }
+
+    pub(super) fn long_ago() -> Instant {
         let now = Instant::now();
         match now.checked_sub(Duration::from_secs(60)) {
             Some(earlier) => earlier,
@@ -693,7 +792,11 @@ mod tests {
         }
     }
 
-    fn release_payload(tag: &str, asset_name: &str, size: serde_json::Value) -> serde_json::Value {
+    pub(super) fn release_payload(
+        tag: &str,
+        asset_name: &str,
+        size: serde_json::Value,
+    ) -> serde_json::Value {
         json!({
             "tag_name": tag,
             "prerelease": false,
@@ -704,7 +807,7 @@ mod tests {
         })
     }
 
-    fn make_app(directory: &Path, name: &str) -> PathBuf {
+    pub(super) fn make_app(directory: &Path, name: &str) -> PathBuf {
         let app = directory.join(name);
         let contents = app.join("Contents");
         fs::create_dir_all(&contents).unwrap();
@@ -713,7 +816,7 @@ mod tests {
         app
     }
 
-    fn make_zip(temp: &Path, app_names: &[&str]) -> PathBuf {
+    pub(super) fn make_zip(temp: &Path, app_names: &[&str]) -> PathBuf {
         let source = temp.join("zip-source");
         fs::create_dir_all(&source).unwrap();
         let zip = temp.join("release.zip");
@@ -733,9 +836,31 @@ mod tests {
         zip
     }
 
-    fn file_size(path: &Path) -> u64 {
+    pub(super) fn file_size(path: &Path) -> u64 {
         let metadata = fs::metadata(path).unwrap();
         metadata.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::{
+        file_size, long_ago, make_app, make_zip, ready_version, recording_host, release_payload,
+        zip_feed,
+    };
+    use super::*;
+    use serde_json::json;
+
+    struct FailingFeed;
+
+    impl Feed for FailingFeed {
+        fn latest(&self) -> Result<serde_json::Value, String> {
+            Err("offline".to_string())
+        }
+
+        fn download(&self, _url: &str, _to: &Path) -> Result<Download, String> {
+            Err("offline".to_string())
+        }
     }
 
     fn release_info(version: &str, size: u64) -> ReleaseInfo {
@@ -743,7 +868,35 @@ mod tests {
             version: version.to_string(),
             asset_url: "https://example.test/zip".to_string(),
             asset_size: size,
+            digest: None,
         }
+    }
+
+    fn sha256_of(path: &Path) -> String {
+        let mut file = File::open(path).unwrap();
+        let hashed = copy_and_hash(&mut file, &mut io::sink()).unwrap();
+        hashed.sha256
+    }
+
+    fn started_with_a_staged_update(
+        temp: &Path,
+        executable: PathBuf,
+    ) -> (Updater, Receiver<UpdateEvent>, Arc<AtomicBool>) {
+        let updates = temp.join("updates");
+        let staged = updates.join("1.0.1");
+        make_app(&staged, "Taco.app");
+        let zip = temp.join("unused.zip");
+        let (silent, _calls) = mpsc::channel();
+        let not_newer = release_payload("v1.0.0", "taco-shells-1.0.0-arm64.zip", json!(1));
+        let feed = zip_feed(not_newer, &zip, silent);
+        let (host, received, quit_called) = recording_host(executable);
+        let started = long_ago();
+        let updater =
+            Updater::start_with(updates, "1.0.0".to_string(), Box::new(feed), host, started);
+        let wait = Duration::from_secs(5);
+        let first = received.recv_timeout(wait).unwrap();
+        assert_eq!(first, UpdateEvent::Ready("1.0.1".to_string()));
+        (updater, received, quit_called)
     }
 
     #[test]
@@ -754,6 +907,7 @@ mod tests {
             version: "1.2.3".to_string(),
             asset_url: "https://example.test/zip".to_string(),
             asset_size: 1234,
+            digest: None,
         };
         assert_eq!(parsed, Some(expected));
 
@@ -783,13 +937,27 @@ mod tests {
     }
 
     #[test]
-    fn versions_compare_numerically_and_only_when_plain() {
-        assert!(is_newer_version("0.10.0", "0.9.9"));
-        assert!(!is_newer_version("0.9.9", "0.10.0"));
-        assert!(!is_newer_version("1.2.3", "1.2.3"));
-        assert!(!is_newer_version("1.2.4-beta", "1.2.3"));
-        assert!(!is_newer_version("1.2.3", "1.2.4-beta"));
-        assert!(!is_newer_version("1.2", "1.1.0"));
+    fn a_digest_is_kept_only_as_sha256_with_64_lowercase_hex_characters() {
+        let hex = "ab".repeat(32);
+        let digest_of = |digest: serde_json::Value| {
+            let mut payload = release_payload("v1.2.3", "taco-shells-1.2.3-arm64.zip", json!(1234));
+            payload["assets"][1]["digest"] = digest;
+            let release = parse_release(&payload).unwrap();
+            release.digest
+        };
+
+        assert_eq!(digest_of(json!(format!("sha256:{hex}"))), Some(hex.clone()));
+        assert_eq!(digest_of(json!(null)), None);
+        assert_eq!(digest_of(json!(format!("sha1:{hex}"))), None);
+        assert_eq!(
+            digest_of(json!(format!("sha256:{}", hex.to_uppercase()))),
+            None
+        );
+        assert_eq!(digest_of(json!(format!("sha256:{}", &hex[2..]))), None);
+
+        let good = release_payload("v1.2.3", "taco-shells-1.2.3-arm64.zip", json!(1234));
+        let release = parse_release(&good).unwrap();
+        assert_eq!(release.digest, None);
     }
 
     #[test]
@@ -839,60 +1007,6 @@ mod tests {
         assert!(!after_a_check.due(drained_at + Duration::from_secs(9)));
         let recheck = drained_at + RECHECK_DELAY + Duration::from_secs(1);
         assert!(after_a_check.due(recheck));
-    }
-
-    fn serve_twice(listener: std::net::TcpListener, bodies: [Vec<u8>; 2]) -> Vec<String> {
-        use std::io::{BufRead, BufReader, Write};
-        let mut agents = Vec::new();
-        for body in bodies {
-            let (stream, _) = listener.accept().unwrap();
-            let cloned = stream.try_clone().unwrap();
-            let mut reader = BufReader::new(cloned);
-            let mut line = String::new();
-            loop {
-                line.clear();
-                reader.read_line(&mut line).unwrap();
-                let lowered = line.to_ascii_lowercase();
-                if let Some(agent) = lowered.strip_prefix("user-agent:") {
-                    agents.push(agent.trim().to_string());
-                }
-                if line == "\r\n" {
-                    break;
-                }
-            }
-            let length = body.len();
-            let head =
-                format!("HTTP/1.1 200 OK\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n");
-            let mut writer = stream;
-            writer.write_all(head.as_bytes()).unwrap();
-            writer.write_all(&body).unwrap();
-        }
-        agents
-    }
-
-    #[test]
-    fn the_http_feed_names_itself_and_streams_the_download() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let port = address.port();
-        let release = br#"{"tag_name":"v9.9.9","prerelease":false,"assets":[]}"#.to_vec();
-        let sent = vec![7u8; 300_000];
-        let served = sent.clone();
-        let server = std::thread::spawn(move || serve_twice(listener, [release, served]));
-
-        let feed = HttpFeed {
-            feed_url: format!("http://127.0.0.1:{port}/feed"),
-        };
-        feed.latest().unwrap();
-        let temp = tempfile::TempDir::new().unwrap();
-        let target = temp.path().join("taco-shells.zip");
-        let url = format!("http://127.0.0.1:{port}/asset");
-        feed.download(&url, &target).unwrap();
-
-        let on_disk = fs::read(&target).unwrap();
-        assert!(on_disk == sent);
-        let agents = server.join().unwrap();
-        assert_eq!(agents, vec![USER_AGENT, USER_AGENT]);
     }
 
     #[test]
@@ -952,19 +1066,46 @@ mod tests {
         let release = release_info("1.2.3", size);
         let whole = download_and_extract(&release, &updates, &feed(&one));
         let replaced = updates.join("1.2.3").join("Foo.app");
-        assert_eq!(whole, Some(replaced));
+        assert_eq!(whole, Ok(replaced));
         assert_eq!(child_names(&updates), vec!["1.2.3"]);
 
         let release = release_info("1.2.4", size + 1);
         let short = download_and_extract(&release, &updates, &feed(&one));
-        assert_eq!(short, None);
+        assert!(short.is_err());
         assert_eq!(child_names(&updates), vec!["1.2.3"]);
 
         let two_size = file_size(&two);
         let release = release_info("1.2.5", two_size);
         let doubled = download_and_extract(&release, &updates, &feed(&two));
-        assert_eq!(doubled, None);
+        assert!(doubled.is_err());
         assert_eq!(child_names(&updates), vec!["1.2.3"]);
+    }
+
+    #[test]
+    fn a_download_must_match_the_published_digest_when_there_is_one() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let updates = temp.path().join("updates");
+        let zip_directory = temp.path().join("zip");
+        let zip = make_zip(&zip_directory, &["Foo.app"]);
+        let (silent, _calls) = mpsc::channel();
+        let feed = zip_feed(json!(null), &zip, silent);
+        let size = file_size(&zip);
+        let real = sha256_of(&zip);
+
+        let mut wrong = release_info("1.2.3", size);
+        wrong.digest = Some("0".repeat(64));
+        let refused = download_and_extract(&wrong, &updates, &feed);
+        assert!(refused.is_err());
+        assert_eq!(child_names(&updates), Vec::<String>::new());
+
+        let mut matching = release_info("1.2.3", size);
+        matching.digest = Some(real);
+        let accepted = download_and_extract(&matching, &updates, &feed);
+        assert!(accepted.is_ok());
+
+        let without = release_info("1.2.4", size);
+        let on_size_alone = download_and_extract(&without, &updates, &feed);
+        assert!(on_size_alone.is_ok());
     }
 
     #[test]
@@ -980,12 +1121,7 @@ mod tests {
         let release = Arc::clone(&feed.release);
         let downloads = Arc::clone(&feed.downloads);
         let (host, received, _quit_called) = recording_host(temp.path().join("taco"));
-        let shared = Shared {
-            ready: Mutex::new(None),
-            applying: AtomicBool::new(false),
-            stopping: AtomicBool::new(false),
-            host,
-        };
+        let shared = Shared::new(None, host);
 
         run_check(&shared, &updates, "1.0.0", &feed);
         run_check(&shared, &updates, "1.0.0", &feed);
@@ -1001,11 +1137,7 @@ mod tests {
         run_check(&shared, &updates, "1.0.0", &feed);
 
         assert_eq!(downloads.load(Ordering::SeqCst), 2);
-        let ready_version = {
-            let ready = lock(&shared.ready);
-            ready.as_ref().map(|app| app.version.clone())
-        };
-        assert_eq!(ready_version, Some("1.0.2".to_string()));
+        assert_eq!(ready_version(&shared), Some("1.0.2".to_string()));
         assert_eq!(child_names(&updates), vec!["1.0.2"]);
         let events: Vec<UpdateEvent> = received.try_iter().collect();
         assert_eq!(events, vec![UpdateEvent::Ready("1.0.2".to_string())]);
@@ -1017,15 +1149,24 @@ mod tests {
         }
         run_check(&shared, &updates, "1.0.0", &feed);
 
-        let while_applying = {
-            let ready = lock(&shared.ready);
-            ready.as_ref().map(|app| app.version.clone())
-        };
-        assert_eq!(while_applying, Some("1.0.2".to_string()));
+        assert_eq!(ready_version(&shared), Some("1.0.2".to_string()));
         let staged = updates.join("1.0.2");
         assert!(staged.is_dir());
         let events: Vec<UpdateEvent> = received.try_iter().collect();
         assert!(events.is_empty(), "{events:?}");
+    }
+
+    #[test]
+    fn a_failing_feed_ends_the_check_without_an_event() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let updates = temp.path().join("updates");
+        let (host, received, _quit_called) = recording_host(temp.path().join("taco"));
+        let shared = Shared::new(None, host);
+
+        run_check(&shared, &updates, "1.0.0", &FailingFeed);
+
+        assert!(received.try_recv().is_err());
+        assert_eq!(ready_version(&shared), None);
     }
 
     #[test]
@@ -1047,7 +1188,7 @@ mod tests {
         let wait = Duration::from_secs(5);
         let first = received.recv_timeout(wait).unwrap();
         assert_eq!(first, UpdateEvent::Ready("1.0.1".to_string()));
-        assert_eq!(updater.ready_version(), Some("1.0.1".to_string()));
+        assert_eq!(ready_version(&updater.shared), Some("1.0.1".to_string()));
         call_log.recv_timeout(wait).unwrap();
 
         updater.apply_ready();
@@ -1058,59 +1199,63 @@ mod tests {
         );
         assert!(!quit_called.load(Ordering::SeqCst));
         updater.stop();
-
-        let (calls, call_log) = mpsc::channel();
-        let (host, received, _quit_called) = recording_host(temp.path().join("taco"));
-        let same = release_payload("v1.0.0", "taco-shells-1.0.0-arm64.zip", json!(size));
-        let feed = zip_feed(same, &zip, calls);
-        let updater = Updater::start_with(
-            temp.path().join("other-updates"),
-            "1.0.0".to_string(),
-            Box::new(feed),
-            host,
-            started,
-        );
-        call_log.recv_timeout(wait).unwrap();
-        let mut second_check_ran = false;
-        for _ in 0..100 {
-            updater.check_now();
-            if call_log.recv_timeout(Duration::from_millis(50)).is_ok() {
-                second_check_ran = true;
-                break;
-            }
-        }
-        assert!(second_check_ran);
-        updater.stop();
-        assert!(received.try_recv().is_err());
     }
 
     #[test]
     fn applying_with_the_ready_app_gone_reports_it_and_never_quits() {
         let temp = tempfile::TempDir::new().unwrap();
-        let updates = temp.path().join("updates");
-        let staged = updates.join("1.0.1");
-        make_app(&staged, "Taco.app");
-        let zip = temp.path().join("unused.zip");
-        let (silent, _calls) = mpsc::channel();
-        let not_newer = release_payload("v1.0.0", "taco-shells-1.0.0-arm64.zip", json!(1));
-        let feed = zip_feed(not_newer, &zip, silent);
         let executable = PathBuf::from("/Applications/Taco Shells.app/Contents/MacOS/taco");
-        let (host, received, quit_called) = recording_host(executable);
-        let started = long_ago();
-        let updater =
-            Updater::start_with(updates, "1.0.0".to_string(), Box::new(feed), host, started);
-        let wait = Duration::from_secs(5);
-        let first = received.recv_timeout(wait).unwrap();
-        assert_eq!(first, UpdateEvent::Ready("1.0.1".to_string()));
+        let (updater, received, quit_called) =
+            started_with_a_staged_update(temp.path(), executable);
+        let staged = temp.path().join("updates").join("1.0.1");
         fs::remove_dir_all(&staged).unwrap();
 
         updater.apply_ready();
 
+        let wait = Duration::from_secs(5);
         let problem = received.recv_timeout(wait).unwrap();
         let message = "The update could not be started: the downloaded update is missing";
         assert_eq!(problem, UpdateEvent::Problem(message.to_string()));
-        assert_eq!(updater.ready_version(), None);
+        assert_eq!(ready_version(&updater.shared), None);
         assert!(!quit_called.load(Ordering::SeqCst));
         updater.stop();
+    }
+
+    #[test]
+    fn applying_without_an_update_helper_next_to_the_app_reports_it_and_never_quits() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let executable =
+            PathBuf::from("/Applications/Taco Shells Without Helper.app/Contents/MacOS/taco");
+        let (updater, received, quit_called) =
+            started_with_a_staged_update(temp.path(), executable);
+
+        updater.apply_ready();
+
+        let wait = Duration::from_secs(5);
+        let problem = received.recv_timeout(wait).unwrap();
+        let message = "The update could not be started: the update helper is missing";
+        assert_eq!(problem, UpdateEvent::Problem(message.to_string()));
+        assert!(!quit_called.load(Ordering::SeqCst));
+        updater.stop();
+    }
+
+    #[test]
+    fn a_helper_that_fails_to_spawn_leaves_the_app_free_to_apply_again() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let (host, _received, _quit_called) = recording_host(temp.path().join("taco"));
+        let shared = Shared::new(None, host);
+        let failing = |_helper: &Path, _installed: &Path, _extracted: &Path| {
+            assert!(shared.applying.load(Ordering::SeqCst));
+            Err(io::Error::other("no such shell"))
+        };
+        let path = temp.path();
+
+        let outcome = start_helper(&shared, path, path, path, &failing);
+
+        let Applying::Refused(message) = outcome else {
+            panic!("a failed spawn must be refused");
+        };
+        assert!(message.contains("no such shell"), "{message}");
+        assert!(!shared.applying.load(Ordering::SeqCst));
     }
 }
