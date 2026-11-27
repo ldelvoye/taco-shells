@@ -1,5 +1,8 @@
+use std::ffi::{OsStr, OsString};
 use std::os::fd::{FromRawFd, OwnedFd, RawFd};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use taco_runtime::program;
@@ -20,7 +23,7 @@ struct Arguments {
 }
 
 fn main() -> ExitCode {
-    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    let arguments: Vec<OsString> = std::env::args_os().skip(1).collect();
     let Some(Arguments {
         control,
         terminals,
@@ -52,22 +55,28 @@ fn main() -> ExitCode {
     }
 }
 
-/// All four arguments, or none if one is missing, empty or not known.
-fn parsed(arguments: &[String]) -> Option<Arguments> {
+/// All four arguments, or none if one is missing, empty or not known. The port file's path is taken as bytes, so any path works.
+fn parsed(arguments: &[OsString]) -> Option<Arguments> {
     let mut control = None;
     let mut terminals = None;
     let mut app = None;
     let mut port_file = None;
     for argument in arguments {
-        let (name, value) = argument.split_once('=')?;
+        let bytes = argument.as_bytes();
+        let equals = bytes.iter().position(|byte| *byte == b'=')?;
+        let name = std::str::from_utf8(&bytes[..equals]).ok()?;
+        let value = OsStr::from_bytes(&bytes[equals + 1..]);
         if value.is_empty() {
             return None;
         }
         match name {
             "--control-fd" => control = Some(open_fd(value)?),
             "--terminals-fd" => terminals = Some(open_fd(value)?),
-            "--app" => app = Some(value.to_string()),
-            "--port-file" => port_file = Some(value.to_string()),
+            "--app" => {
+                let text = value.to_str()?;
+                app = Some(text.to_string());
+            }
+            "--port-file" => port_file = Some(PathBuf::from(value)),
             _ => return None,
         }
     }
@@ -82,8 +91,9 @@ fn parsed(arguments: &[String]) -> Option<Arguments> {
     })
 }
 
-fn open_fd(value: &str) -> Option<UnixStream> {
-    let fd: RawFd = value.parse().ok()?;
+fn open_fd(value: &OsStr) -> Option<UnixStream> {
+    let text = value.to_str()?;
+    let fd: RawFd = text.parse().ok()?;
     if fd <= libc::STDERR_FILENO {
         return None;
     }
