@@ -52,7 +52,6 @@ struct Inner {
     updater: Arc<Slot<Updater>>,
     listener: Slot<HookListener>,
     hook_inbox: Arc<Slot<Sender<Routed>>>,
-    hooks_directory: PathBuf,
     last_config: Mutex<Config>,
 }
 
@@ -385,7 +384,6 @@ impl ServicesHost {
         let writer: Arc<Slot<ConfigWriter>> = Arc::new(Mutex::new(Some(started_writer)));
 
         let started = start_setups(&directory, &activity_on, &writer, &runtime, &window);
-        let hooks_directory = started.hooks_directory();
         let plugin_heard = started.plugin_heard();
         *locked(&setups) = Some(started);
 
@@ -437,7 +435,6 @@ impl ServicesHost {
             updater,
             listener: Mutex::new(Some(listener)),
             hook_inbox,
-            hooks_directory,
             last_config: Mutex::new(first),
         };
         ServicesHost {
@@ -516,10 +513,6 @@ impl ServicesHost {
             setups.recheck_if_too_old();
             setups.refresh();
         }
-    }
-
-    pub fn hooks_directory(&self) -> PathBuf {
-        self.inner.hooks_directory.clone()
     }
 
     // The listener first, so nothing feeds the hook route; dropping its inbox last is what ends the route's thread.

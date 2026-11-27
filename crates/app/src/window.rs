@@ -24,9 +24,7 @@ use crate::link::{
     Ahead, Ports, ServicesOutput, ServicesPort, WindowOutput, WorkspacePort, drawn_with, next_move,
 };
 use crate::look::{FONT_FAMILY, Look, TEXT_SIZE};
-use crate::menu::{
-    AgentMenuClicked, Minimize, Quit, RestartToUpdate, ShowHookScripts, Zoom, set_menus,
-};
+use crate::menu::{AgentMenuClicked, Minimize, Quit, RestartToUpdate, Zoom, set_menus};
 use crate::middle::{Attachable, opens_link};
 use crate::motion::{DrawnBounds, Moved, PAGE_TIME, moved_settings, progress};
 use crate::page::Page;
@@ -373,11 +371,6 @@ impl WindowView {
         }
     }
 
-    fn show_hook_scripts(&self, cx: &mut Context<Self>) {
-        let directory = self.services.hooks_directory();
-        cx.reveal_path(&directory);
-    }
-
     fn agent_menu_clicked(&self, clicked: &AgentMenuClicked) {
         self.services.agent_action(&clicked.harness, clicked.action);
     }
@@ -516,9 +509,6 @@ impl Render for WindowView {
             .on_action(|_: &Minimize, window, _| window.minimize_window())
             .on_action(|_: &Zoom, window, _| window.zoom_window())
             .on_action(cx.listener(|view, _: &RestartToUpdate, _, _| view.apply_update()))
-            .on_action(cx.listener(|view, _: &ShowHookScripts, _, cx| {
-                view.show_hook_scripts(cx);
-            }))
             .on_action(cx.listener(|view, clicked: &AgentMenuClicked, _, _| {
                 view.agent_menu_clicked(clicked);
             }))

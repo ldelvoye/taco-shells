@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::net::UnixStream;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
@@ -64,10 +64,6 @@ impl ServicesPort for ServicesHost {
 
     fn apply_update(&self) {
         ServicesHost::apply_update(self);
-    }
-
-    fn hooks_directory(&self) -> PathBuf {
-        ServicesHost::hooks_directory(self)
     }
 
     fn write_setting(&self, change: SettingChange) {

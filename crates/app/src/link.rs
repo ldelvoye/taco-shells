@@ -1,6 +1,5 @@
 //! The window's side of its contracts: requests out to the workspace, and everything sent back to the window's thread.
 
-use std::path::PathBuf;
 use std::rc::Rc;
 
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -29,7 +28,6 @@ pub trait ServicesPort {
     fn agent_action(&self, harness: &HarnessId, action: AgentMenuAction);
     fn dismiss_notice(&self, harness: &HarnessId);
     fn apply_update(&self);
-    fn hooks_directory(&self) -> PathBuf;
     /// Answered by the next `Config` when it lands, or by `SettingRefused` when it does not.
     fn write_setting(&self, change: SettingChange);
     /// Answered by the next `Config` when it lands, or by `KeymapRefused` when it is refused.
