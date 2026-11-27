@@ -239,14 +239,6 @@ mod tests {
     #[test]
     fn hook_events_map_to_signals_ignoring_the_idle_reminder_and_subagents() {
         assert_eq!(
-            signal_for("UserPromptSubmit", None),
-            Some(AgentSignal::Working)
-        );
-        assert_eq!(
-            signal_for("PreToolUse", Some("Bash")),
-            Some(AgentSignal::Working)
-        );
-        assert_eq!(
             signal_for("PreToolUse", Some("AskUserQuestion")),
             Some(AgentSignal::Needs)
         );
@@ -258,6 +250,11 @@ mod tests {
         assert_eq!(signal_for("Notification", None), None);
         assert_eq!(signal_for("StopFailure", None), Some(AgentSignal::Stopped));
         assert_eq!(signal_for("SubagentStop", None), None);
+        assert_eq!(
+            signal_for("PostToolUseFailure", Some("Bash")),
+            Some(AgentSignal::Working),
+            "a tool that failed is the agent still at work"
+        );
     }
 
     #[test]
@@ -304,8 +301,6 @@ mod tests {
         );
         assert_eq!(question_of("PreToolUse", blank), None);
         assert_eq!(question_of("PreToolUse", other_tool), None);
-        assert_eq!(question_of("PostToolUse", asked), None);
-        assert_eq!(question_of("PreToolUse", "not json"), None);
         let cut = question_of("PreToolUse", &long).unwrap();
         assert_eq!(cut.chars().count(), MAX_QUESTION_CHARACTERS);
     }

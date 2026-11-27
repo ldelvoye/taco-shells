@@ -174,14 +174,13 @@ mod tests {
             ))
         );
         assert_eq!(
-            found(gh("gh pr create --draft --title x", created)),
+            found(gh("gh pr create --draft --title x", created.clone())),
             Some(seen(
                 Some("https://github.com/o/r/pull/79"),
                 79,
                 Some(PrState::Draft)
             ))
         );
-        let created = serde_json::json!({ "number": 79, "url": "https://github.com/o/r/pull/79", "action": "created" });
         let long_body = format!("gh pr create --body '{}' --draft", "b".repeat(2_000));
         let Some(Found::PullRequest(after_a_long_body)) = found(gh(&long_body, created.clone()))
         else {
