@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use gpui::{App, AssetSource, Result, SharedString};
-use taco_services::IS_STABLE;
+use taco_identity::IS_STABLE;
 
 pub const MARK: &str = "brand/mark.svg";
 pub const TERMINALS_ICON: &str = "icons/terminals.svg";

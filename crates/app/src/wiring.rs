@@ -8,13 +8,13 @@ use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use futures::channel::mpsc;
+use taco_identity::{CURRENT, config_directory};
 use taco_protocol::{
     ConfigFile, CursorShape, DrawnState, HarnessId, RuntimeCommand, RuntimeReport,
 };
 use taco_rules::default_panels;
 use taco_services::{
-    AGENT_APP_NAME, AgentMenuAction, config_directory, config_file_path, focus_port_path,
-    plugin_directory_path, read_config_files,
+    AgentMenuAction, config_file_path, focus_port_path, plugin_directory_path, read_config_files,
 };
 use taco_settings::{
     Config, CursorStyle, KeymapChange, SettingChange, palette_for, resolve_config,
@@ -91,7 +91,7 @@ pub fn start(system_is_dark: bool) -> Result<Started, String> {
         let _ = events.send(event);
     };
     let context = ShellContext {
-        app: AGENT_APP_NAME.to_string(),
+        app: CURRENT.agent_app_name.to_string(),
         port_file: focus_port_path(&directory),
         plugin_directory: plugin_directory_path(&directory),
     };

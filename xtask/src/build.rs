@@ -2,17 +2,15 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::identity::{CHANNEL_VARIABLE, STABLE_CHANNEL};
+pub use taco_identity::Channel;
+use taco_identity::{CHANNEL_VARIABLE, DEV_CONFIG_DIR_VARIABLE, STABLE_CHANNEL};
+
 use crate::repo;
 
-pub const APP_EXECUTABLE: &str = "taco-shells";
-pub const RUNTIME_EXECUTABLE: &str = "taco-shells-runtime";
-pub const PLUGIN_EXECUTABLE: &str = "taco-shells-plugin";
 const APP_PACKAGE: &str = "taco-app";
 const RUNTIME_PACKAGE: &str = "taco-runtime";
 const PLUGIN_PACKAGE: &str = "taco-plugin";
 const DRIVE_FEATURE: &str = "taco-app/drive";
-const DEV_CONFIG_DIR_VARIABLE: &str = "TACO_SHELLS_DEV_CONFIG_DIR";
 
 #[derive(Clone, Copy)]
 pub enum Profile {
@@ -27,12 +25,6 @@ impl Profile {
             Profile::Release => "release",
         }
     }
-}
-
-#[derive(Clone, Copy)]
-pub enum Channel {
-    Development,
-    Stable,
 }
 
 /// What the programs are built as. `config_dir` is compiled into a development build as its config directory.

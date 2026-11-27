@@ -14,9 +14,9 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, TryLockError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use taco_identity::RUNTIME_PROGRAM;
 use taco_protocol::{RuntimeAnswer, RuntimeCommand, RuntimeQuery, RuntimeReport};
 
-const PROGRAM: &str = "taco-shells-runtime";
 /// Where the runtime finds its two connections, as its arguments say.
 const CONTROL_FD: RawFd = 3;
 const TERMINALS_FD: RawFd = 4;
@@ -91,7 +91,7 @@ impl RuntimeClient {
             let reason = format!("{} has no directory", this_one.display());
             return Err(io::Error::new(io::ErrorKind::NotFound, reason));
         };
-        Ok(directory.join(PROGRAM))
+        Ok(directory.join(RUNTIME_PROGRAM))
     }
 
     /// Starts it with two socket pairs at descriptors 3 and 4; `on_event` runs on the client's reader thread, in arrival order.

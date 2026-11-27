@@ -1,9 +1,8 @@
+use taco_identity::CURRENT;
 use taco_protocol::APP_VARIABLE;
 
-#[cfg(taco_stable)]
-pub const PLUGIN_NAME: &str = "taco-shells";
-#[cfg(not(taco_stable))]
-pub const PLUGIN_NAME: &str = "taco-shells-dev";
+/// The plugin is named after the app it serves, which is also what its shells' `TACO_SHELLS_APP` holds.
+pub const PLUGIN_NAME: &str = CURRENT.agent_app_name;
 pub const SERVER_NAME: &str = "activity";
 pub const ENTRYPOINT_VARIABLE: &str = "CLAUDE_CODE_ENTRYPOINT";
 

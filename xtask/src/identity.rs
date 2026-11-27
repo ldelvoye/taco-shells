@@ -1,20 +1,16 @@
-pub const CHANNEL_VARIABLE: &str = "TACO_SHELLS_CHANNEL";
-pub const STABLE_CHANNEL: &str = "stable";
+use taco_identity::{Channel, DEVELOPMENT, Identity, STABLE};
 
-pub struct Identity {
-    pub product_name: &'static str,
-    pub bundle_id: &'static str,
-    pub icon: &'static str,
+pub fn identity_of(channel: Channel) -> &'static Identity {
+    match channel {
+        Channel::Stable => &STABLE,
+        Channel::Development => &DEVELOPMENT,
+    }
 }
 
-pub const STABLE: Identity = Identity {
-    product_name: "Taco Shells",
-    bundle_id: "com.ldelvoye.tacoshells",
-    icon: "build/icon.icns",
-};
-
-pub const DEVELOPMENT: Identity = Identity {
-    product_name: "Taco Shells Dev",
-    bundle_id: "com.ldelvoye.tacoshells.dev",
-    icon: "build/icon-dev.icns",
-};
+/// The icon a channel's bundle carries, made by `branding/build-icon.sh`.
+pub fn icon_of(channel: Channel) -> &'static str {
+    match channel {
+        Channel::Stable => "build/icon.icns",
+        Channel::Development => "build/icon-dev.icns",
+    }
+}

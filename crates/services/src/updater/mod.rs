@@ -11,8 +11,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
+use taco_identity::{IS_STABLE, UPDATE_FEED_VARIABLE, UPDATE_HELPER_PATH, release_zip_name};
 
-use crate::identity::IS_STABLE;
 use crate::mac;
 use crate::sync::lock;
 use system::{extract_zip, spawn_update_helper};
@@ -24,7 +24,6 @@ pub(crate) const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 pub(crate) const RECHECK_DELAY: Duration = Duration::from_secs(75);
 
 const DEFAULT_FEED_URL: &str = "https://api.github.com/repos/ldelvoye/taco-shells/releases/latest";
-const FEED_VARIABLE: &str = "TACO_SHELLS_UPDATE_FEED";
 const USER_AGENT: &str = "taco-shells";
 const FEED_TIMEOUT: Duration = Duration::from_secs(30);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
@@ -34,7 +33,6 @@ const ZIP_NAME: &str = "taco-shells.zip";
 const STAGING_SUFFIX: &str = ".partial";
 const APP_SUFFIX: &str = ".app";
 const TAG_PREFIX: &str = "v";
-const HELPER_PATH: &str = "Contents/Resources/update-helper.sh";
 const UNVERSIONED: &str = "0.0.0";
 const NOT_IN_APPLICATIONS: &str = "Taco Shells can only update itself from /Applications.";
 
@@ -120,11 +118,6 @@ impl Shared {
     }
 }
 
-// Must match the zip name xtask produces, or no release ever offers an update.
-fn asset_name_for(version: &str) -> String {
-    format!("taco-shells-{version}-arm64.zip")
-}
-
 fn parse_digest(asset: &serde_json::Value) -> Option<String> {
     let value = asset.get("digest")?;
     let text = value.as_str()?;
@@ -152,7 +145,7 @@ pub(crate) fn parse_release(payload: &serde_json::Value) -> Option<ReleaseInfo> 
     }
     let assets_value = release.get("assets")?;
     let assets = assets_value.as_array()?;
-    let wanted = asset_name_for(version);
+    let wanted = release_zip_name(version);
     for asset in assets {
         let Some(name_value) = asset.get("name") else {
             continue;
@@ -352,7 +345,7 @@ fn fetch_and_unpack(release: &ReleaseInfo, staging: &Path, feed: &dyn Feed) -> R
             }
         }
         None => {
-            let asset = asset_name_for(&release.version);
+            let asset = release_zip_name(&release.version);
             eprintln!("the update check found no digest for {asset}, so only its size was checked");
         }
     }
@@ -501,7 +494,7 @@ fn begin_apply(shared: &Shared, slot: &mut Option<ReadyApp>) -> Applying {
         let message = "The update could not be started: the downloaded update is missing";
         return Applying::Refused(message.to_string());
     }
-    let helper = installed.join(HELPER_PATH);
+    let helper = installed.join(UPDATE_HELPER_PATH);
     if !helper.is_file() {
         let message = "The update could not be started: the update helper is missing";
         return Applying::Refused(message.to_string());
@@ -621,7 +614,7 @@ fn run_thread(
 
 impl Updater {
     pub fn start(config_directory: &Path, host: UpdaterHost) -> Updater {
-        let variable = std::env::var(FEED_VARIABLE);
+        let variable = std::env::var(UPDATE_FEED_VARIABLE);
         let override_url = variable.ok();
         let current = current_version(&host.executable);
         let feed_url = feed_for(IS_STABLE, override_url, &current);

@@ -2,9 +2,9 @@ use gpui::{
     AnyElement, App, Div, FontWeight, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
     ParentElement, Styled, Window, div, img, px,
 };
+use taco_identity::CURRENT;
 use taco_protocol::DrawnState;
 use taco_rules::{selected_terminal, waiting_count};
-use taco_services::APPLICATION_NAME;
 
 use crate::assets::MARK;
 use crate::look::{Look, SMALL_TEXT_SIZE, TITLE_BAR_HEIGHT};
@@ -34,7 +34,7 @@ pub fn title_bar(
         .font_weight(FontWeight::SEMIBOLD)
         .text_size(px(13.))
         .child(img(MARK).w(px(MARK_WIDTH)).h(px(MARK_HEIGHT)))
-        .child(APPLICATION_NAME);
+        .child(CURRENT.application_name);
 
     let mut place = div()
         .flex_1()

@@ -1,6 +1,8 @@
 use std::process::{self, Command};
 
-use crate::build::{self, APP_EXECUTABLE, Build, Channel, Profile};
+use taco_identity::APP_PROGRAM;
+
+use crate::build::{self, Build, Channel, Profile};
 
 pub fn run(arguments: &[String]) -> Result<(), String> {
     let build = Build {
@@ -10,7 +12,7 @@ pub fn run(arguments: &[String]) -> Result<(), String> {
         config_dir: None,
     };
     let binaries = build::binaries(&build)?;
-    let app = binaries.join(APP_EXECUTABLE);
+    let app = binaries.join(APP_PROGRAM);
 
     let mut command = Command::new(&app);
     command.args(arguments);

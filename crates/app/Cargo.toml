@@ -37,6 +37,7 @@ taco-agents.workspace = true
 taco-workspace.workspace = true
 taco-settings.workspace = true
 taco-services.workspace = true
+taco-identity.workspace = true
 taco-terminal-view.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true

@@ -5,13 +5,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
+use taco_identity::{DEVELOPMENT, PLUGIN_PROGRAM, PROGRAMS_PATH, STABLE};
 use taco_protocol::APP_VARIABLE;
 
 use crate::Smoke;
 
-const PLUGIN_EXECUTABLE: &str = "taco-shells-plugin";
-const DEV_NAME: &str = "taco-shells-dev";
-const STABLE_NAME: &str = "taco-shells";
+const DEV_NAME: &str = DEVELOPMENT.agent_app_name;
+const STABLE_NAME: &str = STABLE.agent_app_name;
 const ACTIVITY_TOOLS: [&str; 3] = ["note", "now", "share"];
 const INITIALIZE_ID: u64 = 1;
 const TOOLS_LIST_ID: u64 = 2;
@@ -117,11 +117,8 @@ fn decision_in(answer: &str) -> Result<String, String> {
 }
 
 fn run(smoke: &Smoke, mode: &str, app: Option<&str>, input: &str) -> Result<String, String> {
-    let program = smoke
-        .app
-        .join("Contents")
-        .join("MacOS")
-        .join(PLUGIN_EXECUTABLE);
+    let programs = smoke.app.join(PROGRAMS_PATH);
+    let program = programs.join(PLUGIN_PROGRAM);
     let mut command = Command::new(&program);
     command.arg(mode);
     // Smoke runs inside agents' sessions, whose Claude Code variables would otherwise change the answer.

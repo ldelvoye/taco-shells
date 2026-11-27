@@ -8,6 +8,11 @@ use std::sync::mpsc::{self, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use taco_identity::{
+    APP_PROGRAM, BACKGROUND_WINDOW_VARIABLE, CONFIG_DIRECTORY_VARIABLE, DEVELOPMENT,
+    INFO_PLIST_PATH, PROGRAMS_PATH, UPDATE_FEED_VARIABLE, release_zip_name,
+};
+
 use crate::build::{Channel, Profile};
 use crate::bundle::{self, Options as BundleOptions};
 use crate::install;
@@ -16,15 +21,9 @@ use crate::repo;
 const REHEARSAL_VERSION: &str = "999.0.0";
 const REHEARSAL_APP: &str = "/Applications/Taco Shells Rehearsal.app";
 const DEFAULT_ELECTRON_APP: &str = "/Applications/Taco Shells Dev.app";
-const ELECTRON_BUNDLE_IDENTIFIER: &str = "com.ldelvoye.tacoshells.dev";
-const CONFIG_DIR_VARIABLE: &str = "TACO_SHELLS_CONFIG_DIR";
-const UPDATE_FEED_VARIABLE: &str = "TACO_SHELLS_UPDATE_FEED";
-const BACKGROUND_WINDOW_VARIABLE: &str = "TACO_SHELLS_BACKGROUND_WINDOW";
 const READY_TIMEOUT: Duration = Duration::from_secs(120);
 const READY_POLL: Duration = Duration::from_millis(500);
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
-const RUST_EXECUTABLE: &str = "Contents/MacOS/taco-shells";
-const RUST_EXECUTABLE_NAME: &str = "taco-shells";
 // The Rust copy installed to be updated; any plain version below REHEARSAL_VERSION would do.
 const OLD_RUST_VERSION: &str = "0.0.1";
 const VERSION_KEY: &str = "CFBundleShortVersionString";
@@ -141,7 +140,7 @@ impl OldApp {
     fn executable(&self) -> &str {
         match self {
             OldApp::Electron(electron) => &electron.executable,
-            OldApp::Rust => RUST_EXECUTABLE_NAME,
+            OldApp::Rust => APP_PROGRAM,
         }
     }
 
@@ -156,7 +155,10 @@ impl OldApp {
     fn was_swapped(&self) -> bool {
         let rehearsal_app = Path::new(REHEARSAL_APP);
         match self {
-            OldApp::Electron(_) => rehearsal_app.join(RUST_EXECUTABLE).exists(),
+            OldApp::Electron(_) => {
+                let rust_program = rehearsal_app.join(PROGRAMS_PATH).join(APP_PROGRAM);
+                rust_program.exists()
+            }
             OldApp::Rust => {
                 let version = plist_value(rehearsal_app, VERSION_KEY);
                 matches!(version, Ok(version) if version == REHEARSAL_VERSION)
@@ -193,9 +195,10 @@ fn check_electron(requested: &Option<PathBuf>) -> Result<ElectronApp, String> {
         ));
     }
     let identifier = plist_value(&path, "CFBundleIdentifier")?;
-    if identifier != ELECTRON_BUNDLE_IDENTIFIER {
+    let expected = DEVELOPMENT.bundle_id;
+    if identifier != expected {
         return Err(format!(
-            "{} has bundle identifier {identifier}, expected {ELECTRON_BUNDLE_IDENTIFIER}",
+            "{} has bundle identifier {identifier}, expected {expected}",
             path.display()
         ));
     }
@@ -204,7 +207,7 @@ fn check_electron(requested: &Option<PathBuf>) -> Result<ElectronApp, String> {
 }
 
 fn plist_value(app: &Path, key: &str) -> Result<String, String> {
-    let info_plist = app.join("Contents/Info.plist");
+    let info_plist = app.join(INFO_PLIST_PATH);
     let mut plutil = Command::new("plutil");
     plutil.args(["-extract", key, "raw", "-o", "-"]);
     plutil.arg(&info_plist);
@@ -245,7 +248,7 @@ fn versioned_copy(app: &Path, folder: &Path, version: &str) -> Result<PathBuf, S
     ditto.arg(&copy);
     repo::run(&mut ditto)?;
 
-    let info_plist = copy.join("Contents/Info.plist");
+    let info_plist = copy.join(INFO_PLIST_PATH);
     let mut plutil = Command::new("plutil");
     plutil.args(["-replace", VERSION_KEY, "-string", version]);
     plutil.arg(&info_plist);
@@ -282,8 +285,9 @@ fn release_json(port: u16, zip_size: u64) -> String {
     )
 }
 
+// The shipped name, so the rehearsal fails if the bundle and the updater ever disagree on it.
 fn zip_name() -> String {
-    format!("taco-shells-{REHEARSAL_VERSION}-arm64.zip")
+    release_zip_name(REHEARSAL_VERSION)
 }
 
 fn serve(listener: TcpListener, release: &str, zip: &Path, zip_size: u64) {
@@ -345,9 +349,8 @@ fn response_header(status: &str, content_type: &str, length: u64) -> String {
 }
 
 fn launch(rehearsal: &Rehearsal, background: bool) -> Result<Child, String> {
-    let executable = Path::new(REHEARSAL_APP)
-        .join("Contents/MacOS")
-        .join(rehearsal.old.executable());
+    let programs = Path::new(REHEARSAL_APP).join(PROGRAMS_PATH);
+    let executable = programs.join(rehearsal.old.executable());
     let log_path = rehearsal.work.join(APP_LOG);
     let log = File::create(&log_path)
         .map_err(|error| format!("could not create {}: {error}", log_path.display()))?;
@@ -356,7 +359,7 @@ fn launch(rehearsal: &Rehearsal, background: bool) -> Result<Child, String> {
         .map_err(|error| format!("could not open {}: {error}", log_path.display()))?;
 
     let mut command = Command::new(&executable);
-    command.env(CONFIG_DIR_VARIABLE, &rehearsal.config);
+    command.env(CONFIG_DIRECTORY_VARIABLE, &rehearsal.config);
     command.env(UPDATE_FEED_VARIABLE, &rehearsal.feed_url);
     if background {
         command.env(BACKGROUND_WINDOW_VARIABLE, "1");
