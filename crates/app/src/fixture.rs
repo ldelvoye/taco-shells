@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use taco_protocol::{
     ActivityEntry, ActivityKind, AgentLabel, AgentRow, Arrangement, Author, DrawnState, HarnessId,
-    Row, RowState, Step, TabGroup, TabGroupId, TerminalId,
+    Peer, Row, RowState, StartSource, Step, TabGroup, TabGroupId, TerminalId,
 };
 use taco_rules::default_panels;
 use taco_services::{AgentSetupNotice, AgentSetupNoticeKind, AgentSetupView};
@@ -13,7 +13,7 @@ use taco_settings::{
     Binding, ConfigTexts, SettingChange, Settings, ShellRowName, UnreadSettings, resolve_config,
 };
 
-use crate::activity::{MS_PER_MINUTE, now_ms};
+use crate::activity_panel::{MS_PER_MINUTE, now_ms};
 use crate::banners::Notices;
 use crate::window::Shown;
 
@@ -82,6 +82,25 @@ const MIXED_ROWS: [FixtureRow; 7] = [
 
 const ASKED: &str = "asked";
 const CHANGED: &str = "changed";
+const SHORT_LOG_PAGE: usize = 6;
+const FULL_LOG_PAGE: usize = 200;
+// The full log's newest 17 entries start on the nudged fix's second step.
+const CUT_LOG_PAGE: usize = 17;
+const NARROW_PANEL: f32 = 140.;
+const PLAN_NOTE: &str = "Wrote PLAN-sigkill.md. Today a closed terminal or a stopping runtime gets one SIGHUP and \
+nothing after it, so a shell that ignores it keeps running with its children. The plan adds a SIGKILL to the whole \
+shell session, 2 s after a terminal is closed and 500 ms after the runtime is told to stop, and a test for each. It \
+also covers what could go wrong: a shell that traps SIGHUP to save history gets its 2 s, and a process that left the \
+session on purpose, like a daemon started with setsid, is not touched. No code was changed.";
+const NUDGED_NOTE: &str = "Hook script paths are now quoted safely for any characters, and plain paths stay \
+unquoted as before. All 48 taco-services tests pass, including a new one that runs each quoted path through the \
+shell. Nothing is committed.";
+const REVIEW_MESSAGE: &str = "Review of #155: faint box lines are painted twice where a line's two halves meet, so a \
+dim border reads as dotted. Fix before merging.";
+const FIXED_MESSAGE: &str = "#155 is fixed: the arms are cut into rectangles that no longer overlap, so a faint line \
+stays solid. Tests and clippy are clean.";
+const HEADS_UP: &str = "Heads-up: main moved to 42bf29b while you were rebasing.";
+const ADDRESS: &str = "uds:/tmp/cc-socks/9838.sock";
 
 const WORKING_LOG: [FixtureEntry; 10] = [
     entry(42, ASKED, "rework the billing platform lock"),
@@ -126,6 +145,12 @@ pub enum Fixture {
     BrokenKeys,
     /// The switches one, whose settings writes are applied, so a click moves its control.
     Writable,
+    /// The quiet one whose working agent has written every kind of log line.
+    Activity,
+    /// The same with Agent Activity at its narrowest.
+    ActivityNarrow,
+    /// The same log sent a page at a time, the newest page starting inside a noted stretch.
+    Paged,
 }
 
 struct FixtureRow {
@@ -153,6 +178,9 @@ impl Fixture {
             "switches" => Some(Self::Switches),
             "brokenkeys" => Some(Self::BrokenKeys),
             "writable" => Some(Self::Writable),
+            "activity" => Some(Self::Activity),
+            "activitynarrow" => Some(Self::ActivityNarrow),
+            "paged" => Some(Self::Paged),
             _ => None,
         }
     }
@@ -167,6 +195,17 @@ impl Fixture {
             Self::Switches => switches(),
             Self::BrokenKeys => broken_keys(),
             Self::Writable => switches(),
+            Self::Activity | Self::Paged => quiet(),
+            Self::ActivityNarrow => narrow_activity(),
+        }
+    }
+
+    /// How many entries the stand-in sends in one page of a log.
+    pub(crate) fn log_page(self) -> usize {
+        match self {
+            Self::Activity | Self::ActivityNarrow => FULL_LOG_PAGE,
+            Self::Paged => CUT_LOG_PAGE,
+            _ => SHORT_LOG_PAGE,
         }
     }
 
@@ -179,7 +218,10 @@ impl Fixture {
         if self == Self::Empty {
             return BTreeMap::new();
         }
-        let working = log_of(&WORKING_LOG);
+        let mut working = log_of(&WORKING_LOG);
+        if matches!(self, Self::Activity | Self::ActivityNarrow | Self::Paged) {
+            working = full_log();
+        }
         let needs = log_of(&NEEDS_LOG);
         let done = log_of(&DONE_LOG);
         BTreeMap::from([
@@ -233,6 +275,173 @@ fn log_of(lines: &[FixtureEntry]) -> Vec<ActivityEntry> {
         });
     }
     entries
+}
+
+/// Writes a log as the workspace does: one open stretch, closed by a note and ended by a new turn.
+struct LogWriter {
+    entries: Vec<ActivityEntry>,
+    open: Option<u64>,
+    now: u64,
+}
+
+impl LogWriter {
+    fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            open: None,
+            now: now_ms(),
+        }
+    }
+
+    fn next_seq(&self) -> u64 {
+        let held = self.entries.len() as u64;
+        held + 1
+    }
+
+    fn push(&mut self, minutes_ago: u64, author: Author, kind: ActivityKind) {
+        let seq = self.next_seq();
+        let ago = minutes_ago * MS_PER_MINUTE;
+        let at_ms = self.now.saturating_sub(ago);
+        self.entries.push(ActivityEntry {
+            seq,
+            at_ms,
+            author,
+            kind,
+        });
+    }
+
+    fn asked(&mut self, minutes_ago: u64, text: &str) {
+        self.open = None;
+        let text = text.to_string();
+        self.push(minutes_ago, Author::User, ActivityKind::Asked { text });
+    }
+
+    fn session(&mut self, minutes_ago: u64, source: StartSource) {
+        self.open = None;
+        let kind = ActivityKind::SessionStarted { source };
+        self.push(minutes_ago, Author::App, kind);
+    }
+
+    fn heard(&mut self, minutes_ago: u64, from: Peer, text: &str) {
+        let text = text.to_string();
+        let kind = ActivityKind::MessageIn { text };
+        self.push(minutes_ago, Author::OtherAgent(from), kind);
+    }
+
+    fn step(&mut self, minutes_ago: u64, step: Step) {
+        let next = self.next_seq();
+        let stretch = *self.open.get_or_insert(next);
+        let kind = ActivityKind::Step { stretch, step };
+        self.push(minutes_ago, Author::App, kind);
+    }
+
+    /// A step as an earlier build wrote it, a stretch of its own.
+    fn old_step(&mut self, minutes_ago: u64, step: Step) {
+        let stretch = self.next_seq();
+        let kind = ActivityKind::Step { stretch, step };
+        self.push(minutes_ago, Author::App, kind);
+    }
+
+    fn sent(&mut self, minutes_ago: u64, to: Peer, text: &str) {
+        let next = self.next_seq();
+        let stretch = *self.open.get_or_insert(next);
+        let text = text.to_string();
+        let kind = ActivityKind::MessageOut { to, text, stretch };
+        self.push(minutes_ago, Author::Agent, kind);
+    }
+
+    fn shared(&mut self, minutes_ago: u64, thing: u64, title: &str) {
+        let title = title.to_string();
+        let kind = ActivityKind::Shared { thing, title };
+        self.push(minutes_ago, Author::Agent, kind);
+    }
+
+    fn asked_for_note(&mut self, minutes_ago: u64) {
+        self.push(minutes_ago, Author::App, ActivityKind::AskedForNote);
+    }
+
+    fn note(&mut self, minutes_ago: u64, text: &str) {
+        let stretch = self.open.take();
+        let text = text.to_string();
+        let kind = ActivityKind::Note { text, stretch };
+        self.push(minutes_ago, Author::Agent, kind);
+    }
+}
+
+fn did(tool: &str, summary: &str) -> Step {
+    Step::Did {
+        tool: tool.to_string(),
+        summary: summary.to_string(),
+    }
+}
+
+fn changed(tool: &str, path: &str) -> Step {
+    Step::Changed {
+        tool: tool.to_string(),
+        path: path.to_string(),
+    }
+}
+
+fn named(name: &str) -> Peer {
+    Peer {
+        name: Some(name.to_string()),
+        address: None,
+    }
+}
+
+fn addressed(address: &str) -> Peer {
+    Peer {
+        name: None,
+        address: Some(address.to_string()),
+    }
+}
+
+/// An earlier build's turn, then three sessions of plugin-written work: a plan, a nudged fix, a review round.
+fn full_log() -> Vec<ActivityEntry> {
+    let mut log = LogWriter::new();
+    log.asked(140, "find why test_flaky_retry fails on CI");
+    log.old_step(139, did("Glob", "tests/**/test_retry*.py"));
+    log.old_step(138, did("Read", "tests/sentry/test_retry.py"));
+    log.old_step(130, changed("Edit", "tests/sentry/test_retry.py"));
+    log.session(96, StartSource::New);
+    log.asked(
+        95,
+        "Look into what closing a terminal sends, and write a plan. No code.",
+    );
+    log.step(94, did("Read", "crates/runtime/src/pty.rs"));
+    log.step(93, did("Read", "crates/runtime/src/program.rs"));
+    log.step(92, did("Grep", "SIGHUP"));
+    log.step(92, did("Grep", "kill("));
+    log.step(91, did("Grep", "fn shutdown"));
+    log.step(88, changed("Write", "PLAN-sigkill.md"));
+    log.shared(87, 1, "SIGKILL grace-period plan");
+    log.note(87, PLAN_NOTE);
+    log.asked(70, "Quote hook script paths safely.");
+    log.step(69, did("Read", "crates/services/src/agent_hooks.rs"));
+    log.step(66, changed("Edit", "crates/services/src/agent_hooks.rs"));
+    log.step(64, did("Bash", "cargo test -p taco-services"));
+    log.asked_for_note(62);
+    log.note(61, NUDGED_NOTE);
+    log.session(50, StartSource::Compacted);
+    log.heard(49, named("code-83"), REVIEW_MESSAGE);
+    log.step(48, did("Read", "crates/terminal-view/src/shapes.rs"));
+    log.step(44, changed("Edit", "crates/terminal-view/src/shapes.rs"));
+    log.step(42, did("Bash", "cargo test -p taco-terminal-view"));
+    log.sent(40, named("code-83"), FIXED_MESSAGE);
+    log.asked(30, "Now rebase it onto main.");
+    log.step(29, did("Bash", "git fetch origin"));
+    log.step(28, did("Bash", "git rebase origin/main"));
+    log.step(20, did("Read", "crates/terminal-view/src/draw.rs"));
+    log.step(15, changed("Edit", "crates/terminal-view/src/draw.rs"));
+    log.heard(5, addressed(ADDRESS), HEADS_UP);
+    log.step(3, did("Bash", "git rebase --continue"));
+    log.entries
+}
+
+fn narrow_activity() -> Shown {
+    let mut shown = quiet();
+    shown.drawn.panels.agent_activity.size = NARROW_PANEL;
+    shown
 }
 
 fn mixed() -> Shown {

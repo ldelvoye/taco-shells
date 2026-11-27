@@ -21,7 +21,6 @@ use taco_settings::{Appearance, Config, KeymapChange, SettingChange, apply_setti
 use crate::link::{Ports, ServicesOutput, ServicesPort, WindowOutput, WindowSender, WorkspacePort};
 use crate::window::Shown;
 
-const LOG_PAGE: usize = 6;
 const CHECKOUT_HOOKS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../hooks");
 // Without a config to write into, the stand-in refuses every write.
 const REFUSED_WRITE: &str = "settings.json is read-only, so nothing was changed.";
@@ -33,6 +32,8 @@ pub struct StandIn {
     state: RefCell<DrawnState>,
     setups: RefCell<AgentSetupView>,
     logs: BTreeMap<TerminalId, Vec<ActivityEntry>>,
+    /// How many entries one page of a log holds.
+    log_page: usize,
     window: WindowSender,
     opened: Cell<u64>,
     /// The config a setting is written into and published from; none when every write is refused.
@@ -44,6 +45,7 @@ impl StandIn {
     pub fn start(
         shown: &Shown,
         logs: BTreeMap<TerminalId, Vec<ActivityEntry>>,
+        log_page: usize,
         writes: Option<Appearance>,
     ) -> Ports {
         let (window, outputs) = unbounded();
@@ -64,6 +66,7 @@ impl StandIn {
             state: RefCell::new(shown.drawn.clone()),
             setups: RefCell::new(shown.setups.clone()),
             logs,
+            log_page,
             window,
             opened: Cell::new(0),
             config,
@@ -94,7 +97,7 @@ impl StandIn {
                 kept.push(entry.clone());
             }
         }
-        let start = kept.len().saturating_sub(LOG_PAGE);
+        let start = kept.len().saturating_sub(self.log_page);
         let page = kept.split_off(start);
         let complete = kept.is_empty();
         (page, complete)
