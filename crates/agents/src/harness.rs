@@ -78,7 +78,7 @@ pub struct AgentTitle {
     pub idle: bool,
 }
 
-/// How the app wires an agent's hooks.
+/// Where an agent keeps its settings, and the names the app shows it by and finds it running under.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HarnessSetup {
     /// The agent's name in the Agents menu and the setup line: "Claude Code".
