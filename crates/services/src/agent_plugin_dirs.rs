@@ -1,6 +1,8 @@
 use std::path::Path;
 
-use crate::agent_flow::{Agent, label_of, plugin_dirs_reading, read_settings, write_settings};
+use crate::agent_flow::{
+    Agent, label_of, plugin_dirs_reading, read_settings, settings_text, write_settings,
+};
 use crate::agent_setup_state::{PluginDirs, shown_with_tilde};
 use crate::plugin_dirs::{
     Appended, PluginDirsRecord, append_folder, read_record, remove_record, restore_value,
@@ -9,9 +11,7 @@ use crate::plugin_dirs::{
 use crate::settings_edit::HookEdit;
 
 pub(crate) fn hides_plugin_folder(agent: &Agent) -> bool {
-    let read = read_settings(&agent.paths.settings_path);
-    let readable = read.ok();
-    let text = readable.flatten();
+    let text = settings_text(&agent.paths.settings_path);
     let reading = plugin_dirs_reading(agent, text.as_deref());
     matches!(reading, PluginDirs::Hides { .. })
 }
