@@ -1,7 +1,7 @@
 use std::net::Shutdown;
 use std::time::Instant;
 
-use crate::hook::Post;
+use crate::hook::Request;
 use crate::http::{connect, send_request};
 
 #[derive(Debug, PartialEq)]
@@ -12,7 +12,7 @@ pub enum PostError {
 
 pub fn post(
     port: u16,
-    request: &Post,
+    request: &Request,
     token: Option<&str>,
     deadline: Instant,
 ) -> Result<(), PostError> {
@@ -54,7 +54,7 @@ mod tests {
             received
         });
 
-        let sent = Post {
+        let sent = Request {
             route: SESSION_STATE,
             body: String::from("{\"a\":1}"),
         };
@@ -78,7 +78,7 @@ mod tests {
             received
         });
 
-        let sent = Post {
+        let sent = Request {
             route: SESSION_STATE,
             body: String::from("{}"),
         };
@@ -98,7 +98,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         drop(listener);
 
-        let sent = Post {
+        let sent = Request {
             route: SESSION_STATE,
             body: String::from("{}"),
         };
@@ -110,7 +110,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
 
-        let sent = Post {
+        let sent = Request {
             route: SESSION_STATE,
             body: String::from("{}"),
         };
@@ -132,7 +132,7 @@ mod tests {
             drop(stream);
         });
 
-        let sent = Post {
+        let sent = Request {
             route: SESSION_STATE,
             body: "x".repeat(2 * 1024 * 1024),
         };
