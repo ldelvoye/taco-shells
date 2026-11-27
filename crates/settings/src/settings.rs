@@ -1,5 +1,7 @@
 use serde_json::{Map, Value};
 
+use crate::config::SETTINGS_FILE_NAME;
+
 const THEME_REQUIREMENT: &str = "must be \"system\", \"light\" or \"dark\"";
 const FONT_FAMILY_REQUIREMENT: &str = "must be a non-empty string";
 const FONT_SIZE_REQUIREMENT: &str = "must be a number between 1 and 72";
@@ -8,7 +10,6 @@ const SCROLL_SENSITIVITY_REQUIREMENT: &str = "must be a number greater than 0";
 const BOOLEAN_REQUIREMENT: &str = "must be true or false";
 const CURSOR_STYLE_REQUIREMENT: &str = "must be \"block\", \"underline\" or \"bar\"";
 const SHELL_ROW_NAME_REQUIREMENT: &str = "must be \"folder\" or \"path\"";
-const CHECK_LABEL: &str = "settings.json";
 const SETTING_KEYS: [&str; 11] = [
     "theme",
     "fontFamily",
@@ -178,7 +179,7 @@ impl SettingChange {
         let mut layer = Map::new();
         layer.insert(key, value);
         let base = Settings::default();
-        let result = apply_settings_layer(&base, &layer, CHECK_LABEL);
+        let result = apply_settings_layer(&base, &layer, SETTINGS_FILE_NAME);
         let first_problem = result.problems.into_iter().next();
         match first_problem {
             Some(problem) => Err(problem),

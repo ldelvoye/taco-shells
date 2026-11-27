@@ -8,8 +8,8 @@ use crate::theme::Appearance;
 pub const DEFAULT_SETTINGS_TEXT: &str = include_str!("../defaults/settings.jsonc");
 pub const DEFAULT_KEYBINDINGS_TEXT: &str = include_str!("../defaults/keybindings.jsonc");
 
-const SETTINGS_LABEL: &str = "settings.json";
-const KEYBINDINGS_LABEL: &str = "keybindings.json";
+pub const SETTINGS_FILE_NAME: &str = "settings.json";
+pub const KEYBINDINGS_FILE_NAME: &str = "keybindings.json";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConfigTexts {
@@ -52,7 +52,7 @@ fn appearance_for(theme: ThemeChoice, system_is_dark: bool) -> Appearance {
 pub fn resolve_config(texts: &ConfigTexts, system_is_dark: bool) -> Config {
     let mut problems: Vec<String> = Vec::new();
 
-    let default_result = parse_jsonc(DEFAULT_KEYBINDINGS_TEXT, KEYBINDINGS_LABEL);
+    let default_result = parse_jsonc(DEFAULT_KEYBINDINGS_TEXT, KEYBINDINGS_FILE_NAME);
     problems.extend(default_result.problems);
     let default_keymap = match default_result.value {
         Some(map) => map,
@@ -62,12 +62,12 @@ pub fn resolve_config(texts: &ConfigTexts, system_is_dark: bool) -> Config {
     let mut settings = Settings::default();
     let mut unread_settings = UnreadSettings::None;
     if let Some(settings_text) = &texts.settings {
-        let user_result = parse_jsonc(settings_text, SETTINGS_LABEL);
+        let user_result = parse_jsonc(settings_text, SETTINGS_FILE_NAME);
         problems.extend(user_result.problems);
 
         match user_result.value {
             Some(user_settings) => {
-                let layer = apply_settings_layer(&settings, &user_settings, SETTINGS_LABEL);
+                let layer = apply_settings_layer(&settings, &user_settings, SETTINGS_FILE_NAME);
                 settings = layer.settings;
                 problems.extend(layer.problems);
                 if !layer.rejected.is_empty() {
@@ -81,14 +81,14 @@ pub fn resolve_config(texts: &ConfigTexts, system_is_dark: bool) -> Config {
     let mut user_keymap: Option<Map<String, Value>> = None;
     let mut unread_keybindings = false;
     if let Some(keybindings_text) = &texts.keybindings {
-        let user_result = parse_jsonc(keybindings_text, KEYBINDINGS_LABEL);
+        let user_result = parse_jsonc(keybindings_text, KEYBINDINGS_FILE_NAME);
         problems.extend(user_result.problems);
         user_keymap = user_result.value;
         unread_keybindings = user_keymap.is_none();
     }
 
-    let default_resolution = resolve_keymap(&default_keymap, None, KEYBINDINGS_LABEL);
-    let resolution = resolve_keymap(&default_keymap, user_keymap.as_ref(), KEYBINDINGS_LABEL);
+    let default_resolution = resolve_keymap(&default_keymap, None, KEYBINDINGS_FILE_NAME);
+    let resolution = resolve_keymap(&default_keymap, user_keymap.as_ref(), KEYBINDINGS_FILE_NAME);
     problems.extend(resolution.problems);
 
     let appearance = appearance_for(settings.theme, system_is_dark);
@@ -183,7 +183,7 @@ mod tests {
         assert!(config.problems.is_empty(), "{:?}", config.problems);
         assert_eq!(config.settings, Settings::default());
 
-        let parsed = parse_jsonc(DEFAULT_KEYBINDINGS_TEXT, KEYBINDINGS_LABEL);
+        let parsed = parse_jsonc(DEFAULT_KEYBINDINGS_TEXT, KEYBINDINGS_FILE_NAME);
         let keymap = parsed.value.expect("shipped keybindings parse");
         let command_ids: Vec<&str> = keymap.values().filter_map(Value::as_str).collect();
         let retired: Vec<&&str> = command_ids.iter().filter(|id| is_retired(id)).collect();

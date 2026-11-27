@@ -1,28 +1,16 @@
 use std::fs;
 use std::io::{self, ErrorKind};
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::Path;
+
+use crate::file_write::write_beside_then_rename;
 
 pub const PROGRAM_PATH: &str = "libexec/taco-shells-plugin";
 
 const PROGRAM_MODE: u32 = 0o755;
 
-static TEMPORARY_WRITES: AtomicU64 = AtomicU64::new(0);
-
 fn problem(path: &Path, action: &str, error: io::Error) -> String {
     format!("could not {action} {}: {error}", path.display())
-}
-
-fn temporary_beside(target: &Path) -> Result<PathBuf, String> {
-    let Some(name) = target.file_name() else {
-        return Err(format!("{} has no file name", target.display()));
-    };
-    let shown_name = name.to_string_lossy();
-    let process = std::process::id();
-    let counter = TEMPORARY_WRITES.fetch_add(1, Ordering::Relaxed);
-    let temporary_name = format!(".{shown_name}.{process}.{counter}.taco-tmp");
-    Ok(target.with_file_name(temporary_name))
 }
 
 fn create_parent(target: &Path) -> Result<(), String> {
@@ -42,14 +30,11 @@ fn differs(target: &Path, wanted: &[u8]) -> Result<bool, String> {
     }
 }
 
-fn rename_over(temporary: &Path, target: &Path) -> Result<(), String> {
+fn install_file(target: &Path, bytes: &[u8], mode: Option<u32>) -> Result<(), String> {
+    create_parent(target)?;
     // Written beside and renamed over, never in place: a running server may hold the old program, and macOS kills later launches of a signed program rewritten in place.
-    let renamed = fs::rename(temporary, target);
-    if let Err(error) = renamed {
-        let _ = fs::remove_file(temporary);
-        return Err(problem(target, "replace", error));
-    }
-    Ok(())
+    let written = write_beside_then_rename(target, bytes, mode);
+    written.map_err(|error| problem(target, "write", error))
 }
 
 fn refresh_text_file(target: &Path, content: &str) -> Result<bool, String> {
@@ -57,14 +42,7 @@ fn refresh_text_file(target: &Path, content: &str) -> Result<bool, String> {
     if !changed {
         return Ok(false);
     }
-    create_parent(target)?;
-    let temporary = temporary_beside(target)?;
-    let written = fs::write(&temporary, content);
-    if let Err(error) = written {
-        let _ = fs::remove_file(&temporary);
-        return Err(problem(&temporary, "write", error));
-    }
-    rename_over(&temporary, target)?;
+    install_file(target, content.as_bytes(), None)?;
     Ok(true)
 }
 
@@ -88,20 +66,7 @@ fn refresh_program(target: &Path, program: &Path) -> Result<bool, String> {
     if !changed {
         return repair_mode(target);
     }
-    create_parent(target)?;
-    let temporary = temporary_beside(target)?;
-    let copied = fs::copy(program, &temporary);
-    if let Err(error) = copied {
-        let _ = fs::remove_file(&temporary);
-        return Err(problem(&temporary, "copy the program to", error));
-    }
-    let executable = fs::Permissions::from_mode(PROGRAM_MODE);
-    let marked = fs::set_permissions(&temporary, executable);
-    if let Err(error) = marked {
-        let _ = fs::remove_file(&temporary);
-        return Err(problem(&temporary, "make executable", error));
-    }
-    rename_over(&temporary, target)?;
+    install_file(target, &wanted, Some(PROGRAM_MODE))?;
     Ok(true)
 }
 
@@ -126,6 +91,7 @@ pub fn refresh_plugin_folder(folder: &Path, program: &Path, version: &str) -> Re
 mod tests {
     use std::fs::File;
     use std::io::Read;
+    use std::path::PathBuf;
 
     use super::*;
 
