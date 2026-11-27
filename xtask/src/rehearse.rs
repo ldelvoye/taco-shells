@@ -85,11 +85,7 @@ pub fn run(options: &Options) -> Result<(), String> {
     }
     create_dir(&config)?;
 
-    let profile = if options.until_ready {
-        Profile::Debug
-    } else {
-        Profile::Release
-    };
+    let profile = profile_for(options.until_ready);
     let built = build_rust_bundle(&config, profile)?;
     let (served, installed) = match &old {
         OldApp::Electron(electron) => (built, electron.path.clone()),
@@ -167,6 +163,14 @@ impl OldApp {
             }
         }
     }
+}
+
+// The unattended run is a debug build, for speed; a person's click-through gets the release build.
+fn profile_for(until_ready: bool) -> Profile {
+    if until_ready {
+        return Profile::Debug;
+    }
+    Profile::Release
 }
 
 fn check_electron(requested: &Option<PathBuf>) -> Result<ElectronApp, String> {

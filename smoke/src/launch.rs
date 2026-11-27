@@ -63,9 +63,9 @@ pub fn runtime_pid(app_pid: u32) -> Option<u32> {
 pub fn quit(launched: Launched) {
     let mut child = launched.child;
     let pid = child.id();
-    let terminated = Command::new("kill")
-        .args(["-TERM", &pid.to_string()])
-        .status();
+    let mut kill = Command::new("kill");
+    kill.args(["-TERM", &pid.to_string()]);
+    let terminated = kill.status();
     if terminated.is_ok() && exited_within(&mut child, QUIT_DEADLINE) {
         remove_socket(&socket_path());
         return;
