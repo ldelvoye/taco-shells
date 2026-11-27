@@ -43,7 +43,7 @@ pub fn installed_path(identity: &Identity) -> PathBuf {
     install_dir.join(format!("{}.app", identity.application_name))
 }
 
-/// Copies `app` over `installed`, moving the copy it replaces to the Trash; refused by the caller while it runs.
+/// Copies `app` over `installed`, moving the copy it replaces to the Trash. The caller checks the app is not running.
 pub fn put_in_place(app: &Path, installed: &Path, identity: &Identity) -> Result<(), String> {
     let Some(install_dir) = installed.parent() else {
         return Err(format!("{} has no folder", installed.display()));

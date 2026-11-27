@@ -20,11 +20,10 @@ const NOT_COPIED: [&str; 3] = ["updates", "focus-port", "focus-token"];
 const APP_LOG: &str = "app.log";
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 const STOP_POLL: Duration = Duration::from_millis(100);
-const NOT_A_TERMINAL: &str = "this opens the stable app for you to try and waits for you to press Enter, and this has no terminal to read it from; run it in a terminal window";
+const NOT_A_TERMINAL: &str = "try-stable opens the stable app and waits for you to press Enter, but there is no terminal to read that from; run it in a terminal window";
 
-/// Opens the stable build on copies of `~/.taco-shells` and Claude Code's `settings.json`, for a person to try before
-/// promoting it. The real folders are only read. The bundle is deleted at the end, so no second copy of the stable
-/// app is left for LaunchServices.
+/// Opens the stable build on copies of `~/.taco-shells` and Claude Code's `settings.json` to try before promoting; the
+/// bundle is deleted afterwards, so LaunchServices is never left with a second copy of the stable app.
 pub fn run() -> Result<(), String> {
     if !io::stdin().is_terminal() {
         return Err(NOT_A_TERMINAL.to_string());
@@ -86,6 +85,10 @@ pub fn run() -> Result<(), String> {
 
 fn copy_config(real: &Path, copy: &Path) -> Result<(), String> {
     if !real.exists() {
+        println!(
+            "There is no {} yet, so the app starts on an empty folder.",
+            real.display()
+        );
         return create_dir(copy);
     }
     let mut ditto = Command::new("ditto");

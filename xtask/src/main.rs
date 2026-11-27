@@ -89,6 +89,9 @@ fn promote_options(rest: &[String]) -> Option<promote::Options> {
             continue;
         }
         let key = argument.strip_prefix("--key=")?;
+        if key.is_empty() {
+            return None;
+        }
         options.key = Some(PathBuf::from(key));
     }
     Some(options)

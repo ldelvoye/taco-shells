@@ -1,8 +1,8 @@
 use std::env;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -35,10 +35,39 @@ pub struct Options {
     pub key: Option<PathBuf>,
 }
 
-/// Makes the version HEAD is tagged with stable: tests it, builds the stable bundle and installs it here. With
-/// `--publish` it also signs the zip, attaches the zip, its signature and `install.sh` to that version's release, and
-/// marks it Latest. Only Lucas runs it.
+/// What a promotion has built and checked before it installs or publishes anything.
+struct Built {
+    repo_root: PathBuf,
+    tag: String,
+    version: String,
+    installed: PathBuf,
+    install_script: PathBuf,
+    app: PathBuf,
+    zip: PathBuf,
+    key: PathBuf,
+}
+
+/// Tests the tagged HEAD, builds the stable bundle and installs it here; with `--publish`, also signs it and makes its
+/// release the Latest one.
 pub fn run(options: &Options) -> Result<(), String> {
+    let built = build_and_check(options)?;
+    if options.publish {
+        return publish(&built, options.notes_file.as_deref());
+    }
+    install::put_in_place(&built.app, &built.installed, &STABLE)?;
+    println!(
+        "\nDry run: {} was not promoted on GitHub, and nothing was signed.\n\n{} is now {}, built and installed here.\n\nAdding --publish would sign {} with {}, attach it, its signature and {INSTALL_SCRIPT} to the {} release, and mark it Latest.",
+        built.tag,
+        built.installed.display(),
+        built.version,
+        built.zip.display(),
+        built.key.display(),
+        built.tag
+    );
+    Ok(())
+}
+
+fn build_and_check(options: &Options) -> Result<Built, String> {
     let repo_root = repo::root()?;
     let Some(tag) = exact_tag(&repo_root) else {
         return Err(
@@ -109,63 +138,62 @@ pub fn run(options: &Options) -> Result<(), String> {
     }
     check_stable_bundle(&repo_root, &bundled.app)?;
 
-    let mut signature = None;
-    if options.publish {
-        let signed = sign(&zip, &key, &version_text)?;
-        let allowed = allowed_signers(RELEASE_KEYS)?;
-        verify(&zip, &signed, &allowed)?;
-        signature = Some(signed);
+    Ok(Built {
+        repo_root,
+        tag,
+        version: version_text,
+        installed,
+        install_script,
+        app: bundled.app,
+        zip,
+        key,
+    })
+}
+
+fn publish(built: &Built, notes_file: Option<&Path>) -> Result<(), String> {
+    // Signed and checked against the app's own keys before anything changes, here or on GitHub.
+    let signature = sign(&built.zip, &built.key, &built.version)?;
+    let allowed = allowed_signers(RELEASE_KEYS)?;
+    verify(&built.zip, &signature, &allowed)?;
+
+    // Asked again now, since the tests and the build take minutes: a running app is left alone and updates itself
+    // from the release published below.
+    let app_updates_itself = install::is_running(&built.installed)?;
+    if !app_updates_itself {
+        install::put_in_place(&built.app, &built.installed, &STABLE)?;
     }
 
-    let handing_off = options.publish && install::is_running(&installed)?;
-    if !handing_off {
-        install::put_in_place(&bundled.app, &installed, &STABLE)?;
-    }
-
-    if !options.publish {
-        println!(
-            "\nDry run: {tag} was not promoted on GitHub, and nothing was signed.\n\n{} is now {version_text}, built and installed here.\n\nAdding --publish would sign {} with {}, attach it, its signature and {INSTALL_SCRIPT} to the {tag} release, and mark it Latest.",
-            installed.display(),
-            zip.display(),
-            key.display()
-        );
-        return Ok(());
-    }
-    let Some(signature) = signature else {
-        return Err("the zip was not signed".to_string());
-    };
-
-    let notes = release_notes(&repo_root, &tag, options.notes_file.as_deref())?;
+    let notes = release_notes(&built.repo_root, &built.tag, notes_file)?;
     let mut upload = Command::new("gh");
-    upload.args(["release", "upload", &tag]);
-    upload.arg(&install_script);
-    upload.arg(&zip);
+    upload.args(["release", "upload", &built.tag]);
+    upload.arg(&built.install_script);
+    upload.arg(&built.zip);
     upload.arg(&signature);
     upload.arg("--clobber");
-    upload.current_dir(&repo_root);
+    upload.current_dir(&built.repo_root);
     repo::run(&mut upload)?;
     let mut edit = Command::new("gh");
     edit.args([
         "release",
         "edit",
-        &tag,
+        &built.tag,
         "--prerelease=false",
         "--latest",
-        "--notes",
-        &notes,
     ]);
-    edit.current_dir(&repo_root);
+    edit.args(["--notes", &notes]);
+    edit.current_dir(&built.repo_root);
     repo::run(&mut edit)?;
 
     println!(
-        "\nPromoted {version_text}: {tag} is now Latest, carrying {INSTALL_SCRIPT}, the zip and its signature."
+        "\nPromoted {}: {} is now Latest, carrying {INSTALL_SCRIPT}, the zip and its signature.",
+        built.version, built.tag
     );
-    if !handing_off {
-        println!("Installed {}.", installed.display());
+    if !app_updates_itself {
+        println!("Installed {}.", built.installed.display());
         return Ok(());
     }
-    let accepted = ask_running_app_to_check();
-    if accepted {
+    let answered = running_app_answered_an_update_check();
+    if answered {
         println!(
             "The running app is checking for it; an Update menu appears once it has downloaded."
         );
@@ -274,11 +302,11 @@ fn allowed_signers(keys: &[&str]) -> Result<PathBuf, String> {
             .map_err(|error| format!("could not remove {}: {error}", path.display()))?;
     }
     let text = allowed_signers_text(keys);
-    let mut file = File::create(&path)
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true).mode(0o600);
+    let mut file = options
+        .open(&path)
         .map_err(|error| format!("could not create {}: {error}", path.display()))?;
-    let private = fs::Permissions::from_mode(0o600);
-    file.set_permissions(private)
-        .map_err(|error| format!("could not restrict {}: {error}", path.display()))?;
     file.write_all(text.as_bytes())
         .map_err(|error| format!("could not write {}: {error}", path.display()))?;
     Ok(path)
@@ -294,7 +322,7 @@ fn allowed_signers_text(keys: &[&str]) -> String {
     text
 }
 
-/// The app's own check, run before anything is uploaded, so a release signed with the wrong key never goes out.
+// The same check the app makes before it takes an update, so a release signed with the wrong key never goes out.
 fn verify(zip: &Path, signature: &Path, allowed: &Path) -> Result<(), String> {
     let contents =
         File::open(zip).map_err(|error| format!("could not open {}: {error}", zip.display()))?;
@@ -336,8 +364,9 @@ fn release_notes(repo_root: &Path, tag: &str, notes_file: Option<&Path>) -> Resu
     Ok(format!("{changed}\n\n{INSTALL_NOTES}"))
 }
 
-// The running stable app answers on the port it wrote into its config folder; Electron's does too.
-fn ask_running_app_to_check() -> bool {
+// Whether the running stable app answered 200 to an update check on the port it wrote into its config folder. The
+// Electron app answers the same request, which is what tells it about the first Rust release.
+fn running_app_answered_an_update_check() -> bool {
     let Some(home) = env::home_dir() else {
         return false;
     };
