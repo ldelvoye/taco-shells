@@ -41,7 +41,7 @@ impl WindowView {
             .min_w_0()
             .min_h_0()
             .child(middle);
-        let pages_open = !self.pages.is_empty();
+        let pages_open = !self.pages.open.is_empty();
         let side_strip = strip(&drawn.panels, pages_open, look, cx);
         let mut body = div().relative().flex().flex_1().min_h_0().child(side_strip);
         // A page stands alone beside the strip; the panels come back as they were when it closes.
@@ -62,7 +62,7 @@ impl WindowView {
             let place = panels.place(panel);
             body = body.child(self.panel(panel, place, drawn, mark, cx));
         }
-        if let Some((panel, edge)) = self.panel_target {
+        if let Some((panel, edge)) = self.arrangement.panel_target {
             let place = panels.place(panel);
             let size = bounded_size(edge, place.size, self.viewport);
             let preview = landing_preview(panel, edge, size, look);
@@ -71,7 +71,7 @@ impl WindowView {
         // A closed page fades out over the whole area beside the strip, uncovering the window as it was.
         let now = Instant::now();
         let reduce_motion = cx.reduce_motion();
-        if let Some((left, since)) = self.leaving {
+        if let Some((left, since)) = self.pages.leaving {
             let gone = progress(since, now, PAGE_TIME, reduce_motion);
             if gone < 1. {
                 let remaining = 1. - gone;
@@ -113,7 +113,7 @@ impl WindowView {
         let edge = place.edge;
         // A size saved in a larger window, or edited by hand, must not cover the middle.
         let mut size = bounded_size(edge, place.size, self.viewport);
-        if let Some((resized, live)) = self.resizing
+        if let Some((resized, live)) = self.arrangement.resizing
             && resized == panel
         {
             size = live;
@@ -129,7 +129,7 @@ impl WindowView {
                     drawing_checks: &drawing_checks,
                     home: self.home.as_deref(),
                     shell_row_name: self.shown.settings.shell_row_name,
-                    slot: self.slot,
+                    slot: self.arrangement.slot,
                 };
                 let list = terminal_list(&input, cx);
                 docked(panel, edge, size, list, look, cx)
@@ -144,10 +144,10 @@ impl WindowView {
                     terminal,
                     agent_row,
                     notices: &self.shown.setups.notices,
-                    log: &self.activity,
-                    folds_open: &self.folds_open,
-                    texts_open: &self.texts_open,
-                    shared_all_shown: self.shared_all_shown,
+                    log: &self.activity.log,
+                    folds_open: &self.activity.folds_open,
+                    texts_open: &self.activity.texts_open,
+                    shared_all_shown: self.activity.shared_all_shown,
                     now_ms: now_ms(),
                     look,
                 };
@@ -161,7 +161,7 @@ impl WindowView {
     fn middle(&self, drawn: &DrawnState, cx: &mut Context<Self>) -> Div {
         let look = &self.look;
         let workspace_problem = drawn.problem.as_deref();
-        let page = self.pages.last().copied();
+        let page = self.pages.open.last().copied();
         let without_config;
         let mut notices = &self.shown.notices;
         let mut banners_below = 0.;
@@ -187,12 +187,13 @@ impl WindowView {
             Some(shown) => {
                 let appeared = self.page_appeared(now, reduce_motion);
                 let drawn_page = self.page_element(shown, now, reduce_motion, cx);
-                let fading_in = drawn_page.opacity(appeared).track_focus(&self.page_focus);
+                let fading_in = drawn_page.opacity(appeared).track_focus(&self.pages.focus);
                 terminal = terminal.child(fading_in);
             }
-            None => match &self.opened {
+            None => match &self.activity.opened {
                 Some(opened) => {
-                    let thing = shared_view(opened, look, cx).track_focus(&self.opened_focus);
+                    let thing =
+                        shared_view(opened, look, cx).track_focus(&self.activity.opened_focus);
                     terminal = terminal.child(thing);
                 }
                 None => terminal = terminal.child(self.terminal_or_placeholder()),
