@@ -79,7 +79,6 @@ static SETUP: HarnessSetup = HarnessSetup {
         entry("UserPromptSubmit", SESSION_SCRIPT, true),
         entry("PreToolUse", SESSION_SCRIPT, true),
         entry("PostToolUse", SESSION_SCRIPT, true),
-        entry("PostToolUseFailure", SESSION_SCRIPT, true),
         entry("Notification", SESSION_SCRIPT, true),
         entry("Stop", SESSION_SCRIPT, true),
         entry("StopFailure", SESSION_SCRIPT, true),
@@ -347,17 +346,16 @@ fn message_out(parsed: &Value, context: StepContext) -> Option<EntryRead> {
     }
     let to = text_at(parsed, "/tool_input/to")?;
     let text = written_at(parsed, "/tool_input/message", MAX_WRITTEN_CHARACTERS)?;
-    let peer = if to.starts_with(SESSION_ADDRESS_PREFIX) {
-        Peer {
-            name: None,
-            address: Some(to),
-        }
-    } else {
-        Peer {
-            name: Some(to),
-            address: None,
-        }
+    let is_address = to.starts_with(SESSION_ADDRESS_PREFIX);
+    let mut peer = Peer {
+        name: None,
+        address: None,
     };
+    if is_address {
+        peer.address = Some(to);
+    } else {
+        peer.name = Some(to);
+    }
     Some(EntryRead::MessageOut {
         to: peer,
         text,
@@ -797,6 +795,13 @@ mod tests {
             turn: Some("turn-b".into()),
             subagent: true,
         };
+        for main_agent in [serde_json::json!(""), serde_json::Value::Null] {
+            let payload = serde_json::json!({ "tool_name": "Bash", "agent_id": main_agent });
+            assert!(
+                !step_context(&payload).subagent,
+                "an empty or null agent_id is the main agent"
+            );
+        }
         let to_name = EntryRead::MessageOut {
             to: Peer {
                 name: Some("code-78".into()),
