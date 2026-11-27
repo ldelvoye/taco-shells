@@ -353,6 +353,7 @@ fn start_hook_route(
     runtime: RuntimeClient,
     workspace: WorkspaceHost,
     activity_on: Arc<AtomicBool>,
+    setups: Arc<Slot<AgentSetups>>,
     ask_notes_on: Arc<AtomicBool>,
     window: &WindowSender,
 ) -> Sender<Routed> {
@@ -362,7 +363,18 @@ fn start_hook_route(
         runtime.ask(query)
     };
     let asking = workspace.clone();
-    let deliver = move |event| workspace.hook(event);
+    let delivering_activity_on = Arc::clone(&activity_on);
+    let deliver = move |event: HookEvent| {
+        let is_on = delivering_activity_on.load(Ordering::SeqCst);
+        if is_on {
+            // While on, only the plugin's posts get through, so any post means the plugin loaded in this terminal.
+            let setups = locked(&setups);
+            if let Some(setups) = setups.as_ref() {
+                setups.note_plugin_heard(event.terminal.clone());
+            }
+        }
+        workspace.hook(event);
+    };
     let ask = move |terminal, question| {
         let notes_on = ask_notes_on.load(Ordering::SeqCst);
         ask_workspace(question, terminal, notes_on, &asking);
@@ -434,10 +446,12 @@ impl ServicesHost {
         let updater: Arc<Slot<Updater>> = Arc::new(Mutex::new(Some(updater)));
 
         let routed_activity_on = Arc::clone(&activity_on);
+        let routed_setups = Arc::clone(&setups);
         let inbox = start_hook_route(
             runtime,
             workspace,
             routed_activity_on,
+            routed_setups,
             ask_notes_on,
             &window,
         );
