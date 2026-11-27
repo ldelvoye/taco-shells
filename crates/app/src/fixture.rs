@@ -88,7 +88,7 @@ const CHANGED: &str = "changed";
 const SHORT_LOG_PAGE: usize = 6;
 const FULL_LOG_PAGE: usize = 200;
 // The newest page must start inside a noted stretch: here, the nudged fix's second step.
-const CUT_LOG_PAGE: usize = 17;
+const CUT_LOG_PAGE: usize = 18;
 const NARROW_PANEL: f32 = 140.;
 const PLAN_NOTE: &str = "Wrote PLAN-sigkill.md. Today a closed terminal or a stopping runtime gets one SIGHUP and \
 nothing after it, so a shell that ignores it keeps running with its children. The plan adds a SIGKILL to the whole \
@@ -407,6 +407,14 @@ fn did(tool: &str, summary: &str) -> Step {
     }
 }
 
+fn failed(tool: &str, summary: &str, error: &str) -> Step {
+    Step::Did {
+        tool: tool.to_string(),
+        summary: summary.to_string(),
+        failed: Some(error.to_string()),
+    }
+}
+
 fn changed(tool: &str, path: &str) -> Step {
     Step::Changed {
         tool: tool.to_string(),
@@ -458,11 +466,26 @@ fn full_log() -> Vec<ActivityEntry> {
     log.heard(49, named("code-83"), REVIEW_MESSAGE);
     log.step(48, did("Read", "crates/terminal-view/src/shapes.rs"));
     log.step(44, changed("Edit", "crates/terminal-view/src/shapes.rs"));
+    log.step(
+        43,
+        failed(
+            "Bash",
+            "cargo test -p taco-terminal-view",
+            "Exit code 101: test shapes::faint_lines_meet ... FAILED",
+        ),
+    );
     log.step(42, did("Bash", "cargo test -p taco-terminal-view"));
     log.sent(40, named("code-83"), FIXED_MESSAGE);
     log.asked(30, "Now rebase it onto main.");
     log.step(29, did("Bash", "git fetch origin"));
-    log.step(28, did("Bash", "git rebase origin/main"));
+    log.step(
+        28,
+        failed(
+            "Bash",
+            "git rebase origin/main",
+            "Exit code 1: CONFLICT (content): Merge conflict in crates/terminal-view/src/draw.rs",
+        ),
+    );
     log.step(20, did("Read", "crates/terminal-view/src/draw.rs"));
     log.step(15, changed("Edit", "crates/terminal-view/src/draw.rs"));
     log.heard(5, addressed(ADDRESS), HEADS_UP);
