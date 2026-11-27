@@ -504,7 +504,7 @@ fn full_board() -> Board {
             20,
             Author::OtherAgent(named("code-83")),
             "Review",
-            "What Lucas approved for Agent Activity",
+            "What was approved for Agent Activity",
             link,
         ),
         thing(
