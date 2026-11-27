@@ -51,8 +51,9 @@ pub enum RuntimeCommand {
         shape: CursorShape,
         blink: bool,
     },
-    /// Whether new shells are told to load the app's agent plugin. Off until it is sent; running shells keep what they had.
-    AgentPlugin {
+    /// Whether shells started from now on get the entry named at launch for this `:`-joined variable: appended while on; while off, exactly that entry is taken out. Off until sent; running shells keep what they had.
+    ListEntry {
+        variable: String,
         on: bool,
     },
     /// A question, answered by a `RuntimeReport::Answer` carrying the same `ask`.

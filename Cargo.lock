@@ -5107,6 +5107,7 @@ dependencies = [
  "crossbeam-channel",
  "futures",
  "libc",
+ "taco-agents",
  "taco-identity",
  "taco-protocol",
  "taco-rules",

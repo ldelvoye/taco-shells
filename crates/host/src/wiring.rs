@@ -7,13 +7,14 @@ use std::time::Duration;
 
 use crossbeam_channel::{Receiver, bounded, unbounded};
 use futures::channel::mpsc;
+use taco_agents::HARNESSES;
 use taco_identity::{CURRENT, config_directory};
 use taco_protocol::{ConfigFile, HarnessId, RuntimeCommand, RuntimeReport};
 use taco_services::{
     AgentMenuAction, config_file_path, focus_port_path, plugin_directory_path, read_config_files,
 };
 use taco_settings::{Config, KeymapChange, SettingChange, resolve_config};
-use taco_wire::launch::ShellContext;
+use taco_wire::launch::{ListEntry, ShellContext};
 use taco_workspace::{FileStorage, Options};
 
 use crate::ports::{ServicesPort, WindowReceiver, WindowSender};
@@ -90,7 +91,7 @@ pub fn start(system_is_dark: bool) -> Result<Started, String> {
     let context = ShellContext {
         app: CURRENT.agent_app_name.to_string(),
         port_file: focus_port_path(&directory),
-        plugin_directory: plugin_directory_path(&directory),
+        list_entries: plugin_entries(&directory),
     };
     let started = RuntimeClient::start(&program, &context, on_event);
     let started =
@@ -176,6 +177,25 @@ fn workspace_options(directory: &Path, config: &Config) -> Options {
         storage: Box::new(storage),
         restore_on_launch: config.settings.restore_on_launch,
     }
+}
+
+fn plugin_entries(directory: &Path) -> Vec<ListEntry> {
+    let mut entries = Vec::new();
+    for harness in HARNESSES {
+        let Some(variable) = harness.plugin_variable() else {
+            continue;
+        };
+        let mut given = entries.iter();
+        let already = given.any(|entry: &ListEntry| entry.variable == variable);
+        if already {
+            continue;
+        }
+        entries.push(ListEntry {
+            variable: variable.to_string(),
+            entry: plugin_directory_path(directory),
+        });
+    }
+    entries
 }
 
 /// Forwards on one thread so each report reaches the workspace, and the services, in arrival order.

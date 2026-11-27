@@ -66,7 +66,7 @@ impl Shells for FakeShells {
     fn shell_pid(&self, id: &TerminalId) -> Option<u32> {
         self.pids.get(id).copied()
     }
-    fn set_agent_plugin(&mut self, _on: bool) {}
+    fn set_list_entry(&mut self, _variable: &str, _on: bool) {}
 }
 
 fn id(name: &str) -> TerminalId {
