@@ -47,8 +47,6 @@ pub struct Workspace {
     raw_titles: BTreeMap<TerminalId, String>,
     sessions: AgentSessions,
     panels: Panels,
-    /// The terminal the app jumps to when it is next activated.
-    waiting: Option<TerminalId>,
     refocus: u64,
     focus_count: u64,
     problem: Option<String>,
@@ -106,7 +104,6 @@ impl Workspace {
             raw_titles: BTreeMap::new(),
             sessions: AgentSessions::default(),
             panels: default_panels(),
-            waiting: None,
             refocus: 0,
             focus_count: 0,
             problem: None,
@@ -341,17 +338,6 @@ impl Workspace {
             .request(storage, request, held, current_session.as_deref())
     }
 
-    /// The app came to the front: jump to the terminal that last asked for attention.
-    pub fn app_activated(&mut self, now_ms: u64) -> Vec<Outbound> {
-        let mut out = Vec::new();
-        if let Some(waiting) = self.waiting.clone() {
-            self.change_arrangement(|arrangement| select_row(arrangement, &waiting));
-            self.refocus += 1;
-        }
-        self.finish(now_ms, &mut out);
-        out
-    }
-
     /// Closes every terminal and tells the window why; the save is frozen first.
     pub fn runtime_died(&mut self, reason: &str, now_ms: u64) -> Vec<Outbound> {
         let mut out = Vec::new();
@@ -576,9 +562,6 @@ impl Workspace {
         self.directories.remove(terminal);
         self.raw_titles.remove(terminal);
         self.rows.remove(terminal);
-        if self.waiting.as_ref() == Some(terminal) {
-            self.waiting = None;
-        }
         self.change_arrangement(|arrangement| close_row(arrangement, terminal));
     }
 
@@ -642,13 +625,6 @@ impl Workspace {
         out: &mut Vec<Outbound>,
     ) {
         match call {
-            HookCall::Attention => {
-                // asking while you are already in that terminal is not a request to go anywhere
-                let selected = selected_terminal(self.arrangement.as_ref());
-                if selected != Some(terminal) {
-                    self.waiting = Some(terminal.clone());
-                }
-            }
             HookCall::AgentStart {
                 harness,
                 session_id,
@@ -736,9 +712,6 @@ impl Workspace {
     fn finish(&mut self, now_ms: u64, out: &mut Vec<Outbound>) {
         let selected = selected_terminal(self.arrangement.as_ref()).cloned();
         apply_on_screen(&mut self.rows, selected.as_ref(), now_ms);
-        if self.waiting.is_some() && self.waiting == selected {
-            self.waiting = None;
-        }
 
         self.schedule_save(now_ms);
 

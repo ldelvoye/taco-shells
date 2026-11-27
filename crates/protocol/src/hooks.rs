@@ -19,7 +19,6 @@ pub struct HookEvent {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum HookCall {
-    Attention,
     AgentStart {
         harness: HarnessId,
         session_id: String,

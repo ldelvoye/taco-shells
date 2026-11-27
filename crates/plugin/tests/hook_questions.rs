@@ -12,7 +12,7 @@ use taco_protocol::{APP_VARIABLE, PORT_FILE_VARIABLE};
 
 const CONTEXT_ROUTE: &str = "/agent-session/context";
 const STOP_ROUTE: &str = "/agent-session/stop";
-const POST_ROUTES: [&str; 3] = ["/attention", "/agent-session/state", "/agent-session/hook"];
+const POST_ROUTES: [&str; 2] = ["/agent-session/state", "/agent-session/hook"];
 const HEAD_END: &[u8] = b"\r\n\r\n";
 const HELD_FOR: Duration = Duration::from_secs(6);
 const POLL_LIMIT: Duration = Duration::from_secs(3);

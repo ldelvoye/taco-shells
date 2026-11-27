@@ -98,14 +98,14 @@ mod tests {
         });
 
         let sent = Post {
-            route: "/attention",
+            route: "/agent-session/state",
             body: String::from("{\"a\":1}"),
         };
         post(port, &sent, Some("abc123"), soon(1000)).unwrap();
 
         let received = server.join().unwrap();
         let first_line = received.lines().next().unwrap();
-        assert_eq!(first_line, "POST /attention HTTP/1.1");
+        assert_eq!(first_line, "POST /agent-session/state HTTP/1.1");
         assert!(received.contains("\r\nX-Taco-Shells-Token: abc123\r\n"));
         assert!(received.ends_with("\r\n\r\n{\"a\":1}"));
     }
@@ -122,7 +122,7 @@ mod tests {
         });
 
         let sent = Post {
-            route: "/attention",
+            route: "/agent-session/state",
             body: String::from("{}"),
         };
         post(port, &sent, None, soon(1000)).unwrap();
@@ -142,7 +142,7 @@ mod tests {
         drop(listener);
 
         let sent = Post {
-            route: "/attention",
+            route: "/agent-session/state",
             body: String::from("{}"),
         };
         assert_eq!(post(port, &sent, None, soon(1000)), Err(PostError::Refused));
@@ -154,7 +154,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
 
         let sent = Post {
-            route: "/attention",
+            route: "/agent-session/state",
             body: String::from("{}"),
         };
         let started = Instant::now();
@@ -176,7 +176,7 @@ mod tests {
         });
 
         let sent = Post {
-            route: "/attention",
+            route: "/agent-session/state",
             body: "x".repeat(2 * 1024 * 1024),
         };
         let started = Instant::now();

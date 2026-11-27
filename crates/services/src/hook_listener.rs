@@ -19,7 +19,6 @@ use taco_protocol::{HookCall, HookMessage};
 pub const FOCUS_PORTS: std::ops::RangeInclusive<u16> = 23456..=23460;
 
 const UPDATE_CHECK_ROUTE: &str = "/update/check";
-const ATTENTION_ROUTE: &str = "/attention";
 const AGENT_START_ROUTE: &str = "/agent-session/start";
 const AGENT_END_ROUTE: &str = "/agent-session/end";
 const AGENT_STATE_ROUTE: &str = "/agent-session/state";
@@ -619,9 +618,7 @@ fn final_answer(kind: &QuestionKind, placed: Option<bool>, content: Option<Answe
 fn body_cap(route: &str) -> Option<u64> {
     match route {
         AGENT_HOOK_ROUTE | CONTEXT_ROUTE | STOP_ROUTE => Some(AGENT_HOOK_BODY_CAP),
-        ATTENTION_ROUTE | AGENT_START_ROUTE | AGENT_END_ROUTE | AGENT_STATE_ROUTE => {
-            Some(SMALL_BODY_CAP)
-        }
+        AGENT_START_ROUTE | AGENT_END_ROUTE | AGENT_STATE_ROUTE => Some(SMALL_BODY_CAP),
         _ => None,
     }
 }
@@ -640,7 +637,7 @@ fn parse_message(
     let object = value.as_object()?;
     let pids_value = object.get("pids")?;
     let pids = read_pids(pids_value)?;
-    let call = call_for(route, object)?;
+    let call = agent_call(route, object)?;
     Some(HookMessage { pids, call })
 }
 
@@ -698,13 +695,6 @@ fn read_pids(value: &Value) -> Option<Vec<u32>> {
         return None;
     }
     Some(pids)
-}
-
-fn call_for(route: &str, object: &Map<String, Value>) -> Option<HookCall> {
-    match route {
-        ATTENTION_ROUTE => Some(HookCall::Attention),
-        _ => agent_call(route, object),
-    }
 }
 
 fn agent_call(route: &str, object: &Map<String, Value>) -> Option<HookCall> {
@@ -869,6 +859,18 @@ mod tests {
         HarnessId("claude".to_string())
     }
 
+    fn end_body(pids: &str) -> String {
+        format!(r#"{{"pids":{pids},"harness":"claude","sessionId":"{SESSION}"}}"#)
+    }
+
+    fn ended(pids: Vec<u32>) -> ListenerEvent {
+        let call = HookCall::AgentEnd {
+            harness: claude(),
+            session_id: SESSION.to_string(),
+        };
+        hook(pids, call)
+    }
+
     fn next_event(receiver: &Receiver<ListenerEvent>) -> ListenerEvent {
         receiver.recv_timeout(WAIT).unwrap()
     }
@@ -879,11 +881,11 @@ mod tests {
         let status = post_with(port, "POST", path, headers, body.as_bytes());
         assert_eq!(status, 200, "{path} {body}");
 
-        let marker = br#"{"pids":[9]}"#;
-        let marked = post_with(port, "POST", ATTENTION_ROUTE, headers, marker);
+        let marker = end_body("[9]");
+        let marked = post_with(port, "POST", AGENT_END_ROUTE, headers, marker.as_bytes());
         assert_eq!(marked, 200);
         let next = next_event(&collecting.receiver);
-        assert_eq!(next, hook(vec![9], HookCall::Attention), "{path} {body}");
+        assert_eq!(next, ended(vec![9]), "{path} {body}");
     }
 
     #[test]
@@ -900,14 +902,10 @@ mod tests {
         assert_eq!(status, 200);
         assert_eq!(next_event(receiver), ListenerEvent::UpdateCheck);
 
-        post(
-            port,
-            "POST",
-            ATTENTION_ROUTE,
-            br#"{"pids":[4,"x",-1,5.5,99999999999,5]}"#,
-        );
-        let attention = next_event(receiver);
-        assert_eq!(attention, hook(vec![4, 5], HookCall::Attention));
+        let odd_pids = end_body(r#"[4,"x",-1,5.5,99999999999,5]"#);
+        post(port, "POST", AGENT_END_ROUTE, odd_pids.as_bytes());
+        let ended_session = next_event(receiver);
+        assert_eq!(ended_session, ended(vec![4, 5]));
         assert_eq!(post(port, "POST", "/focus-tab", br#"{"pids":[4]}"#), 404);
 
         let start = format!(
@@ -961,14 +959,14 @@ mod tests {
         let state = next_event(receiver);
         assert_eq!(state, hook(vec![1], needs));
 
-        expect_dropped(&collecting, ATTENTION_ROUTE, r#"{"pids":[]}"#);
+        expect_dropped(&collecting, AGENT_END_ROUTE, &end_body("[]"));
 
-        assert_eq!(post(port, "GET", ATTENTION_ROUTE, b""), 404);
+        assert_eq!(post(port, "GET", AGENT_END_ROUTE, b""), 404);
         assert_eq!(post(port, "POST", "/nope", b"{}"), 404);
         let at_cap = vec![b' '; 64 * 1024];
-        assert_eq!(post(port, "POST", ATTENTION_ROUTE, &at_cap), 200);
+        assert_eq!(post(port, "POST", AGENT_END_ROUTE, &at_cap), 200);
         let over_cap = vec![b' '; 64 * 1024 + 1];
-        assert_eq!(post(port, "POST", ATTENTION_ROUTE, &over_cap), 413);
+        assert_eq!(post(port, "POST", AGENT_END_ROUTE, &over_cap), 413);
 
         let payload = format!(
             r#"{{ "session_id": "{SESSION}", "hook_event_name": "PreToolUse", "tool_input": {{"a": [1, 2.50]}} }}"#
@@ -1003,27 +1001,30 @@ mod tests {
             hook_body.as_bytes(),
         );
         assert_eq!(refused, 403);
-        let page_attention = post_with(
+        let page_end_body = end_body("[6]");
+        let page_end = post_with(
             port,
             "POST",
-            ATTENTION_ROUTE,
+            AGENT_END_ROUTE,
             from_a_page,
-            br#"{"pids":[6]}"#,
+            page_end_body.as_bytes(),
         );
-        assert_eq!(page_attention, 403);
+        assert_eq!(page_end, 403);
         let page_check = post_with(port, "POST", UPDATE_CHECK_ROUTE, from_a_page, b"");
         assert_eq!(page_check, 403);
-        post(port, "POST", ATTENTION_ROUTE, br#"{"pids":[8]}"#);
+        let after_page_body = end_body("[8]");
+        post(port, "POST", AGENT_END_ROUTE, after_page_body.as_bytes());
         let after_page = next_event(receiver);
-        assert_eq!(after_page, hook(vec![8], HookCall::Attention));
+        assert_eq!(after_page, ended(vec![8]));
 
         let mut stalled = TcpStream::connect(("127.0.0.1", port)).unwrap();
         let stalled_head =
             format!("POST {AGENT_HOOK_ROUTE} HTTP/1.1\r\nContent-Length: 5000\r\n\r\n{{");
         stalled.write_all(stalled_head.as_bytes()).unwrap();
-        post(port, "POST", ATTENTION_ROUTE, br#"{"pids":[7]}"#);
+        let after_stall_body = end_body("[7]");
+        post(port, "POST", AGENT_END_ROUTE, after_stall_body.as_bytes());
         let after_stall = next_event(receiver);
-        assert_eq!(after_stall, hook(vec![7], HookCall::Attention));
+        assert_eq!(after_stall, ended(vec![7]));
         drop(stalled);
 
         collecting.listener.stop();
@@ -1094,11 +1095,17 @@ mod tests {
         let share = activity_post("mcp__plugin_other_activity__share");
         let status = post(port, "POST", AGENT_HOOK_ROUTE, share.as_bytes());
         assert_eq!(status, 200);
-        let marker = br#"{"pids":[9]}"#;
-        let marked = post_with(port, "POST", ATTENTION_ROUTE, &with_token, marker);
+        let marker = end_body("[9]");
+        let marked = post_with(
+            port,
+            "POST",
+            AGENT_END_ROUTE,
+            &with_token,
+            marker.as_bytes(),
+        );
         assert_eq!(marked, 200);
         let next = next_event(&receiver);
-        assert_eq!(next, hook(vec![9], HookCall::Attention));
+        assert_eq!(next, ended(vec![9]));
 
         let ordinary = activity_post("Bash");
         post_with(
@@ -1130,7 +1137,6 @@ mod tests {
             (AGENT_END_ROUTE, end),
             (AGENT_STATE_ROUTE, state),
             (AGENT_HOOK_ROUTE, hook_body),
-            (ATTENTION_ROUTE, r#"{"pids":[1]}"#.to_string()),
         ]
     }
 
@@ -1157,10 +1163,16 @@ mod tests {
             let status = post(port, "POST", route, body.as_bytes());
             assert_eq!(status, 200, "{route}");
         }
-        let marker = br#"{"pids":[9]}"#;
-        post_with(port, "POST", ATTENTION_ROUTE, &with_token, marker);
+        let marker = end_body("[9]");
+        post_with(
+            port,
+            "POST",
+            AGENT_END_ROUTE,
+            &with_token,
+            marker.as_bytes(),
+        );
         let first = next_event(&receiver);
-        assert_eq!(first, hook(vec![9], HookCall::Attention));
+        assert_eq!(first, ended(vec![9]));
 
         for (route, body) in &routes {
             let status = post_with(port, "POST", route, &with_token, body.as_bytes());
@@ -1319,7 +1331,6 @@ mod tests {
                 harness: claude(),
                 session_id: SESSION.to_string(),
             },
-            HookCall::Attention,
         ];
         assert_eq!(calls.len(), expected.len(), "{calls:?}");
         for call in &expected {
@@ -1421,18 +1432,18 @@ mod tests {
         thread::sleep(Duration::from_millis(100));
 
         let sent = Instant::now();
-        let attention = br#"{"pids":[3]}"#;
+        let end = end_body("[3]");
         let status = post_with(
             port,
             "POST",
-            ATTENTION_ROUTE,
+            AGENT_END_ROUTE,
             &questioned.token_header,
-            attention,
+            end.as_bytes(),
         );
         let post_took = sent.elapsed();
         assert_eq!(status, 200);
         assert!(post_took < Duration::from_millis(150), "{post_took:?}");
-        assert_eq!(next_event(&receiver), hook(vec![3], HookCall::Attention));
+        assert_eq!(next_event(&receiver), ended(vec![3]));
 
         let (reply, waited) = asker.join().unwrap();
         assert_eq!(reply, "{}");
@@ -1548,9 +1559,9 @@ mod tests {
             assert_eq!(reply, "{}", "{route}");
         }
 
-        let marker = br#"{"pids":[9]}"#;
+        let marker = end_body("[9]");
         let headers = &questioned.token_header;
-        post_with(port, "POST", ATTENTION_ROUTE, headers, marker);
-        assert_eq!(next_event(&receiver), hook(vec![9], HookCall::Attention));
+        post_with(port, "POST", AGENT_END_ROUTE, headers, marker.as_bytes());
+        assert_eq!(next_event(&receiver), ended(vec![9]));
     }
 }

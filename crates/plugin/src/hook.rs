@@ -7,7 +7,6 @@ use crate::panel_text::PANEL_TEXT;
 use crate::post::PostError;
 use crate::tools::TOOL_NAMES;
 
-const ATTENTION_ROUTE: &str = "/attention";
 const START_ROUTE: &str = "/agent-session/start";
 const END_ROUTE: &str = "/agent-session/end";
 const STATE_ROUTE: &str = "/agent-session/state";
@@ -260,14 +259,6 @@ pub fn posts_for(payload: &Value, pids: &[u32]) -> Vec<Post> {
         return posts;
     };
 
-    if event == "Notification" || event == "Stop" {
-        let body = json!({ "pids": pids });
-        posts.push(Post {
-            route: ATTENTION_ROUTE,
-            body: body.to_string(),
-        });
-    }
-
     let Some(session_id) = text_field(payload, "session_id") else {
         return posts;
     };
@@ -435,12 +426,8 @@ mod tests {
         let notification = run(
             r#"{"hook_event_name":"Notification","session_id":"s1","notification_type":"idle_prompt"}"#,
         );
-        assert_eq!(
-            routes(&notification),
-            [ATTENTION_ROUTE, STATE_ROUTE, HOOK_ROUTE]
-        );
-        assert_eq!(notification[0].1, json!({"pids": [42, 7]}));
-        assert_eq!(notification[1].1["detail"], "idle_prompt");
+        assert_eq!(routes(&notification), [STATE_ROUTE, HOOK_ROUTE]);
+        assert_eq!(notification[0].1["detail"], "idle_prompt");
 
         let prompt = run(r#"{"hook_event_name":"UserPromptSubmit","session_id":"s1"}"#);
         assert!(prompt[0].1.get("detail").is_none());
@@ -449,7 +436,7 @@ mod tests {
     #[test]
     fn events_without_a_session_or_a_meaning_post_little() {
         let stop_without_session = run(r#"{"hook_event_name":"Stop"}"#);
-        assert_eq!(routes(&stop_without_session), [ATTENTION_ROUTE]);
+        assert!(stop_without_session.is_empty());
 
         let unknown = run(r#"{"hook_event_name":"PreCompact","session_id":"s1"}"#);
         assert!(unknown.is_empty());
@@ -555,7 +542,7 @@ mod tests {
     fn sending_stops_at_the_first_failure() {
         let posts: Vec<Post> = (0..3)
             .map(|index| Post {
-                route: ATTENTION_ROUTE,
+                route: STATE_ROUTE,
                 body: index.to_string(),
             })
             .collect();
