@@ -1,15 +1,14 @@
 //! Made-up states the window can be drawn from.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use taco_protocol::{
-    ActivityEntry, ActivityKind, AgentLabel, AgentRow, Arrangement, Author, Board, DrawnState,
-    HarnessId, Panel, Peer, PrState, Row, RowState, SharedTarget, SharedThing, StartSource, Step,
-    TabGroup, TabGroupId, TerminalId,
+    ActivityEntry, ActivityKind, AgentSignal, Author, Board, DrawnState, HarnessId, HookCall,
+    HookEvent, Panel, Peer, PrState, RequestReply, RowState, RuntimeReport, SharedTarget,
+    SharedThing, StartSource, Step, TabGroupId, TerminalId, WorkspaceRequest,
 };
-use taco_rules::default_panels;
 use taco_services::{
     AgentMenuAction, AgentSetupNotice, AgentSetupNoticeKind, AgentSetupView, changed_file_text,
     done_text, offer_text, plugin_dirs_hidden_text, too_old_reason,
@@ -17,14 +16,18 @@ use taco_services::{
 use taco_settings::{
     Binding, ConfigTexts, SettingChange, Settings, ShellRowName, UnreadSettings, resolve_config,
 };
+use taco_workspace::{Outbound, Workspace};
 
 use crate::activity_panel::{MS_PER_MINUTE, now_ms};
 use crate::banners::Notices;
-use crate::stand_in::{PRODUCT_NAME, StandInActivity};
+use crate::stand_in::{PRODUCT_NAME, StandInActivity, delivered, home, stand_in_workspace};
 use crate::window::Shown;
 
 const CLAUDE: &str = "claude";
 const STATE_MINUTES_AGO: u64 = 52;
+const QUESTION: &str = "Can I force-push the rebased branch?";
+const NOTIFICATION: &str = "Notification";
+const PERMISSION_PROMPT: &str = "permission_prompt";
 const FONT_SIZE_PROBLEM: &str = "settings.json: \"fontSize\" must be a number between 1 and 72";
 const KEYBINDINGS_PROBLEM: &str = "keybindings.json: expected a comma at line 7";
 const OLD_VERSION: &str = "2.1.212";
@@ -203,6 +206,13 @@ struct FixtureEntry {
     text: &'static str,
 }
 
+/// Feeds the workspace what the host would, all at the instant each agent row's state began.
+struct Inputs {
+    workspace: Workspace,
+    at_ms: u64,
+    focus_moves: u64,
+}
+
 impl Fixture {
     pub fn named(name: &str) -> Option<Self> {
         match name {
@@ -229,26 +239,58 @@ impl Fixture {
         }
     }
 
-    pub(crate) fn shown(self) -> Shown {
+    pub(crate) fn workspace(self, panel: Option<f32>) -> Workspace {
+        let now = now_ms();
+        let ago = STATE_MINUTES_AGO * MS_PER_MINUTE;
+        let at_ms = now.saturating_sub(ago);
+        let mut inputs = Inputs::new(at_ms);
+        inputs.start();
+        if self == Self::Empty {
+            let opened = terminal_at(0);
+            inputs.close(&opened);
+        } else {
+            mixed_rows(&mut inputs);
+        }
         match self {
-            Self::Mixed => mixed(),
-            Self::Quiet => quiet(),
-            Self::Empty => empty(),
-            Self::Broken => broken(),
-            Self::Paths => paths(),
-            Self::Switches => switches(),
-            Self::BrokenKeys => broken_keys(),
-            Self::Writable => switches(),
-            Self::Activity | Self::Paged => quiet(),
-            Self::ActivityNarrow => narrow_activity(),
-            Self::SetupOff => setup_on_shell(offer_kind()),
-            Self::SetupTooOld => setup_on_shell(too_old_kind()),
-            Self::SetupDone => done_beside_agent(None),
-            Self::SetupDoneChanged => done_beside_agent(Some(SETTINGS_FILE)),
-            Self::SetupOffAgent => setup_beside_agent(offer_kind(), &offer_text(PRODUCT_NAME)),
-            Self::AgentNoLog => quiet(),
-            Self::SetupPluginDirs => setup_beside_agent(offer_kind(), &plugin_dirs_offer_text()),
-            Self::SetupPluginDirsNarrow => narrow_plugin_dirs_offer(),
+            Self::ActivityNarrow | Self::SetupPluginDirsNarrow => {
+                inputs.resize_activity(NARROW_PANEL);
+            }
+            Self::SetupOff | Self::SetupTooOld => {
+                let plain_shell = terminal_at(PLAIN_SHELL_ROW);
+                inputs.select(&plain_shell);
+            }
+            _ => {}
+        }
+        if let Some(size) = panel {
+            inputs.resize_activity(size);
+        }
+        inputs.workspace
+    }
+
+    pub(crate) fn shown(self, drawn: DrawnState) -> Shown {
+        match self {
+            Self::Mixed => mixed(drawn),
+            Self::Quiet => quiet(drawn),
+            Self::Empty => empty(drawn),
+            Self::Broken => broken(drawn),
+            Self::Paths => paths(drawn),
+            Self::Switches => switches(drawn),
+            Self::BrokenKeys => broken_keys(drawn),
+            Self::Writable => switches(drawn),
+            Self::Activity | Self::ActivityNarrow | Self::Paged => quiet(drawn),
+            Self::SetupOff => setup_on_shell(drawn, offer_kind()),
+            Self::SetupTooOld => setup_on_shell(drawn, too_old_kind()),
+            Self::SetupDone => done_beside_agent(drawn, None),
+            Self::SetupDoneChanged => done_beside_agent(drawn, Some(SETTINGS_FILE)),
+            Self::SetupOffAgent => {
+                let offer = offer_text(PRODUCT_NAME);
+                setup_beside_agent(drawn, offer_kind(), &offer)
+            }
+            Self::AgentNoLog => quiet(drawn),
+            Self::SetupPluginDirs | Self::SetupPluginDirsNarrow => {
+                let offer = plugin_dirs_offer_text();
+                setup_beside_agent(drawn, offer_kind(), &offer)
+            }
         }
     }
 
@@ -314,6 +356,177 @@ impl Fixture {
             (TerminalId("t2".to_string()), needs),
             (TerminalId("t3".to_string()), done),
         ])
+    }
+}
+
+impl Inputs {
+    fn new(at_ms: u64) -> Self {
+        Self {
+            workspace: stand_in_workspace(),
+            at_ms,
+            focus_moves: 0,
+        }
+    }
+
+    fn deliver(&mut self, out: Vec<Outbound>) {
+        delivered(&mut self.workspace, out, self.at_ms);
+    }
+
+    fn start(&mut self) {
+        let out = self.workspace.start(self.at_ms);
+        self.deliver(out);
+    }
+
+    fn request(&mut self, request: WorkspaceRequest) -> RequestReply {
+        let (reply, out) = self.workspace.request(request, self.at_ms);
+        self.deliver(out);
+        reply
+    }
+
+    fn report(&mut self, report: RuntimeReport) {
+        let out = self.workspace.runtime_report(report, self.at_ms);
+        self.deliver(out);
+    }
+
+    fn hook(&mut self, terminal: &TerminalId, call: HookCall) {
+        let event = HookEvent {
+            terminal: terminal.clone(),
+            call,
+        };
+        let out = self.workspace.hook(event, self.at_ms);
+        self.deliver(out);
+    }
+
+    fn select(&mut self, terminal: &TerminalId) {
+        self.focus_moves += 1;
+        let request = WorkspaceRequest::FocusReported {
+            terminal: terminal.clone(),
+            count: self.focus_moves,
+        };
+        self.request(request);
+    }
+
+    fn close(&mut self, terminal: &TerminalId) {
+        let request = WorkspaceRequest::CloseTerminal {
+            terminal: terminal.clone(),
+        };
+        self.request(request);
+    }
+
+    fn tab_group(&mut self, terminal: &TerminalId, name: &str) -> Option<TabGroupId> {
+        let created = WorkspaceRequest::TabGroupCreated {
+            terminal: terminal.clone(),
+        };
+        let reply = self.request(created);
+        let id = reply.tab_group?;
+        let renamed = WorkspaceRequest::TabGroupRenamed {
+            id: id.clone(),
+            name: name.to_string(),
+        };
+        self.request(renamed);
+        Some(id)
+    }
+
+    fn resize_activity(&mut self, size: f32) {
+        let request = WorkspaceRequest::PanelResized {
+            panel: Panel::AgentActivity,
+            size,
+        };
+        self.request(request);
+    }
+
+    fn agent(&mut self, terminal: &TerminalId, index: usize, cwd: &str, state: RowState) {
+        let session_id = format!("00000000-0000-4000-8000-{index:012}");
+        let start = HookCall::AgentStart {
+            harness: claude(),
+            session_id: session_id.clone(),
+            cwd: cwd.to_string(),
+            has_conversation: true,
+        };
+        self.hook(terminal, start);
+        if state == RowState::Needs {
+            self.permission_prompt(terminal, &session_id);
+        }
+        let signal = match state {
+            RowState::Idle => return,
+            RowState::Working => AgentSignal::Working,
+            RowState::Needs => AgentSignal::Needs,
+            RowState::Done => AgentSignal::Stopped,
+        };
+        let call = HookCall::AgentState {
+            harness: claude(),
+            session_id,
+            signal,
+        };
+        self.hook(terminal, call);
+    }
+
+    fn permission_prompt(&mut self, terminal: &TerminalId, session_id: &str) {
+        let payload = serde_json::json!({
+            "hook_event_name": NOTIFICATION,
+            "notification_type": PERMISSION_PROMPT,
+            "message": QUESTION,
+        });
+        let call = HookCall::AgentHook {
+            harness: claude(),
+            session_id: session_id.to_string(),
+            event: NOTIFICATION.to_string(),
+            payload: payload.to_string(),
+        };
+        self.hook(terminal, call);
+    }
+}
+
+fn claude() -> HarnessId {
+    HarnessId(CLAUDE.to_string())
+}
+
+fn terminal_at(index: usize) -> TerminalId {
+    TerminalId(format!("t{index}"))
+}
+
+fn mixed_rows(inputs: &mut Inputs) {
+    let mut tab_groups: BTreeMap<&str, TabGroupId> = BTreeMap::new();
+    for (index, fixture_row) in MIXED_ROWS.iter().enumerate() {
+        let terminal = terminal_at(index);
+        let opened_at_launch = index == 0;
+        if !opened_at_launch {
+            let mut tab_group = None;
+            if let Some(name) = fixture_row.tab_group {
+                tab_group = tab_groups.get(name).cloned();
+            }
+            let open = WorkspaceRequest::OpenTerminalIn { tab_group };
+            inputs.request(open);
+        }
+        let Some(name) = fixture_row.tab_group else {
+            continue;
+        };
+        if tab_groups.contains_key(name) {
+            continue;
+        }
+        if let Some(id) = inputs.tab_group(&terminal, name) {
+            tab_groups.insert(name, id);
+        }
+    }
+    let first = terminal_at(0);
+    inputs.select(&first);
+    for (index, fixture_row) in MIXED_ROWS.iter().enumerate() {
+        let terminal = terminal_at(index);
+        let directory = home().join(fixture_row.directory);
+        let directory_text = directory.to_string_lossy().into_owned();
+        let moved = RuntimeReport::DirectoryChanged {
+            id: terminal.clone(),
+            directory: directory_text.clone(),
+        };
+        inputs.report(moved);
+        let titled = RuntimeReport::Titled {
+            id: terminal.clone(),
+            title: fixture_row.title.to_string(),
+        };
+        inputs.report(titled);
+        if let Some(state) = fixture_row.state {
+            inputs.agent(&terminal, index, &directory_text, state);
+        }
     }
 }
 
@@ -651,44 +864,7 @@ fn full_board() -> Board {
     }
 }
 
-fn narrow_activity() -> Shown {
-    let mut shown = quiet();
-    let place = shown.drawn.panels.place_mut(Panel::AgentActivity);
-    place.size = NARROW_PANEL;
-    shown
-}
-
-fn mixed() -> Shown {
-    let mut drawn = empty_drawn();
-    let mut rows = Vec::new();
-    for (index, fixture_row) in MIXED_ROWS.iter().enumerate() {
-        let terminal = TerminalId(format!("t{index}"));
-        let tab_group = fixture_row
-            .tab_group
-            .map(|name| TabGroupId(name.to_string()));
-        rows.push(Row {
-            terminal: terminal.clone(),
-            title: fixture_row.title.to_string(),
-            tab_group,
-        });
-        let directory = home().join(fixture_row.directory);
-        let directory_text = directory.to_string_lossy().into_owned();
-        drawn.directories.insert(terminal.clone(), directory_text);
-        drawn.started.insert(terminal.clone());
-        if let Some(state) = fixture_row.state {
-            drawn.agent_rows.insert(terminal, agent_row(index, state));
-        }
-    }
-    let billing = TabGroup {
-        id: TabGroupId("billing".to_string()),
-        name: "billing".to_string(),
-        collapsed: false,
-    };
-    drawn.arrangement = Some(Arrangement {
-        rows,
-        selected: 0,
-        tab_groups: vec![billing],
-    });
+fn mixed(drawn: DrawnState) -> Shown {
     let notices = Notices {
         config_problems: vec!["Could not read settings.json: line 4.".to_string()],
         update: Some("0.27.0".to_string()),
@@ -708,42 +884,42 @@ fn mixed() -> Shown {
     }
 }
 
-fn quiet() -> Shown {
-    let mut shown = mixed();
+fn quiet(drawn: DrawnState) -> Shown {
+    let mut shown = mixed(drawn);
     shown.notices = Notices::default();
     shown
 }
 
-fn broken_keys() -> Shown {
-    let mut shown = quiet();
+fn broken_keys(drawn: DrawnState) -> Shown {
+    let mut shown = quiet(drawn);
     shown.notices.config_problems = vec![KEYBINDINGS_PROBLEM.to_string()];
     shown.unread_keybindings = true;
     shown
 }
 
-fn switches() -> Shown {
-    let mut shown = quiet();
+fn switches(drawn: DrawnState) -> Shown {
+    let mut shown = quiet(drawn);
     shown.settings.restore_on_launch = false;
     shown
 }
 
-fn paths() -> Shown {
-    let mut shown = quiet();
+fn paths(drawn: DrawnState) -> Shown {
+    let mut shown = quiet(drawn);
     shown.settings.shell_row_name = ShellRowName::Path;
     shown
 }
 
-fn broken() -> Shown {
-    let mut shown = quiet();
+fn broken(drawn: DrawnState) -> Shown {
+    let mut shown = quiet(drawn);
     let font_size = SettingChange::FontSize(Settings::default().font_size);
     shown.notices.config_problems = vec![FONT_SIZE_PROBLEM.to_string()];
     shown.unread = UnreadSettings::Keys(vec![font_size.key()]);
     shown
 }
 
-fn empty() -> Shown {
+fn empty(drawn: DrawnState) -> Shown {
     Shown {
-        drawn: empty_drawn(),
+        drawn,
         notices: Notices::default(),
         placeholder_screen: Vec::new(),
         setups: AgentSetupView::default(),
@@ -752,42 +928,6 @@ fn empty() -> Shown {
         unread_keybindings: false,
         settings: Settings::default(),
         unread: UnreadSettings::None,
-    }
-}
-
-fn empty_drawn() -> DrawnState {
-    let claude = AgentLabel {
-        name: "Claude Code".to_string(),
-        forks: true,
-    };
-    let agents = BTreeMap::from([(HarnessId(CLAUDE.to_string()), claude)]);
-    DrawnState {
-        revision: 1,
-        arrangement: None,
-        agent_rows: BTreeMap::new(),
-        directories: BTreeMap::new(),
-        started: BTreeSet::new(),
-        refocus: 0,
-        focus_count: 0,
-        agents,
-        default_agent_name: "Claude Code".to_string(),
-        panels: default_panels(),
-        problem: None,
-    }
-}
-
-fn agent_row(index: usize, state: RowState) -> AgentRow {
-    let mut question = None;
-    if state == RowState::Needs {
-        question = Some("Can I force-push the rebased branch?".to_string());
-    }
-    AgentRow {
-        harness: HarnessId(CLAUDE.to_string()),
-        session_id: format!("session-{index}"),
-        state,
-        state_since_ms: now_ms().saturating_sub(STATE_MINUTES_AGO * MS_PER_MINUTE),
-        has_conversation: true,
-        question,
     }
 }
 
@@ -826,24 +966,22 @@ fn one_notice(kind: AgentSetupNoticeKind, text: &str, terminal: &str) -> AgentSe
 }
 
 // The services send the offer's text in both states; a too-old Claude Code's reason rides in the kind.
-fn setup_on_shell(kind: AgentSetupNoticeKind) -> Shown {
-    let mut shown = quiet();
+fn setup_on_shell(drawn: DrawnState, kind: AgentSetupNoticeKind) -> Shown {
+    let mut shown = quiet(drawn);
     let terminal = format!("t{PLAIN_SHELL_ROW}");
     shown.setups = one_notice(kind, &offer_text(PRODUCT_NAME), &terminal);
-    if let Some(arrangement) = &mut shown.drawn.arrangement {
-        arrangement.selected = PLAIN_SHELL_ROW;
-    }
     shown
 }
 
-fn setup_beside_agent(kind: AgentSetupNoticeKind, text: &str) -> Shown {
-    let mut shown = quiet();
+fn setup_beside_agent(drawn: DrawnState, kind: AgentSetupNoticeKind, text: &str) -> Shown {
+    let mut shown = quiet(drawn);
     shown.setups = one_notice(kind, text, "t0");
     shown
 }
 
-fn done_beside_agent(changed_file: Option<&str>) -> Shown {
-    let mut shown = setup_beside_agent(AgentSetupNoticeKind::Done, &done_text(PRODUCT_NAME));
+fn done_beside_agent(drawn: DrawnState, changed_file: Option<&str>) -> Shown {
+    let done = done_text(PRODUCT_NAME);
+    let mut shown = setup_beside_agent(drawn, AgentSetupNoticeKind::Done, &done);
     let detail = changed_file.map(changed_file_text);
     for notice in &mut shown.setups.notices {
         notice.detail = detail.clone();
@@ -853,13 +991,6 @@ fn done_beside_agent(changed_file: Option<&str>) -> Shown {
 
 fn plugin_dirs_offer_text() -> String {
     plugin_dirs_hidden_text(PRODUCT_NAME, SETTINGS_FILE)
-}
-
-fn narrow_plugin_dirs_offer() -> Shown {
-    let mut shown = setup_beside_agent(offer_kind(), &plugin_dirs_offer_text());
-    let place = shown.drawn.panels.place_mut(Panel::AgentActivity);
-    place.size = NARROW_PANEL;
-    shown
 }
 
 fn offered_setup() -> AgentSetupView {
@@ -876,11 +1007,4 @@ fn offered_setup() -> AgentSetupView {
         menus: Vec::new(),
         notices: vec![notice],
     }
-}
-
-fn home() -> PathBuf {
-    let Some(home) = std::env::home_dir() else {
-        return PathBuf::from("/");
-    };
-    home
 }

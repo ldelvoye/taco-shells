@@ -19,6 +19,7 @@ render = [
     "gpui/test-support",
     "gpui_platform/test-support",
     "dep:serde_json",
+    "dep:taco-workspace",
 ]
 # The smoke tests' way into the running window. xtask never builds it into the stable app.
 drive = [
@@ -44,3 +45,4 @@ unicode-segmentation.workspace = true
 chrono.workspace = true
 taco-drive = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
+taco-workspace = { workspace = true, optional = true }
