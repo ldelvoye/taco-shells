@@ -1,7 +1,6 @@
 use serde_json::{Value, json};
 
-use crate::identity::tool_name_prefix;
-use crate::tools::TOOL_NAMES;
+use taco_agents::activity_tool_of;
 
 const SUBAGENT_REASON: &str =
     "The activity panel is the main agent's; a subagent reports back to it instead.";
@@ -11,11 +10,7 @@ pub fn permission_answer(hook_input: &str) -> Option<String> {
     let tool_value = parsed.get("tool_name")?;
     let tool_name = tool_value.as_str()?;
 
-    let prefix = tool_name_prefix();
-    let is_approved = TOOL_NAMES.iter().any(|name| {
-        let approved = format!("{prefix}{name}");
-        approved == tool_name
-    });
+    let is_approved = activity_tool_of(tool_name).is_some();
     if !is_approved {
         return None;
     }

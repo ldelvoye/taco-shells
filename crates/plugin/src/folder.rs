@@ -2,7 +2,9 @@ use std::path::PathBuf;
 
 use serde_json::{Value, json};
 
-use crate::identity::{PLUGIN_NAME, SERVER_NAME, tool_name_prefix};
+use taco_agents::{ACTIVITY_SERVER, activity_tool_prefix};
+
+use crate::identity::PLUGIN_NAME;
 
 const DESCRIPTION: &str = "Agent Activity for Taco Shells";
 
@@ -29,7 +31,7 @@ pub fn plugin_files(version: &str) -> Vec<(PathBuf, String)> {
     });
     let mcp = json!({
         "mcpServers": {
-            SERVER_NAME: {
+            ACTIVITY_SERVER: {
                 "command": "${CLAUDE_PLUGIN_ROOT}/libexec/taco-shells-plugin",
                 "args": ["mcp"],
                 // Without it the tools wait behind tool search and an agent rarely loads them.
@@ -37,7 +39,7 @@ pub fn plugin_files(version: &str) -> Vec<(PathBuf, String)> {
             }
         }
     });
-    let matcher = format!("{}.*", tool_name_prefix());
+    let matcher = format!("{}.*", activity_tool_prefix());
     let allow_group = json!({
         "matcher": matcher,
         "hooks": [{
@@ -74,7 +76,7 @@ pub fn plugin_files(version: &str) -> Vec<(PathBuf, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::TOOL_NAMES;
+    use taco_agents::ACTIVITY_TOOLS;
 
     fn parsed(files: &[(PathBuf, String)], suffix: &str) -> Value {
         let found = files.iter().find(|(path, _)| path.ends_with(suffix));
@@ -98,16 +100,18 @@ mod tests {
         assert_eq!(paths, expected_paths);
 
         let mcp = parsed(&files, ".mcp.json");
-        assert_eq!(mcp["mcpServers"][SERVER_NAME]["alwaysLoad"], true);
-        assert_eq!(mcp["mcpServers"][SERVER_NAME]["args"], json!(["mcp"]));
-        let mcp_command = mcp["mcpServers"][SERVER_NAME]["command"].as_str().unwrap();
+        assert_eq!(mcp["mcpServers"][ACTIVITY_SERVER]["alwaysLoad"], true);
+        assert_eq!(mcp["mcpServers"][ACTIVITY_SERVER]["args"], json!(["mcp"]));
+        let mcp_command = mcp["mcpServers"][ACTIVITY_SERVER]["command"]
+            .as_str()
+            .unwrap();
         assert!(mcp_command.contains("/libexec/"));
 
         let hooks = parsed(&files, "hooks.json");
         let matcher = hooks["hooks"]["PreToolUse"][0]["matcher"].as_str().unwrap();
         let matcher_prefix = matcher.strip_suffix(".*").unwrap();
-        for name in TOOL_NAMES {
-            let approved = format!("{}{name}", tool_name_prefix());
+        for name in ACTIVITY_TOOLS {
+            let approved = format!("{}{name}", activity_tool_prefix());
             assert!(approved.starts_with(matcher_prefix));
         }
 

@@ -1,3 +1,4 @@
+use taco_agents::{NOTE_TOOL, activity_tool_prefix};
 use taco_protocol::{
     ActivityEvent, ActivityKind, ActivityRequest, Author, HarnessId, HookCall, SharedTarget,
     WorkspaceRequest,
@@ -21,7 +22,7 @@ fn ran(workspace: &mut Workspace, terminal: &str, command: &str) {
 }
 
 fn noted(workspace: &mut Workspace, terminal: &str, text: &str) {
-    let tool = "mcp__plugin_taco-shells_activity__note";
+    let tool = format!("{}{NOTE_TOOL}", activity_tool_prefix());
     let payload = serde_json::json!({ "tool_name": tool, "tool_input": { "text": text } });
     tool_used(workspace, terminal, payload);
 }

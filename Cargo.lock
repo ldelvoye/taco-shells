@@ -5057,6 +5057,7 @@ name = "taco-agents"
 version = "0.0.0"
 dependencies = [
  "serde_json",
+ "taco-identity",
  "taco-protocol",
 ]
 
@@ -5125,6 +5126,7 @@ version = "0.0.0"
 dependencies = [
  "libc",
  "serde_json",
+ "taco-agents",
  "taco-identity",
  "taco-protocol",
  "tempfile",

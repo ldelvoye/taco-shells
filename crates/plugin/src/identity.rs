@@ -3,7 +3,6 @@ use taco_protocol::APP_VARIABLE;
 
 /// The plugin is named after the app it serves, which is also what its shells' `TACO_SHELLS_APP` holds.
 pub const PLUGIN_NAME: &str = CURRENT.agent_app_name;
-pub const SERVER_NAME: &str = "activity";
 pub const ENTRYPOINT_VARIABLE: &str = "CLAUDE_CODE_ENTRYPOINT";
 
 pub struct Surroundings {
@@ -17,10 +16,6 @@ impl Surroundings {
         let entrypoint = std::env::var(ENTRYPOINT_VARIABLE).ok();
         Surroundings { app, entrypoint }
     }
-}
-
-pub fn tool_name_prefix() -> String {
-    format!("mcp__plugin_{PLUGIN_NAME}_{SERVER_NAME}__")
 }
 
 pub fn serves(surroundings: &Surroundings) -> bool {

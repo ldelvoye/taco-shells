@@ -1,3 +1,4 @@
+use taco_agents::{NOW_TOOL, SHARE_TOOL, activity_tool_prefix};
 use taco_protocol::{
     ActivityEntry, ActivityEvent, ActivityKind, ActivityRequest, Author, HarnessId, HookCall,
     HookEvent, Peer, RuntimeCommand, RuntimeReport, TerminalId, TerminalStart, WorkspaceRequest,
@@ -250,7 +251,7 @@ fn prompted(
 }
 
 fn now_set(workspace: &mut Workspace, terminal: &str, text: &str) -> Vec<Outbound> {
-    let tool = "mcp__plugin_taco-shells_activity__now";
+    let tool = format!("{}{NOW_TOOL}", activity_tool_prefix());
     let payload = serde_json::json!({ "tool_name": tool, "tool_input": { "text": text } });
     let call = HookCall::AgentHook {
         harness: claude(),
@@ -262,7 +263,7 @@ fn now_set(workspace: &mut Workspace, terminal: &str, text: &str) -> Vec<Outboun
 }
 
 fn shared_by_agent(workspace: &mut Workspace, input: serde_json::Value) -> Vec<Outbound> {
-    let tool = "mcp__plugin_taco-shells_activity__share";
+    let tool = format!("{}{SHARE_TOOL}", activity_tool_prefix());
     let payload = serde_json::json!({ "tool_name": tool, "tool_input": input, "cwd": "/work" });
     let call = HookCall::AgentHook {
         harness: claude(),

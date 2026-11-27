@@ -1,10 +1,5 @@
 use serde_json::{Value, json};
-
-pub const NOTE: &str = "note";
-pub const NOW: &str = "now";
-pub const SHARE: &str = "share";
-pub const TOOL_NAMES: [&str; 3] = [NOTE, NOW, SHARE];
-pub const SHARE_KINDS: [&str; 5] = ["document", "image", "pull_request", "artifact", "other"];
+use taco_agents::{NOTE_TOOL, NOW_TOOL, SHARE_KINDS, SHARE_TOOL};
 
 fn text_tool(name: &str, description: &str) -> Value {
     let schema = json!({
@@ -33,16 +28,16 @@ fn share_tool() -> Value {
         },
         "required": ["kind", "title"],
     });
-    json!({"name": SHARE, "description": description, "inputSchema": schema})
+    json!({"name": SHARE_TOOL, "description": description, "inputSchema": schema})
 }
 
 pub fn tools() -> Vec<Value> {
     let note = text_tool(
-        NOTE,
+        NOTE_TOOL,
         "Add an entry to the user's activity log for this terminal: one or two plain sentences on what you just did, decided or found, written for the user.",
     );
     let now = text_tool(
-        NOW,
+        NOW_TOOL,
         "Set the one line the user sees for what you are on right now. Replaces the previous line. Under ten words.",
     );
     let share = share_tool();
