@@ -5,9 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    AnyWindowHandle, AppContext, HeadlessAppContext, Keystroke, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, PlatformInput, Point, Result, ScrollDelta, ScrollEvent,
-    point, px, size,
+    AnyWindowHandle, AppContext, HeadlessAppContext, Keystroke, MouseButton, Pixels, PlatformInput,
+    Point, Result, ScrollDelta, ScrollEvent, point, px, size,
 };
 use taco_settings::Appearance;
 
@@ -16,6 +15,7 @@ use crate::fixture::Fixture;
 use crate::look::Look;
 use crate::platform::TrafficLights;
 use crate::stand_in::StandIn;
+use crate::synthetic_input::{moves_through, press, release};
 use crate::text_field;
 use crate::window::WindowView;
 use crate::{WINDOW_HEIGHT, WINDOW_WIDTH};
@@ -23,7 +23,6 @@ use crate::{WINDOW_HEIGHT, WINDOW_WIDTH};
 const HEADLESS: bool = true;
 // Images load in the background, so the frame is drawn again once they have.
 const DRAWS: usize = 3;
-const DRAG_STEPS: usize = 8;
 
 /// Something done to the window before it is drawn, with points in window points.
 #[derive(Clone, Debug)]
@@ -166,37 +165,10 @@ fn move_through(
     from: Point<Pixels>,
     to: Point<Pixels>,
 ) -> Result<()> {
-    for step in 1..=DRAG_STEPS {
-        let share = step as f32 / DRAG_STEPS as f32;
-        let at = from + (to - from) * share;
-        let moved = MouseMoveEvent {
-            position: at,
-            pressed_button: Some(MouseButton::Left),
-            ..Default::default()
-        };
-        send(cx, window, PlatformInput::MouseMove(moved))?;
+    for moved in moves_through(from, to) {
+        send(cx, window, moved)?;
     }
     Ok(())
-}
-
-fn press(at: Point<Pixels>, button: MouseButton) -> PlatformInput {
-    let pressed = MouseDownEvent {
-        button,
-        position: at,
-        click_count: 1,
-        ..Default::default()
-    };
-    PlatformInput::MouseDown(pressed)
-}
-
-fn release(at: Point<Pixels>, button: MouseButton) -> PlatformInput {
-    let released = MouseUpEvent {
-        button,
-        position: at,
-        click_count: 1,
-        ..Default::default()
-    };
-    PlatformInput::MouseUp(released)
 }
 
 // Each event is hit-tested against the last frame, so a frame is drawn after every one.
