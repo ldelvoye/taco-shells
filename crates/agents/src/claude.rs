@@ -593,12 +593,12 @@ fn found_file(parsed: &Value) -> Option<Found> {
     let file = Path::new(&path);
     let extension = file.extension()?.to_str()?;
     let lowered = extension.to_lowercase();
-    let kind = if DOCUMENT_EXTENSIONS.contains(&lowered.as_str()) {
-        DOCUMENT_KIND
-    } else if IMAGE_EXTENSIONS.contains(&lowered.as_str()) {
-        IMAGE_KIND
-    } else {
-        return None;
+    let is_document = DOCUMENT_EXTENSIONS.contains(&lowered.as_str());
+    let is_image = IMAGE_EXTENSIONS.contains(&lowered.as_str());
+    let kind = match (is_document, is_image) {
+        (true, _) => DOCUMENT_KIND,
+        (false, true) => IMAGE_KIND,
+        (false, false) => return None,
     };
     let scratchpad = text_at(parsed, "/scratchpad_dir");
     let in_scratchpad = scratchpad.is_some_and(|folder| path.starts_with(&folder));
