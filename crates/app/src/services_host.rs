@@ -313,6 +313,12 @@ impl ServicesHost {
                     let _ = inbox.send(message);
                 }
             }
+            // Not yet routed: every question is answered as not one of the app's terminals, which prints nothing.
+            ListenerEvent::Question(question) => {
+                let _ = question
+                    .reply
+                    .send(taco_services::AnswerPart::Placed(false));
+            }
             ListenerEvent::UpdateCheck => {
                 let updater = locked(&checked_updater);
                 if let Some(updater) = updater.as_ref() {

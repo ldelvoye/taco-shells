@@ -24,5 +24,8 @@
   "shellRowName": "folder",
 
   // Give Claude Code the Agent Activity panel's tools and hooks in this app's terminals. Set up turns it on.
-  "agentActivity": false
+  "agentActivity": false,
+
+  // Ask an agent for a note in its activity log when it stops after real work without writing one.
+  "askForActivityNotes": true
 }

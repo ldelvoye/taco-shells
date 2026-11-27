@@ -35,7 +35,9 @@ pub use config_files::{
 };
 pub use config_store::ConfigStore;
 pub use config_writer::{ConfigChange, ConfigWriter, Refusal};
-pub use hook_listener::{FOCUS_PORTS, HookListener, ListenerEvent};
+pub use hook_listener::{
+    AnswerPart, FOCUS_PORTS, HookListener, ListenerEvent, OnDelivered, Question, QuestionKind,
+};
 pub use identity::{
     AGENT_APP_NAME, APPLICATION_NAME, CONFIG_DIRECTORY_NAME, CONFIG_DIRECTORY_VARIABLE, IS_STABLE,
     config_directory,

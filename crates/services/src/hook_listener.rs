@@ -6,6 +6,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -23,6 +24,10 @@ const AGENT_START_ROUTE: &str = "/agent-session/start";
 const AGENT_END_ROUTE: &str = "/agent-session/end";
 const AGENT_STATE_ROUTE: &str = "/agent-session/state";
 const AGENT_HOOK_ROUTE: &str = "/agent-session/hook";
+const CONTEXT_ROUTE: &str = "/agent-session/context";
+const STOP_ROUTE: &str = "/agent-session/stop";
+const NO_ANSWER: &str = "{}";
+const ANSWER_DEADLINE: Duration = Duration::from_secs(1);
 
 const SMALL_BODY_CAP: u64 = 64 * 1024;
 const AGENT_HOOK_BODY_CAP: u64 = 16 * 1024 * 1024;
@@ -41,7 +46,40 @@ type OnEvent = Box<dyn Fn(ListenerEvent) + Send + Sync>;
 #[derive(Clone, Debug, PartialEq)]
 pub enum ListenerEvent {
     Hook(HookMessage),
+    Question(Question),
     UpdateCheck,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum QuestionKind {
+    Context { source: String },
+    Stop,
+}
+
+pub enum AnswerPart {
+    Placed(bool),
+    Context(Option<String>),
+    Nudge(Option<String>, Option<OnDelivered>),
+}
+
+pub type OnDelivered = Box<dyn FnOnce() + Send>;
+
+#[derive(Clone, Debug)]
+pub struct Question {
+    pub kind: QuestionKind,
+    pub message: HookMessage,
+    pub reply: Sender<AnswerPart>,
+}
+
+impl PartialEq for Question {
+    fn eq(&self, other: &Question) -> bool {
+        self.kind == other.kind && self.message == other.message
+    }
+}
+
+struct Answer {
+    body: Value,
+    on_delivered: Option<OnDelivered>,
 }
 
 struct Head {
@@ -227,6 +265,7 @@ fn handle(
     let Some((head_bytes, leftover)) = read_head(&mut stream, deadline) else {
         return;
     };
+    let answer_by = Instant::now() + ANSWER_DEADLINE;
     let Some(head) = parse_head(&head_bytes) else {
         respond(&mut stream, 400);
         return;
@@ -273,10 +312,24 @@ fn handle(
         return;
     };
 
+    let sent_token = head.token.as_deref();
+    let is_question = head.route == CONTEXT_ROUTE || head.route == STOP_ROUTE;
+    if is_question {
+        ask_question(
+            stream,
+            &head.route,
+            sent_token,
+            &body,
+            answer_by,
+            token,
+            on_event,
+        );
+        return;
+    }
+
     // Answered before any work on the body, so a hook that blocks the agent never waits on the app.
     respond(&mut stream, 200);
 
-    let sent_token = head.token.as_deref();
     // While Agent Activity is on, every hook post comes from the plugin and carries the token; one without it is an old script or another process.
     let is_required = require_token.load(Ordering::SeqCst);
     if is_required && sent_token != Some(token) {
@@ -416,9 +469,149 @@ fn respond(stream: &mut TcpStream, status: u16) {
     let _ = stream.write_all(response.as_bytes());
 }
 
+fn respond_with_body(stream: &mut TcpStream, body: &str) -> bool {
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let _ = stream.set_write_timeout(Some(READ_DEADLINE));
+    let written = stream.write_all(response.as_bytes());
+    written.is_ok()
+}
+
+fn ask_question(
+    mut stream: TcpStream,
+    route: &str,
+    sent_token: Option<&str>,
+    body: &[u8],
+    answer_by: Instant,
+    token: &str,
+    on_event: &(dyn Fn(ListenerEvent) + Send + Sync),
+) {
+    if sent_token != Some(token) {
+        respond_with_body(&mut stream, NO_ANSWER);
+        return;
+    }
+    let Some(message) = parse_hook_message(body, sent_token, token) else {
+        respond_with_body(&mut stream, NO_ANSWER);
+        return;
+    };
+
+    let kind = question_kind(route, &message);
+    let (reply, replies) = mpsc::channel();
+    let question = Question {
+        kind: kind.clone(),
+        message,
+        reply,
+    };
+    on_event(ListenerEvent::Question(question));
+
+    // Answered off the serial loop, so a question waiting on the workspace holds up no other post.
+    thread::spawn(move || answer_question(stream, &kind, &replies, answer_by));
+}
+
+fn question_kind(route: &str, message: &HookMessage) -> QuestionKind {
+    if route == STOP_ROUTE {
+        return QuestionKind::Stop;
+    }
+    let source = payload_source(message);
+    QuestionKind::Context { source }
+}
+
+fn payload_source(message: &HookMessage) -> String {
+    let HookCall::AgentHook { payload, .. } = &message.call else {
+        return String::new();
+    };
+    let parsed: Result<Value, _> = serde_json::from_str(payload);
+    let Ok(value) = parsed else {
+        return String::new();
+    };
+    let source = value.get("source").and_then(Value::as_str);
+    match source {
+        Some(text) => text.to_string(),
+        None => String::new(),
+    }
+}
+
+fn answer_question(
+    mut stream: TcpStream,
+    kind: &QuestionKind,
+    replies: &Receiver<AnswerPart>,
+    answer_by: Instant,
+) {
+    let mut placed = false;
+    let mut complete = None;
+    loop {
+        let left = answer_by.saturating_duration_since(Instant::now());
+        let Ok(part) = replies.recv_timeout(left) else {
+            break;
+        };
+        if let AnswerPart::Placed(is_placed) = part {
+            placed = is_placed;
+            if !placed {
+                break;
+            }
+            continue;
+        }
+        if !placed {
+            continue;
+        }
+        complete = complete_answer(kind, part);
+        if complete.is_some() {
+            break;
+        }
+    }
+
+    let answer = match complete {
+        Some(answer) => answer,
+        None => unfinished_answer(kind, placed),
+    };
+    let body = answer.body.to_string();
+    let written = respond_with_body(&mut stream, &body);
+    let in_time = Instant::now() <= answer_by;
+    let delivered = written && in_time;
+    if delivered && let Some(on_delivered) = answer.on_delivered {
+        on_delivered();
+    }
+}
+
+fn complete_answer(kind: &QuestionKind, part: AnswerPart) -> Option<Answer> {
+    match (kind, part) {
+        (QuestionKind::Context { .. }, AnswerPart::Context(Some(text))) => Some(Answer {
+            body: serde_json::json!({"yours": true, "context": text}),
+            on_delivered: None,
+        }),
+        (QuestionKind::Context { .. }, AnswerPart::Context(None)) => Some(Answer {
+            body: serde_json::json!({"yours": true}),
+            on_delivered: None,
+        }),
+        (QuestionKind::Stop, AnswerPart::Nudge(Some(reason), on_delivered)) => Some(Answer {
+            body: serde_json::json!({"reason": reason}),
+            on_delivered,
+        }),
+        (QuestionKind::Stop, AnswerPart::Nudge(None, _)) => Some(Answer {
+            body: serde_json::json!({}),
+            on_delivered: None,
+        }),
+        _ => None,
+    }
+}
+
+fn unfinished_answer(kind: &QuestionKind, placed: bool) -> Answer {
+    let is_context = matches!(kind, QuestionKind::Context { .. });
+    let mut body = serde_json::json!({});
+    if placed && is_context {
+        body = serde_json::json!({"yours": true});
+    }
+    Answer {
+        body,
+        on_delivered: None,
+    }
+}
+
 fn body_cap(route: &str) -> Option<u64> {
     match route {
-        AGENT_HOOK_ROUTE => Some(AGENT_HOOK_BODY_CAP),
+        AGENT_HOOK_ROUTE | CONTEXT_ROUTE | STOP_ROUTE => Some(AGENT_HOOK_BODY_CAP),
         ATTENTION_ROUTE | AGENT_START_ROUTE | AGENT_END_ROUTE | AGENT_STATE_ROUTE => {
             Some(SMALL_BODY_CAP)
         }
@@ -595,6 +788,17 @@ mod tests {
     }
 
     fn post_with(port: u16, method: &str, path: &str, extra_headers: &str, body: &[u8]) -> u16 {
+        let (status, _) = post_for_reply(port, method, path, extra_headers, body);
+        status
+    }
+
+    fn post_for_reply(
+        port: u16,
+        method: &str,
+        path: &str,
+        extra_headers: &str,
+        body: &[u8],
+    ) -> (u16, String) {
         let head = format!(
             "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{extra_headers}Content-Length: {}\r\nConnection: close\r\n\r\n",
             body.len()
@@ -608,7 +812,8 @@ mod tests {
         let _ = stream.read_to_end(&mut reply);
         let text = String::from_utf8_lossy(&reply);
         let status = text.split_whitespace().nth(1).unwrap();
-        status.parse().unwrap()
+        let reply_body = text.split("\r\n\r\n").nth(1).unwrap_or_default();
+        (status.parse().unwrap(), reply_body.to_string())
     }
 
     fn token_not_required() -> Arc<AtomicBool> {
@@ -1190,5 +1395,199 @@ mod tests {
             "UserPromptSubmit",
         ];
         assert_eq!(hook_events, names);
+    }
+
+    struct Questioned {
+        _listener: HookListener,
+        port: u16,
+        token_header: String,
+        _directory: tempfile::TempDir,
+    }
+
+    fn start_questioned(on_event: impl Fn(ListenerEvent) + Send + Sync + 'static) -> Questioned {
+        let directory = tempfile::tempdir().unwrap();
+        let listener = HookListener::start_on(
+            &[0],
+            directory.path().join("focus-port"),
+            TEST_DEADLINE,
+            token_not_required(),
+            Box::new(on_event),
+        );
+        let port = listener.port().unwrap();
+        let token = fs::read_to_string(directory.path().join("focus-token")).unwrap();
+        Questioned {
+            _listener: listener,
+            port,
+            token_header: format!("X-Taco-Shells-Token: {token}\r\n"),
+            _directory: directory,
+        }
+    }
+
+    fn question_body() -> String {
+        let payload = serde_json::json!({
+            "session_id": SESSION,
+            "hook_event_name": "SessionStart",
+            "source": "resume",
+        });
+        let body = serde_json::json!({"pids": [1], "harness": "claude", "payload": payload});
+        body.to_string()
+    }
+
+    fn ask(questioned: &Questioned, route: &str) -> (String, Duration) {
+        let started = Instant::now();
+        let body = question_body();
+        let headers = &questioned.token_header;
+        let (status, reply) =
+            post_for_reply(questioned.port, "POST", route, headers, body.as_bytes());
+        assert_eq!(status, 200);
+        (reply, started.elapsed())
+    }
+
+    fn answering(parts: fn() -> Vec<AnswerPart>) -> impl Fn(ListenerEvent) + Send + Sync + 'static {
+        let kept = Mutex::new(Vec::new());
+        move |event| {
+            let ListenerEvent::Question(question) = event else {
+                return;
+            };
+            for part in parts() {
+                let _ = question.reply.send(part);
+            }
+            kept.lock().unwrap().push(question.reply);
+        }
+    }
+
+    fn wait_until(flag: &AtomicBool) -> bool {
+        let give_up = Instant::now() + WAIT;
+        while Instant::now() < give_up {
+            if flag.load(Ordering::SeqCst) {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        false
+    }
+
+    #[test]
+    fn a_waiting_question_holds_up_no_other_post() {
+        let held = Arc::new(Mutex::new(Vec::new()));
+        let keeper = Arc::clone(&held);
+        let (sender, receiver) = mpsc::channel();
+        let questioned = start_questioned(move |event| match event {
+            ListenerEvent::Question(question) => keeper.lock().unwrap().push(question.reply),
+            other => {
+                let _ = sender.send(other);
+            }
+        });
+
+        let port = questioned.port;
+        let headers = questioned.token_header.clone();
+        let asker = thread::spawn(move || {
+            let started = Instant::now();
+            let body = question_body();
+            let (_, reply) = post_for_reply(port, "POST", CONTEXT_ROUTE, &headers, body.as_bytes());
+            (reply, started.elapsed())
+        });
+        thread::sleep(Duration::from_millis(200));
+
+        let status = post(port, "POST", ATTENTION_ROUTE, br#"{"pids":[3]}"#);
+        assert_eq!(status, 200);
+        assert_eq!(next_event(&receiver), hook(vec![3], HookCall::Attention));
+
+        let (reply, waited) = asker.join().unwrap();
+        assert_eq!(reply, "{}");
+        let seconds = waited.as_secs_f64();
+        assert!((0.8..1.5).contains(&seconds), "{seconds}");
+    }
+
+    #[test]
+    fn a_context_question_is_answered_as_soon_as_it_is_complete() {
+        let with_context = start_questioned(answering(|| {
+            vec![
+                AnswerPart::Placed(true),
+                AnswerPart::Context(Some("hello".to_string())),
+            ]
+        }));
+        let (reply, waited) = ask(&with_context, CONTEXT_ROUTE);
+        assert_eq!(reply, r#"{"yours":true,"context":"hello"}"#);
+        assert!(waited < Duration::from_millis(500), "{waited:?}");
+
+        let placed_only = start_questioned(answering(|| vec![AnswerPart::Placed(true)]));
+        let (reply, waited) = ask(&placed_only, CONTEXT_ROUTE);
+        assert_eq!(reply, r#"{"yours":true}"#);
+        assert!(waited > Duration::from_millis(800), "{waited:?}");
+
+        let elsewhere = start_questioned(answering(|| vec![AnswerPart::Placed(false)]));
+        let (reply, waited) = ask(&elsewhere, CONTEXT_ROUTE);
+        assert_eq!(reply, "{}");
+        assert!(waited < Duration::from_millis(500), "{waited:?}");
+    }
+
+    #[test]
+    fn a_stop_question_runs_on_delivered_only_when_the_reason_arrived_in_time() {
+        let delivered = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&delivered);
+        let in_time = start_questioned(move |event| {
+            let ListenerEvent::Question(question) = event else {
+                return;
+            };
+            let flag = Arc::clone(&flag);
+            let on_delivered: OnDelivered = Box::new(move || flag.store(true, Ordering::SeqCst));
+            let _ = question.reply.send(AnswerPart::Placed(true));
+            let nudge = AnswerPart::Nudge(Some("write a note".to_string()), Some(on_delivered));
+            let _ = question.reply.send(nudge);
+        });
+        let (reply, _) = ask(&in_time, STOP_ROUTE);
+        assert_eq!(reply, r#"{"reason":"write a note"}"#);
+        assert!(wait_until(&delivered));
+
+        let late_delivered = Arc::new(AtomicBool::new(false));
+        let late_flag = Arc::clone(&late_delivered);
+        let late_sender: Arc<Mutex<Option<JoinHandle<()>>>> = Arc::new(Mutex::new(None));
+        let late_slot = Arc::clone(&late_sender);
+        let late = start_questioned(move |event| {
+            let ListenerEvent::Question(question) = event else {
+                return;
+            };
+            let flag = Arc::clone(&late_flag);
+            let sender = thread::spawn(move || {
+                let on_delivered: OnDelivered =
+                    Box::new(move || flag.store(true, Ordering::SeqCst));
+                let _ = question.reply.send(AnswerPart::Placed(true));
+                thread::sleep(Duration::from_millis(1200));
+                let nudge = AnswerPart::Nudge(Some("too late".to_string()), Some(on_delivered));
+                let _ = question.reply.send(nudge);
+            });
+            *late_slot.lock().unwrap() = Some(sender);
+        });
+        let (reply, _) = ask(&late, STOP_ROUTE);
+        assert_eq!(reply, "{}");
+        let sender = late_sender.lock().unwrap().take().unwrap();
+        sender.join().unwrap();
+        assert!(!late_delivered.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_question_without_the_token_gets_nothing_and_raises_no_event() {
+        let (sender, receiver) = mpsc::channel();
+        let questioned = start_questioned(move |event| {
+            let _ = sender.send(event);
+        });
+        let port = questioned.port;
+        let body = question_body();
+
+        for route in [CONTEXT_ROUTE, STOP_ROUTE] {
+            let started = Instant::now();
+            let (status, reply) = post_for_reply(port, "POST", route, "", body.as_bytes());
+            assert_eq!(status, 200, "{route}");
+            assert_eq!(reply, "{}", "{route}");
+            assert!(started.elapsed() < Duration::from_millis(500), "{route}");
+
+            let wrong = "X-Taco-Shells-Token: nope\r\n";
+            let (_, reply) = post_for_reply(port, "POST", route, wrong, body.as_bytes());
+            assert_eq!(reply, "{}", "{route}");
+        }
+
+        post(port, "POST", ATTENTION_ROUTE, br#"{"pids":[9]}"#);
+        assert_eq!(next_event(&receiver), hook(vec![9], HookCall::Attention));
     }
 }
