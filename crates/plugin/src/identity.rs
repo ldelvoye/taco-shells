@@ -4,6 +4,10 @@ use taco_protocol::APP_VARIABLE;
 pub const PLUGIN_NAME: &str = "taco-shells";
 #[cfg(not(taco_stable))]
 pub const PLUGIN_NAME: &str = "taco-shells-dev";
+#[cfg(taco_stable)]
+pub const CONFIG_FOLDER: &str = ".taco-shells";
+#[cfg(not(taco_stable))]
+pub const CONFIG_FOLDER: &str = ".taco-shells-dev";
 
 pub const SERVER_NAME: &str = "activity";
 pub const ENTRYPOINT_VARIABLE: &str = "CLAUDE_CODE_ENTRYPOINT";
