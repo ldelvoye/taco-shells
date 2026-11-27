@@ -70,6 +70,9 @@ pub fn run() -> Result<(), String> {
         "Your real ~/{} and ~/{CLAUDE_FOLDER} are not touched.",
         STABLE.config_directory_name
     );
+    println!(
+        "An agent started in its terminals runs against the copied Claude folder, so it may look signed out or have no history. That is the copy, not a fault."
+    );
     println!("Look it over, then press Enter here to quit it.");
     let mut answer = String::new();
     let _ = io::stdin().read_line(&mut answer);
