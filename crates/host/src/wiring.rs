@@ -21,7 +21,7 @@ use taco_settings::{
 };
 use taco_workspace::{FileStorage, Options};
 
-use crate::link::{ServicesPort, WindowReceiver};
+use crate::ports::{ServicesPort, WindowReceiver};
 use crate::runtime_client::{RuntimeClient, RuntimeEvent, ShellContext};
 use crate::services_host::ServicesHost;
 use crate::workspace_host::{RuntimeCommands, WorkspaceHost, new_terminal_id};

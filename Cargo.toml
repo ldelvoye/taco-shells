@@ -21,6 +21,7 @@ taco-drive = { path = "crates/drive" }
 taco-ghostty = { path = "crates/ghostty" }
 taco-plugin = { path = "crates/plugin" }
 taco-identity = { path = "crates/identity" }
+taco-host = { path = "crates/host" }
 
 serde = { version = "1", features = ["derive"] }
 # preserve_order: key bindings layer, and problems are listed, in the order the user's file has them.

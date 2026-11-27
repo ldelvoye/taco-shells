@@ -20,7 +20,7 @@ use taco_services::{
 };
 use taco_settings::{Config, KeymapChange, SettingChange};
 
-use crate::link::{ServicesOutput, WindowOutput, WindowSender};
+use crate::ports::{ServicesOutput, WindowOutput, WindowSender};
 use crate::runtime_client::RuntimeClient;
 use crate::workspace_host::WorkspaceHost;
 

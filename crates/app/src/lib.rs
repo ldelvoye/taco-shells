@@ -23,8 +23,6 @@ mod popups;
 #[cfg(feature = "render")]
 pub mod render;
 mod row_name;
-pub mod runtime_client;
-pub mod services_host;
 mod settings_page;
 mod shared_view;
 mod shell;
@@ -37,8 +35,6 @@ mod terminal_list;
 mod text_field;
 mod title_bar;
 mod window;
-mod wiring;
-pub mod workspace_host;
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -49,6 +45,7 @@ use gpui::{
     AnyWindowHandle, App, AppContext, Bounds, Context, Global, IntoElement, PromptLevel, Render,
     TitlebarOptions, Window, WindowAppearance, WindowBounds, WindowOptions, div, px, size,
 };
+use taco_host::wiring::{self, Hosts, Started, nothing_drawn, shut_down};
 use taco_identity::CURRENT;
 use taco_services::AgentSetupView;
 use taco_settings::{Appearance, Config, palette_for};
@@ -63,7 +60,6 @@ use crate::link::Ports;
 use crate::look::Look;
 use crate::platform::TrafficLights;
 use crate::window::{Shown, WindowView};
-use crate::wiring::{Hosts, Started, nothing_drawn, shut_down};
 
 const WINDOW_WIDTH: f32 = 1100.;
 const WINDOW_HEIGHT: f32 = 720.;

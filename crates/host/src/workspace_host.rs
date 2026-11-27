@@ -12,7 +12,7 @@ use taco_protocol::{
 use taco_workspace::{Options, Outbound, Workspace};
 use uuid::Uuid;
 
-use crate::link::{WindowOutput, WindowSender, WorkspacePort};
+use crate::ports::{WindowOutput, WindowSender, WorkspacePort};
 
 /// What the host sends the runtime; the runtime client in the app, and a fake in tests.
 pub trait RuntimeCommands: Send + 'static {
@@ -304,7 +304,7 @@ mod tests {
     use taco_workspace::{Options, Storage};
 
     use super::{RuntimeCommands, WorkspaceHost, new_terminal_id};
-    use crate::link::{WindowOutput, WorkspacePort};
+    use crate::ports::{WindowOutput, WorkspacePort};
 
     #[derive(Clone, Default)]
     struct Commands(Arc<Mutex<Vec<RuntimeCommand>>>);

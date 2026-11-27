@@ -9,6 +9,7 @@ use gpui::{
     KeyDownEvent, ParentElement, Pixels, Point, Render, Size, Styled, Subscription, Task, Window,
     div, px,
 };
+use taco_host::{ServicesOutput, ServicesPort, WindowOutput, WorkspacePort};
 use taco_protocol::{
     ActivityEvent, DrawnState, DropPlace, Edge, Panel, TabGroupId, TerminalId, WorkspaceRequest,
 };
@@ -21,9 +22,7 @@ use crate::activity_log::ActivityLog;
 use crate::addresses::{TERMINAL_SCHEMES, may_open};
 use crate::banners::{Dismissal, Notices};
 use crate::done_checks::DoneChecks;
-use crate::link::{
-    Ahead, Ports, ServicesOutput, ServicesPort, WindowOutput, WorkspacePort, drawn_with, next_move,
-};
+use crate::link::{Ahead, Ports, drawn_with, next_move};
 use crate::look::{FONT_FAMILY, Look, TEXT_SIZE};
 use crate::menu::{AgentMenuClicked, Minimize, Quit, RestartToUpdate, Zoom, set_menus};
 use crate::middle::Attachable;

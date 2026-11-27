@@ -5065,25 +5065,21 @@ name = "taco-app"
 version = "0.0.0"
 dependencies = [
  "chrono",
- "crossbeam-channel",
  "futures",
  "gpui",
  "gpui_platform",
  "image",
  "libc",
  "serde_json",
- "taco-agents",
  "taco-drive",
+ "taco-host",
  "taco-identity",
  "taco-protocol",
  "taco-rules",
  "taco-services",
  "taco-settings",
  "taco-terminal-view",
- "taco-wire",
- "taco-workspace",
  "unicode-segmentation",
- "uuid",
 ]
 
 [[package]]
@@ -5100,6 +5096,23 @@ version = "0.0.0"
 dependencies = [
  "bindgen",
  "taco-protocol",
+]
+
+[[package]]
+name = "taco-host"
+version = "0.0.0"
+dependencies = [
+ "crossbeam-channel",
+ "futures",
+ "libc",
+ "taco-identity",
+ "taco-protocol",
+ "taco-rules",
+ "taco-services",
+ "taco-settings",
+ "taco-wire",
+ "taco-workspace",
+ "uuid",
 ]
 
 [[package]]
