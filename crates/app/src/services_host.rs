@@ -427,6 +427,7 @@ impl ServicesHost {
         let inbox = start_hook_route(runtime, workspace, ask_notes_on, &window);
         let hook_inbox: Arc<Slot<Sender<Routed>>> = Arc::new(Mutex::new(Some(inbox)));
         let routed_inbox = Arc::clone(&hook_inbox);
+        let asked_activity_on = Arc::clone(&activity_on);
         let checked_updater = Arc::clone(&updater);
         let on_event = move |event| match event {
             ListenerEvent::Hook(message) => {
@@ -436,6 +437,11 @@ impl ServicesHost {
                 }
             }
             ListenerEvent::Question(question) => {
+                // A shell started while Agent Activity was on still loads the plugin; once it is off, no agent is told about the panel.
+                if !asked_activity_on.load(Ordering::SeqCst) {
+                    let _ = question.reply.send(AnswerPart::Placed(false));
+                    return;
+                }
                 let inbox = locked(&routed_inbox);
                 if let Some(inbox) = inbox.as_ref() {
                     let _ = inbox.send(Routed::Question(question));
@@ -733,7 +739,7 @@ mod tests {
     }
 
     #[test]
-    fn a_question_is_resolved_after_the_posts_queued_before_it() {
+    fn a_question_is_asked_after_the_posts_queued_before_it_are_delivered() {
         let (inbox, messages) = unbounded();
         let (asked, _replies) = question(2);
         inbox.send(Routed::Post(message(1, "a"))).unwrap();
@@ -741,23 +747,28 @@ mod tests {
         inbox.send(Routed::Post(message(3, "b"))).unwrap();
         drop(inbox);
 
-        let resolved = Arc::new(Mutex::new(Vec::new()));
-        let resolved_in_route = Arc::clone(&resolved);
-        let resolve = move |pids: Vec<u32>| {
-            let mut resolved = resolved_in_route.lock().unwrap();
-            resolved.push(pids[0]);
-            placed_unless_pid_is_12(pids)
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let delivered_log = Arc::clone(&log);
+        let deliver = move |event: HookEvent| {
+            let mut log = delivered_log.lock().unwrap();
+            log.push(format!("deliver {}", event.terminal.0));
+        };
+        let asked_log = Arc::clone(&log);
+        let ask = move |terminal: TerminalId, _: Question| {
+            let mut log = asked_log.lock().unwrap();
+            log.push(format!("ask {}", terminal.0));
         };
         route_hooks(
             messages,
             SHORT_ANSWER_WAIT,
             SHORT_ANSWER_WAIT,
-            resolve,
-            |_| {},
-            no_ask,
+            placed_unless_pid_is_12,
+            deliver,
+            ask,
         );
 
-        assert_eq!(*resolved.lock().unwrap(), vec![1, 2, 3]);
+        let expected = vec!["deliver terminal-1", "ask terminal-2", "deliver terminal-3"];
+        assert_eq!(*log.lock().unwrap(), expected);
     }
 
     #[test]

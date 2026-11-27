@@ -4,9 +4,9 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use taco_plugin::{
-    ANCESTOR_LIMIT, Post, Question, Surroundings, ancestor_pids, ask, permission_answer, post,
-    posts_for, question_for, read_port, read_token, send_posts, serve, serves,
-    session_start_output, stop_output,
+    ANCESTOR_LIMIT, CONTEXT_ROUTE, Post, Question, Surroundings, ancestor_pids, ask,
+    permission_answer, post, posts_for, question_for, read_port, read_token, send_posts, serve,
+    serves, session_start_output, stop_output,
 };
 use taco_protocol::PORT_FILE_VARIABLE;
 
@@ -32,17 +32,6 @@ fn run_allow() -> std::io::Result<()> {
         stdout.flush()?;
     }
     Ok(())
-}
-
-fn event_name(payload: &serde_json::Value) -> String {
-    let name = payload.get("hook_event_name");
-    let Some(name) = name else {
-        return String::new();
-    };
-    let Some(text) = name.as_str() else {
-        return String::new();
-    };
-    text.to_string()
 }
 
 fn send_all(posts: &[Post], port: u16, token: Option<&str>) {
@@ -92,8 +81,7 @@ fn run_hook() -> std::io::Result<()> {
         send_all(&posts, port, token_text);
         return Ok(());
     };
-    let event = event_name(&payload);
-    if event == "SessionStart" {
+    if question.route == CONTEXT_ROUTE {
         send_all(&posts, port, token_text);
         let answer = ask_question(port, &question, token_text);
         if let Some(answer) = answer
@@ -118,7 +106,7 @@ fn run_hook() -> std::io::Result<()> {
 
 fn main() -> ExitCode {
     let mode = std::env::args().nth(1);
-    // A hook never fails the agent: every outcome exits 0, and its posts give up after the hook's deadline.
+    // A hook never fails the agent: every outcome exits 0, and its posts and question give up after their deadlines.
     if mode.as_deref() == Some("hook") {
         let _ = run_hook();
         return ExitCode::SUCCESS;

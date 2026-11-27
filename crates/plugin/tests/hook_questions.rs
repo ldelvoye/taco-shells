@@ -7,7 +7,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
-use taco_plugin::PLUGIN_NAME;
+use taco_plugin::{PANEL_TEXT, PLUGIN_NAME};
 use taco_protocol::{APP_VARIABLE, PORT_FILE_VARIABLE};
 
 const CONTEXT_ROUTE: &str = "/agent-session/context";
@@ -16,6 +16,9 @@ const POST_ROUTES: [&str; 3] = ["/attention", "/agent-session/state", "/agent-se
 const HEAD_END: &[u8] = b"\r\n\r\n";
 const HELD_FOR: Duration = Duration::from_secs(6);
 const POLL_LIMIT: Duration = Duration::from_secs(3);
+const START_ROUTE: &str = "/agent-session/start";
+
+type Arrivals = Mutex<Vec<(usize, String)>>;
 
 #[derive(Clone, Copy)]
 enum Reply {
@@ -55,18 +58,26 @@ fn content_length(head: &str) -> usize {
     for line in head.lines() {
         let lowered = line.to_ascii_lowercase();
         if let Some(value) = lowered.strip_prefix("content-length:") {
-            return value.trim().parse().unwrap_or(0);
+            let parsed = value.trim().parse::<usize>();
+            let Ok(length) = parsed else {
+                return 0;
+            };
+            return length;
         }
     }
     0
 }
 
-fn handle(mut stream: TcpStream, reply: Reply, routes: &Mutex<Vec<String>>) {
+fn handle(mut stream: TcpStream, reply: Reply, arrival: usize, routes: &Arrivals) {
     let Some(request_line) = read_request(&mut stream) else {
         return;
     };
-    let route = request_line.split(' ').nth(1).unwrap_or("").to_string();
-    routes.lock().unwrap().push(route.clone());
+    let mut parts = request_line.split(' ');
+    let route = match parts.nth(1) {
+        Some(found) => found.to_string(),
+        None => String::new(),
+    };
+    routes.lock().unwrap().push((arrival, route.clone()));
     let is_question = route == CONTEXT_ROUTE || route == STOP_ROUTE;
     if !is_question {
         return;
@@ -83,18 +94,21 @@ fn handle(mut stream: TcpStream, reply: Reply, routes: &Mutex<Vec<String>>) {
     }
 }
 
-fn stand_in(reply: Reply) -> (u16, Arc<Mutex<Vec<String>>>) {
+fn stand_in(reply: Reply) -> (u16, Arc<Arrivals>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let routes = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&routes);
     thread::spawn(move || {
+        let mut accepted = 0;
         for stream in listener.incoming() {
             let Ok(stream) = stream else {
                 continue;
             };
+            let arrival = accepted;
+            accepted += 1;
             let seen = Arc::clone(&seen);
-            thread::spawn(move || handle(stream, reply, &seen));
+            thread::spawn(move || handle(stream, reply, arrival, &seen));
         }
     });
     (port, routes)
@@ -135,11 +149,13 @@ fn stop_payload() -> Value {
     json!({"hook_event_name": "Stop", "session_id": "s1"})
 }
 
-fn seen_routes(routes: &Mutex<Vec<String>>) -> Vec<String> {
-    routes.lock().unwrap().clone()
+fn seen_routes(routes: &Arrivals) -> Vec<String> {
+    let mut arrivals = routes.lock().unwrap().clone();
+    arrivals.sort();
+    arrivals.into_iter().map(|(_, route)| route).collect()
 }
 
-fn wait_for_posts(routes: &Mutex<Vec<String>>) -> Vec<String> {
+fn wait_for_posts(routes: &Arrivals) -> Vec<String> {
     let started = Instant::now();
     loop {
         let seen = seen_routes(routes);
@@ -224,6 +240,39 @@ fn a_session_start_the_app_does_not_claim_prints_nothing() {
 
     assert_eq!(output.status_code, Some(0));
     assert_eq!(output.stdout, "");
+}
+
+#[test]
+fn a_claimed_session_start_prints_the_panel_and_hand_back_after_its_own_post() {
+    let directory = tempfile::tempdir().unwrap();
+    let (port, routes) = stand_in(Reply::Json(
+        r#"{"yours":true,"context":"Earlier: fixed the build"}"#,
+    ));
+    write_port_files(directory.path(), port);
+    let payload = json!({
+        "hook_event_name": "SessionStart",
+        "session_id": "s1",
+        "cwd": "/work",
+        "source": "startup",
+    });
+
+    let output = run_hook(directory.path(), &payload);
+
+    assert_eq!(output.status_code, Some(0));
+    assert!(output.stdout.ends_with('\n'));
+    assert_eq!(output.stdout.lines().count(), 1);
+    let printed: Value = serde_json::from_str(&output.stdout).unwrap();
+    let specific = &printed["hookSpecificOutput"];
+    assert_eq!(specific["hookEventName"], "SessionStart");
+    let expected = format!("{PANEL_TEXT}\n\nEarlier: fixed the build");
+    assert_eq!(specific["additionalContext"], expected.as_str());
+    let seen = seen_routes(&routes);
+    let started = seen.iter().position(|route| route == START_ROUTE);
+    let asked = seen.iter().position(|route| route == CONTEXT_ROUTE);
+    let (Some(started), Some(asked)) = (started, asked) else {
+        panic!("expected the start post and the context question, saw {seen:?}");
+    };
+    assert!(started < asked);
 }
 
 #[test]
