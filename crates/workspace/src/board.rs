@@ -4,6 +4,8 @@ use taco_protocol::{Author, Board, PrState, SharedTarget, SharedThing};
 
 /// How many things Shared keeps; the oldest goes as a new one comes.
 pub const KEPT_THINGS: usize = 100;
+/// The state file this build writes. A file with no version is one from before versions, read as this one.
+const STATE_VERSION: u64 = 1;
 
 /// What seeing a pull request did to Shared.
 #[derive(Debug, PartialEq)]
@@ -48,21 +50,43 @@ pub struct TerminalBoard {
     pub next_thing: u64,
 }
 
+#[derive(Deserialize)]
+struct StateFile {
+    version: Option<u64>,
+    #[serde(flatten)]
+    board: TerminalBoard,
+}
+
+#[derive(Serialize)]
+struct StateFileWritten<'a> {
+    version: u64,
+    #[serde(flatten)]
+    board: &'a TerminalBoard,
+}
+
 impl TerminalBoard {
-    /// The board a state file holds; an unreadable file is an empty board.
+    /// The board a state file holds; an unreadable file, or one a newer build wrote, is an empty board.
     pub fn from_text(text: Option<String>) -> TerminalBoard {
         let Some(text) = text else {
             return TerminalBoard::default();
         };
-        let parsed: Result<TerminalBoard, _> = serde_json::from_str(&text);
-        let Ok(board) = parsed else {
+        let parsed: Result<StateFile, _> = serde_json::from_str(&text);
+        let Ok(file) = parsed else {
             return TerminalBoard::default();
         };
-        board
+        let written_by_another_build = file.version.is_some_and(|version| version != STATE_VERSION);
+        if written_by_another_build {
+            return TerminalBoard::default();
+        }
+        file.board
     }
 
     pub fn text(&self) -> Option<String> {
-        serde_json::to_string(self).ok()
+        let file = StateFileWritten {
+            version: STATE_VERSION,
+            board: self,
+        };
+        serde_json::to_string(&file).ok()
     }
 
     /// The board the panel shows while `session` is the terminal's agent session: a now line from another session is hidden.
@@ -257,6 +281,37 @@ mod tests {
             body: Some("é".repeat(3)),
             at_ms: 0,
         }
+    }
+
+    // A state file as this build writes it, with a now line and every kind of target. Renaming a variant or a field
+    // would empty a user's Shared without a word, so the file must read back whole and unchanged.
+    const STORED_STATE: &str = concat!(
+        r#"{"version":1,"now":{"session_id":"s1","text":"Fixing the logo"},"shared":["#,
+        r##"{"thing":{"id":4,"at_ms":50,"by":"App","kind":"Pull request","title":"#12 o/r","target":{"PullRequest":{"url":"https://github.com/o/r/pull/12","number":12,"state":"Draft","checked_ms":51}}},"body":null},"##,
+        r##"{"thing":{"id":3,"at_ms":40,"by":"Agent","kind":"Pull request","title":"#7","target":{"PullRequest":{"url":null,"number":7,"state":"Merged","checked_ms":null}}},"body":null},"##,
+        r#"{"thing":{"id":2,"at_ms":30,"by":"Agent","kind":"Artifact","title":"Choices","target":{"Link":{"url":"https://claude.ai/artifact/abc"}}},"body":null},"#,
+        r#"{"thing":{"id":1,"at_ms":20,"by":"App","kind":"Document","title":"PLAN.md","target":{"File":{"path":"/w/PLAN.md"}}},"body":null},"#,
+        r#"{"thing":{"id":0,"at_ms":10,"by":"Agent","kind":"Note","title":"Finding","target":{"Text":{"characters":5}}},"body":"Found"}"#,
+        r#"],"next_thing":5}"#,
+    );
+
+    #[test]
+    fn a_state_file_this_build_wrote_reads_back_whole_and_one_from_a_newer_build_reads_as_empty() {
+        let board = TerminalBoard::from_text(Some(STORED_STATE.into()));
+        assert_eq!(board.text().as_deref(), Some(STORED_STATE));
+        for state in ["Open", "Closed"] {
+            let stored = STORED_STATE.replace("Draft", state);
+            let read = TerminalBoard::from_text(Some(stored.clone()));
+            assert_eq!(read.text(), Some(stored), "{state}");
+        }
+        let before_versions = STORED_STATE.replace(r#""version":1,"#, "");
+        let read = TerminalBoard::from_text(Some(before_versions));
+        assert_eq!(read, board, "a file from before versions");
+        let newer = STORED_STATE.replace(r#""version":1"#, r#""version":2"#);
+        assert_eq!(
+            TerminalBoard::from_text(Some(newer)),
+            TerminalBoard::default()
+        );
     }
 
     #[test]

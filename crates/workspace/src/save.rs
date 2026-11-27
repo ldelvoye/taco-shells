@@ -389,6 +389,26 @@ mod tests {
         rows.collect()
     }
 
+    // A save as this build writes it, with an agent, a tab group and both panels. Renaming a field or a panel's
+    // value would lose a user's terminals or layout without a word, so the file must read back whole and unchanged.
+    const STORED_SAVE: &str = concat!(
+        r#"{"version":2,"rows":["#,
+        r#"{"id":"t1","directory":"/w","agent":{"harness":"claude","sessionId":"123e4567-e89b-12d3-a456-426614174000","cwd":"/w/tacos"},"tabGroup":0},"#,
+        r#"{"id":"t2","directory":null,"agent":null,"tabGroup":null}"#,
+        r#"],"selected":1,"tabGroups":[{"name":"Tacos","collapsed":true}],"panels":{"#,
+        r#""terminals":{"edge":"Left","open":true,"size":210.0},"#,
+        r#""agent_activity":{"edge":"Bottom","open":false,"size":340.5}}}"#,
+    );
+
+    #[test]
+    fn a_save_this_build_wrote_reads_back_whole_and_writes_the_same_text() {
+        let saved = read_saved(STORED_SAVE).unwrap();
+        assert_eq!(saved_text(&saved), STORED_SAVE);
+        let on_the_right = STORED_SAVE.replace("Bottom", "Right");
+        let saved = read_saved(&on_the_right).unwrap();
+        assert_eq!(saved_text(&saved), on_the_right);
+    }
+
     #[test]
     fn an_electron_save_becomes_one_row_per_pane_in_order_with_its_colors_dropped() {
         let saved = read_saved(ELECTRON_FILE).unwrap();
