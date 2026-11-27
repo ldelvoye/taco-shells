@@ -6,7 +6,10 @@ use gpui::{
     Context, Div, ElementId, Entity, FontWeight, InteractiveElement, MouseButton, ParentElement,
     SharedString, Stateful, StatefulInteractiveElement, Styled, div, px,
 };
-use taco_settings::{Binding, Chord, CommandId, KeymapChange, command_for};
+use taco_settings::{
+    Binding, Chord, CommandId, KeymapChange, chords_for, command_for, differs_from_defaults,
+    file_chord_text, modifier_spelling,
+};
 
 use crate::drive::mark;
 use crate::look::{Look, SMALL_TEXT_SIZE};
@@ -77,14 +80,6 @@ const GROUPS: [(&str, &[(CommandId, &str)]); 3] = [
             (CommandId::ConfigOpenKeybindings, "Keyboard shortcuts"),
         ],
     ),
-];
-
-/// Query words for a modifier, as the file spells it: "alt" and "option" search as "opt".
-const MODIFIER_WORDS: [(&str, &str); 4] = [
-    ("alt", "opt"),
-    ("option", "opt"),
-    ("command", "cmd"),
-    ("control", "ctrl"),
 ];
 
 // Keys that type no character.
@@ -186,7 +181,7 @@ pub fn shortcuts_page(input: &ShortcutsInput, cx: &mut Context<WindowView>) -> D
                 continue;
             }
             let defaults = chords_for(input.defaults, command);
-            let changed = differs(&chords, &defaults);
+            let changed = differs_from_defaults(&chords, &defaults);
             let row = Row {
                 command,
                 name,
@@ -510,43 +505,6 @@ fn foot(look: &Look, cx: &mut Context<WindowView>) -> Div {
     page_foot(FOOT_TEXT, open, look)
 }
 
-/// The command's chords, in the order the keymap holds them.
-pub fn chords_for(bindings: &[Binding], command: CommandId) -> Vec<Chord> {
-    let mut chords = Vec::new();
-    for binding in bindings {
-        if binding.command == command {
-            chords.push(binding.chord.clone());
-        }
-    }
-    chords
-}
-
-/// Whether a command's chords are not its defaults, in any order.
-fn differs(chords: &[Chord], defaults: &[Chord]) -> bool {
-    let same_count = chords.len() == defaults.len();
-    let all_default = chords.iter().all(|chord| defaults.contains(chord));
-    !(same_count && all_default)
-}
-
-/// A chord as the file spells it, with "opt" for the option key: "cmd+opt+left".
-fn file_spelling(chord: &Chord) -> String {
-    let mut parts = Vec::new();
-    if chord.cmd {
-        parts.push("cmd");
-    }
-    if chord.ctrl {
-        parts.push("ctrl");
-    }
-    if chord.alt {
-        parts.push("opt");
-    }
-    if chord.shift {
-        parts.push("shift");
-    }
-    parts.push(chord.key.as_str());
-    parts.join("+")
-}
-
 /// Whether the normalized query finds a command by its name or by a chord in the file's spelling.
 fn is_found(wanted: &str, name: &str, chords: &[Chord]) -> bool {
     if wanted.is_empty() {
@@ -557,7 +515,7 @@ fn is_found(wanted: &str, name: &str, chords: &[Chord]) -> bool {
         return true;
     }
     for chord in chords {
-        let spelled = file_spelling(chord);
+        let spelled = file_chord_text(chord);
         if spelled.contains(wanted) {
             return true;
         }
@@ -569,10 +527,9 @@ fn normalized_query(query: &str) -> String {
     let lower = query.trim().to_lowercase();
     let mut parts = Vec::new();
     for part in lower.split('+') {
-        let mut words = MODIFIER_WORDS.iter();
-        let renamed = words.find(|(said, _)| *said == part);
+        let renamed = modifier_spelling(part);
         match renamed {
-            Some((_, spelled)) => parts.push(spelled.to_string()),
+            Some(spelled) => parts.push(spelled.to_string()),
             None => parts.push(part.to_string()),
         }
     }
@@ -727,15 +684,5 @@ mod tests {
         assert!(finds("alt+left", "Back a word", &word_left));
         assert!(finds("option+left", "Back a word", &word_left));
         assert!(!finds("cmd+j", "Clear", &clear));
-    }
-
-    #[test]
-    fn back_to_default_shows_only_when_the_chords_are_not_the_defaults() {
-        let both = [chord("cmd+t"), chord("cmd+n")];
-        let reversed = [chord("cmd+n"), chord("cmd+t")];
-        let one = [chord("cmd+t")];
-        assert!(!differs(&reversed, &both));
-        assert!(differs(&one, &both));
-        assert!(differs(&both, &one));
     }
 }
