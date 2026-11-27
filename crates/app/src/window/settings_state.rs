@@ -12,8 +12,9 @@ use crate::motion::{
     DrawnBounds, LONGEST_SETTING_MOVE, Moved, SWITCH_TIME, card_name, progress, switch_amount,
     switch_value,
 };
-use crate::settings_page::{SettingsFields, Typed, TypedSetting, published_text, typed};
+use crate::settings_page::SettingsFields;
 use crate::text_field::{TextField, TextFieldEvent};
+use crate::typed_setting::{Typed, TypedSetting, published_text, typed};
 
 const NOT_WHOLE: &str = "Scrollback must be a whole number.";
 const TYPED_SETTINGS: [TypedSetting; 2] = [TypedSetting::Font, TypedSetting::Scrollback];
