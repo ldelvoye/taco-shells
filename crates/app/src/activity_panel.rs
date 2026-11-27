@@ -27,6 +27,7 @@ use crate::window::WindowView;
 const SCROLL_ID: &str = "activity-scroll";
 const OLDER_ID: &str = "activity-older";
 const SHELL_TEXT: &str = "No agent here, just a shell.";
+const EMPTY_LOG_TEXT: &str = "Nothing in this agent's log yet.";
 const NEEDS_HEADING: &str = "Needs you.";
 const SET_UP_LABEL: &str = "Set up";
 const SHOW_OLDER: &str = "Show older";
@@ -425,9 +426,10 @@ fn question_card(question: &str, look: &Look) -> Div {
         .child(question.to_string())
 }
 
-// Only an outcome is drawn beside an agent: an offer or the too-old line would contradict the log under it.
+// A row becomes an agent row from its title alone, hooks or not, so the offer has to draw beside one: that is the
+// terminal it is for.
 fn shows_beside_agent(line: &NoAgentLine) -> bool {
-    matches!(line, NoAgentLine::Outcome { .. })
+    !matches!(line, NoAgentLine::Shell)
 }
 
 fn card(look: &Look) -> Div {
@@ -571,6 +573,13 @@ fn log_section(input: &ActivityInput, row: &AgentRow, cx: &mut Context<WindowVie
     }
     let agent_working = matches!(row.state, RowState::Working | RowState::Needs);
     let items = log_items(input.log, agent_working);
+    if items.is_empty() {
+        let nothing = div()
+            .pt(px(ITEM_PADDING))
+            .text_color(look.secondary_text)
+            .child(EMPTY_LOG_TEXT);
+        section = section.child(nothing);
+    }
     for item in &items {
         let shown = item_element(item, input, cx);
         section = section.child(shown);
@@ -1261,7 +1270,8 @@ mod tests {
             text: text.clone(),
         };
         assert_eq!(no_agent_line(&here, &[offer]), expected);
-        assert!(!shows_beside_agent(&expected));
+        assert!(shows_beside_agent(&expected));
+        assert!(!shows_beside_agent(&NoAgentLine::Shell));
 
         let unavailable = notice(unavailable, "here");
         let expected = NoAgentLine::Unavailable {
@@ -1269,7 +1279,7 @@ mod tests {
             reason,
         };
         assert_eq!(no_agent_line(&here, &[unavailable]), expected);
-        assert!(!shows_beside_agent(&expected));
+        assert!(shows_beside_agent(&expected));
 
         for kind in [AgentSetupNoticeKind::Done, AgentSetupNoticeKind::Problem] {
             let outcome = notice(kind, "here");

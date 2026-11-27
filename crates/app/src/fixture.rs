@@ -178,6 +178,10 @@ pub enum Fixture {
     SetupTooOld,
     /// The activity one just after Set up, with the hint above the running agent's log.
     SetupDone,
+    /// Agent Activity off, and an agent known only by its title, with nothing in its log: the offer shows beside it.
+    SetupOffAgent,
+    /// Agent Activity on, and an agent known only by its title, with nothing in its log yet.
+    AgentNoLog,
 }
 
 struct FixtureRow {
@@ -211,6 +215,8 @@ impl Fixture {
             "setupoff" => Some(Self::SetupOff),
             "setuptooold" => Some(Self::SetupTooOld),
             "setupdone" => Some(Self::SetupDone),
+            "setupoffagent" => Some(Self::SetupOffAgent),
+            "agentnolog" => Some(Self::AgentNoLog),
             _ => None,
         }
     }
@@ -230,6 +236,8 @@ impl Fixture {
             Self::SetupOff => setup_on_shell(offer_kind()),
             Self::SetupTooOld => setup_on_shell(too_old_kind()),
             Self::SetupDone => setup_beside_agent(AgentSetupNoticeKind::Done, DONE_TEXT),
+            Self::SetupOffAgent => setup_beside_agent(offer_kind(), OFFER_TEXT),
+            Self::AgentNoLog => quiet(),
         }
     }
 
@@ -271,6 +279,9 @@ impl Fixture {
         let mut working = log_of(&WORKING_LOG);
         if full {
             working = full_log();
+        }
+        if matches!(self, Self::SetupOffAgent | Self::AgentNoLog) {
+            working = Vec::new();
         }
         let needs = log_of(&NEEDS_LOG);
         let done = log_of(&DONE_LOG);
