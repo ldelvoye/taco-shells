@@ -13,7 +13,9 @@ use taco_protocol::{
 };
 use taco_rules::default_panels;
 use taco_services::{AgentMenuAction, config_directory, config_file_path, read_config_texts};
-use taco_settings::{Config, CursorStyle, SettingChange, palette_for, resolve_config};
+use taco_settings::{
+    Config, CursorStyle, KeymapChange, SettingChange, palette_for, resolve_config,
+};
 use taco_workspace::{FileStorage, Options};
 
 use crate::link::{ServicesPort, WindowReceiver};
@@ -67,6 +69,10 @@ impl ServicesPort for ServicesHost {
 
     fn write_setting(&self, change: SettingChange) {
         ServicesHost::write_setting(self, change);
+    }
+
+    fn write_keybinding(&self, change: KeymapChange) {
+        ServicesHost::write_keybinding(self, change);
     }
 }
 

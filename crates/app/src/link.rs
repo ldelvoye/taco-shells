@@ -11,7 +11,7 @@ use taco_protocol::{
 };
 use taco_rules::{locate_row, select_row};
 use taco_services::{AgentMenuAction, AgentSetupView};
-use taco_settings::{CommandId, Config, SettingChange};
+use taco_settings::{CommandId, Config, KeymapChange, SettingChange};
 use taco_terminal_view::Terminals;
 
 pub type WindowSender = UnboundedSender<WindowOutput>;
@@ -32,6 +32,8 @@ pub trait ServicesPort {
     fn hooks_directory(&self) -> PathBuf;
     /// Answered by the next `Config` when it lands, or by `SettingRefused` when it does not.
     fn write_setting(&self, change: SettingChange);
+    /// Answered by the next `Config` when it lands, or by `KeymapRefused` when it does not.
+    fn write_keybinding(&self, change: KeymapChange);
 }
 
 /// What the window sends to, receives from, and tells of a new config.

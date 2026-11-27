@@ -19,7 +19,7 @@ const BEFORE_LAUNCH: [Check; 1] = [Check {
     run: bundle::holds_only_dev_names,
 }];
 
-const LAUNCHED: [LaunchedCheck; 9] = [
+const LAUNCHED: [LaunchedCheck; 10] = [
     LaunchedCheck {
         name: "the window draws rows",
         run: window::draws_rows,
@@ -39,6 +39,10 @@ const LAUNCHED: [LaunchedCheck; 9] = [
     LaunchedCheck {
         name: "a scrollback typed on the settings page is written to settings.json",
         run: window::a_typed_scrollback_is_written_to_the_settings_file,
+    },
+    LaunchedCheck {
+        name: "a shortcut set by pressing keys on its row is written to keybindings.json",
+        run: window::a_shortcut_set_by_pressing_keys_is_written_to_the_keybindings_file,
     },
     LaunchedCheck {
         name: "every marked part of the window has bounds, and nothing else does",
