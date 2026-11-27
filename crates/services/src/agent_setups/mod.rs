@@ -54,6 +54,11 @@ pub(crate) struct SetupFiles {
     pub(crate) app_version: String,
 }
 
+struct SetUpOutcome {
+    problems: Vec<String>,
+    changed_file: Option<String>,
+}
+
 struct Reading<'a> {
     agent: &'a Agent,
     state: AgentSetupState,
@@ -285,14 +290,13 @@ fn refresh_plugin(shared: &Shared) -> Vec<String> {
     problems
 }
 
-fn set_up(
-    shared: &Arc<Shared>,
-    agent: &Agent,
-    state: &AgentSetupState,
-) -> (Vec<String>, Option<String>) {
+fn set_up(shared: &Arc<Shared>, agent: &Agent, state: &AgentSetupState) -> SetUpOutcome {
     let mut problems = refresh_plugin(shared);
     if !problems.is_empty() {
-        return (problems, None);
+        return SetUpOutcome {
+            problems,
+            changed_file: None,
+        };
     }
     // The click is the user's own consent, so a development build may make this one write into the agent's settings.
     if *state == AgentSetupState::OldSetup {
@@ -309,7 +313,10 @@ fn set_up(
             Ok(written) => changed_file = written,
             Err(problem) => {
                 problems.push(problem);
-                return (problems, None);
+                return SetUpOutcome {
+                    problems,
+                    changed_file: None,
+                };
             }
         }
     }
@@ -324,7 +331,10 @@ fn set_up(
         problems.push(NO_TOKEN_PROBLEM.to_string());
     }
     check_version(shared);
-    (problems, changed_file)
+    SetUpOutcome {
+        problems,
+        changed_file,
+    }
 }
 
 impl AgentSetups {
@@ -556,8 +566,8 @@ impl AgentSetups {
         let fresh = agent_menu_of(&state, product_name);
         // The menu may have changed since it was drawn, so a click acts only if it would still be offered.
         if fresh.enabled && fresh.action == clicked {
-            let (problems, changed_file) = set_up(&self.shared, agent, &state);
-            let recorded = recorded_of(problems, changed_file);
+            let outcome = set_up(&self.shared, agent, &state);
+            let recorded = recorded_of(outcome.problems, outcome.changed_file);
             let mut shared_state = lock(&self.shared.state);
             shared_state.recorded.insert(harness.clone(), recorded);
         }
