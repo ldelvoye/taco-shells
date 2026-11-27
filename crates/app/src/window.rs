@@ -11,8 +11,9 @@ use gpui::{
     size,
 };
 use taco_protocol::{
-    ActivityRequest, ConfigFile, Dragged, DrawnState, DropPlace, Edge, FocusMove, HarnessId, Panel,
-    PanelPlace, RequestReply, TabGroupId, TerminalId, WorkspaceRequest,
+    ActivityEvent, ActivityRequest, ConfigFile, Dragged, DrawnState, DropPlace, Edge, FocusMove,
+    HarnessId, Panel, PanelPlace, RequestReply, SharedTarget, SharedThing, TabGroupId, TerminalId,
+    WorkspaceRequest,
 };
 use taco_rules::{DropMark, DropPoint, drop_for, drop_mark_for, focus_target, selected_terminal};
 use taco_services::{AgentMenuAction, AgentSetupView};
@@ -50,6 +51,7 @@ use crate::popups::{Popup, RenameStep, popup_layer, rename_step};
 use crate::settings_page::{
     SettingsFields, SettingsInput, Typed, TypedSetting, published_text, settings_page, typed,
 };
+use crate::shared_view::{Content, OpenedThing, body_content, file_content, is_https, shared_view};
 use crate::shortcuts_page::{
     Capture, Pressed, SEARCH_PLACEHOLDER, ShortcutsInput, capture_still_open, change_for, pressed,
     shortcuts_page,
@@ -157,6 +159,11 @@ pub struct WindowView {
     leaving: Option<(Page, Instant)>,
     /// The last page has just closed and the terminal on screen takes the keyboard back.
     terminal_wants_keyboard: bool,
+    /// A shared thing shown in the middle in place of the terminal, under any page.
+    opened: Option<OpenedThing>,
+    opened_focus: FocusHandle,
+    /// The thing has just opened and takes the keyboard on the next frame.
+    opened_wants_keyboard: bool,
     /// Why each setting's last write was refused, by its name in settings.json, until it is written again.
     refused: HashMap<&'static str, String>,
 }
@@ -269,6 +276,9 @@ impl WindowView {
             page_since: None,
             leaving: None,
             terminal_wants_keyboard: false,
+            opened: None,
+            opened_focus: cx.focus_handle(),
+            opened_wants_keyboard: false,
             refused: HashMap::new(),
         }
     }
@@ -291,6 +301,14 @@ impl WindowView {
             WindowOutput::Replied { token, reply } => self.replied(token, reply, cx),
             // Through `Quit`, not `cx.quit()`, so everything behind the window is stopped in order first.
             WindowOutput::Emptied => cx.dispatch_action(&Quit),
+            WindowOutput::Activity(ActivityEvent::Body {
+                terminal,
+                thing,
+                body,
+            }) => {
+                let content = body_content(body);
+                self.fill_opened(&terminal, thing, content, cx);
+            }
             WindowOutput::Activity(event) => {
                 self.activity.apply(event);
                 cx.notify();
@@ -427,6 +445,100 @@ impl WindowView {
     pub(crate) fn toggle_shared_all(&mut self, cx: &mut Context<Self>) {
         self.shared_all_shown = !self.shared_all_shown;
         cx.notify();
+    }
+
+    /// Opens a shared thing: an https link in the browser, anything else in the middle. Nothing is handed to the system.
+    pub(crate) fn open_shared(&mut self, thing: &SharedThing, cx: &mut Context<Self>) {
+        let Some(terminal) = self.activity.terminal.clone() else {
+            return;
+        };
+        let content = match &thing.target {
+            SharedTarget::Link { url } | SharedTarget::PullRequest { url: Some(url), .. } => {
+                if is_https(url) {
+                    cx.open_url(url);
+                    return;
+                }
+                Content::Address(url.clone())
+            }
+            SharedTarget::PullRequest { url: None, .. } => return,
+            SharedTarget::Text { .. } => {
+                let request = ActivityRequest::Body {
+                    terminal: terminal.clone(),
+                    thing: thing.id,
+                };
+                self.port.activity(request);
+                Content::Loading
+            }
+            SharedTarget::File { path } => {
+                self.read_shared_file(&terminal, thing.id, path.clone(), cx);
+                Content::Loading
+            }
+        };
+        self.opened = Some(OpenedThing {
+            terminal,
+            thing: thing.clone(),
+            content,
+        });
+        self.opened_wants_keyboard = true;
+        cx.notify();
+    }
+
+    fn read_shared_file(
+        &self,
+        terminal: &TerminalId,
+        thing: u64,
+        path: String,
+        cx: &mut Context<Self>,
+    ) {
+        let terminal = terminal.clone();
+        let reading = cx.background_spawn(async move { file_content(&path) });
+        let filling = cx.spawn(async move |this, cx| {
+            let content = reading.await;
+            this.update(cx, |view, cx| {
+                view.fill_opened(&terminal, thing, content, cx)
+            })
+            .ok();
+        });
+        filling.detach();
+    }
+
+    /// Shows what a shared thing holds, if that thing is still the one open.
+    fn fill_opened(
+        &mut self,
+        terminal: &TerminalId,
+        thing: u64,
+        content: Content,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(opened) = &mut self.opened else {
+            return;
+        };
+        let still_open = &opened.terminal == terminal && opened.thing.id == thing;
+        if !still_open {
+            return;
+        }
+        opened.content = content;
+        cx.notify();
+    }
+
+    pub(crate) fn close_opened(&mut self, cx: &mut Context<Self>) {
+        let was_open = self.opened.take().is_some();
+        if was_open {
+            self.terminal_wants_keyboard = true;
+            cx.notify();
+        }
+    }
+
+    // A thing belongs to the terminal whose log it came from, so another selection closes it.
+    fn close_opened_elsewhere(&mut self, drawn: &DrawnState) {
+        let Some(opened) = &self.opened else {
+            return;
+        };
+        let selected = selected_terminal(drawn.arrangement.as_ref());
+        if selected != Some(&opened.terminal) {
+            self.opened = None;
+            self.terminal_wants_keyboard = true;
+        }
     }
 
     pub(crate) fn show_older(&self) {
@@ -890,12 +1002,24 @@ impl WindowView {
             self.move_pages(PageMove::Back, cx);
             return true;
         }
+        let thing_open = self.opened.is_some();
+        if !page_open && thing_open && escaped {
+            self.close_opened(cx);
+            return true;
+        }
         let chord = chord_of(&event.keystroke);
         let Some(command) = command_for(&self.shown.bindings, &chord) else {
             return false;
         };
         if page_open {
             return self.run_over_page(command, event.is_held, cx);
+        }
+        // Close-terminal closes the opened thing first, as it closes a page.
+        if thing_open && command == CommandId::TerminalClose {
+            if !event.is_held {
+                self.close_opened(cx);
+            }
+            return true;
         }
         if !self.runs(command) {
             return false;
@@ -1337,7 +1461,13 @@ impl WindowView {
                 let fading_in = drawn_page.opacity(appeared).track_focus(&self.page_focus);
                 terminal = terminal.child(fading_in);
             }
-            None => terminal = terminal.child(self.terminal_or_placeholder()),
+            None => match &self.opened {
+                Some(opened) => {
+                    let thing = shared_view(opened, look, cx).track_focus(&self.opened_focus);
+                    terminal = terminal.child(thing);
+                }
+                None => terminal = terminal.child(self.terminal_or_placeholder()),
+            },
         }
         if !banners.is_empty() {
             let cards = banner_cards(&banners, banners_below, look, cx);
@@ -1497,6 +1627,16 @@ impl WindowView {
             }
             return;
         }
+        // An opened thing takes the keyboard when it opens, when the last page over it closes, or when nothing holds it.
+        if self.opened.is_some() {
+            let wanted = self.opened_wants_keyboard || self.terminal_wants_keyboard || unfocused;
+            self.opened_wants_keyboard = false;
+            self.terminal_wants_keyboard = false;
+            if wanted {
+                window.focus(&self.opened_focus, cx);
+            }
+            return;
+        }
         let page_closed = self.terminal_wants_keyboard;
         self.terminal_wants_keyboard = false;
         if !switched && !unfocused && !page_closed {
@@ -1547,6 +1687,7 @@ impl Render for WindowView {
         self.ahead = kept;
         // Rendering is the one place the drawn selection is final, whether it came from the workspace or a move ahead of it.
         self.watch_activity(&drawn);
+        self.close_opened_elsewhere(&drawn);
         // Once no drag is under way, there is nothing to mark and no panel on the move.
         if !cx.has_active_drag() {
             self.drop_place = None;

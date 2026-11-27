@@ -19,6 +19,7 @@ use crate::assets::{
     CLOSE_ICON, DOCUMENT_ICON, IMAGE_ICON, LINK_ICON, PULL_REQUEST_ICON, TEXT_ICON,
 };
 use crate::look::{Look, SMALL_TEXT_SIZE};
+use crate::shared_view::is_image;
 use crate::shell::shell_orange;
 use crate::terminal_list::state_mark;
 use crate::window::WindowView;
@@ -66,7 +67,7 @@ const SHARED_ICON_SIZE: f32 = 16.;
 const SHARED_RADIUS: f32 = 9.;
 const SHOW_FEWER: &str = "Show fewer";
 const PILL_RADIUS: f32 = 8.;
-const IMAGE_EXTENSIONS: [&str; 6] = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
+const NO_LONGER_SHARED: &str = "no longer in Shared";
 const CLOSE_SIZE: f32 = 14.;
 pub const MS_PER_MINUTE: u64 = 60_000;
 const MINUTES_PER_HOUR: u64 = 60;
@@ -563,14 +564,6 @@ fn pull_request_state(state: PrState, checked_ms: Option<u64>, at_ms: u64, now_m
     format!("{word}, seen {seen}")
 }
 
-fn is_image(path: &str) -> bool {
-    let Some((_, extension)) = path.rsplit_once('.') else {
-        return false;
-    };
-    let lowered = extension.to_ascii_lowercase();
-    IMAGE_EXTENSIONS.contains(&lowered.as_str())
-}
-
 fn target_icon(target: &SharedTarget) -> &'static str {
     match target {
         SharedTarget::Text { .. } => TEXT_ICON,
@@ -614,7 +607,7 @@ fn shared_section(input: &ActivityInput, cx: &mut Context<WindowView>) -> Option
     let shown = shared.iter().take(count).enumerate();
     for (index, thing) in shown {
         let ruled_above = index > 0;
-        let row = shared_row(thing, ruled_above, input);
+        let row = shared_row(thing, ruled_above, input, cx);
         card = card.child(row);
     }
     let mut section = div()
@@ -636,7 +629,52 @@ fn shared_section(input: &ActivityInput, cx: &mut Context<WindowView>) -> Option
     Some(section)
 }
 
-fn shared_row(thing: &SharedThing, ruled_above: bool, input: &ActivityInput) -> Div {
+/// A share in the log: its title opens the thing while it is in Shared, and says when it has left.
+fn shared_mention(
+    id: u64,
+    title: &str,
+    input: &ActivityInput,
+    cx: &mut Context<WindowView>,
+) -> AnyElement {
+    let look = input.look;
+    let mut in_shared = input.log.board.shared.iter();
+    let found = in_shared.find(|thing| thing.id == id);
+    let Some(thing) = found else {
+        let gone = div()
+            .text_color(look.secondary_text)
+            .child(NO_LONGER_SHARED);
+        return div()
+            .flex()
+            .flex_wrap()
+            .gap_x(px(6.))
+            .child(title.to_string())
+            .child(gone)
+            .into_any_element();
+    };
+    let words = div().min_w_0().child(title.to_string());
+    if !opens(&thing.target) {
+        return words.into_any_element();
+    }
+    let hover_ink = look.agent_ink;
+    let clicked = thing.clone();
+    words
+        .id(element_id("mention", id))
+        .cursor_pointer()
+        .hover(move |style| style.text_color(hover_ink))
+        .on_click(cx.listener(move |view, _, _, cx| view.open_shared(&clicked, cx)))
+        .into_any_element()
+}
+
+fn opens(target: &SharedTarget) -> bool {
+    !matches!(target, SharedTarget::PullRequest { url: None, .. })
+}
+
+fn shared_row(
+    thing: &SharedThing,
+    ruled_above: bool,
+    input: &ActivityInput,
+    cx: &mut Context<WindowView>,
+) -> AnyElement {
     let look = input.look;
     let icon_path = target_icon(&thing.target);
     let icon = svg()
@@ -716,7 +754,16 @@ fn shared_row(thing: &SharedThing, ruled_above: bool, input: &ActivityInput) -> 
     if ruled_above {
         row = row.border_t_1().border_color(look.hairline);
     }
-    row
+    if !opens(&thing.target) {
+        return row.into_any_element();
+    }
+    let veil = look.veil;
+    let clicked = thing.clone();
+    row.id(element_id("shared", thing.id))
+        .cursor_pointer()
+        .hover(move |style| style.bg(veil))
+        .on_click(cx.listener(move |view, _, _, cx| view.open_shared(&clicked, cx)))
+        .into_any_element()
 }
 
 fn item_element(item: &LogItem, input: &ActivityInput, cx: &mut Context<WindowView>) -> AnyElement {
@@ -779,11 +826,15 @@ fn item_element(item: &LogItem, input: &ActivityInput, cx: &mut Context<WindowVi
             entry(Who::Agent, &label, *at_ms, vec![said], input)
         }
         LogItem::Shared {
-            at_ms, by, title, ..
+            at_ms,
+            by,
+            thing,
+            title,
+            ..
         } => {
             let label = shared_label(by);
             let who = Who::of(by);
-            let shown = div().min_w_0().child(title.clone()).into_any_element();
+            let shown = shared_mention(*thing, title, input, cx);
             entry(who, &label, *at_ms, vec![shown], input)
         }
         LogItem::AskedForNote { at_ms, .. } => {
@@ -1062,10 +1113,6 @@ mod tests {
         assert_eq!(shown_count(23, true), 23);
         assert!(!has_more_than_shown(5));
         assert!(has_more_than_shown(6));
-
-        assert!(is_image("/Users/me/view-check/logo-after.PNG"));
-        assert!(!is_image("/Users/me/PLAN-sigkill.md"));
-        assert!(!is_image("/Users/me/pictures.png/notes"));
     }
 
     #[test]

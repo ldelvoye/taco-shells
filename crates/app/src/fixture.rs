@@ -1,7 +1,8 @@
 //! Made-up states the window can be drawn from.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use taco_protocol::{
     ActivityEntry, ActivityKind, AgentLabel, AgentRow, Arrangement, Author, Board, DrawnState,
@@ -104,6 +105,18 @@ stays solid. Tests and clippy are clean.";
 const HEADS_UP: &str = "Heads-up: main moved to 42bf29b while you were rebasing.";
 const ADDRESS: &str = "uds:/tmp/cc-socks/9838.sock";
 const NOW_LINE: &str = "Rebasing #179 onto main, then resolving the conflict in draw.rs.";
+const CHECKOUT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+const CHECKOUT_IMAGE: &str = "branding/icons/taco-shells.svg";
+const CHECKOUT_DOCUMENT: &str = "README.md";
+const FINDING_ID: u64 = 1;
+/// What the finding shared in the full board holds, sent when it is opened.
+const FINDING_BODY: &str = "Closing a terminal sends its shell one SIGHUP and nothing after it.
+
+A shell that ignores SIGHUP keeps running, and so do its children: in a test, `trap '' HUP; sleep 600` outlived the terminal by the full ten minutes.
+
+The runtime does the same when it is told to stop. It sends SIGHUP to each shell's session and exits without waiting, so a process that ignores it is left behind with no terminal.
+
+The plan in PLAN-sigkill.md adds a SIGKILL to the whole session after a short grace period.";
 
 const WORKING_LOG: [FixtureEntry; 10] = [
     entry(42, ASKED, "rework the billing platform lock"),
@@ -219,9 +232,14 @@ impl Fixture {
         if full {
             boards.insert(TerminalId("t0".to_string()), full_board());
         }
+        let mut bodies = BTreeMap::new();
+        if full {
+            bodies.insert(FINDING_ID, FINDING_BODY.to_string());
+        }
         StandInActivity {
             logs: self.logs(full),
             boards,
+            bodies,
             page,
         }
     }
@@ -452,6 +470,16 @@ fn full_log() -> Vec<ActivityEntry> {
     log.entries
 }
 
+/// A file of this checkout by its absolute path, so a fixture can open something real.
+fn checkout_file(relative: &str) -> String {
+    let joined = Path::new(CHECKOUT).join(relative);
+    let mut path = joined.clone();
+    if let Ok(resolved) = fs::canonicalize(&joined) {
+        path = resolved;
+    }
+    path.to_string_lossy().into_owned()
+}
+
 /// A now line and one shared thing of each kind, newest first, as the workspace keeps them.
 fn full_board() -> Board {
     let now = now_ms();
@@ -480,18 +508,14 @@ fn full_board() -> Board {
         url: "https://claude.ai/artifact/9NXFTKtkNKmvbxjMDsn1zL".to_string(),
     };
     let image = SharedTarget::File {
-        path: home()
-            .join("code/taco-shells/view-check/logo-after.png")
-            .to_string_lossy()
-            .into_owned(),
+        path: checkout_file(CHECKOUT_IMAGE),
     };
     let document = SharedTarget::File {
-        path: home()
-            .join("code/taco-shells/PLAN-sigkill.md")
-            .to_string_lossy()
-            .into_owned(),
+        path: checkout_file(CHECKOUT_DOCUMENT),
     };
-    let text = SharedTarget::Text { characters: 2_400 };
+    let text = SharedTarget::Text {
+        characters: FINDING_BODY.chars().count(),
+    };
     let shared = vec![
         thing(
             6,
@@ -534,7 +558,7 @@ fn full_board() -> Board {
             document,
         ),
         thing(
-            1,
+            FINDING_ID,
             87,
             Author::Agent,
             "Finding",
