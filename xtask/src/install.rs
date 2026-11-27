@@ -3,9 +3,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use taco_identity::{DEVELOPMENT, PROGRAMS_PATH};
+
 use crate::build::{Channel, Profile};
 use crate::bundle::{self, Options};
-use crate::identity::DEVELOPMENT;
 use crate::repo;
 
 const INSTALL_DIR_VARIABLE: &str = "TACO_SHELLS_INSTALL_DIR";
@@ -17,7 +18,7 @@ pub fn run() -> Result<(), String> {
         Some(dir) => PathBuf::from(dir),
         None => PathBuf::from(DEFAULT_INSTALL_DIR),
     };
-    let installed = install_dir.join(format!("{}.app", DEVELOPMENT.product_name));
+    let installed = install_dir.join(format!("{}.app", DEVELOPMENT.application_name));
 
     if is_running(&installed)? {
         return Err(format!(
@@ -77,7 +78,7 @@ pub fn run() -> Result<(), String> {
 }
 
 pub(crate) fn is_running(installed: &Path) -> Result<bool, String> {
-    let pattern = format!("{}/Contents/MacOS/", installed.display());
+    let pattern = format!("{}/{PROGRAMS_PATH}/", installed.display());
     let mut pgrep = Command::new("pgrep");
     pgrep.args(["-f", &pattern]);
     let output = pgrep
@@ -103,7 +104,7 @@ fn trash_path() -> Result<PathBuf, String> {
     let Some(timestamp) = repo::capture(&mut date) else {
         return Err("date failed".to_string());
     };
-    let name = format!("{} {timestamp}.app", DEVELOPMENT.product_name);
+    let name = format!("{} {timestamp}.app", DEVELOPMENT.application_name);
     Ok(PathBuf::from(home).join(".Trash").join(name))
 }
 

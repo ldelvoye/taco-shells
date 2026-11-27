@@ -47,7 +47,8 @@ use gpui::{
     AnyWindowHandle, App, AppContext, Bounds, Context, Global, IntoElement, PromptLevel, Render,
     TitlebarOptions, Window, WindowAppearance, WindowBounds, WindowOptions, div, px, size,
 };
-use taco_services::{APPLICATION_NAME, AgentSetupView};
+use taco_identity::CURRENT;
+use taco_services::AgentSetupView;
 use taco_settings::{Appearance, Config, palette_for};
 use taco_terminal_view::Terminals;
 
@@ -221,7 +222,7 @@ fn open_window(started: Started, background: bool, cx: &mut App) -> Option<AnyWi
     let window_size = size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT));
     let bounds = Bounds::centered(None, window_size, cx);
     let titlebar = TitlebarOptions {
-        title: Some(APPLICATION_NAME.into()),
+        title: Some(CURRENT.application_name.into()),
         appears_transparent: true,
         traffic_light_position: Some(platform::traffic_light_position()),
     };

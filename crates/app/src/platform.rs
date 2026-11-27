@@ -1,14 +1,13 @@
 //! The window's macOS chrome: the traffic lights, the name it gives this machine, and keeping out of sight when asked.
 
 use gpui::{ActivationPolicy, App, Pixels, Point, point, px};
+use taco_identity::BACKGROUND_WINDOW_VARIABLE;
 
 use crate::look::TITLE_BAR_HEIGHT;
 
 /// The machine a local terminal runs on, as the title bar names it.
 pub const THIS_MACHINE: &str = "this Mac";
 
-/// Set to `1`, the app runs with its window never shown and no Dock icon, so it never takes anyone's focus.
-pub const BACKGROUND_WINDOW_VARIABLE: &str = "TACO_SHELLS_BACKGROUND_WINDOW";
 const BACKGROUND_WINDOW_ON: &str = "1";
 
 // Where macOS draws the three traffic lights, which the title bar leaves room for.

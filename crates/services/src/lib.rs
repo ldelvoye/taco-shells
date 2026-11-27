@@ -4,15 +4,12 @@ mod agent_flow;
 mod agent_hooks;
 mod agent_setup_state;
 mod agent_setups;
-#[cfg(test)]
-mod build_identity;
 mod claude_version;
 mod config_files;
 mod config_store;
 mod config_writer;
 mod file_write;
 mod hook_listener;
-mod identity;
 mod mac;
 mod plugin_dirs;
 mod plugin_folder;
@@ -39,10 +36,6 @@ pub use config_store::ConfigStore;
 pub use config_writer::{ConfigChange, ConfigWriter, Refusal};
 pub use hook_listener::{
     AnswerPart, FOCUS_PORTS, HookListener, ListenerEvent, OnDelivered, Question, QuestionKind,
-};
-pub use identity::{
-    AGENT_APP_NAME, APPLICATION_NAME, CONFIG_DIRECTORY_NAME, CONFIG_DIRECTORY_VARIABLE, IS_STABLE,
-    config_directory,
 };
 pub use mac::app_version;
 pub use plugin_folder::{PROGRAM_PATH, refresh_plugin_folder};

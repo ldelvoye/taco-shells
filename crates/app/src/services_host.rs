@@ -8,6 +8,7 @@ use std::thread;
 use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
+use taco_identity::PLUGIN_PROGRAM;
 use taco_protocol::{
     ConfigFile, HarnessId, HookCall, HookEvent, HookMessage, RuntimeAnswer, RuntimeQuery,
     TerminalId,
@@ -30,7 +31,6 @@ const ROUTE_NOT_STARTED: &str =
 const RUNTIME_ANSWER_WAIT: Duration = Duration::from_secs(2);
 const QUESTION_PLACE_WAIT: Duration = Duration::from_millis(600);
 const FORWARD_WAIT: Duration = Duration::from_secs(1);
-const PLUGIN_PROGRAM_NAME: &str = "taco-shells-plugin";
 
 type Slot<T> = Mutex<Option<T>>;
 type Work = Box<dyn FnOnce() + Send>;
@@ -65,7 +65,7 @@ fn send_to_window(window: &WindowSender, output: ServicesOutput) {
 
 fn plugin_program_beside(executable: &Path) -> Option<PathBuf> {
     let directory = executable.parent()?;
-    Some(directory.join(PLUGIN_PROGRAM_NAME))
+    Some(directory.join(PLUGIN_PROGRAM))
 }
 
 fn start_setups(

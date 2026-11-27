@@ -2,26 +2,30 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+use taco_identity::{
+    APP_PROGRAM, DEVELOPMENT, INFO_PLIST_PATH, PLUGIN_PROGRAM, PROGRAMS_PATH, RUNTIME_PROGRAM,
+    STABLE,
+};
+
 use crate::Smoke;
 
-const DEV_BUNDLE_ID: &str = "com.ldelvoye.tacoshells.dev";
-const STABLE_BUNDLE_ID: &str = "com.ldelvoye.tacoshells";
+const DEV_BUNDLE_ID: &str = DEVELOPMENT.bundle_id;
+const STABLE_BUNDLE_ID: &str = STABLE.bundle_id;
 const DEV_ID_ENDING: &str = ".dev";
-const DEV_APPLICATION_NAME: &str = "Taco Shells Dev";
-const APP_EXECUTABLE: &str = "taco-shells";
-const EXECUTABLES: [&str; 3] = [APP_EXECUTABLE, "taco-shells-runtime", "taco-shells-plugin"];
+const DEV_APPLICATION_NAME: &str = DEVELOPMENT.application_name;
+const EXECUTABLES: [&str; 3] = [APP_PROGRAM, RUNTIME_PROGRAM, PLUGIN_PROGRAM];
 
 /// A dev build carrying the stable identity would read and write the app in daily use. The stable config folder's
 /// name is not scanned for: `.taco-shells` also forms where two unrelated strings meet in a binary.
 pub fn holds_only_dev_names(smoke: &Smoke) -> Result<(), String> {
     let app = &smoke.app;
-    let plist = app.join("Contents").join("Info.plist");
+    let plist = app.join(INFO_PLIST_PATH);
     let identifier = plist_value(&plist, "CFBundleIdentifier")?;
     if identifier != DEV_BUNDLE_ID {
         return Err(format!("its bundle id is {identifier}"));
     }
 
-    let programs = app.join("Contents").join("MacOS");
+    let programs = app.join(PROGRAMS_PATH);
     for executable in EXECUTABLES {
         let path = programs.join(executable);
         let bytes = fs::read(&path)
@@ -31,7 +35,7 @@ pub fn holds_only_dev_names(smoke: &Smoke) -> Result<(), String> {
                 "{executable} holds the stable app's {STABLE_BUNDLE_ID}"
             ));
         }
-        let is_app = executable == APP_EXECUTABLE;
+        let is_app = executable == APP_PROGRAM;
         if is_app && find(&bytes, DEV_APPLICATION_NAME.as_bytes()).is_none() {
             return Err(format!(
                 "{executable} holds no \"{DEV_APPLICATION_NAME}\", so it was not built as the dev app"

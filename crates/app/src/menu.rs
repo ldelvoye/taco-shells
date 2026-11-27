@@ -1,8 +1,9 @@
 //! The native menu bar, rebuilt whenever an agent's setup or a ready update changes.
 
 use gpui::{Action, App, KeyBinding, Menu, MenuItem, actions};
+use taco_identity::CURRENT;
 use taco_protocol::HarnessId;
-use taco_services::{APPLICATION_NAME, AgentMenuAction, AgentMenuEntry};
+use taco_services::{AgentMenuAction, AgentMenuEntry};
 
 use crate::window::Shown;
 
@@ -59,7 +60,7 @@ fn menus_of(agents: &[AgentMenuEntry], update: Option<&str>) -> Vec<Menu> {
         MenuItem::separator(),
         MenuItem::action("Quit", Quit),
     ];
-    let app_menu = Menu::new(APPLICATION_NAME).items(app_items);
+    let app_menu = Menu::new(CURRENT.application_name).items(app_items);
     let mut menus = vec![app_menu];
     if !agents.is_empty() {
         let submenus = agents.iter().map(agent_submenu);

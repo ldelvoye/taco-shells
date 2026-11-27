@@ -8,5 +8,6 @@ default-run = "taco-smoke"
 
 [dependencies]
 taco-drive.workspace = true
+taco-identity.workspace = true
 taco-protocol.workspace = true
 serde_json.workspace = true

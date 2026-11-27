@@ -5,14 +5,16 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use taco_drive::SOCKET_VARIABLE;
+use taco_identity::{
+    APP_PROGRAM, BACKGROUND_WINDOW_VARIABLE, CONFIG_DIRECTORY_VARIABLE, PROGRAMS_PATH,
+    RUNTIME_PROGRAM,
+};
 
 use crate::driver::Driver;
 
 const CONNECT_DEADLINE: Duration = Duration::from_secs(15);
 const QUIT_DEADLINE: Duration = Duration::from_secs(10);
 const QUIT_POLL: Duration = Duration::from_millis(100);
-const APP_EXECUTABLE: &str = "Contents/MacOS/taco-shells";
-const RUNTIME_NAME: &str = "taco-shells-runtime";
 
 pub struct Launched {
     pub child: Child,
@@ -29,10 +31,10 @@ pub fn launch(app: &Path, config: &Path, log: &Path) -> Result<Launched, String>
         .try_clone()
         .map_err(|error| format!("could not share {}: {error}", log.display()))?;
 
-    let executable = app.join(APP_EXECUTABLE);
+    let executable = app.join(PROGRAMS_PATH).join(APP_PROGRAM);
     let mut command = Command::new(&executable);
-    command.env("TACO_SHELLS_CONFIG_DIR", config);
-    command.env("TACO_SHELLS_BACKGROUND_WINDOW", "1");
+    command.env(CONFIG_DIRECTORY_VARIABLE, config);
+    command.env(BACKGROUND_WINDOW_VARIABLE, "1");
     command.env(SOCKET_VARIABLE, &socket);
     command.stdout(stdout);
     command.stderr(stderr);
@@ -53,7 +55,7 @@ pub fn launch(app: &Path, config: &Path, log: &Path) -> Result<Launched, String>
 
 pub fn runtime_pid(app_pid: u32) -> Option<u32> {
     let mut pgrep = Command::new("pgrep");
-    pgrep.args(["-P", &app_pid.to_string(), "-f", RUNTIME_NAME]);
+    pgrep.args(["-P", &app_pid.to_string(), "-f", RUNTIME_PROGRAM]);
     let output = pgrep.output().ok()?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let first = stdout.lines().next()?;

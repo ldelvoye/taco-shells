@@ -2,15 +2,18 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::build::{
-    self, APP_EXECUTABLE, Build, Channel, PLUGIN_EXECUTABLE, Profile, RUNTIME_EXECUTABLE,
+use taco_identity::{
+    APP_PROGRAM, INFO_PLIST_PATH, Identity, PLUGIN_PROGRAM, PROGRAMS_PATH, RESOURCES_PATH,
+    RUNTIME_PROGRAM, UPDATE_HELPER_PATH, release_zip_name,
 };
-use crate::identity::{DEVELOPMENT, Identity, STABLE};
+
+use crate::build::{self, Build, Channel, Profile};
+use crate::identity::{icon_of, identity_of};
 use crate::repo;
 use crate::version::{self, BundleVersion};
 
-const EXECUTABLES: [&str; 3] = [APP_EXECUTABLE, RUNTIME_EXECUTABLE, PLUGIN_EXECUTABLE];
-const NESTED_EXECUTABLES: [&str; 2] = [RUNTIME_EXECUTABLE, PLUGIN_EXECUTABLE];
+const PROGRAMS: [&str; 3] = [APP_PROGRAM, RUNTIME_PROGRAM, PLUGIN_PROGRAM];
+const NESTED_PROGRAMS: [&str; 2] = [RUNTIME_PROGRAM, PLUGIN_PROGRAM];
 
 pub struct Options {
     pub profile: Profile,
@@ -37,10 +40,7 @@ pub fn run(options: &Options) -> Result<(), String> {
 
 pub fn create(options: &Options) -> Result<Bundled, String> {
     let repo_root = repo::root()?;
-    let identity = match options.channel {
-        Channel::Stable => &STABLE,
-        Channel::Development => &DEVELOPMENT,
-    };
+    let identity = identity_of(options.channel);
 
     let build = Build {
         profile: options.profile,
@@ -55,40 +55,40 @@ pub fn create(options: &Options) -> Result<Bundled, String> {
     let output = target
         .join("bundle.noindex")
         .join(options.profile.directory());
-    let app = output.join(format!("{}.app", identity.product_name));
+    let app = output.join(format!("{}.app", identity.application_name));
     if app.exists() {
         remove_dir(&app)?;
     }
 
-    let contents = app.join("Contents");
-    let macos = contents.join("MacOS");
-    let resources = contents.join("Resources");
-    create_dir(&macos)?;
+    let programs = app.join(PROGRAMS_PATH);
+    let resources = app.join(RESOURCES_PATH);
+    create_dir(&programs)?;
     create_dir(&resources)?;
 
-    for executable in EXECUTABLES {
-        copy_file(&binaries.join(executable), &macos.join(executable))?;
+    for program in PROGRAMS {
+        copy_file(&binaries.join(program), &programs.join(program))?;
     }
     if options.icon {
-        let icon = ensure_icon(&repo_root, identity)?;
+        let icon = ensure_icon(&repo_root, options.channel)?;
         copy_file(&icon, &resources.join("icon.icns"))?;
     }
     let helper = repo_root.join("resources").join("update-helper.sh");
-    copy_file(&helper, &resources.join("update-helper.sh"))?;
+    copy_file(&helper, &app.join(UPDATE_HELPER_PATH))?;
 
     let version = version::current(&repo_root);
     let plist = info_plist(identity, &version);
-    write_file(&contents.join("Info.plist"), &plist)?;
+    write_file(&app.join(INFO_PLIST_PATH), &plist)?;
 
     // The runtime and the plugin program are signed before the bundle, whose signature seals everything inside it.
-    for executable in NESTED_EXECUTABLES {
-        sign(&macos.join(executable))?;
+    for program in NESTED_PROGRAMS {
+        sign(&programs.join(program))?;
     }
     sign(&app)?;
 
     let mut zip = None;
     if options.zip {
-        let zip_path = output.join(format!("taco-shells-{}-arm64.zip", version.short));
+        let zip_name = release_zip_name(&version.short);
+        let zip_path = output.join(zip_name);
         make_zip(&app, &zip_path)?;
         zip = Some(zip_path);
     }
@@ -98,12 +98,12 @@ pub fn create(options: &Options) -> Result<Bundled, String> {
 pub fn info_plist(identity: &Identity, version: &BundleVersion) -> String {
     let strings = [
         ("CFBundleDevelopmentRegion", "en"),
-        ("CFBundleDisplayName", identity.product_name),
-        ("CFBundleExecutable", APP_EXECUTABLE),
+        ("CFBundleDisplayName", identity.application_name),
+        ("CFBundleExecutable", APP_PROGRAM),
         ("CFBundleIconFile", "icon"),
         ("CFBundleIdentifier", identity.bundle_id),
         ("CFBundleInfoDictionaryVersion", "6.0"),
-        ("CFBundleName", identity.product_name),
+        ("CFBundleName", identity.application_name),
         ("CFBundlePackageType", "APPL"),
         ("CFBundleShortVersionString", version.short.as_str()),
         ("CFBundleVersion", version.long.as_str()),
@@ -150,8 +150,8 @@ fn escape_xml(text: &str) -> String {
     escaped
 }
 
-fn ensure_icon(repo_root: &Path, identity: &Identity) -> Result<PathBuf, String> {
-    let icon = repo_root.join(identity.icon);
+fn ensure_icon(repo_root: &Path, channel: Channel) -> Result<PathBuf, String> {
+    let icon = repo_root.join(icon_of(channel));
     if !icon.exists() {
         let mut script = Command::new("bash");
         script.arg("branding/build-icon.sh");

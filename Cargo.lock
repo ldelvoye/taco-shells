@@ -5074,6 +5074,7 @@ dependencies = [
  "serde_json",
  "taco-agents",
  "taco-drive",
+ "taco-identity",
  "taco-protocol",
  "taco-rules",
  "taco-services",
@@ -5102,11 +5103,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "taco-identity"
+version = "0.0.0"
+
+[[package]]
 name = "taco-plugin"
 version = "0.0.0"
 dependencies = [
  "libc",
  "serde_json",
+ "taco-identity",
  "taco-protocol",
  "tempfile",
 ]
@@ -5146,6 +5152,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "taco-agents",
+ "taco-identity",
  "taco-plugin",
  "taco-protocol",
  "taco-settings",
@@ -5169,6 +5176,7 @@ version = "0.0.0"
 dependencies = [
  "serde_json",
  "taco-drive",
+ "taco-identity",
  "taco-protocol",
 ]
 
@@ -6591,6 +6599,9 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 [[package]]
 name = "xtask"
 version = "0.0.0"
+dependencies = [
+ "taco-identity",
+]
 
 [[package]]
 name = "xxhash-rust"

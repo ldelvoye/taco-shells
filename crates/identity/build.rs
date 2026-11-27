@@ -1,23 +1,26 @@
 #[path = "src/build_identity.rs"]
 mod build_identity;
+#[path = "src/build_names.rs"]
+#[allow(dead_code)]
+mod build_names;
 
-const CHANNEL_VARIABLE: &str = "TACO_SHELLS_CHANNEL";
-const DEV_CONFIG_VARIABLE: &str = "TACO_SHELLS_DEV_CONFIG_DIR";
-const BAKED_CONFIG_VARIABLE: &str = "TACO_SHELLS_BAKED_CONFIG_DIR";
+use build_names::{
+    BAKED_CONFIG_VARIABLE, CHANNEL_VARIABLE, DEV_CONFIG_DIR_VARIABLE, STABLE_CHANNEL,
+};
 
 fn main() {
     println!("cargo::rerun-if-env-changed={CHANNEL_VARIABLE}");
-    println!("cargo::rerun-if-env-changed={DEV_CONFIG_VARIABLE}");
+    println!("cargo::rerun-if-env-changed={DEV_CONFIG_DIR_VARIABLE}");
     println!("cargo::rustc-check-cfg=cfg(taco_stable)");
 
     let channel = std::env::var(CHANNEL_VARIABLE);
     // Anything but exactly "stable" builds the dev app, so a build that lost the variable never replaces the app in daily use.
-    let is_stable = channel.as_deref() == Ok("stable");
+    let is_stable = channel.as_deref() == Ok(STABLE_CHANNEL);
     if is_stable {
         println!("cargo::rustc-cfg=taco_stable");
     }
 
-    let asked = std::env::var(DEV_CONFIG_VARIABLE).ok();
+    let asked = std::env::var(DEV_CONFIG_DIR_VARIABLE).ok();
     let baked = build_identity::baked_config_directory(is_stable, asked.as_deref());
     let directory = match baked {
         Ok(Some(directory)) => directory,
