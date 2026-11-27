@@ -2,27 +2,11 @@ use serde_json::{Map, Value};
 
 use crate::config::SETTINGS_FILE_NAME;
 
-const THEME_REQUIREMENT: &str = "must be \"system\", \"light\" or \"dark\"";
 const FONT_FAMILY_REQUIREMENT: &str = "must be a non-empty string";
 const FONT_SIZE_REQUIREMENT: &str = "must be a number between 1 and 72";
 const SCROLLBACK_REQUIREMENT: &str = "must be a whole number of lines, 0 or more";
 const SCROLL_SENSITIVITY_REQUIREMENT: &str = "must be a number greater than 0";
 const BOOLEAN_REQUIREMENT: &str = "must be true or false";
-const CURSOR_STYLE_REQUIREMENT: &str = "must be \"block\", \"underline\" or \"bar\"";
-const SHELL_ROW_NAME_REQUIREMENT: &str = "must be \"folder\" or \"path\"";
-const SETTING_KEYS: [&str; 11] = [
-    "theme",
-    "fontFamily",
-    "fontSize",
-    "scrollback",
-    "scrollSensitivity",
-    "cursorBlink",
-    "cursorStyle",
-    "restoreOnLaunch",
-    "agentActivity",
-    "askForActivityNotes",
-    "shellRowName",
-];
 // Keys an older version wrote: read without a problem line and ignored.
 const RETIRED_SETTING_KEYS: [&str; 1] = ["manageAgentHooks"];
 
@@ -37,6 +21,22 @@ pub enum ThemeChoice {
     Dark,
 }
 
+impl ThemeChoice {
+    pub const ALL: [Self; 3] = [Self::System, Self::Light, Self::Dark];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ThemeChoice::System => "system",
+            ThemeChoice::Light => "light",
+            ThemeChoice::Dark => "dark",
+        }
+    }
+
+    pub fn from_text(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|choice| choice.as_str() == text)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CursorStyle {
     Block,
@@ -44,10 +44,41 @@ pub enum CursorStyle {
     Bar,
 }
 
+impl CursorStyle {
+    pub const ALL: [Self; 3] = [Self::Block, Self::Underline, Self::Bar];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CursorStyle::Block => "block",
+            CursorStyle::Underline => "underline",
+            CursorStyle::Bar => "bar",
+        }
+    }
+
+    pub fn from_text(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|style| style.as_str() == text)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShellRowName {
     Folder,
     Path,
+}
+
+impl ShellRowName {
+    pub const ALL: [Self; 2] = [Self::Folder, Self::Path];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ShellRowName::Folder => "folder",
+            ShellRowName::Path => "path",
+        }
+    }
+
+    pub fn from_text(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|name| name.as_str() == text)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -87,11 +118,6 @@ pub struct SettingsLayerResult {
     pub rejected: Vec<&'static str>,
 }
 
-enum Rejection {
-    UnknownKey,
-    Invalid(&'static str),
-}
-
 impl Default for Settings {
     fn default() -> Self {
         Settings {
@@ -110,6 +136,24 @@ impl Default for Settings {
     }
 }
 
+impl Settings {
+    pub fn apply(&mut self, change: SettingChange) {
+        match change {
+            SettingChange::Theme(choice) => self.theme = choice,
+            SettingChange::FontFamily(family) => self.font_family = family,
+            SettingChange::FontSize(size) => self.font_size = size,
+            SettingChange::Scrollback(lines) => self.scrollback = lines,
+            SettingChange::ScrollSensitivity(sensitivity) => self.scroll_sensitivity = sensitivity,
+            SettingChange::CursorBlink(on) => self.cursor_blink = on,
+            SettingChange::CursorStyle(style) => self.cursor_style = style,
+            SettingChange::RestoreOnLaunch(on) => self.restore_on_launch = on,
+            SettingChange::AgentActivity(on) => self.agent_activity = on,
+            SettingChange::AskForActivityNotes(on) => self.ask_for_activity_notes = on,
+            SettingChange::ShellRowName(name) => self.shell_row_name = name,
+        }
+    }
+}
+
 // A whole number is written as one ("fontSize": 20), the way a person writes it, not as 20.0.
 fn number_value(number: f64) -> Value {
     let whole = number as i64;
@@ -120,7 +164,66 @@ fn number_value(number: f64) -> Value {
     Value::from(number)
 }
 
+fn choices_requirement(names: &[&str]) -> String {
+    let mut quoted: Vec<String> = Vec::new();
+    for name in names {
+        quoted.push(format!("\"{name}\""));
+    }
+    let Some(last) = quoted.pop() else {
+        return String::new();
+    };
+    if quoted.is_empty() {
+        return format!("must be {last}");
+    }
+    let leading = quoted.join(", ");
+    format!("must be {leading} or {last}")
+}
+
+fn theme_requirement() -> String {
+    let names = ThemeChoice::ALL.map(ThemeChoice::as_str);
+    choices_requirement(&names)
+}
+
+fn cursor_style_requirement() -> String {
+    let names = CursorStyle::ALL.map(CursorStyle::as_str);
+    choices_requirement(&names)
+}
+
+fn shell_row_name_requirement() -> String {
+    let names = ShellRowName::ALL.map(ShellRowName::as_str);
+    choices_requirement(&names)
+}
+
 impl SettingChange {
+    pub fn all(settings: &Settings) -> Vec<SettingChange> {
+        let Settings {
+            theme,
+            font_family,
+            font_size,
+            scrollback,
+            scroll_sensitivity,
+            cursor_blink,
+            cursor_style,
+            restore_on_launch,
+            agent_activity,
+            ask_for_activity_notes,
+            shell_row_name,
+        } = settings;
+        vec![
+            SettingChange::Theme(*theme),
+            SettingChange::FontFamily(font_family.clone()),
+            SettingChange::FontSize(*font_size),
+            SettingChange::Scrollback(*scrollback),
+            SettingChange::ScrollSensitivity(*scroll_sensitivity),
+            SettingChange::CursorBlink(*cursor_blink),
+            SettingChange::CursorStyle(*cursor_style),
+            SettingChange::RestoreOnLaunch(*restore_on_launch),
+            SettingChange::AgentActivity(*agent_activity),
+            SettingChange::AskForActivityNotes(*ask_for_activity_notes),
+            SettingChange::ShellRowName(*shell_row_name),
+        ]
+    }
+
     pub fn key(&self) -> &'static str {
         match self {
             SettingChange::Theme(_) => "theme",
@@ -139,37 +242,17 @@ impl SettingChange {
 
     pub fn value(&self) -> Value {
         match self {
-            SettingChange::Theme(choice) => {
-                let text = match choice {
-                    ThemeChoice::System => "system",
-                    ThemeChoice::Light => "light",
-                    ThemeChoice::Dark => "dark",
-                };
-                Value::from(text)
-            }
+            SettingChange::Theme(choice) => Value::from(choice.as_str()),
             SettingChange::FontFamily(family) => Value::from(family.as_str()),
             SettingChange::FontSize(size) => number_value(*size),
             SettingChange::Scrollback(lines) => Value::from(*lines),
             SettingChange::ScrollSensitivity(sensitivity) => number_value(*sensitivity),
             SettingChange::CursorBlink(on) => Value::from(*on),
-            SettingChange::CursorStyle(style) => {
-                let text = match style {
-                    CursorStyle::Block => "block",
-                    CursorStyle::Underline => "underline",
-                    CursorStyle::Bar => "bar",
-                };
-                Value::from(text)
-            }
+            SettingChange::CursorStyle(style) => Value::from(style.as_str()),
             SettingChange::RestoreOnLaunch(on) => Value::from(*on),
             SettingChange::AgentActivity(on) => Value::from(*on),
             SettingChange::AskForActivityNotes(on) => Value::from(*on),
-            SettingChange::ShellRowName(name) => {
-                let text = match name {
-                    ShellRowName::Folder => "folder",
-                    ShellRowName::Path => "path",
-                };
-                Value::from(text)
-            }
+            SettingChange::ShellRowName(name) => Value::from(name.as_str()),
         }
     }
 
@@ -188,38 +271,9 @@ impl SettingChange {
     }
 }
 
-fn setting_name(key: &str) -> Option<&'static str> {
-    let mut names = SETTING_KEYS.into_iter();
-    names.find(|name| *name == key)
-}
-
-fn read_theme(value: &Value) -> Option<ThemeChoice> {
+fn read_choice<T>(value: &Value, from_text: fn(&str) -> Option<T>) -> Option<T> {
     let text = value.as_str()?;
-    match text {
-        "system" => Some(ThemeChoice::System),
-        "light" => Some(ThemeChoice::Light),
-        "dark" => Some(ThemeChoice::Dark),
-        _ => None,
-    }
-}
-
-fn read_cursor_style(value: &Value) -> Option<CursorStyle> {
-    let text = value.as_str()?;
-    match text {
-        "block" => Some(CursorStyle::Block),
-        "underline" => Some(CursorStyle::Underline),
-        "bar" => Some(CursorStyle::Bar),
-        _ => None,
-    }
-}
-
-fn read_shell_row_name(value: &Value) -> Option<ShellRowName> {
-    let text = value.as_str()?;
-    match text {
-        "folder" => Some(ShellRowName::Folder),
-        "path" => Some(ShellRowName::Path),
-        _ => None,
-    }
+    from_text(text)
 }
 
 fn read_non_empty_string(value: &Value) -> Option<String> {
@@ -256,75 +310,81 @@ fn read_positive_number(value: &Value) -> Option<f64> {
     None
 }
 
-fn assign<T>(slot: &mut T, parsed: Option<T>, requirement: &'static str) -> Result<(), Rejection> {
+fn require<T>(parsed: Option<T>, requirement: &str) -> Result<T, String> {
     match parsed {
-        Some(parsed_value) => {
-            *slot = parsed_value;
-            Ok(())
-        }
-        None => Err(Rejection::Invalid(requirement)),
+        Some(parsed_value) => Ok(parsed_value),
+        None => Err(requirement.to_string()),
     }
 }
 
-fn apply_setting(
-    settings: &mut Settings,
-    name: &'static str,
-    value: &Value,
-) -> Result<(), Rejection> {
-    match name {
-        "theme" => assign(&mut settings.theme, read_theme(value), THEME_REQUIREMENT),
-        "fontFamily" => assign(
-            &mut settings.font_family,
-            read_non_empty_string(value),
-            FONT_FAMILY_REQUIREMENT,
-        ),
-        "fontSize" => assign(
-            &mut settings.font_size,
-            read_font_size(value),
-            FONT_SIZE_REQUIREMENT,
-        ),
-        "scrollback" => assign(
-            &mut settings.scrollback,
-            read_scrollback(value),
-            SCROLLBACK_REQUIREMENT,
-        ),
-        "scrollSensitivity" => assign(
-            &mut settings.scroll_sensitivity,
-            read_positive_number(value),
-            SCROLL_SENSITIVITY_REQUIREMENT,
-        ),
-        "cursorBlink" => assign(
-            &mut settings.cursor_blink,
-            value.as_bool(),
-            BOOLEAN_REQUIREMENT,
-        ),
-        "cursorStyle" => assign(
-            &mut settings.cursor_style,
-            read_cursor_style(value),
-            CURSOR_STYLE_REQUIREMENT,
-        ),
-        "restoreOnLaunch" => assign(
-            &mut settings.restore_on_launch,
-            value.as_bool(),
-            BOOLEAN_REQUIREMENT,
-        ),
-        "agentActivity" => assign(
-            &mut settings.agent_activity,
-            value.as_bool(),
-            BOOLEAN_REQUIREMENT,
-        ),
-        "askForActivityNotes" => assign(
-            &mut settings.ask_for_activity_notes,
-            value.as_bool(),
-            BOOLEAN_REQUIREMENT,
-        ),
-        "shellRowName" => assign(
-            &mut settings.shell_row_name,
-            read_shell_row_name(value),
-            SHELL_ROW_NAME_REQUIREMENT,
-        ),
-        _ => Err(Rejection::UnknownKey),
+fn read_setting(template: &SettingChange, value: &Value) -> Result<SettingChange, String> {
+    match template {
+        SettingChange::Theme(_) => {
+            let parsed = read_choice(value, ThemeChoice::from_text);
+            match parsed {
+                Some(choice) => Ok(SettingChange::Theme(choice)),
+                None => Err(theme_requirement()),
+            }
+        }
+        SettingChange::FontFamily(_) => {
+            let parsed = read_non_empty_string(value);
+            let family = require(parsed, FONT_FAMILY_REQUIREMENT)?;
+            Ok(SettingChange::FontFamily(family))
+        }
+        SettingChange::FontSize(_) => {
+            let parsed = read_font_size(value);
+            let size = require(parsed, FONT_SIZE_REQUIREMENT)?;
+            Ok(SettingChange::FontSize(size))
+        }
+        SettingChange::Scrollback(_) => {
+            let parsed = read_scrollback(value);
+            let lines = require(parsed, SCROLLBACK_REQUIREMENT)?;
+            Ok(SettingChange::Scrollback(lines))
+        }
+        SettingChange::ScrollSensitivity(_) => {
+            let parsed = read_positive_number(value);
+            let sensitivity = require(parsed, SCROLL_SENSITIVITY_REQUIREMENT)?;
+            Ok(SettingChange::ScrollSensitivity(sensitivity))
+        }
+        SettingChange::CursorBlink(_) => {
+            let parsed = value.as_bool();
+            let on = require(parsed, BOOLEAN_REQUIREMENT)?;
+            Ok(SettingChange::CursorBlink(on))
+        }
+        SettingChange::CursorStyle(_) => {
+            let parsed = read_choice(value, CursorStyle::from_text);
+            match parsed {
+                Some(style) => Ok(SettingChange::CursorStyle(style)),
+                None => Err(cursor_style_requirement()),
+            }
+        }
+        SettingChange::RestoreOnLaunch(_) => {
+            let parsed = value.as_bool();
+            let on = require(parsed, BOOLEAN_REQUIREMENT)?;
+            Ok(SettingChange::RestoreOnLaunch(on))
+        }
+        SettingChange::AgentActivity(_) => {
+            let parsed = value.as_bool();
+            let on = require(parsed, BOOLEAN_REQUIREMENT)?;
+            Ok(SettingChange::AgentActivity(on))
+        }
+        SettingChange::AskForActivityNotes(_) => {
+            let parsed = value.as_bool();
+            let on = require(parsed, BOOLEAN_REQUIREMENT)?;
+            Ok(SettingChange::AskForActivityNotes(on))
+        }
+        SettingChange::ShellRowName(_) => {
+            let parsed = read_choice(value, ShellRowName::from_text);
+            match parsed {
+                Some(name) => Ok(SettingChange::ShellRowName(name)),
+                None => Err(shell_row_name_requirement()),
+            }
+        }
     }
+}
+
+fn template_for<'a>(templates: &'a [SettingChange], key: &str) -> Option<&'a SettingChange> {
+    templates.iter().find(|template| template.key() == key)
 }
 
 pub fn apply_settings_layer(
@@ -335,24 +395,24 @@ pub fn apply_settings_layer(
     let mut settings = base.clone();
     let mut problems = Vec::new();
     let mut rejected = Vec::new();
+    let defaults = Settings::default();
+    let templates = SettingChange::all(&defaults);
 
     for (key, value) in layer {
         let is_retired = RETIRED_SETTING_KEYS.contains(&key.as_str());
         if is_retired {
             continue;
         }
-        let unknown = format!("{label}: \"{key}\" is not a setting");
-        let Some(name) = setting_name(key) else {
-            problems.push(unknown);
+        let Some(template) = template_for(&templates, key) else {
+            problems.push(format!("{label}: \"{key}\" is not a setting"));
             continue;
         };
-        let outcome = apply_setting(&mut settings, name, value);
+        let outcome = read_setting(template, value);
         match outcome {
-            Ok(()) => {}
-            Err(Rejection::UnknownKey) => problems.push(unknown),
-            Err(Rejection::Invalid(requirement)) => {
+            Ok(change) => settings.apply(change),
+            Err(requirement) => {
                 problems.push(format!("{label}: \"{key}\" {requirement}"));
-                rejected.push(name);
+                rejected.push(template.key());
             }
         }
     }
@@ -543,5 +603,41 @@ mod tests {
             assert_eq!(result.settings, expected, "{}", change.key());
             assert_ne!(result.settings, base, "{}", change.key());
         }
+    }
+
+    #[test]
+    fn every_setting_reads_back_what_it_writes() {
+        let defaults = Settings::default();
+        let non_default = Settings {
+            theme: ThemeChoice::Dark,
+            font_family: "Iosevka".to_string(),
+            font_size: 20.0,
+            scrollback: 5000,
+            scroll_sensitivity: 2.5,
+            cursor_blink: false,
+            cursor_style: CursorStyle::Bar,
+            restore_on_launch: false,
+            agent_activity: true,
+            ask_for_activity_notes: false,
+            shell_row_name: ShellRowName::Path,
+        };
+        let default_changes = SettingChange::all(&defaults);
+
+        let changes = SettingChange::all(&non_default);
+        for change in &changes {
+            assert!(!default_changes.contains(change), "{}", change.key());
+
+            let layer = layer_from(json!({ change.key(): change.value() }));
+            let result = apply_settings_layer(&defaults, &layer, "settings.json");
+            assert!(result.problems.is_empty(), "{}", change.key());
+
+            let read_back = SettingChange::all(&result.settings);
+            assert!(read_back.contains(change), "{}", change.key());
+        }
+
+        let mut keys: Vec<&str> = changes.iter().map(SettingChange::key).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), changes.len());
     }
 }
