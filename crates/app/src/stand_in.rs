@@ -283,10 +283,11 @@ impl ServicesPort for StandIn {
         };
         let mut layer = Map::new();
         layer.insert(key.to_string(), change.value());
-        let mut written = config.borrow().clone();
-        let applied = apply_settings_layer(&written.settings, &layer, STAND_IN_LABEL);
-        written.settings = applied.settings;
-        *config.borrow_mut() = written.clone();
+        let mut current = config.borrow_mut();
+        let applied = apply_settings_layer(&current.settings, &layer, STAND_IN_LABEL);
+        current.settings = applied.settings;
+        let written = current.clone();
+        drop(current);
         let published = ServicesOutput::Config(written);
         self.publish(WindowOutput::Services(published));
     }

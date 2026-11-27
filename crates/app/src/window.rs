@@ -36,7 +36,8 @@ use crate::menu::{
 };
 use crate::middle::{Attachable, attachable, line_editing_bytes, opens_link};
 use crate::motion::{
-    DrawnBounds, Motion, Moved, PAGE_TIME, SEGMENT_TIME, moved_settings, progress,
+    DrawnBounds, LONGEST_SETTING_MOVE, Motion, Moved, PAGE_TIME, SWITCH_TIME, card_name,
+    moved_settings, progress, switch_amount, switch_value,
 };
 use crate::page::{OverPage, Page, PageMove, over_page, pages_after};
 use crate::panels::{
@@ -310,15 +311,17 @@ impl WindowView {
                 self.shown.bindings = config.bindings;
                 self.shown.default_bindings = config.default_bindings;
                 self.shown.unread_keybindings = config.unread_keybindings;
-                let now = Instant::now();
                 let moved = moved_settings(&self.shown.settings, &config.settings);
-                for from in moved {
-                    let key = from.key();
-                    self.moved.insert(key, Moved { from, since: now });
-                }
                 self.shown.settings = config.settings;
                 self.shown.unread = config.unread_settings;
                 notices.config_problems = config.problems;
+                let now = Instant::now();
+                let reduce_motion = cx.reduce_motion();
+                for from in moved {
+                    let started = self.move_from(from, now, reduce_motion);
+                    let key = started.from.key();
+                    self.moved.insert(key, started);
+                }
                 self.refresh_fields(cx);
                 self.close_stale_capture();
             }
@@ -607,16 +610,13 @@ impl WindowView {
         let shortcuts_left = !after.contains(&Page::Shortcuts);
         let was_on_top = self.pages.last().copied();
         let now = Instant::now();
-        // The page now on top fades in; the last one to close fades out over the terminal.
-        match (after.is_empty(), was_on_top) {
-            (true, Some(closed)) => {
-                self.leaving = Some((closed, now));
-                self.page_since = None;
-            }
-            _ => {
-                self.leaving = None;
-                self.page_since = Some(now);
-            }
+        let closing_all = after.is_empty();
+        if closing_all && let Some(closed) = was_on_top {
+            self.leaving = Some((closed, now));
+            self.page_since = None;
+        } else {
+            self.leaving = None;
+            self.page_since = Some(now);
         }
         self.pages = after;
         if shortcuts_left {
@@ -1381,11 +1381,41 @@ impl WindowView {
         }
         let mut setting_moving = false;
         for moved in self.moved.values() {
-            if progress(moved.since, now, SEGMENT_TIME, reduce_motion) < 1. {
+            if progress(moved.since, now, LONGEST_SETTING_MOVE, reduce_motion) < 1. {
                 setting_moving = true;
             }
         }
         page_fading || leaving || setting_moving
+    }
+
+    /// A move away from `from`; one landing while the last is under way starts where the control is drawn now.
+    fn move_from(&self, from: SettingChange, now: Instant, reduce_motion: bool) -> Moved {
+        let key = from.key();
+        let mut start_amount = None;
+        let mut start_bounds = None;
+        let mut under_way = None;
+        if let Some(previous) = self.moved.get(key) {
+            let done = progress(previous.since, now, LONGEST_SETTING_MOVE, reduce_motion);
+            if done < 1. {
+                under_way = Some(previous);
+            }
+        }
+        if let Some(previous) = under_way {
+            if let Some(was_heading_to) = switch_value(&from) {
+                let done = progress(previous.since, now, SWITCH_TIME, reduce_motion);
+                let drawn = switch_amount(was_heading_to, previous.start_amount, done);
+                start_amount = Some(drawn);
+            }
+            let card = card_name(key);
+            let table = self.drawn_bounds.borrow();
+            start_bounds = table.get(&card).copied();
+        }
+        Moved {
+            from,
+            since: now,
+            start_amount,
+            start_bounds,
+        }
     }
 
     fn terminal_or_placeholder(&self) -> AnyElement {
@@ -1472,7 +1502,13 @@ impl Render for WindowView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.watch_field_focus(window, cx);
         let now = Instant::now();
-        if self.pages_moving(now, cx.reduce_motion()) {
+        let reduce_motion = cx.reduce_motion();
+        if let Some((_, since)) = self.leaving
+            && progress(since, now, PAGE_TIME, reduce_motion) >= 1.
+        {
+            self.leaving = None;
+        }
+        if self.pages_moving(now, reduce_motion) {
             window.request_animation_frame();
         }
         self.viewport = window.viewport_size();

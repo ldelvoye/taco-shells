@@ -170,11 +170,11 @@ impl Fixture {
         }
     }
 
-    /// The agent logs the stand-in answers from, by terminal.
     pub(crate) fn applies_writes(self) -> bool {
         self == Self::Writable
     }
 
+    /// The agent logs the stand-in answers from, by terminal.
     pub(crate) fn logs(self) -> BTreeMap<TerminalId, Vec<ActivityEntry>> {
         if self == Self::Empty {
             return BTreeMap::new();
