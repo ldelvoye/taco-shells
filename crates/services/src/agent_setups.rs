@@ -148,6 +148,12 @@ fn offer_text(product_name: &str) -> String {
     format!("{product_name} is running here but isn't set up, so its activity can't show.")
 }
 
+fn old_setup_text(product_name: &str) -> String {
+    format!(
+        "{product_name} still reports through this app's old hooks. Set up moves it to the plugin."
+    )
+}
+
 fn too_old_reason(product_name: &str, version: &str) -> String {
     let (major, minor, patch) = MINIMUM_VERSION;
     format!(
@@ -196,11 +202,17 @@ fn notice_of(
         return notice(AgentSetupNoticeKind::Done, DONE_TEXT.to_string());
     }
     match &reading.state {
-        AgentSetupState::Off | AgentSetupState::OldSetup => {
+        AgentSetupState::Off => {
             let kind = AgentSetupNoticeKind::Offer {
                 action: AgentMenuAction::SetUp,
             };
             notice(kind, offer_text(product_name))
+        }
+        AgentSetupState::OldSetup => {
+            let kind = AgentSetupNoticeKind::Offer {
+                action: AgentMenuAction::SetUp,
+            };
+            notice(kind, old_setup_text(product_name))
         }
         AgentSetupState::TooOld { version } => {
             let reason = too_old_reason(product_name, version);
@@ -919,7 +931,9 @@ mod tests {
         fs::write(&settings_path, &ours_too).unwrap();
         let fixture = fixture_with(environment, false);
         let seen = seen_claude(&fixture, "one");
-        assert!(is_offer(&only_notice(&fixture).kind));
+        let offer = only_notice(&fixture);
+        assert!(is_offer(&offer.kind));
+        assert!(offer.text.contains("still reports"), "{}", offer.text);
 
         fixture.setups.act(&claude(), AgentMenuAction::SetUp);
 
