@@ -36,6 +36,7 @@ mod strip;
 mod terminal_list;
 mod text_field;
 mod title_bar;
+mod typed_setting;
 mod window;
 
 use std::rc::Rc;
