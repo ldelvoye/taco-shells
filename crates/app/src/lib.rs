@@ -18,6 +18,7 @@ mod middle;
 mod motion;
 mod page;
 mod panels;
+mod parts;
 mod platform;
 mod popups;
 #[cfg(feature = "render")]

@@ -17,6 +17,7 @@ pub const BUTTON_RADIUS: f32 = 6.;
 pub const BUTTON_PADDING_Y: f32 = 3.;
 pub const BUTTON_PADDING_X: f32 = 9.;
 pub const CHIP_GAP: f32 = 5.;
+pub const UNREAD_OPACITY: f32 = 0.45;
 const PAGE_COLUMN_MARK: &str = "page:column";
 const HEADER_PADDING_LEFT: f32 = 16.;
 const HEADER_PADDING_RIGHT: f32 = 10.;

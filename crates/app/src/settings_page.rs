@@ -16,9 +16,10 @@ use crate::motion::{
     Motion, Moved, SEGMENT_TIME, SWITCH_TIME, card_name, lerp, recorder, switch_amount,
 };
 use crate::page::{
-    CHIP_GAP, PageMove, ROW_GAP, ROW_PADDING, chip, form_column, group, page_foot, page_frame,
-    page_header, text_button,
+    CHIP_GAP, PageMove, ROW_GAP, ROW_PADDING, UNREAD_OPACITY, chip, form_column, group, page_foot,
+    page_frame, page_header, text_button,
 };
+use crate::parts;
 use crate::shell::{shell_orange, shell_outline};
 use crate::shortcuts_page::chords_for;
 use crate::text_field::TextField;
@@ -35,7 +36,6 @@ const KEYBOARD_ROW: &str = "Keyboard shortcuts";
 const KEYBOARD_HINT: &str = "See and change what each key combination does.";
 const MORE: &str = "›";
 const FIELD_FONT: &str = "Menlo";
-const UNREAD_OPACITY: f32 = 0.45;
 const THEME_OPTIONS: [(&str, ThemeChoice); 3] = [
     ("System", ThemeChoice::System),
     ("Light", ThemeChoice::Light),
@@ -53,9 +53,6 @@ const ROW_NAME_OPTIONS: [(&str, ShellRowName); 2] = [
 const FONT_SIZE_STEP: f64 = 1.0;
 const SCROLL_SPEED_STEP: f64 = 1.0;
 const SCROLL_SPEED_MIN: f64 = 1.0;
-const CARD_PADDING: f32 = 10.;
-const CARD_RADIUS: f32 = 8.;
-const CARD_GAP: f32 = 8.;
 const TRACK_PADDING: f32 = 2.;
 const TRACK_RADIUS: f32 = 7.;
 const SEGMENT_RADIUS: f32 = 5.;
@@ -198,23 +195,8 @@ fn keyboard_group(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
 }
 
 fn problem_card(problems: &[String], look: &Look, cx: &mut Context<WindowView>) -> Div {
-    let mut card = div()
-        .flex()
-        .flex_col()
-        .items_start()
-        .gap(px(CARD_GAP))
-        .p(px(CARD_PADDING))
-        .rounded(px(CARD_RADIUS))
-        .bg(look.selected_card)
-        .border_1()
-        .border_color(look.hairline)
-        .text_color(look.text);
-    for problem in problems {
-        let line = div().child(problem.clone());
-        card = card.child(line);
-    }
     let open = open_file_button("settings-problems-open", look, cx);
-    card.child(open)
+    parts::problem_card(problems, open, look)
 }
 
 fn open_file_button(id: &'static str, look: &Look, cx: &mut Context<WindowView>) -> Stateful<Div> {

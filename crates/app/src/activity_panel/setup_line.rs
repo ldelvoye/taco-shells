@@ -1,21 +1,21 @@
 //! The agent setup line: which one a terminal shows, and the card it is drawn in beside an agent.
 
 use gpui::{
-    Context, Div, FontWeight, InteractiveElement, ParentElement, Stateful,
-    StatefulInteractiveElement, Styled, div, px, svg,
+    Context, Div, FontWeight, ParentElement, Stateful, StatefulInteractiveElement, Styled, div, px,
+    svg,
 };
 use taco_protocol::{HarnessId, TerminalId};
 use taco_services::{AgentMenuAction, AgentSetupNotice, AgentSetupNoticeKind};
 
 use super::{ActivityInput, card};
-use crate::assets::{CLOSE_ICON, DONE_ICON};
+use crate::assets::DONE_ICON;
 use crate::look::{Look, MARK_SIZE, SMALL_TEXT_SIZE};
+use crate::parts::{bordered_button, close_button};
 use crate::window::WindowView;
 
 const SHELL_TEXT: &str = "No agent here, just a shell.";
 const NO_TERMINAL_TEXT: &str = "No terminal is open.";
 const SET_UP_LABEL: &str = "Set up";
-const CLOSE_SIZE: f32 = 14.;
 const DONE_LINE_HEIGHT: f32 = 18.;
 const DONE_CHECK_GAP: f32 = 7.;
 
@@ -195,37 +195,13 @@ fn set_up_button(
     cx: &mut Context<WindowView>,
 ) -> Stateful<Div> {
     let chosen = harness.clone();
-    div()
-        .id("activity-set-up")
-        .flex_none()
-        .px(px(8.))
-        .py(px(2.))
-        .rounded(px(6.))
-        .border_1()
-        .border_color(look.hairline)
-        .bg(look.selected_card)
-        .cursor_pointer()
-        .font_weight(FontWeight::SEMIBOLD)
-        .child(SET_UP_LABEL)
+    bordered_button("activity-set-up", SET_UP_LABEL, look)
         .on_click(cx.listener(move |view, _, _, _| view.set_up(&chosen, action)))
 }
 
 fn dismiss_button(harness: &HarnessId, look: &Look, cx: &mut Context<WindowView>) -> Stateful<Div> {
     let dismissed = harness.clone();
-    let veil = look.veil;
-    let cross = svg()
-        .path(CLOSE_ICON)
-        .size(px(CLOSE_SIZE))
-        .flex_none()
-        .text_color(look.secondary_text);
-    div()
-        .id("activity-dismiss")
-        .flex_none()
-        .p(px(2.))
-        .rounded(px(6.))
-        .cursor_pointer()
-        .hover(move |style| style.bg(veil))
-        .child(cross)
+    close_button("activity-dismiss", look)
         .on_click(cx.listener(move |view, _, _, _| view.dismiss_notice(&dismissed)))
 }
 

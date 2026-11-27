@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use chrono::{DateTime, Local, TimeZone};
 use gpui::{
     AnyElement, Context, Div, ElementId, FontWeight, Hsla, InteractiveElement, IntoElement,
-    ParentElement, SharedString, Stateful, StatefulInteractiveElement, Styled, div, px, rgb, svg,
+    ParentElement, Stateful, StatefulInteractiveElement, Styled, div, px, rgb, svg,
 };
 use taco_protocol::{
     AgentRow, Author, Peer, PrState, RowState, SharedTarget, SharedThing, StartSource, TerminalId,
@@ -16,6 +16,7 @@ use taco_services::AgentSetupNotice;
 use crate::activity_log::{ActivityLog, LogItem, Stretch, log_items, preview};
 use crate::assets::{DOCUMENT_ICON, IMAGE_ICON, LINK_ICON, PULL_REQUEST_ICON, TEXT_ICON};
 use crate::look::{Look, SMALL_TEXT_SIZE};
+use crate::parts;
 use crate::shared_view::{is_image, opens};
 use crate::shell::shell_orange;
 use crate::terminal_list::state_mark;
@@ -244,8 +245,8 @@ fn now_text(row: &AgentRow, now_ms: u64) -> Option<String> {
 }
 
 fn element_id(kind: &str, number: u64) -> ElementId {
-    let id = SharedString::from(format!("activity-{kind}:{number}"));
-    ElementId::Name(id)
+    let prefixed = format!("activity-{kind}");
+    parts::element_id(&prefixed, number)
 }
 
 fn question_card(question: &str, look: &Look) -> Div {

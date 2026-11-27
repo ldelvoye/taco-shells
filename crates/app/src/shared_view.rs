@@ -12,6 +12,7 @@ use gpui::{
 use taco_protocol::{SharedTarget, SharedThing, TerminalId};
 
 use crate::look::{FONT_FAMILY, Look, SMALL_TEXT_SIZE, TEXT_SIZE, TITLE_BAR_HEIGHT};
+use crate::parts::bordered_button;
 use crate::window::WindowView;
 
 const MAX_TEXT_BYTES: u64 = 1024 * 1024;
@@ -288,17 +289,7 @@ fn path_line(text: &str) -> Div {
 
 fn reveal_button(path: &Path, look: &Look, cx: &mut Context<WindowView>) -> impl IntoElement {
     let revealed = path.to_path_buf();
-    div()
-        .id(REVEAL_ID)
-        .px(px(8.))
-        .py(px(2.))
-        .rounded(px(6.))
-        .border_1()
-        .border_color(look.hairline)
-        .bg(look.selected_card)
-        .cursor_pointer()
-        .font_weight(FontWeight::SEMIBOLD)
-        .child(REVEAL_LABEL)
+    bordered_button(REVEAL_ID, REVEAL_LABEL, look)
         .on_click(cx.listener(move |_, _, _, cx| cx.reveal_path(&revealed)))
 }
 

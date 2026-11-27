@@ -4,9 +4,9 @@ use std::time::Duration;
 
 use gpui::{
     Animation, AnimationExt, AnyElement, App, AppContext, Context, Div, DragMoveEvent, Easing,
-    ElementId, FontWeight, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
-    ParentElement, Pixels, Point, Render, SharedString, Stateful, StatefulInteractiveElement,
-    Styled, TimedTransformation, Transformation, Window, div, px, size, svg, transparent_black,
+    FontWeight, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement,
+    Pixels, Point, Render, Stateful, StatefulInteractiveElement, Styled, TimedTransformation,
+    Transformation, Window, div, px, size, svg, transparent_black,
 };
 use taco_protocol::{
     AgentRow, Arrangement, Dragged, DrawnState, Row, RowState, TabGroup, TabGroupId, TerminalId,
@@ -18,9 +18,10 @@ use crate::assets::{DONE_ICON, PLUS_ICON, RIPPLE_ICON, TRASH_ICON, WORKING_ICON}
 use crate::done_checks::DRAW_TIME;
 use crate::drive;
 use crate::look::{FONT_FAMILY, Look, MARK_SIZE, ROW_HEIGHT, ROW_RADIUS, TEXT_SIZE, TRAY_RADIUS};
+use crate::parts::element_id;
 use crate::row_name::row_name;
 use crate::shell::{shell_orange, shell_outline};
-use crate::slot::{Slot, fraction_at};
+use crate::slot::{ENTRY_GAP, Slot, fraction_at};
 use crate::window::WindowView;
 
 const UNNAMED_TAB_GROUP: &str = "Group";
@@ -99,7 +100,7 @@ pub fn terminal_list(input: &ListInput, cx: &mut Context<WindowView>) -> Statefu
         .overflow_y_scroll()
         .flex()
         .flex_col()
-        .gap(px(2.))
+        .gap(px(ENTRY_GAP))
         .px(px(6.))
         .py(px(5.))
         .on_drop(cx.listener(|view, drag: &ListDrag, _, cx| view.drop_on_list(drag, cx)))
@@ -205,7 +206,7 @@ fn tray_element(
         .flex()
         .flex_none()
         .flex_col()
-        .gap(px(2.))
+        .gap(px(ENTRY_GAP))
         .pt(px(2.))
         .px(px(3.))
         .pb(px(4.))
@@ -465,11 +466,6 @@ fn drag_preview(
         look: drag.look.clone(),
     };
     cx.new(|_| preview)
-}
-
-fn element_id(kind: &str, name: &str) -> ElementId {
-    let id = SharedString::from(format!("{kind}:{name}"));
-    ElementId::Name(id)
 }
 
 // The "taco shell slot" Lucas chose: a row-sized gap outlined in the shell's orange.
