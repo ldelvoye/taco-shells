@@ -20,6 +20,7 @@ use crate::repo;
 use crate::smoke;
 
 const SSH_KEYGEN: &str = "/usr/bin/ssh-keygen";
+const KEYGEN_PATH: &str = "/usr/bin:/bin";
 const KEY_FOLDER: &str = ".config/taco-shells-release";
 const KEY_FILE: &str = "release_key";
 const INSTALL_SCRIPT: &str = "install.sh";
@@ -326,7 +327,7 @@ fn allowed_signers_text(keys: &[&str]) -> String {
 fn verify(zip: &Path, signature: &Path, allowed: &Path) -> Result<(), String> {
     let contents =
         File::open(zip).map_err(|error| format!("could not open {}: {error}", zip.display()))?;
-    let mut keygen = Command::new(SSH_KEYGEN);
+    let mut keygen = keygen_without_agent();
     keygen.args(["-Y", "verify", "-f"]);
     keygen.arg(allowed);
     keygen.args([
@@ -350,6 +351,16 @@ fn verify(zip: &Path, signature: &Path, allowed: &Path) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+// With SSH_AUTH_SOCK set, ssh-keygen asks the SSH agent about a key before reading the key file, and that can wait
+// on an approval forever. Only the real release signing may reach the agent or the terminal.
+fn keygen_without_agent() -> Command {
+    let mut keygen = Command::new(SSH_KEYGEN);
+    keygen.env_clear();
+    keygen.env("PATH", KEYGEN_PATH);
+    keygen.stdin(Stdio::null());
+    keygen
 }
 
 fn release_notes(repo_root: &Path, tag: &str, notes_file: Option<&Path>) -> Result<String, String> {
@@ -395,6 +406,11 @@ fn running_app_answered_an_update_check() -> bool {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::thread;
+    use std::time::Instant;
+
+    const KEYGEN_DEADLINE: Duration = Duration::from_secs(10);
+    const KEYGEN_POLL: Duration = Duration::from_millis(20);
 
     static SCRATCH_COUNT: AtomicU64 = AtomicU64::new(0);
 
@@ -408,25 +424,40 @@ mod tests {
 
     fn throwaway_key(folder: &Path, name: &str) -> (PathBuf, String) {
         let key = folder.join(name);
-        let mut keygen = Command::new(SSH_KEYGEN);
+        let mut keygen = keygen_without_agent();
         keygen.args(["-q", "-t", "ed25519", "-N", "", "-C", name, "-f"]);
         keygen.arg(&key);
-        let made = keygen.status().unwrap();
-        assert!(made.success());
+        assert!(succeeded_in_time(keygen));
         let public = fs::read_to_string(key.with_extension("pub")).unwrap();
         (key, public.trim().to_string())
     }
 
     fn signed_with(key: &Path, zip: &Path, namespace: &str) -> PathBuf {
-        let mut keygen = Command::new(SSH_KEYGEN);
+        let mut keygen = keygen_without_agent();
         keygen.args(["-Y", "sign", "-q", "-n", namespace, "-f"]);
         keygen.arg(key);
         keygen.arg(zip);
-        let signed = keygen.status().unwrap();
-        assert!(signed.success());
+        assert!(succeeded_in_time(keygen));
         let mut signature = zip.as_os_str().to_os_string();
         signature.push(".sig");
         PathBuf::from(signature)
+    }
+
+    fn succeeded_in_time(mut keygen: Command) -> bool {
+        let mut child = keygen.spawn().unwrap();
+        let deadline = Instant::now() + KEYGEN_DEADLINE;
+        loop {
+            let polled = child.try_wait().unwrap();
+            if let Some(status) = polled {
+                return status.success();
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("{SSH_KEYGEN} overran {KEYGEN_DEADLINE:?}");
+            }
+            thread::sleep(KEYGEN_POLL);
+        }
     }
 
     #[test]
