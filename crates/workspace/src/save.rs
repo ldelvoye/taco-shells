@@ -44,10 +44,12 @@ pub struct SavedTabGroup {
 /// When the save is due and what it should hold, so a burst of changes is written once.
 #[derive(Default)]
 pub(crate) struct SaveScheduler {
-    /// What the save should hold now, and what the file was last written with.
+    /// What the save should hold now.
     wanted_save: Option<Saved>,
+    /// What the file was last written with.
     written_save: Option<Saved>,
     save_due: Option<u64>,
+    /// When the oldest change not yet written was made.
     unsaved_since: Option<u64>,
 }
 
@@ -111,10 +113,10 @@ pub(crate) fn saved_from(
         }
     }
     let rows = arrangement.rows.iter().map(|row| {
-        let tab_group = match &row.tab_group {
-            Some(tab_group) => ordered.iter().position(|known| *known == tab_group),
-            None => None,
-        };
+        let mut tab_group = None;
+        if let Some(group) = &row.tab_group {
+            tab_group = ordered.iter().position(|known| *known == group);
+        }
         SavedRow {
             id: Some(row.terminal.clone()),
             directory: directories.get(&row.terminal).cloned(),
@@ -159,18 +161,14 @@ impl SaveScheduler {
         self.save_due = Some(debounced.min(latest));
     }
 
+    /// Replaces what the save should hold, at once and without a wait.
+    pub(crate) fn want(&mut self, saved: Option<Saved>) {
+        self.wanted_save = saved;
+    }
+
     // After the freeze the save stays what it was when the quit began, so only the state from before it is written.
-    pub(crate) fn write(
-        &mut self,
-        saved_now: Option<Saved>,
-        frozen: bool,
-        storage: &mut dyn Storage,
-        now_ms: u64,
-    ) {
+    pub(crate) fn write(&mut self, storage: &mut dyn Storage, now_ms: u64) {
         self.save_due = None;
-        if !frozen {
-            self.wanted_save = saved_now;
-        }
         let Some(saved) = &self.wanted_save else {
             return;
         };

@@ -2,9 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use taco_agents::{HARNESSES, default_harness, harness_of};
 use taco_protocol::{
-    ActivityEvent, ActivityRequest, AgentLabel, AgentSignal, Arrangement, ConfigFile, DrawnState,
-    HarnessId, HookCall, HookEvent, Panels, RequestReply, Row, RowState, RuntimeCommand,
-    RuntimeReport, TabGroup, TabGroupId, TerminalId, TerminalSize, TerminalStart, WorkspaceRequest,
+    ActivityRequest, AgentLabel, AgentSignal, Arrangement, ConfigFile, DrawnState, HarnessId,
+    HookCall, HookEvent, Panels, RequestReply, Row, RowState, RuntimeCommand, RuntimeReport,
+    TabGroup, TabGroupId, TerminalId, TerminalSize, TerminalStart, WorkspaceRequest,
 };
 use taco_rules::{
     add_row, add_row_to, apply_drop, can_fork, close_panel, close_row, create_tab_group,
@@ -14,6 +14,7 @@ use taco_rules::{
 };
 
 use crate::activity::Activity;
+use crate::outbound::Outbound;
 use crate::rows::{
     AgentRows, Signalled, apply_idle_title, apply_on_screen, apply_question, apply_signal,
 };
@@ -33,15 +34,6 @@ pub struct Options {
     pub storage: Box<dyn Storage>,
     /// The `restoreOnLaunch` setting: when false, the saved terminals are not reopened.
     pub restore_on_launch: bool,
-}
-
-/// What has to go out after an input: to the runtime, to the window, or to the app.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Outbound {
-    Runtime(RuntimeCommand),
-    State(DrawnState),
-    /// For Agent Activity, on its own stream rather than in the state published whole.
-    Activity(ActivityEvent),
 }
 
 /// The owner of the arrangement: it applies what the window asks for and what the runtime and the hooks report.
@@ -778,13 +770,13 @@ impl Workspace {
     }
 
     fn write_save(&mut self, now_ms: u64) {
-        let mut saved_now = None;
         if !self.frozen {
             self.sessions.drop_expired(now_ms);
-            saved_now = self.saved_now();
+            let saved = self.saved_now();
+            self.save.want(saved);
         }
         let storage = self.options.storage.as_mut();
-        self.save.write(saved_now, self.frozen, storage, now_ms);
+        self.save.write(storage, now_ms);
     }
 
     /// Rebuilds the saved terminals under their saved ids and opens each where it was. False when the save holds none.

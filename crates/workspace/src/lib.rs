@@ -1,9 +1,10 @@
-//! The arrangement of terminals and everything that changes it.
+//! The terminals' arrangement, their agents, their save, and Agent Activity.
 
 mod activity;
 mod asking;
 mod board;
 mod log;
+mod outbound;
 mod rows;
 mod save;
 mod sessions;
@@ -15,8 +16,9 @@ mod workspace;
 mod tests;
 
 pub use log::KEPT_ENTRIES;
+pub use outbound::Outbound;
 pub use save::SAVE_DEBOUNCE_MS;
 pub use storage::{
     ACTIVITY_DIRECTORY, ELECTRON_COPY_FILE, FileStorage, Storage, UNREADABLE_COPY_FILE,
 };
-pub use workspace::{Options, Outbound, Workspace};
+pub use workspace::{Options, Workspace};

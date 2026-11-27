@@ -9,8 +9,8 @@ use taco_protocol::{
 use crate::asking::{context_text, nudge_text, start_source};
 use crate::board::{NowLine, Seen, Sharing, TerminalBoard};
 use crate::log::{Log, line_of};
+use crate::outbound::Outbound;
 use crate::storage::Storage;
-use crate::workspace::Outbound;
 
 /// Agent Activity for every terminal: the logs, the boards and the terminal the panel watches.
 #[derive(Default)]
@@ -47,7 +47,6 @@ fn loaded_log<'a>(
     })
 }
 
-/// Puts a new entry in the log's file: the whole log when it is due a rewrite, else the one line. Says whether it did.
 fn write_log(
     storage: &mut dyn Storage,
     terminal: &TerminalId,
