@@ -3,6 +3,7 @@ use std::path::Path;
 use serde_json::{Map, Value, json};
 
 use crate::identity::tool_name_prefix;
+use crate::panel_text::PANEL_TEXT;
 use crate::post::PostError;
 use crate::tools::TOOL_NAMES;
 
@@ -11,6 +12,8 @@ const START_ROUTE: &str = "/agent-session/start";
 const END_ROUTE: &str = "/agent-session/end";
 const STATE_ROUTE: &str = "/agent-session/state";
 const HOOK_ROUTE: &str = "/agent-session/hook";
+const CONTEXT_ROUTE: &str = "/agent-session/context";
+const STOP_ROUTE: &str = "/agent-session/stop";
 const HARNESS: &str = "claude";
 const TOKEN_FILE_NAME: &str = "focus-token";
 const FAILURE_EVENT: &str = "PostToolUseFailure";
@@ -46,6 +49,12 @@ const STATE_EVENTS: [&str; 6] = [
 
 #[derive(Debug, PartialEq)]
 pub struct Post {
+    pub route: &'static str,
+    pub body: String,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Question {
     pub route: &'static str,
     pub body: String,
 }
@@ -269,18 +278,63 @@ pub fn posts_for(payload: &Value, pids: &[u32]) -> Vec<Post> {
         None => return posts,
     }
 
+    posts.push(Post {
+        route: HOOK_ROUTE,
+        body: hook_body(payload, pids),
+    });
+    posts
+}
+
+fn hook_body(payload: &Value, pids: &[u32]) -> String {
     let reduced = reduced_payload(payload);
-    let hook_body = json!({
+    let body = json!({
         "pids": pids,
         "harness": HARNESS,
         "payload": reduced,
     });
-    let body = hook_body.to_string();
-    posts.push(Post {
-        route: HOOK_ROUTE,
-        body,
+    body.to_string()
+}
+
+pub fn question_for(payload: &Value, pids: &[u32]) -> Option<Question> {
+    let event = text_field(payload, "hook_event_name")?;
+    let route = match event.as_str() {
+        "SessionStart" => CONTEXT_ROUTE,
+        "Stop" => STOP_ROUTE,
+        _ => return None,
+    };
+    let already_continued = payload.get("stop_hook_active") == Some(&Value::Bool(true));
+    if route == STOP_ROUTE && already_continued {
+        return None;
+    }
+    Some(Question {
+        route,
+        body: hook_body(payload, pids),
+    })
+}
+
+pub fn session_start_output(answer: &Value) -> Option<String> {
+    if answer["yours"] != Value::Bool(true) {
+        return None;
+    }
+    let mut text = String::from(PANEL_TEXT);
+    let context = text_field(answer, "context");
+    if let Some(context) = context {
+        text.push_str("\n\n");
+        text.push_str(&context);
+    }
+    let output = json!({
+        "hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": text,
+        }
     });
-    posts
+    Some(output.to_string())
+}
+
+pub fn stop_output(answer: &Value) -> Option<String> {
+    let reason = text_field(answer, "reason")?;
+    let output = json!({ "decision": "block", "reason": reason });
+    Some(output.to_string())
 }
 
 pub fn send_posts(posts: &[Post], mut send: impl FnMut(&Post) -> Result<(), PostError>) -> usize {
@@ -521,5 +575,58 @@ mod tests {
         });
         assert_eq!(attempted, 2);
         assert_eq!(sent, ["0", "1"]);
+    }
+
+    #[test]
+    fn only_a_session_start_and_a_first_stop_ask_the_app_and_they_send_the_hook_posts_body() {
+        let start = json!({"hook_event_name": "SessionStart", "session_id": "s1", "cwd": "/w", "source": "compact"});
+        let stop = json!({"hook_event_name": "Stop", "session_id": "s1"});
+        let looping =
+            json!({"hook_event_name": "Stop", "session_id": "s1", "stop_hook_active": true});
+        let tool =
+            json!({"hook_event_name": "PreToolUse", "session_id": "s1", "tool_name": "Bash"});
+
+        let started = question_for(&start, &PIDS).unwrap();
+        assert_eq!(started.route, CONTEXT_ROUTE);
+        let stopped = question_for(&stop, &PIDS).unwrap();
+        assert_eq!(stopped.route, STOP_ROUTE);
+        assert_eq!(question_for(&looping, &PIDS), None);
+        assert_eq!(question_for(&tool, &PIDS), None);
+
+        let posts = posts_for(&start, &PIDS);
+        let hook_post = posts.last().unwrap();
+        assert_eq!(hook_post.route, HOOK_ROUTE);
+        assert_eq!(started.body, hook_post.body);
+    }
+
+    #[test]
+    fn the_session_start_output_hands_over_the_panel_text_and_the_apps_context() {
+        assert_eq!(session_start_output(&json!({})), None);
+
+        let bare = session_start_output(&json!({"yours": true})).unwrap();
+        let parsed: Value = serde_json::from_str(&bare).unwrap();
+        let expected = json!({"hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": PANEL_TEXT,
+        }});
+        assert_eq!(parsed, expected);
+
+        let with_context = session_start_output(&json!({"yours": true, "context": "Earlier: x"}));
+        let parsed: Value = serde_json::from_str(&with_context.unwrap()).unwrap();
+        let text = format!("{PANEL_TEXT}\n\nEarlier: x");
+        assert_eq!(parsed["hookSpecificOutput"]["additionalContext"], text);
+    }
+
+    #[test]
+    fn a_stop_is_blocked_only_with_a_reason() {
+        assert_eq!(stop_output(&json!({})), None);
+        assert_eq!(stop_output(&json!({"reason": ""})), None);
+
+        let blocked = stop_output(&json!({"reason": "write a note"})).unwrap();
+        let parsed: Value = serde_json::from_str(&blocked).unwrap();
+        assert_eq!(
+            parsed,
+            json!({"decision": "block", "reason": "write a note"})
+        );
     }
 }
