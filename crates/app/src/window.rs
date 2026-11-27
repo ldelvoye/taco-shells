@@ -105,6 +105,8 @@ pub struct WindowView {
     folds_open: HashSet<u64>,
     /// The `seq` of each long text in the log shown whole.
     texts_open: HashSet<u64>,
+    /// Whether Shared lists every thing rather than the newest few.
+    shared_all_shown: bool,
     ahead: Option<Ahead>,
     /// The number of this window's last focus move.
     last_move: u64,
@@ -234,6 +236,7 @@ impl WindowView {
             activity: ActivityLog::default(),
             folds_open: HashSet::new(),
             texts_open: HashSet::new(),
+            shared_all_shown: false,
             ahead: None,
             last_move,
             drop_place: None,
@@ -398,6 +401,7 @@ impl WindowView {
         };
         self.folds_open.clear();
         self.texts_open.clear();
+        self.shared_all_shown = false;
         let request = ActivityRequest::Watch { terminal: wanted };
         self.port.activity(request);
     }
@@ -417,6 +421,11 @@ impl WindowView {
 
     pub(crate) fn toggle_text(&mut self, seq: u64, cx: &mut Context<Self>) {
         toggle(&mut self.texts_open, seq);
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_shared_all(&mut self, cx: &mut Context<Self>) {
+        self.shared_all_shown = !self.shared_all_shown;
         cx.notify();
     }
 
@@ -1285,6 +1294,7 @@ impl WindowView {
                     log: &self.activity,
                     folds_open: &self.folds_open,
                     texts_open: &self.texts_open,
+                    shared_all_shown: self.shared_all_shown,
                     now_ms: now_ms(),
                     look,
                 };

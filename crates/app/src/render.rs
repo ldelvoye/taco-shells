@@ -72,7 +72,7 @@ pub fn render_png(
         if fixture.applies_writes() {
             writes = Some(appearance);
         }
-        let ports = StandIn::start(&shown, fixture.logs(), fixture.log_page(), writes);
+        let ports = StandIn::start(&shown, fixture.activity(), writes);
         let lights = TrafficLights::StandIns;
         cx.new(|cx| WindowView::new(shown, look, lights, ports, cx))
     })?;

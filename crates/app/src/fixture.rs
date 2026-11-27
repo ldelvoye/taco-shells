@@ -4,8 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use taco_protocol::{
-    ActivityEntry, ActivityKind, AgentLabel, AgentRow, Arrangement, Author, DrawnState, HarnessId,
-    Peer, Row, RowState, StartSource, Step, TabGroup, TabGroupId, TerminalId,
+    ActivityEntry, ActivityKind, AgentLabel, AgentRow, Arrangement, Author, Board, DrawnState,
+    HarnessId, Peer, PrState, Row, RowState, SharedTarget, SharedThing, StartSource, Step,
+    TabGroup, TabGroupId, TerminalId,
 };
 use taco_rules::default_panels;
 use taco_services::{AgentSetupNotice, AgentSetupNoticeKind, AgentSetupView};
@@ -15,6 +16,7 @@ use taco_settings::{
 
 use crate::activity_panel::{MS_PER_MINUTE, now_ms};
 use crate::banners::Notices;
+use crate::stand_in::StandInActivity;
 use crate::window::Shown;
 
 const CLAUDE: &str = "claude";
@@ -101,6 +103,7 @@ const FIXED_MESSAGE: &str = "#155 is fixed: the arms are cut into rectangles tha
 stays solid. Tests and clippy are clean.";
 const HEADS_UP: &str = "Heads-up: main moved to 42bf29b while you were rebasing.";
 const ADDRESS: &str = "uds:/tmp/cc-socks/9838.sock";
+const NOW_LINE: &str = "Rebasing #179 onto main, then resolving the conflict in draw.rs.";
 
 const WORKING_LOG: [FixtureEntry; 10] = [
     entry(42, ASKED, "rework the billing platform lock"),
@@ -200,26 +203,36 @@ impl Fixture {
         }
     }
 
-    /// How many entries the stand-in sends in one page of a log.
-    pub(crate) fn log_page(self) -> usize {
-        match self {
-            Self::Activity | Self::ActivityNarrow => FULL_LOG_PAGE,
-            Self::Paged => CUT_LOG_PAGE,
-            _ => SHORT_LOG_PAGE,
-        }
-    }
-
     pub(crate) fn applies_writes(self) -> bool {
         self == Self::Writable
     }
 
-    /// The agent logs the stand-in answers from, by terminal.
-    pub(crate) fn logs(self) -> BTreeMap<TerminalId, Vec<ActivityEntry>> {
+    /// The agent logs and boards the stand-in answers from.
+    pub(crate) fn activity(self) -> StandInActivity {
+        let full = matches!(self, Self::Activity | Self::ActivityNarrow | Self::Paged);
+        let mut page = SHORT_LOG_PAGE;
+        if self == Self::Paged {
+            page = CUT_LOG_PAGE;
+        } else if full {
+            page = FULL_LOG_PAGE;
+        }
+        let mut boards = BTreeMap::new();
+        if full {
+            boards.insert(TerminalId("t0".to_string()), full_board());
+        }
+        StandInActivity {
+            logs: self.logs(full),
+            boards,
+            page,
+        }
+    }
+
+    fn logs(self, full: bool) -> BTreeMap<TerminalId, Vec<ActivityEntry>> {
         if self == Self::Empty {
             return BTreeMap::new();
         }
         let mut working = log_of(&WORKING_LOG);
-        if matches!(self, Self::Activity | Self::ActivityNarrow | Self::Paged) {
+        if full {
             working = full_log();
         }
         let needs = log_of(&NEEDS_LOG);
@@ -438,6 +451,102 @@ fn full_log() -> Vec<ActivityEntry> {
     log.heard(5, addressed(ADDRESS), HEADS_UP);
     log.step(3, did("Bash", "git rebase --continue"));
     log.entries
+}
+
+/// A now line and one shared thing of each kind, newest first, as the workspace keeps them.
+fn full_board() -> Board {
+    let now = now_ms();
+    let ago = |minutes: u64| now.saturating_sub(minutes * MS_PER_MINUTE);
+    let thing = |id: u64, minutes: u64, by: Author, kind: &str, title: &str, target| SharedThing {
+        id,
+        at_ms: ago(minutes),
+        by,
+        kind: kind.to_string(),
+        title: title.to_string(),
+        target,
+    };
+    let merged = SharedTarget::PullRequest {
+        url: Some("https://github.com/ldelvoye/taco-shells/pull/155".to_string()),
+        number: 155,
+        state: PrState::Merged,
+        checked_ms: None,
+    };
+    let open = SharedTarget::PullRequest {
+        url: Some("https://github.com/ldelvoye/taco-shells/pull/179".to_string()),
+        number: 179,
+        state: PrState::Open,
+        checked_ms: Some(ago(6)),
+    };
+    let link = SharedTarget::Link {
+        url: "https://claude.ai/artifact/9NXFTKtkNKmvbxjMDsn1zL".to_string(),
+    };
+    let image = SharedTarget::File {
+        path: home()
+            .join("code/taco-shells/view-check/logo-after.png")
+            .to_string_lossy()
+            .into_owned(),
+    };
+    let document = SharedTarget::File {
+        path: home()
+            .join("code/taco-shells/PLAN-sigkill.md")
+            .to_string_lossy()
+            .into_owned(),
+    };
+    let text = SharedTarget::Text { characters: 2_400 };
+    let shared = vec![
+        thing(
+            6,
+            8,
+            Author::App,
+            "Pull request",
+            "#179 ldelvoye/taco-shells",
+            open,
+        ),
+        thing(
+            5,
+            20,
+            Author::OtherAgent(named("code-83")),
+            "Review",
+            "What Lucas approved for Agent Activity",
+            link,
+        ),
+        thing(
+            4,
+            38,
+            Author::Agent,
+            "Images",
+            "The logo before and after",
+            image,
+        ),
+        thing(
+            3,
+            44,
+            Author::App,
+            "Pull request",
+            "#155 Draw block and box characters as shapes",
+            merged,
+        ),
+        thing(
+            2,
+            86,
+            Author::Agent,
+            "Plan",
+            "SIGKILL grace-period plan",
+            document,
+        ),
+        thing(
+            1,
+            87,
+            Author::Agent,
+            "Finding",
+            "Why closing a terminal leaves its shell running",
+            text,
+        ),
+    ];
+    Board {
+        now: Some(NOW_LINE.to_string()),
+        shared,
+    }
 }
 
 fn narrow_activity() -> Shown {
