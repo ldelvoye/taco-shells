@@ -28,12 +28,18 @@ const STAND_IN_LABEL: &str = "stand-in";
 const REFUSED_KEYMAP_WRITE: &str = "keybindings.json is read-only, so nothing was changed.";
 const SET_UP_TEXT: &str = "Claude Code is set up. Its activity shows here from its next session.";
 
+/// The agent logs and boards the stand-in answers from, by terminal.
+pub struct StandInActivity {
+    pub logs: BTreeMap<TerminalId, Vec<ActivityEntry>>,
+    pub boards: BTreeMap<TerminalId, Board>,
+    /// How many entries one page of a log holds.
+    pub page: usize,
+}
+
 pub struct StandIn {
     state: RefCell<DrawnState>,
     setups: RefCell<AgentSetupView>,
-    logs: BTreeMap<TerminalId, Vec<ActivityEntry>>,
-    /// How many entries one page of a log holds.
-    log_page: usize,
+    activity: StandInActivity,
     window: WindowSender,
     opened: Cell<u64>,
     /// The config a setting is written into and published from; none when every write is refused.
@@ -42,12 +48,7 @@ pub struct StandIn {
 
 impl StandIn {
     /// With `writes` set to the appearance drawn in, a setting written is applied and published as a new config.
-    pub fn start(
-        shown: &Shown,
-        logs: BTreeMap<TerminalId, Vec<ActivityEntry>>,
-        log_page: usize,
-        writes: Option<Appearance>,
-    ) -> Ports {
+    pub fn start(shown: &Shown, activity: StandInActivity, writes: Option<Appearance>) -> Ports {
         let (window, outputs) = unbounded();
         let mut config = None;
         if let Some(appearance) = writes {
@@ -65,8 +66,7 @@ impl StandIn {
         let stand_in = Rc::new(Self {
             state: RefCell::new(shown.drawn.clone()),
             setups: RefCell::new(shown.setups.clone()),
-            logs,
-            log_page,
+            activity,
             window,
             opened: Cell::new(0),
             config,
@@ -84,7 +84,7 @@ impl StandIn {
 
     /// The newest page of a terminal's log before `before`, and whether nothing older is left.
     fn log_page(&self, terminal: &TerminalId, before: Option<u64>) -> (Vec<ActivityEntry>, bool) {
-        let Some(log) = self.logs.get(terminal) else {
+        let Some(log) = self.activity.logs.get(terminal) else {
             return (Vec::new(), true);
         };
         let mut kept = Vec::new();
@@ -97,7 +97,7 @@ impl StandIn {
                 kept.push(entry.clone());
             }
         }
-        let start = kept.len().saturating_sub(self.log_page);
+        let start = kept.len().saturating_sub(self.activity.page);
         let page = kept.split_off(start);
         let complete = kept.is_empty();
         (page, complete)
@@ -226,11 +226,15 @@ impl WorkspacePort for StandIn {
                 terminal: Some(terminal),
             } => {
                 let (entries, complete) = self.log_page(&terminal, None);
+                let mut board = Board::default();
+                if let Some(kept) = self.activity.boards.get(&terminal) {
+                    board = kept.clone();
+                }
                 ActivityEvent::Loaded {
                     terminal,
                     entries,
                     complete,
-                    board: Board::default(),
+                    board,
                 }
             }
             ActivityRequest::Older { terminal, before } => {

@@ -6,13 +6,18 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use chrono::{DateTime, Local, TimeZone};
 use gpui::{
     AnyElement, Context, Div, ElementId, FontWeight, Hsla, InteractiveElement, IntoElement,
-    ParentElement, SharedString, Stateful, StatefulInteractiveElement, Styled, div, px, svg,
+    ParentElement, SharedString, Stateful, StatefulInteractiveElement, Styled, div, px, rgb, svg,
 };
-use taco_protocol::{AgentRow, Author, HarnessId, Peer, RowState, StartSource, Step, TerminalId};
+use taco_protocol::{
+    AgentRow, Author, HarnessId, Peer, PrState, RowState, SharedTarget, SharedThing, StartSource,
+    Step, TerminalId,
+};
 use taco_services::{AgentSetupNotice, AgentSetupNoticeKind};
 
 use crate::activity_log::{ActivityLog, LogItem, Stretch, StretchStep, log_items, preview};
-use crate::assets::CLOSE_ICON;
+use crate::assets::{
+    CLOSE_ICON, DOCUMENT_ICON, IMAGE_ICON, LINK_ICON, PULL_REQUEST_ICON, TEXT_ICON,
+};
 use crate::look::{Look, SMALL_TEXT_SIZE};
 use crate::shell::shell_orange;
 use crate::terminal_list::state_mark;
@@ -45,6 +50,25 @@ const LINE_GAP: f32 = 4.;
 const ITEM_PADDING: f32 = 9.;
 const RULE_GAP: f32 = 8.;
 const QUIET_PADDING: f32 = 6.;
+const SHARED_ALL_ID: &str = "activity-shared-all";
+// Lucas chooses from pictures whether the Now card keeps the logo's lettuce along its top.
+const LETTUCE_BAND: bool = true;
+const LETTUCE_WIDTH: f32 = 3.;
+/// The ink on the shell orange, in both appearances: 6.53:1.
+const NOW_INK: u32 = 0x2B211C;
+const NOW_TEXT_SIZE: f32 = 13.5;
+const NOW_RADIUS: f32 = 10.;
+const NOW_PADDING_X: f32 = 14.;
+const NOW_PADDING_Y: f32 = 11.;
+const TOP_GAP: f32 = 14.;
+const SHARED_HEADING: &str = "SHARED";
+const SHARED_HEADING_SIZE: f32 = 10.5;
+const SHARED_SHOWN: usize = 5;
+const SHARED_ICON_SIZE: f32 = 16.;
+const SHARED_RADIUS: f32 = 9.;
+const SHOW_FEWER: &str = "Show fewer";
+const PILL_RADIUS: f32 = 8.;
+const IMAGE_EXTENSIONS: [&str; 6] = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
 const CLOSE_SIZE: f32 = 14.;
 pub const MS_PER_MINUTE: u64 = 60_000;
 const MINUTES_PER_HOUR: u64 = 60;
@@ -68,6 +92,8 @@ pub struct ActivityInput<'a> {
     pub folds_open: &'a HashSet<u64>,
     /// The `seq` of each long text shown whole.
     pub texts_open: &'a HashSet<u64>,
+    /// Whether Shared lists every thing rather than the newest few.
+    pub shared_all_shown: bool,
     pub now_ms: u64,
     pub look: &'a Look,
 }
@@ -432,18 +458,32 @@ fn dismiss_button(harness: &HarnessId, look: &Look, cx: &mut Context<WindowView>
 fn log_section(input: &ActivityInput, row: &AgentRow, cx: &mut Context<WindowView>) -> Div {
     let look = input.look;
     let mut section = div().flex().flex_col();
-    if let Some(text) = now_text(row, input.now_ms) {
+    let mut top = Vec::new();
+    if let Some(now) = &input.log.board.now {
+        top.push(now_card(now, row, input));
+    } else if let Some(text) = now_text(row, input.now_ms) {
         let mark = state_mark(Some(row.state), look);
-        let now = div()
+        let header = div()
             .flex()
             .items_center()
             .gap(px(8.))
+            .child(mark)
+            .child(text);
+        top.push(header);
+    }
+    if let Some(shared) = shared_section(input, cx) {
+        top.push(shared);
+    }
+    if !top.is_empty() {
+        let above_the_log = div()
+            .flex()
+            .flex_col()
+            .gap(px(TOP_GAP))
             .pb(px(ITEM_PADDING))
             .border_b_1()
             .border_color(look.hairline)
-            .child(mark)
-            .child(text);
-        section = section.child(now);
+            .children(top);
+        section = section.child(above_the_log);
     }
     let agent_working = matches!(row.state, RowState::Working | RowState::Needs);
     let items = log_items(input.log, agent_working);
@@ -458,6 +498,217 @@ fn log_section(input: &ActivityInput, row: &AgentRow, cx: &mut Context<WindowVie
         section = section.child(placed);
     }
     section
+}
+
+/// The agent's own line on what it is doing, on the shell's orange, with the row's state under it.
+fn now_card(now: &str, row: &AgentRow, input: &ActivityInput) -> Div {
+    let look = input.look;
+    let ink: Hsla = rgb(NOW_INK).into();
+    let line = div()
+        .text_size(px(NOW_TEXT_SIZE))
+        .font_weight(FontWeight::SEMIBOLD)
+        .child(now.to_string());
+    let mut card = div()
+        .flex()
+        .flex_col()
+        .gap(px(4.))
+        .px(px(NOW_PADDING_X))
+        .py(px(NOW_PADDING_Y))
+        .rounded(px(NOW_RADIUS))
+        .bg(shell_orange())
+        .text_color(ink)
+        .child(line);
+    if let Some(state) = now_text(row, input.now_ms) {
+        let mut inked = look.clone();
+        inked.working = ink;
+        inked.done = ink;
+        inked.needs = ink;
+        let mark = state_mark(Some(row.state), &inked);
+        let state_line = div()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .text_size(px(SMALL_TEXT_SIZE))
+            .child(mark)
+            .child(state);
+        card = card.child(state_line);
+    }
+    if LETTUCE_BAND {
+        card = card.border_t(px(LETTUCE_WIDTH)).border_color(look.done);
+    }
+    card
+}
+
+/// How many of the shared things the list shows.
+fn shown_count(total: usize, all_shown: bool) -> usize {
+    if all_shown {
+        return total;
+    }
+    total.min(SHARED_SHOWN)
+}
+
+/// A pull request's state as last seen, never as if current: "Open, seen 12:04".
+fn pull_request_state(state: PrState, checked_ms: Option<u64>, at_ms: u64, now_ms: u64) -> String {
+    let word = match state {
+        PrState::Open => "Open",
+        PrState::Draft => "Draft",
+        PrState::Merged => "Merged",
+        PrState::Closed => "Closed",
+    };
+    let mut seen_ms = at_ms;
+    if let Some(checked) = checked_ms {
+        seen_ms = checked;
+    }
+    let seen = time_label(seen_ms, now_ms);
+    format!("{word}, seen {seen}")
+}
+
+fn is_image(path: &str) -> bool {
+    let Some((_, extension)) = path.rsplit_once('.') else {
+        return false;
+    };
+    let lowered = extension.to_ascii_lowercase();
+    IMAGE_EXTENSIONS.contains(&lowered.as_str())
+}
+
+fn target_icon(target: &SharedTarget) -> &'static str {
+    match target {
+        SharedTarget::Text { .. } => TEXT_ICON,
+        SharedTarget::File { path } if is_image(path) => IMAGE_ICON,
+        SharedTarget::File { .. } => DOCUMENT_ICON,
+        SharedTarget::Link { .. } => LINK_ICON,
+        SharedTarget::PullRequest { .. } => PULL_REQUEST_ICON,
+    }
+}
+
+fn sharer_name(by: &Author) -> String {
+    match by {
+        Author::Agent => "agent".to_string(),
+        Author::User => "you".to_string(),
+        Author::OtherAgent(peer) => peer_name(peer),
+        Author::App => "the app".to_string(),
+    }
+}
+
+/// What the agent and the app shared, newest first, in one card.
+fn shared_section(input: &ActivityInput, cx: &mut Context<WindowView>) -> Option<Div> {
+    let shared = &input.log.board.shared;
+    if shared.is_empty() {
+        return None;
+    }
+    let look = input.look;
+    let heading_text = format!("{SHARED_HEADING} · {}", shared.len());
+    let heading = div()
+        .text_size(px(SHARED_HEADING_SIZE))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(look.agent_ink)
+        .child(heading_text);
+    let count = shown_count(shared.len(), input.shared_all_shown);
+    let mut card = div()
+        .flex()
+        .flex_col()
+        .rounded(px(SHARED_RADIUS))
+        .border_1()
+        .border_color(look.hairline)
+        .bg(look.selected_card);
+    for (index, thing) in shared[..count].iter().enumerate() {
+        let below_another = index > 0;
+        let row = shared_row(thing, below_another, input);
+        card = card.child(row);
+    }
+    let mut section = div()
+        .flex()
+        .flex_col()
+        .items_start()
+        .gap(px(6.))
+        .child(heading)
+        .child(card.w_full());
+    if shared.len() > SHARED_SHOWN {
+        let mut label = format!("Show all {}", shared.len());
+        if input.shared_all_shown {
+            label = SHOW_FEWER.to_string();
+        }
+        let button = aligned_button(SHARED_ALL_ID.into(), &label, look);
+        let toggle = button.on_click(cx.listener(|view, _, _, cx| view.toggle_shared_all(cx)));
+        section = section.child(toggle);
+    }
+    Some(section)
+}
+
+fn shared_row(thing: &SharedThing, below_another: bool, input: &ActivityInput) -> Div {
+    let look = input.look;
+    let icon_path = target_icon(&thing.target);
+    let icon = svg()
+        .path(icon_path)
+        .size(px(SHARED_ICON_SIZE))
+        .flex_none()
+        .mt(px(1.))
+        .text_color(shell_orange());
+    let title = div()
+        .min_w_0()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_ellipsis()
+        .font_weight(FontWeight::MEDIUM)
+        .child(thing.title.clone());
+    let who = Who::of(&thing.by);
+    let dot = div()
+        .flex_none()
+        .size(px(AUTHOR_DOT))
+        .rounded_full()
+        .bg(who.dot(look));
+    let sharer = div()
+        .flex()
+        .items_center()
+        .gap(px(4.))
+        .child(dot)
+        .child(sharer_name(&thing.by));
+    let time = time_label(thing.at_ms, input.now_ms);
+    let mut facts = div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap_x(px(6.))
+        .gap_y(px(2.))
+        .text_size(px(SMALL_TEXT_SIZE))
+        .text_color(look.secondary_text)
+        .child(thing.kind.clone())
+        .child(sharer)
+        .child(time);
+    if let SharedTarget::PullRequest {
+        state, checked_ms, ..
+    } = &thing.target
+    {
+        let words = pull_request_state(*state, *checked_ms, thing.at_ms, input.now_ms);
+        let pill = div()
+            .max_w_full()
+            .px(px(6.))
+            .rounded(px(PILL_RADIUS))
+            .bg(look.strong_veil)
+            .text_color(look.text)
+            .child(words);
+        facts = facts.child(pill);
+    }
+    let words = div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_w_0()
+        .gap(px(2.))
+        .child(title)
+        .child(facts);
+    let mut row = div()
+        .flex()
+        .items_start()
+        .gap(px(8.))
+        .px(px(CARD_PADDING))
+        .py(px(7.))
+        .child(icon)
+        .child(words);
+    if below_another {
+        row = row.border_t_1().border_color(look.hairline);
+    }
+    row
 }
 
 fn item_element(item: &LogItem, input: &ActivityInput, cx: &mut Context<WindowView>) -> AnyElement {
@@ -773,6 +1024,23 @@ mod tests {
             fold_label(&stretch(0, true), false),
             "Show the earlier steps"
         );
+    }
+
+    #[test]
+    fn a_pull_request_reads_as_last_seen_and_shared_shows_the_newest_five_until_asked() {
+        let now = now_ms();
+        let shared_at = now - 40 * MS_PER_MINUTE;
+        let checked_at = now - 5 * MS_PER_MINUTE;
+        let checked = pull_request_state(PrState::Open, Some(checked_at), shared_at, now);
+        let expected = format!("Open, seen {}", time_label(checked_at, now));
+        assert_eq!(checked, expected);
+        let never_checked = pull_request_state(PrState::Merged, None, shared_at, now);
+        let expected = format!("Merged, seen {}", time_label(shared_at, now));
+        assert_eq!(never_checked, expected);
+
+        assert_eq!(shown_count(3, false), 3);
+        assert_eq!(shown_count(23, false), 5);
+        assert_eq!(shown_count(23, true), 23);
     }
 
     #[test]
