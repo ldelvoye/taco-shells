@@ -9,28 +9,28 @@ use gpui::{
     ParentElement, SharedString, Stateful, StatefulInteractiveElement, Styled, div, px, rgb, svg,
 };
 use taco_protocol::{
-    AgentRow, Author, HarnessId, Peer, PrState, RowState, SharedTarget, SharedThing, StartSource,
-    Step, TerminalId,
+    AgentRow, Author, Peer, PrState, RowState, SharedTarget, SharedThing, StartSource, TerminalId,
 };
-use taco_services::{AgentMenuAction, AgentSetupNotice, AgentSetupNoticeKind};
+use taco_services::AgentSetupNotice;
 
-use crate::activity_log::{ActivityLog, LogItem, Stretch, StretchStep, log_items, preview};
-use crate::assets::{
-    CLOSE_ICON, DOCUMENT_ICON, DONE_ICON, IMAGE_ICON, LINK_ICON, PULL_REQUEST_ICON, TEXT_ICON,
-};
-use crate::look::{Look, MARK_SIZE, SMALL_TEXT_SIZE};
+use crate::activity_log::{ActivityLog, LogItem, Stretch, log_items, preview};
+use crate::assets::{DOCUMENT_ICON, IMAGE_ICON, LINK_ICON, PULL_REQUEST_ICON, TEXT_ICON};
+use crate::look::{Look, SMALL_TEXT_SIZE};
 use crate::shared_view::{is_image, opens};
 use crate::shell::shell_orange;
 use crate::terminal_list::state_mark;
 use crate::window::WindowView;
 
+mod setup_line;
+mod step_lines;
+
+use setup_line::{no_agent_element, no_agent_for, setup_card, shows_beside_agent};
+use step_lines::{fold_label, step_line, step_lines};
+
 const SCROLL_ID: &str = "activity-scroll";
 const OLDER_ID: &str = "activity-older";
-const SHELL_TEXT: &str = "No agent here, just a shell.";
 const EMPTY_LOG_TEXT: &str = "Nothing in this agent's log yet.";
-const NO_TERMINAL_TEXT: &str = "No terminal is open.";
 const NEEDS_HEADING: &str = "Needs you.";
-const SET_UP_LABEL: &str = "Set up";
 const SHOW_OLDER: &str = "Show older";
 const SHOW_ALL: &str = "Show all";
 const SHOW_LESS: &str = "Show less";
@@ -72,37 +72,8 @@ const PILL_RADIUS: f32 = 8.;
 const NO_LONGER_SHARED: &str = "no longer in Shared";
 const FAILED_MARK: &str = "×";
 const FAILED_WITHOUT_ERROR: &str = "It failed.";
-const CLOSE_SIZE: f32 = 14.;
-const DONE_LINE_HEIGHT: f32 = 18.;
-const DONE_CHECK_GAP: f32 = 7.;
 pub const MS_PER_MINUTE: u64 = 60_000;
 const MINUTES_PER_HOUR: u64 = 60;
-
-/// The agent setup line for a terminal.
-#[derive(Clone, Debug, PartialEq)]
-pub enum NoAgentLine {
-    /// No terminal is open, after the last one closed.
-    NoTerminal,
-    Shell,
-    Offer {
-        harness: HarnessId,
-        action: AgentMenuAction,
-        text: String,
-    },
-    Unavailable {
-        text: String,
-        reason: String,
-    },
-    Done {
-        harness: HarnessId,
-        text: String,
-        detail: Option<String>,
-    },
-    Problem {
-        harness: HarnessId,
-        text: String,
-    },
-}
 
 /// Everything one drawing of the panel reads.
 pub struct ActivityInput<'a> {
@@ -118,13 +89,6 @@ pub struct ActivityInput<'a> {
     pub shared_all_shown: bool,
     pub now_ms: u64,
     pub look: &'a Look,
-}
-
-/// A step as the fold draws it: its words, and the first line of its error when it failed.
-#[derive(Clone, Debug, PartialEq)]
-struct StepLine {
-    text: String,
-    failed: Option<String>,
 }
 
 /// Who wrote a line, which picks its colour.
@@ -161,37 +125,6 @@ impl Who {
             Self::App => look.secondary_text.opacity(APP_DOT_ALPHA),
             Self::User | Self::OtherAgent => self.ink(look),
         }
-    }
-}
-
-pub fn no_agent_line(terminal: &TerminalId, notices: &[AgentSetupNotice]) -> NoAgentLine {
-    let mut about_terminal = notices
-        .iter()
-        .filter(|notice| notice.terminals.contains(terminal));
-    let Some(notice) = about_terminal.next() else {
-        return NoAgentLine::Shell;
-    };
-    let harness = notice.harness.clone();
-    let text = notice.text.clone();
-    match &notice.kind {
-        AgentSetupNoticeKind::Offer { action } => NoAgentLine::Offer {
-            harness,
-            action: *action,
-            text,
-        },
-        AgentSetupNoticeKind::Unavailable { reason } => {
-            let reason = reason.clone();
-            NoAgentLine::Unavailable { text, reason }
-        }
-        AgentSetupNoticeKind::Done => {
-            let detail = notice.detail.clone();
-            NoAgentLine::Done {
-                harness,
-                text,
-                detail,
-            }
-        }
-        AgentSetupNoticeKind::Problem => NoAgentLine::Problem { harness, text },
     }
 }
 
@@ -236,13 +169,6 @@ pub fn now_ms() -> u64 {
     fitted
 }
 
-fn no_agent_for(input: &ActivityInput) -> NoAgentLine {
-    match input.terminal {
-        Some(terminal) => no_agent_line(terminal, input.notices),
-        None => NoAgentLine::NoTerminal,
-    }
-}
-
 fn peer_name(peer: &Peer) -> String {
     if let Some(name) = &peer.name {
         return name.clone();
@@ -269,109 +195,6 @@ fn session_words(source: StartSource) -> &'static str {
         StartSource::Compacted => "Continued after compacting",
         StartSource::Cleared => "Session cleared",
     }
-}
-
-fn step_text(step: &StretchStep) -> String {
-    match step {
-        StretchStep::Step(Step::Did { tool, summary, .. }) => match tool.as_str() {
-            "Bash" => format!("Ran {summary}"),
-            "Read" => format!("Read {summary}"),
-            "Grep" | "Glob" => format!("Searched for {summary}"),
-            _ => format!("{tool}: {summary}"),
-        },
-        StretchStep::Step(Step::Changed { tool, path }) => match tool.as_str() {
-            "Write" => format!("Wrote {path}"),
-            _ => format!("Edited {path}"),
-        },
-        StretchStep::SentMessage(peer) => format!("Sent a message to {}", peer_name(peer)),
-    }
-}
-
-fn failure_of(step: &StretchStep) -> Option<&str> {
-    let StretchStep::Step(Step::Did {
-        failed: Some(error),
-        ..
-    }) = step
-    else {
-        return None;
-    };
-    Some(error)
-}
-
-fn failure_count(steps: &[StretchStep]) -> usize {
-    let failures = steps.iter().filter(|step| failure_of(step).is_some());
-    failures.count()
-}
-
-// A failed search keeps a line of its own, so its error is not folded into "Searched 3 times".
-fn is_search(step: &StretchStep) -> bool {
-    let StretchStep::Step(Step::Did {
-        tool, failed: None, ..
-    }) = step
-    else {
-        return false;
-    };
-    tool == "Grep" || tool == "Glob"
-}
-
-fn step_line(step: &StretchStep) -> StepLine {
-    let failed = failure_of(step).map(str::to_string);
-    StepLine {
-        text: step_text(step),
-        failed,
-    }
-}
-
-/// One line per step, with a run of searches told as one.
-fn step_lines(steps: &[StretchStep]) -> Vec<StepLine> {
-    let mut lines = Vec::new();
-    let mut searches = Vec::new();
-    for step in steps {
-        if is_search(step) {
-            searches.push(step);
-            continue;
-        }
-        tell_searches(&mut searches, &mut lines);
-        lines.push(step_line(step));
-    }
-    tell_searches(&mut searches, &mut lines);
-    lines
-}
-
-fn tell_searches(searches: &mut Vec<&StretchStep>, lines: &mut Vec<StepLine>) {
-    match searches.as_slice() {
-        [] => {}
-        [only] => lines.push(step_line(only)),
-        several => {
-            let text = format!("Searched {} times", several.len());
-            lines.push(StepLine { text, failed: None });
-        }
-    }
-    searches.clear();
-}
-
-fn fold_label(steps: &Stretch, is_open: bool) -> String {
-    let count = steps.steps.len();
-    if is_open && count == 1 {
-        return "Hide the step".to_string();
-    }
-    if is_open {
-        return "Hide the steps".to_string();
-    }
-    if count == 0 {
-        return "Show the earlier steps".to_string();
-    }
-    let mut label = format!("Show the {count} steps");
-    if steps.earlier_not_loaded {
-        label = format!("Show the {count}+ steps");
-    } else if count == 1 {
-        label = "Show the step".to_string();
-    }
-    let failures = failure_count(&steps.steps);
-    if failures > 0 {
-        label = format!("{label}, {failures} failed");
-    }
-    label
 }
 
 fn local_time(ms: u64) -> Option<DateTime<Local>> {
@@ -442,12 +265,6 @@ fn question_card(question: &str, look: &Look) -> Div {
         .child(question.to_string())
 }
 
-// A row becomes an agent row from its title alone, hooks or not, so the offer has to draw beside one: that is the
-// terminal it is for.
-fn shows_beside_agent(line: &NoAgentLine) -> bool {
-    !matches!(line, NoAgentLine::Shell | NoAgentLine::NoTerminal)
-}
-
 fn card(look: &Look) -> Div {
     div()
         .p(px(CARD_PADDING))
@@ -476,142 +293,6 @@ fn quiet_button(id: ElementId, label: &str, look: &Look) -> Stateful<Div> {
 fn aligned_button(id: ElementId, label: &str, look: &Look) -> Stateful<Div> {
     let button = quiet_button(id, label, look);
     button.ml(px(-QUIET_PADDING))
-}
-
-fn no_agent_element(line: &NoAgentLine, look: &Look, cx: &mut Context<WindowView>) -> Div {
-    let row = div().flex().items_center().gap(px(10.));
-    match line {
-        NoAgentLine::NoTerminal => div()
-            .text_color(look.secondary_text)
-            .child(NO_TERMINAL_TEXT),
-        NoAgentLine::Shell => div().text_color(look.secondary_text).child(SHELL_TEXT),
-        NoAgentLine::Offer {
-            harness,
-            action,
-            text,
-        } => {
-            let shown = div().min_w_0().child(text.clone());
-            let button = set_up_button(harness, *action, look, cx);
-            div()
-                .flex()
-                .flex_col()
-                .items_start()
-                .gap(px(8.))
-                .child(shown)
-                .child(button)
-        }
-        NoAgentLine::Unavailable { text, reason } => {
-            let shown = div().min_w_0().child(text.clone());
-            let why = div()
-                .min_w_0()
-                .text_color(look.secondary_text)
-                .child(reason.clone());
-            div().flex().flex_col().gap(px(4.)).child(shown).child(why)
-        }
-        NoAgentLine::Done {
-            harness,
-            text,
-            detail,
-        } => {
-            let said = done_said(text, detail.as_deref(), look);
-            let dismiss = dismiss_button(harness, look, cx);
-            row.items_start().child(said).child(dismiss)
-        }
-        NoAgentLine::Problem { harness, text } => {
-            let shown = text_cell(text);
-            let dismiss = dismiss_button(harness, look, cx);
-            row.child(shown).child(dismiss)
-        }
-    }
-}
-
-// The check sits in a box one headline line tall, so it stays on the first line when the headline wraps.
-fn done_said(text: &str, detail: Option<&str>, look: &Look) -> Div {
-    let check = svg()
-        .path(DONE_ICON)
-        .size(px(MARK_SIZE))
-        .text_color(look.done);
-    let check_box = div()
-        .flex_none()
-        .h(px(DONE_LINE_HEIGHT))
-        .flex()
-        .items_center()
-        .child(check);
-    let words = div().min_w_0().child(text.to_string());
-    let headline = div()
-        .flex()
-        .items_start()
-        .gap(px(DONE_CHECK_GAP))
-        .line_height(px(DONE_LINE_HEIGHT))
-        .font_weight(FontWeight::SEMIBOLD)
-        .child(check_box)
-        .child(words);
-    let mut said = div()
-        .flex_1()
-        .min_w_0()
-        .flex()
-        .flex_col()
-        .gap(px(4.))
-        .child(headline);
-    if let Some(detail) = detail {
-        let quiet = div()
-            .min_w_0()
-            .text_size(px(SMALL_TEXT_SIZE))
-            .text_color(look.secondary_text)
-            .child(detail.to_string());
-        said = said.child(quiet);
-    }
-    said
-}
-
-fn setup_card(line: &NoAgentLine, look: &Look, cx: &mut Context<WindowView>) -> Div {
-    let said = no_agent_element(line, look, cx);
-    card(look).child(said)
-}
-
-fn text_cell(text: &str) -> Div {
-    div().flex_1().min_w_0().child(text.to_string())
-}
-
-fn set_up_button(
-    harness: &HarnessId,
-    action: AgentMenuAction,
-    look: &Look,
-    cx: &mut Context<WindowView>,
-) -> Stateful<Div> {
-    let chosen = harness.clone();
-    div()
-        .id("activity-set-up")
-        .flex_none()
-        .px(px(8.))
-        .py(px(2.))
-        .rounded(px(6.))
-        .border_1()
-        .border_color(look.hairline)
-        .bg(look.selected_card)
-        .cursor_pointer()
-        .font_weight(FontWeight::SEMIBOLD)
-        .child(SET_UP_LABEL)
-        .on_click(cx.listener(move |view, _, _, _| view.set_up(&chosen, action)))
-}
-
-fn dismiss_button(harness: &HarnessId, look: &Look, cx: &mut Context<WindowView>) -> Stateful<Div> {
-    let dismissed = harness.clone();
-    let veil = look.veil;
-    let cross = svg()
-        .path(CLOSE_ICON)
-        .size(px(CLOSE_SIZE))
-        .flex_none()
-        .text_color(look.secondary_text);
-    div()
-        .id("activity-dismiss")
-        .flex_none()
-        .p(px(2.))
-        .rounded(px(6.))
-        .cursor_pointer()
-        .hover(move |style| style.bg(veil))
-        .child(cross)
-        .on_click(cx.listener(move |view, _, _, _| view.dismiss_notice(&dismissed)))
 }
 
 fn log_section(input: &ActivityInput, row: &AgentRow, cx: &mut Context<WindowView>) -> Div {
@@ -1210,100 +891,6 @@ fn session_divider(source: StartSource, at_ms: u64, input: &ActivityInput) -> Di
 mod tests {
     use super::*;
 
-    fn notice(kind: AgentSetupNoticeKind, terminal: &str) -> AgentSetupNotice {
-        AgentSetupNotice {
-            harness: HarnessId("claude".to_string()),
-            kind,
-            text: "Set up Claude?".to_string(),
-            detail: None,
-            terminals: vec![TerminalId(terminal.to_string())],
-        }
-    }
-
-    fn did(tool: &str, summary: &str) -> StretchStep {
-        let tool = tool.to_string();
-        let summary = summary.to_string();
-        StretchStep::Step(Step::Did {
-            tool,
-            summary,
-            failed: None,
-        })
-    }
-
-    fn changed(tool: &str, path: &str) -> StretchStep {
-        let tool = tool.to_string();
-        let path = path.to_string();
-        StretchStep::Step(Step::Changed { tool, path })
-    }
-
-    fn failed(tool: &str, summary: &str, error: &str) -> StretchStep {
-        let tool = tool.to_string();
-        let summary = summary.to_string();
-        let failed = Some(error.to_string());
-        StretchStep::Step(Step::Did {
-            tool,
-            summary,
-            failed,
-        })
-    }
-
-    #[test]
-    fn steps_tell_a_run_of_searches_as_one_and_folds_count_what_is_held() {
-        let code_83 = Peer {
-            name: Some("code-83".to_string()),
-            address: None,
-        };
-        let steps = vec![
-            did("Grep", "SIGHUP"),
-            did("Glob", "*.rs"),
-            did("Read", "pty.rs"),
-            failed("Bash", "cargo test", "Exit code 101: 2 tests failed"),
-            changed("Write", "PLAN.md"),
-            changed("Edit", "pty.rs"),
-            StretchStep::SentMessage(code_83),
-            did("Glob", "tests/*.rs"),
-            failed("Grep", "kill(", "regex parse error"),
-            did("Grep", "fn shutdown"),
-        ];
-        let expected = [
-            ("Searched 2 times", None),
-            ("Read pty.rs", None),
-            ("Ran cargo test", Some("Exit code 101: 2 tests failed")),
-            ("Wrote PLAN.md", None),
-            ("Edited pty.rs", None),
-            ("Sent a message to code-83", None),
-            ("Searched for tests/*.rs", None),
-            ("Searched for kill(", Some("regex parse error")),
-            ("Searched for fn shutdown", None),
-        ];
-        let lines = step_lines(&steps);
-        let told: Vec<(&str, Option<&str>)> = lines
-            .iter()
-            .map(|line| (line.text.as_str(), line.failed.as_deref()))
-            .collect();
-        assert_eq!(told, expected);
-
-        let stretch = |count: usize, earlier_not_loaded: bool| Stretch {
-            number: 1,
-            steps: steps[..count].to_vec(),
-            earlier_not_loaded,
-        };
-        assert_eq!(fold_label(&stretch(1, false), false), "Show the step");
-        assert_eq!(fold_label(&stretch(1, false), true), "Hide the step");
-        assert_eq!(
-            fold_label(&stretch(4, false), false),
-            "Show the 4 steps, 1 failed"
-        );
-        assert_eq!(
-            fold_label(&stretch(7, true), false),
-            "Show the 7+ steps, 1 failed"
-        );
-        assert_eq!(
-            fold_label(&stretch(0, true), false),
-            "Show the earlier steps"
-        );
-    }
-
     #[test]
     fn a_pull_request_reads_as_last_seen_and_shared_shows_the_newest_five_until_asked() {
         let now = now_ms();
@@ -1318,60 +905,5 @@ mod tests {
         assert_eq!(shown_count(23, true), 23);
         assert!(!has_more_than_shown(5));
         assert!(has_more_than_shown(6));
-    }
-
-    #[test]
-    fn no_agent_line_follows_the_notice_for_this_terminal() {
-        let here = TerminalId("here".to_string());
-        let reason = "Turned off".to_string();
-        let unavailable = AgentSetupNoticeKind::Unavailable {
-            reason: reason.clone(),
-        };
-        let harness = HarnessId("claude".to_string());
-        let text = "Set up Claude?".to_string();
-
-        assert_eq!(no_agent_line(&here, &[]), NoAgentLine::Shell);
-        let offer_kind = AgentSetupNoticeKind::Offer {
-            action: AgentMenuAction::SetUp,
-        };
-        let elsewhere = notice(offer_kind.clone(), "there");
-        assert_eq!(no_agent_line(&here, &[elsewhere]), NoAgentLine::Shell);
-
-        let offer = notice(offer_kind, "here");
-        let expected = NoAgentLine::Offer {
-            harness: harness.clone(),
-            action: AgentMenuAction::SetUp,
-            text: text.clone(),
-        };
-        assert_eq!(no_agent_line(&here, &[offer]), expected);
-        assert!(shows_beside_agent(&expected));
-        assert!(!shows_beside_agent(&NoAgentLine::Shell));
-
-        let unavailable = notice(unavailable, "here");
-        let expected = NoAgentLine::Unavailable {
-            text: text.clone(),
-            reason,
-        };
-        assert_eq!(no_agent_line(&here, &[unavailable]), expected);
-        assert!(shows_beside_agent(&expected));
-
-        let detail = Some("One line changed in ~/.claude/settings.json.".to_string());
-        let mut done = notice(AgentSetupNoticeKind::Done, "here");
-        done.detail = detail.clone();
-        let expected = NoAgentLine::Done {
-            harness: harness.clone(),
-            text: text.clone(),
-            detail,
-        };
-        assert_eq!(no_agent_line(&here, &[done]), expected);
-        assert!(shows_beside_agent(&expected));
-
-        let problem = notice(AgentSetupNoticeKind::Problem, "here");
-        let expected = NoAgentLine::Problem {
-            harness: harness.clone(),
-            text: text.clone(),
-        };
-        assert_eq!(no_agent_line(&here, &[problem]), expected);
-        assert!(shows_beside_agent(&expected));
     }
 }
