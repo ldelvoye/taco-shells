@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use serde_json::{Map, Value, json};
-use taco_agents::{Harness, harness_of, legacy_harness};
+use taco_agents::{Harness, harness_of};
 use taco_protocol::{Arrangement, Panels, TabGroupId, TerminalId};
 
 use crate::sessions::{AgentSession, AgentSessions};
@@ -9,8 +9,6 @@ use crate::storage::Storage;
 
 /// The save file the Rust app writes: one row per terminal.
 pub const SAVE_VERSION: u64 = 2;
-/// The save file the Electron app writes: groups of split panes.
-pub const ELECTRON_VERSION: u64 = 1;
 /// How long the save waits after a change, so a burst of changes is written once.
 pub const SAVE_DEBOUNCE_MS: u64 = 250;
 const MAX_SAVE_WAIT_MS: u64 = 2_000;
@@ -27,7 +25,7 @@ pub struct Saved {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SavedRow {
-    /// None for a row from a file without ids, such as the Electron app's.
+    /// None for a row from a file without ids, such as a hand-edited one.
     pub id: Option<TerminalId>,
     pub directory: Option<String>,
     pub agent: Option<AgentSession>,
@@ -59,16 +57,15 @@ pub fn version_of(text: &str) -> Option<u64> {
     parsed.get("version")?.as_u64()
 }
 
-/// The save a file's text describes, from either app, or none when it cannot be one.
+/// The save a file's text describes, or none when it cannot be one.
 pub fn read_saved(text: &str) -> Option<Saved> {
     let parsed: Value = serde_json::from_str(text).ok()?;
     let file = parsed.as_object()?;
     let version = file.get("version")?.as_u64()?;
-    let read = match version {
-        ELECTRON_VERSION => read_electron(file)?,
-        SAVE_VERSION => read_rows(file)?,
-        _ => return None,
-    };
+    if version != SAVE_VERSION {
+        return None;
+    }
+    let read = read_rows(file)?;
     Some(repaired(read))
 }
 
@@ -279,59 +276,6 @@ fn read_rows(file: &Map<String, Value>) -> Option<Saved> {
     Some(saved)
 }
 
-fn electron_pane(record: &Map<String, Value>, tab_group: Option<usize>) -> SavedRow {
-    let agent = match (record.get("agent"), record.get("claude")) {
-        (Some(value), _) => agent_session_from(value),
-        // a file saved before agents had ids holds a Claude session under "claude"
-        (None, Some(legacy)) => agent_session_for(legacy_harness(), legacy),
-        (None, None) => None,
-    };
-    SavedRow {
-        id: None,
-        directory: string_in(record, "cwd"),
-        agent,
-        tab_group,
-    }
-}
-
-/// An Electron save as rows, one per split pane in order; colors are dropped.
-fn read_electron(file: &Map<String, Value>) -> Option<Saved> {
-    let Value::Array(groups) = file.get("groups")? else {
-        return None;
-    };
-    let mut kept: Vec<(Vec<SavedRow>, usize)> = Vec::new();
-    for group in groups.iter().filter_map(Value::as_object) {
-        let Some(Value::Array(panes)) = group.get("panes") else {
-            continue;
-        };
-        let tab_group = index_in(group, "tabGroup");
-        let records = panes.iter().filter_map(Value::as_object);
-        let rows: Vec<SavedRow> = records.map(|pane| electron_pane(pane, tab_group)).collect();
-        if rows.is_empty() {
-            continue;
-        }
-        let active = clamped(index_in(group, "activePane"), rows.len());
-        kept.push((rows, active));
-    }
-
-    let active_group = clamped(index_in(file, "activeGroup"), kept.len());
-    let mut selected = 0;
-    let mut rows = Vec::new();
-    for (index, (group_rows, active_pane)) in kept.into_iter().enumerate() {
-        if index == active_group {
-            selected = rows.len() + active_pane;
-        }
-        rows.extend(group_rows);
-    }
-    let saved = Saved {
-        rows,
-        selected,
-        tab_groups: tab_groups_in(file),
-        panels: None,
-    };
-    Some(saved)
-}
-
 fn clamped(index: Option<usize>, length: usize) -> usize {
     let last = length.saturating_sub(1);
     match index {
@@ -379,16 +323,6 @@ fn repaired(mut saved: Saved) -> Saved {
 mod tests {
     use super::*;
 
-    const ELECTRON_FILE: &str = include_str!("../tests/fixtures/electron-workspace.json");
-
-    fn shape(saved: &Saved) -> Vec<(Option<String>, Option<usize>, Option<String>)> {
-        let rows = saved.rows.iter().map(|row| {
-            let session = row.agent.as_ref().map(|agent| agent.session_id.clone());
-            (row.directory.clone(), row.tab_group, session)
-        });
-        rows.collect()
-    }
-
     // A save as this build writes it, with an agent, a tab group and both panels. Renaming a field or a panel's
     // value would lose a user's terminals or layout without a word, so the file must read back whole and unchanged.
     const STORED_SAVE: &str = concat!(
@@ -422,36 +356,6 @@ mod tests {
             read, rows_kept,
             "every row survives; only the layout resets"
         );
-    }
-
-    #[test]
-    fn an_electron_save_becomes_one_row_per_pane_in_order_with_its_colors_dropped() {
-        let saved = read_saved(ELECTRON_FILE).unwrap();
-        let tacos = Some("/Users/me/code/tacos".to_string());
-        let first = Some("123e4567-e89b-12d3-a456-426614174000".to_string());
-        let legacy = Some("223e4567-e89b-12d3-a456-426614174000".to_string());
-
-        assert_eq!(
-            shape(&saved),
-            vec![
-                (tacos.clone(), Some(0), first),
-                (Some("/Users/me/code/tacos/docs".into()), Some(0), None),
-                (Some("/Users/me".into()), Some(0), legacy),
-                (None, None, None),
-            ]
-        );
-        assert_eq!(saved.selected, 1, "the active pane of the active group");
-        assert_eq!(
-            saved.tab_groups,
-            vec![SavedTabGroup {
-                name: "Tacos".into(),
-                collapsed: false
-            }]
-        );
-        assert_eq!(saved.rows[2].agent.as_ref().unwrap().cwd, "/Users/me/notes");
-
-        let later_group = r#"{"version":1,"activeGroup":1,"groups":[{"panes":[{},{}]},{"panes":[{},{}],"activePane":1}]}"#;
-        assert_eq!(read_saved(later_group).unwrap().selected, 3);
     }
 
     #[test]
