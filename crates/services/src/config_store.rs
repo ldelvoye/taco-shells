@@ -9,9 +9,7 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use taco_protocol::ConfigFile;
 use taco_settings::{Config, resolve_config};
 
-use crate::config_files::{
-    config_file_path, read_config_texts, seed_config_files, unreadable_problems,
-};
+use crate::config_files::{config_file_path, read_config_files, seed_config_files};
 use crate::sync::lock;
 
 const WATCH_QUIET: Duration = Duration::from_millis(100);
@@ -41,12 +39,11 @@ pub struct ConfigStore {
 }
 
 fn resolve(directory: &Path, start_problems: &[String], system_is_dark: bool) -> Config {
-    let texts = read_config_texts(directory);
-    let resolved = resolve_config(&texts, system_is_dark);
-    let unreadable = unreadable_problems(directory);
+    let read = read_config_files(directory);
+    let resolved = resolve_config(&read.texts, system_is_dark);
 
     let mut problems = start_problems.to_vec();
-    problems.extend(unreadable);
+    problems.extend(read.unreadable);
     problems.extend(resolved.problems);
     Config {
         problems,

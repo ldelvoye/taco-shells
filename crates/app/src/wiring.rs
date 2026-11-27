@@ -14,7 +14,7 @@ use taco_protocol::{
 use taco_rules::default_panels;
 use taco_services::{
     AGENT_APP_NAME, AgentMenuAction, config_directory, config_file_path, focus_port_path,
-    plugin_directory_path, read_config_texts,
+    plugin_directory_path, read_config_files,
 };
 use taco_settings::{
     Config, CursorStyle, KeymapChange, SettingChange, palette_for, resolve_config,
@@ -84,8 +84,8 @@ pub fn start(system_is_dark: bool) -> Result<Started, String> {
     let Some(directory) = config_directory() else {
         return Err("Taco Shells has no home directory to keep its config in.".to_string());
     };
-    let texts = read_config_texts(&directory);
-    let first = resolve_config(&texts, system_is_dark);
+    let read = read_config_files(&directory);
+    let first = resolve_config(&read.texts, system_is_dark);
 
     let program = RuntimeClient::program_beside_this_one();
     let program =

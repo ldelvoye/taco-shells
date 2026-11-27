@@ -3,12 +3,12 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 
-use taco_settings::{CommandId, KeymapChange, SettingChange, edit_keymap, set_top_level};
+use taco_settings::{
+    CommandId, KEYBINDINGS_FILE_NAME, KeymapChange, SETTINGS_FILE_NAME, SettingChange, edit_keymap,
+    set_top_level,
+};
 
 use crate::file_write::{read_text, write_if_unchanged};
-
-const SETTINGS_LABEL: &str = "settings.json";
-const KEYBINDINGS_LABEL: &str = "keybindings.json";
 
 type AfterWrite = Box<dyn Fn() + Send + Sync>;
 type OnRefused = Box<dyn Fn(Refusal) + Send + Sync>;
@@ -72,8 +72,8 @@ fn file_for<'a>(
     keybindings_path: &'a Path,
 ) -> (&'a Path, &'static str) {
     match change {
-        ConfigChange::Setting(_) => (settings_path, SETTINGS_LABEL),
-        ConfigChange::Keymap(_) => (keybindings_path, KEYBINDINGS_LABEL),
+        ConfigChange::Setting(_) => (settings_path, SETTINGS_FILE_NAME),
+        ConfigChange::Keymap(_) => (keybindings_path, KEYBINDINGS_FILE_NAME),
     }
 }
 

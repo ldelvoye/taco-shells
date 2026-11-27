@@ -32,8 +32,8 @@ pub use agent_setups::{
 };
 pub use claude_version::{MINIMUM_VERSION, claude_version, find_claude, is_too_old, parse_version};
 pub use config_files::{
-    config_file_path, focus_port_path, plugin_directory_path, read_config_texts, seed_config_files,
-    unreadable_problems,
+    ConfigRead, config_file_path, focus_port_path, plugin_directory_path, read_config_files,
+    seed_config_files,
 };
 pub use config_store::ConfigStore;
 pub use config_writer::{ConfigChange, ConfigWriter, Refusal};

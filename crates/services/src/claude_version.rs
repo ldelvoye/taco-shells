@@ -76,7 +76,7 @@ fn newest_nvm_claude(nvm_folder: &Path) -> Option<PathBuf> {
     None
 }
 
-fn run_for_output(program: &Path, arguments: &[&str]) -> Option<String> {
+fn run_for_output(program: &Path, arguments: &[&str], limit: Duration) -> Option<String> {
     let mut command = Command::new(program);
     command.args(arguments).env_clear();
     for name in PASSED_VARIABLES {
@@ -112,7 +112,7 @@ fn run_for_output(program: &Path, arguments: &[&str]) -> Option<String> {
                 return None;
             }
         }
-        if started.elapsed() >= RUN_LIMIT {
+        if started.elapsed() >= limit {
             end_group(&mut child);
             return None;
         }
@@ -120,7 +120,7 @@ fn run_for_output(program: &Path, arguments: &[&str]) -> Option<String> {
     }
 
     let spent = started.elapsed();
-    let left = RUN_LIMIT.saturating_sub(spent);
+    let left = limit.saturating_sub(spent);
     received.recv_timeout(left).ok()
 }
 
@@ -150,7 +150,7 @@ fn login_shell() -> Option<PathBuf> {
 
 fn login_shell_claude() -> Option<PathBuf> {
     let shell = login_shell()?;
-    let output = run_for_output(&shell, &["-l", "-c", "command -v claude"])?;
+    let output = run_for_output(&shell, &["-l", "-c", "command -v claude"], RUN_LIMIT)?;
     last_executable_line(&output)
 }
 
@@ -177,7 +177,7 @@ pub fn find_claude(home: &Path) -> Option<PathBuf> {
 }
 
 pub fn claude_version(claude: &Path) -> Option<(u32, u32, u32)> {
-    let direct = run_for_output(claude, &["--version"]);
+    let direct = run_for_output(claude, &["--version"], RUN_LIMIT);
     if let Some(output) = direct {
         let version = parse_version(&output);
         if version.is_some() {
@@ -189,13 +189,15 @@ pub fn claude_version(claude: &Path) -> Option<(u32, u32, u32)> {
     let shell = login_shell()?;
     let claude_text = claude.to_str()?;
     let arguments = ["-l", "-c", "\"$1\" --version", "taco-shells", claude_text];
-    let through_shell = run_for_output(&shell, &arguments)?;
+    let through_shell = run_for_output(&shell, &arguments, RUN_LIMIT)?;
     parse_version(&through_shell)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const TEST_LIMIT: Duration = Duration::from_millis(200);
 
     fn executable_file(path: &Path, text: &str) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -253,9 +255,9 @@ mod tests {
         executable_file(&script, "#!/bin/sh\nsleep 10 &\nwait\n");
 
         let started = Instant::now();
-        let output = run_for_output(&script, &[]);
+        let output = run_for_output(&script, &[], TEST_LIMIT);
 
         assert_eq!(output, None);
-        assert!(started.elapsed() < Duration::from_millis(3500));
+        assert!(started.elapsed() < TEST_LIMIT + Duration::from_millis(500));
     }
 }

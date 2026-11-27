@@ -10,8 +10,8 @@ mod theme;
 
 pub use commands::{CommandId, RETIRED_COMMAND_IDS, is_retired};
 pub use config::{
-    Config, ConfigTexts, DEFAULT_KEYBINDINGS_TEXT, DEFAULT_SETTINGS_TEXT, UnreadSettings,
-    resolve_config,
+    Config, ConfigTexts, DEFAULT_KEYBINDINGS_TEXT, DEFAULT_SETTINGS_TEXT, KEYBINDINGS_FILE_NAME,
+    SETTINGS_FILE_NAME, UnreadSettings, resolve_config,
 };
 pub use jsonc::{JSONC_PARSE_OPTIONS, JsoncResult, parse_jsonc, set_top_level};
 pub use keymap_edit::{KeymapChange, edit_keymap};
