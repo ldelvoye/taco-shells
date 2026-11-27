@@ -1,4 +1,4 @@
-//! What the window runs on until the services are wired to it: the real workspace kept in memory, fixture logs and setup notices, published as they would be.
+//! What the window runs on until the services are wired to it: the real workspace kept in memory and setup notices, published as they would be.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -9,8 +9,8 @@ use futures::channel::mpsc::unbounded;
 use serde_json::Map;
 use taco_host::{ServicesOutput, ServicesPort, WindowOutput, WindowSender, WorkspacePort};
 use taco_protocol::{
-    ActivityEntry, ActivityEvent, ActivityRequest, Board, DrawnState, HarnessId, RuntimeCommand,
-    RuntimeReport, TerminalId, TerminalStart, WorkspaceRequest,
+    ActivityRequest, HarnessId, RuntimeCommand, RuntimeReport, TerminalId, TerminalStart,
+    WorkspaceRequest,
 };
 use taco_services::{AgentMenuAction, AgentSetupNoticeKind, AgentSetupView, done_text};
 use taco_settings::{Appearance, Config, KeymapChange, SettingChange, apply_settings_layer};
@@ -34,20 +34,9 @@ struct Memory {
     states: BTreeMap<TerminalId, String>,
 }
 
-/// The agent logs and boards the stand-in answers from, by terminal.
-pub struct StandInActivity {
-    pub logs: BTreeMap<TerminalId, Vec<ActivityEntry>>,
-    pub boards: BTreeMap<TerminalId, Board>,
-    /// The body of each shared text, by the thing's id.
-    pub bodies: BTreeMap<u64, String>,
-    /// How many entries one page of a log holds.
-    pub page: usize,
-}
-
 pub struct StandIn {
     workspace: RefCell<Workspace>,
     setups: RefCell<AgentSetupView>,
-    activity: StandInActivity,
     window: WindowSender,
     /// The config a setting is written into and published from; none when every write is refused.
     config: Option<RefCell<Config>>,
@@ -111,12 +100,7 @@ impl Storage for Memory {
 
 impl StandIn {
     /// With `writes` set to the appearance drawn in, a setting written is applied and published as a new config.
-    pub fn start(
-        shown: &Shown,
-        workspace: Workspace,
-        activity: StandInActivity,
-        writes: Option<Appearance>,
-    ) -> Ports {
+    pub fn start(shown: &Shown, workspace: Workspace, writes: Option<Appearance>) -> Ports {
         let (window, outputs) = unbounded();
         let mut config = None;
         if let Some(appearance) = writes {
@@ -134,7 +118,6 @@ impl StandIn {
         let stand_in = Rc::new(Self {
             workspace: RefCell::new(workspace),
             setups: RefCell::new(shown.setups.clone()),
-            activity,
             window,
             config,
         });
@@ -146,27 +129,6 @@ impl StandIn {
             outputs,
             terminals: None,
         }
-    }
-
-    /// The newest page of a terminal's log before `before`, and whether nothing older is left.
-    fn log_page(&self, terminal: &TerminalId, before: Option<u64>) -> (Vec<ActivityEntry>, bool) {
-        let Some(log) = self.activity.logs.get(terminal) else {
-            return (Vec::new(), true);
-        };
-        let mut kept = Vec::new();
-        for entry in log {
-            let older = match before {
-                Some(before) => entry.seq < before,
-                None => true,
-            };
-            if older {
-                kept.push(entry.clone());
-            }
-        }
-        let start = kept.len().saturating_sub(self.activity.page);
-        let page = kept.split_off(start);
-        let complete = kept.is_empty();
-        (page, complete)
     }
 
     fn publish_setups(&self) {
@@ -186,10 +148,10 @@ impl WorkspacePort for StandIn {
         let now = now_ms();
         let mut workspace = self.workspace.borrow_mut();
         let (reply, out) = workspace.request(request, now);
-        let states = delivered(&mut workspace, out, now);
+        let outputs = delivered(&mut workspace, out, now);
         drop(workspace);
-        for state in states {
-            self.publish(WindowOutput::State(state));
+        for output in outputs {
+            self.publish(output);
         }
         let Some(token) = token else {
             return;
@@ -198,41 +160,14 @@ impl WorkspacePort for StandIn {
     }
 
     fn activity(&self, request: ActivityRequest) {
-        let event = match request {
-            ActivityRequest::Watch { terminal: None } => return,
-            ActivityRequest::Watch {
-                terminal: Some(terminal),
-            } => {
-                let (entries, complete) = self.log_page(&terminal, None);
-                let mut board = Board::default();
-                if let Some(kept) = self.activity.boards.get(&terminal) {
-                    board = kept.clone();
-                }
-                ActivityEvent::Loaded {
-                    terminal,
-                    entries,
-                    complete,
-                    board,
-                }
-            }
-            ActivityRequest::Older { terminal, before } => {
-                let (entries, complete) = self.log_page(&terminal, Some(before));
-                ActivityEvent::Older {
-                    terminal,
-                    entries,
-                    complete,
-                }
-            }
-            ActivityRequest::Body { terminal, thing } => {
-                let body = self.activity.bodies.get(&thing).cloned();
-                ActivityEvent::Body {
-                    terminal,
-                    thing,
-                    body,
-                }
-            }
-        };
-        self.publish(WindowOutput::Activity(event));
+        let now = now_ms();
+        let mut workspace = self.workspace.borrow_mut();
+        let out = workspace.activity(request);
+        let outputs = delivered(&mut workspace, out, now);
+        drop(workspace);
+        for output in outputs {
+            self.publish(output);
+        }
     }
 }
 
@@ -309,17 +244,18 @@ pub(crate) fn stand_in_workspace() -> Workspace {
     Workspace::new(options)
 }
 
-/// The states published after an input, each terminal it opened or closed reported started or exited as the runtime would.
+/// What the window is sent after an input, each terminal it opened or closed reported started or exited as the runtime would.
 pub(crate) fn delivered(
     workspace: &mut Workspace,
     out: Vec<Outbound>,
     now_ms: u64,
-) -> Vec<DrawnState> {
-    let mut states = Vec::new();
+) -> Vec<WindowOutput> {
+    let mut outputs = Vec::new();
     let mut reports = Vec::new();
     for output in out {
         match output {
-            Outbound::State(state) => states.push(state),
+            Outbound::State(state) => outputs.push(WindowOutput::State(state)),
+            Outbound::Activity(event) => outputs.push(WindowOutput::Activity(event)),
             Outbound::Runtime(RuntimeCommand::Open(start)) => {
                 let started = started_where_asked(start);
                 reports.push(started);
@@ -334,9 +270,9 @@ pub(crate) fn delivered(
     for report in reports {
         let reported = workspace.runtime_report(report, now_ms);
         let more = delivered(workspace, reported, now_ms);
-        states.extend(more);
+        outputs.extend(more);
     }
-    states
+    outputs
 }
 
 fn started_where_asked(start: TerminalStart) -> RuntimeReport {

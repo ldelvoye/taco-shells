@@ -76,7 +76,7 @@ pub fn render_png(
         if fixture.applies_writes() {
             writes = Some(appearance);
         }
-        let ports = StandIn::start(&shown, workspace, fixture.activity(), writes);
+        let ports = StandIn::start(&shown, workspace, writes);
         let lights = TrafficLights::StandIns;
         cx.new(|cx| WindowView::new(shown, look, lights, ports, cx))
     })?;

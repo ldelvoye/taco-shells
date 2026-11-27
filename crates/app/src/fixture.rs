@@ -4,10 +4,11 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
+use serde_json::{Map, Value, json};
+use taco_identity::CURRENT;
 use taco_protocol::{
-    ActivityEntry, ActivityKind, AgentSignal, Author, Board, DrawnState, HarnessId, HookCall,
-    HookEvent, Panel, Peer, PrState, RequestReply, RowState, RuntimeReport, SharedTarget,
-    SharedThing, StartSource, Step, TabGroupId, TerminalId, WorkspaceRequest,
+    AgentSignal, DrawnState, HarnessId, HookCall, HookEvent, Panel, Peer, RequestReply, RowState,
+    RuntimeReport, TabGroupId, TerminalId, WorkspaceRequest,
 };
 use taco_services::{
     AgentMenuAction, AgentSetupNotice, AgentSetupNoticeKind, AgentSetupView, changed_file_text,
@@ -20,7 +21,7 @@ use taco_workspace::{Outbound, Workspace};
 
 use crate::activity_panel::{MS_PER_MINUTE, now_ms};
 use crate::banners::Notices;
-use crate::stand_in::{PRODUCT_NAME, StandInActivity, delivered, home, stand_in_workspace};
+use crate::stand_in::{PRODUCT_NAME, delivered, home, stand_in_workspace};
 use crate::window::Shown;
 
 const CLAUDE: &str = "claude";
@@ -91,11 +92,29 @@ const MIXED_ROWS: [FixtureRow; 7] = [
 ];
 
 const ASKED: &str = "asked";
-const CHANGED: &str = "changed";
-const SHORT_LOG_PAGE: usize = 6;
-const FULL_LOG_PAGE: usize = 200;
-// The newest page must start inside a noted stretch: here, the nudged fix's second step.
-const CUT_LOG_PAGE: usize = 18;
+const WORKING_ROW: usize = 0;
+const NEEDS_ROW: usize = 2;
+const DONE_ROW: usize = 3;
+// Enough retries that the workspace's 200-entry page starts inside the nudged fix's noted stretch.
+const PAGED_RETRIES: usize = 90;
+const USER_PROMPT_SUBMIT: &str = "UserPromptSubmit";
+const POST_TOOL_USE: &str = "PostToolUse";
+const POST_TOOL_USE_FAILURE: &str = "PostToolUseFailure";
+const STARTUP: &str = "startup";
+const COMPACT: &str = "compact";
+const MESSAGE_OPEN: &str = "<cross-session-message";
+const MESSAGE_CLOSE: &str = "</cross-session-message>";
+const TOOL_INPUTS: [(&str, &str); 6] = [
+    ("Bash", "command"),
+    ("Read", "file_path"),
+    ("Edit", "file_path"),
+    ("Write", "file_path"),
+    ("Grep", "pattern"),
+    ("Glob", "pattern"),
+];
+const PULL_REQUESTS: &str = "https://github.com/ldelvoye/taco-shells/pull/";
+const ARTIFACT_LINK: &str = "https://claude.ai/artifact/9NXFTKtkNKmvbxjMDsn1zL";
+const REVIEWER: &str = "code-83";
 const NARROW_PANEL: f32 = 140.;
 const PLAN_NOTE: &str = "Wrote PLAN-sigkill.md. Today a closed terminal or a stopping runtime gets one SIGHUP and \
 nothing after it, so a shell that ignores it keeps running with its children. The plan adds a SIGKILL to the whole \
@@ -114,9 +133,8 @@ const ADDRESS: &str = "uds:/tmp/cc-socks/9838.sock";
 const NOW_LINE: &str = "Rebasing #179 onto main, then resolving the conflict in draw.rs.";
 const CHECKOUT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
 const CHECKOUT_IMAGE: &str = "branding/icons/taco-shells.svg";
-const CHECKOUT_DOCUMENT: &str = "README.md";
-const FINDING_ID: u64 = 1;
-/// What the finding shared in the full board holds, sent when it is opened.
+const PLAN_PATH: &str = "/work/taco-shells/PLAN-sigkill.md";
+/// The text of the finding the agent shares, sent when it is opened.
 const FINDING_BODY: &str = "Closing a terminal sends its shell one SIGHUP and nothing after it.
 
 A shell that ignores SIGHUP keeps running, and so do its children: in a test, `trap '' HUP; sleep 600` outlived the terminal by the full ten minutes.
@@ -131,8 +149,8 @@ const WORKING_LOG: [FixtureEntry; 10] = [
     entry(40, "Read", "billing/platform/lock.py"),
     entry(40, "Read", "billing/platform/models.py"),
     entry(39, "Read", "billing/tests/test_lock.py"),
-    entry(31, CHANGED, "billing/platform/lock.py"),
-    entry(30, CHANGED, "billing/tests/test_lock.py"),
+    entry(31, "Edit", "billing/platform/lock.py"),
+    entry(30, "Edit", "billing/tests/test_lock.py"),
     entry(22, "Bash", "pytest billing/tests"),
     entry(4, ASKED, "now rebase it onto master"),
     entry(3, "Bash", "git rebase master"),
@@ -140,14 +158,14 @@ const WORKING_LOG: [FixtureEntry; 10] = [
 
 const NEEDS_LOG: [FixtureEntry; 3] = [
     entry(18, ASKED, "address the review comments on the PR"),
-    entry(12, CHANGED, "src/sentry/api/endpoints/project_details.py"),
+    entry(12, "Edit", "src/sentry/api/endpoints/project_details.py"),
     entry(9, "Bash", "git rebase origin/master"),
 ];
 
 const DONE_LOG: [FixtureEntry; 3] = [
     entry(75, ASKED, "find why test_flaky_retry fails on CI"),
     entry(70, "Glob", "tests/**/test_retry*.py"),
-    entry(52, CHANGED, "tests/sentry/test_retry.py"),
+    entry(52, "Edit", "tests/sentry/test_retry.py"),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -199,18 +217,26 @@ struct FixtureRow {
     directory: &'static str,
 }
 
-/// One log entry: `tool` is a tool's name, or `ASKED` or `CHANGED`.
+/// One log entry: `tool` is the tool the agent ran, or `ASKED` for a prompt.
 struct FixtureEntry {
     minutes_ago: u64,
     tool: &'static str,
     text: &'static str,
 }
 
-/// Feeds the workspace what the host would, all at the instant each agent row's state began.
+/// The agent session in a terminal whose hooks are fed.
+struct AgentLog {
+    terminal: TerminalId,
+    session_id: String,
+}
+
+/// Feeds the workspace what the host would: rows at the instant each agent row's state began, hooks at their own times.
 struct Inputs {
     workspace: Workspace,
+    now_ms: u64,
     at_ms: u64,
     focus_moves: u64,
+    turns: u64,
 }
 
 impl Fixture {
@@ -241,15 +267,14 @@ impl Fixture {
 
     pub(crate) fn workspace(self, panel: Option<f32>) -> Workspace {
         let now = now_ms();
-        let ago = STATE_MINUTES_AGO * MS_PER_MINUTE;
-        let at_ms = now.saturating_sub(ago);
-        let mut inputs = Inputs::new(at_ms);
+        let mut inputs = Inputs::new(now);
         inputs.start();
         if self == Self::Empty {
             let opened = terminal_at(0);
             inputs.close(&opened);
         } else {
             mixed_rows(&mut inputs);
+            self.agent_logs(&mut inputs);
         }
         match self {
             Self::ActivityNarrow | Self::SetupPluginDirsNarrow => {
@@ -298,78 +323,50 @@ impl Fixture {
         self == Self::Writable
     }
 
-    /// The agent logs and boards the stand-in answers from.
-    pub(crate) fn activity(self) -> StandInActivity {
-        let full = matches!(
-            self,
-            Self::Activity
-                | Self::ActivityNarrow
-                | Self::Paged
-                | Self::SetupDone
-                | Self::SetupDoneChanged
-        );
-        let page = match self {
-            Self::Paged => CUT_LOG_PAGE,
+    fn agent_logs(self, inputs: &mut Inputs) {
+        let working = agent_log(WORKING_ROW);
+        match self {
             Self::Activity | Self::ActivityNarrow | Self::SetupDone | Self::SetupDoneChanged => {
-                FULL_LOG_PAGE
+                full_story(inputs, &working, 0);
             }
-            _ => SHORT_LOG_PAGE,
-        };
-        let mut boards = BTreeMap::new();
-        if full {
-            boards.insert(TerminalId("t0".to_string()), full_board());
-        }
-        let mut bodies = BTreeMap::new();
-        if full {
-            bodies.insert(FINDING_ID, FINDING_BODY.to_string());
-        }
-        StandInActivity {
-            logs: self.logs(full),
-            boards,
-            bodies,
-            page,
-        }
-    }
-
-    fn logs(self, full: bool) -> BTreeMap<TerminalId, Vec<ActivityEntry>> {
-        if self == Self::Empty {
-            return BTreeMap::new();
-        }
-        let mut working = log_of(&WORKING_LOG);
-        if full {
-            working = full_log();
-        }
-        let no_log = matches!(
-            self,
+            Self::Paged => full_story(inputs, &working, PAGED_RETRIES),
             Self::SetupOffAgent
-                | Self::AgentNoLog
-                | Self::SetupPluginDirs
-                | Self::SetupPluginDirsNarrow
-        );
-        if no_log {
-            working = Vec::new();
+            | Self::AgentNoLog
+            | Self::SetupPluginDirs
+            | Self::SetupPluginDirsNarrow => {}
+            _ => short_log(inputs, &working, &WORKING_LOG),
         }
-        let needs = log_of(&NEEDS_LOG);
-        let done = log_of(&DONE_LOG);
-        BTreeMap::from([
-            (TerminalId("t0".to_string()), working),
-            (TerminalId("t2".to_string()), needs),
-            (TerminalId("t3".to_string()), done),
-        ])
+        let needs = agent_log(NEEDS_ROW);
+        short_log(inputs, &needs, &NEEDS_LOG);
+        let done = agent_log(DONE_ROW);
+        short_log(inputs, &done, &DONE_LOG);
     }
 }
 
 impl Inputs {
-    fn new(at_ms: u64) -> Self {
+    fn new(now_ms: u64) -> Self {
+        let ago = STATE_MINUTES_AGO * MS_PER_MINUTE;
+        let at_ms = now_ms.saturating_sub(ago);
         Self {
             workspace: stand_in_workspace(),
+            now_ms,
             at_ms,
             focus_moves: 0,
+            turns: 0,
         }
     }
 
     fn deliver(&mut self, out: Vec<Outbound>) {
         delivered(&mut self.workspace, out, self.at_ms);
+    }
+
+    fn ago(&self, minutes: u64) -> u64 {
+        let ago = minutes * MS_PER_MINUTE;
+        self.now_ms.saturating_sub(ago)
+    }
+
+    fn turn(&self) -> String {
+        format!("turn-{}", self.turns)
     }
 
     fn start(&mut self) {
@@ -389,11 +386,15 @@ impl Inputs {
     }
 
     fn hook(&mut self, terminal: &TerminalId, call: HookCall) {
+        self.hook_at(terminal, call, self.at_ms);
+    }
+
+    fn hook_at(&mut self, terminal: &TerminalId, call: HookCall, at_ms: u64) {
         let event = HookEvent {
             terminal: terminal.clone(),
             call,
         };
-        let out = self.workspace.hook(event, self.at_ms);
+        let out = self.workspace.hook(event, at_ms);
         self.deliver(out);
     }
 
@@ -436,7 +437,7 @@ impl Inputs {
     }
 
     fn agent(&mut self, terminal: &TerminalId, index: usize, cwd: &str, state: RowState) {
-        let session_id = format!("00000000-0000-4000-8000-{index:012}");
+        let session_id = session_at(index);
         let start = HookCall::AgentStart {
             harness: claude(),
             session_id: session_id.clone(),
@@ -474,6 +475,157 @@ impl Inputs {
             payload: payload.to_string(),
         };
         self.hook(terminal, call);
+    }
+
+    fn agent_hook(&mut self, log: &AgentLog, minutes_ago: u64, event: &str, payload: Value) {
+        let at_ms = self.ago(minutes_ago);
+        let call = HookCall::AgentHook {
+            harness: claude(),
+            session_id: log.session_id.clone(),
+            event: event.to_string(),
+            payload: payload.to_string(),
+        };
+        self.hook_at(&log.terminal, call, at_ms);
+    }
+
+    fn submit(&mut self, log: &AgentLog, minutes_ago: u64, prompt: &str) {
+        let turn = self.turn();
+        let payload = json!({
+            "hook_event_name": USER_PROMPT_SUBMIT,
+            "prompt": prompt,
+            "prompt_id": turn,
+        });
+        self.agent_hook(log, minutes_ago, USER_PROMPT_SUBMIT, payload);
+    }
+
+    fn asked(&mut self, log: &AgentLog, minutes_ago: u64, text: &str) {
+        self.turns += 1;
+        self.submit(log, minutes_ago, text);
+    }
+
+    fn heard(&mut self, log: &AgentLog, minutes_ago: u64, from: &Peer, text: &str) {
+        self.turns += 1;
+        self.heard_mid_turn(log, minutes_ago, from, text);
+    }
+
+    fn heard_mid_turn(&mut self, log: &AgentLog, minutes_ago: u64, from: &Peer, text: &str) {
+        let prompt = message_prompt(from, text);
+        self.submit(log, minutes_ago, &prompt);
+    }
+
+    fn tool_ran(&mut self, log: &AgentLog, minutes_ago: u64, mut payload: Value) {
+        let turn = self.turn();
+        payload["hook_event_name"] = Value::from(POST_TOOL_USE);
+        payload["prompt_id"] = Value::from(turn);
+        self.agent_hook(log, minutes_ago, POST_TOOL_USE, payload);
+    }
+
+    fn step(&mut self, log: &AgentLog, minutes_ago: u64, tool: &str, text: &str) {
+        let input = tool_input(tool, text);
+        let payload = json!({ "tool_name": tool, "tool_input": input });
+        self.tool_ran(log, minutes_ago, payload);
+    }
+
+    fn failed_step(
+        &mut self,
+        log: &AgentLog,
+        minutes_ago: u64,
+        tool: &str,
+        text: &str,
+        error: &str,
+    ) {
+        let input = tool_input(tool, text);
+        let turn = self.turn();
+        let payload = json!({
+            "hook_event_name": POST_TOOL_USE_FAILURE,
+            "tool_name": tool,
+            "tool_input": input,
+            "error": error,
+            "prompt_id": turn,
+        });
+        self.agent_hook(log, minutes_ago, POST_TOOL_USE_FAILURE, payload);
+    }
+
+    fn wrote(&mut self, log: &AgentLog, minutes_ago: u64, path: &str) {
+        let payload = json!({
+            "tool_name": "Write",
+            "tool_input": { "file_path": path },
+            "tool_response": { "type": "create", "filePath": path },
+        });
+        self.tool_ran(log, minutes_ago, payload);
+    }
+
+    fn sent(&mut self, log: &AgentLog, minutes_ago: u64, to: &str, text: &str) {
+        let payload = json!({
+            "tool_name": "SendMessage",
+            "tool_input": { "to": to, "message": text },
+            "tool_response": { "success": true },
+        });
+        self.tool_ran(log, minutes_ago, payload);
+    }
+
+    fn pull_request_seen(
+        &mut self,
+        log: &AgentLog,
+        minutes_ago: u64,
+        command: &str,
+        number: u64,
+        action: &str,
+    ) {
+        let url = pull_request_link(number);
+        let operation = json!({ "number": number, "url": url, "action": action });
+        let response = json!({ "stdout": "", "gitOperation": { "pr": operation } });
+        let payload = json!({
+            "tool_name": "Bash",
+            "tool_input": { "command": command },
+            "tool_response": response,
+        });
+        self.tool_ran(log, minutes_ago, payload);
+    }
+
+    fn activity_tool(&mut self, log: &AgentLog, minutes_ago: u64, tool: &str, input: Value) {
+        let app = CURRENT.agent_app_name;
+        let name = format!("mcp__plugin_{app}_activity__{tool}");
+        let payload = json!({ "tool_name": name, "tool_input": input });
+        self.tool_ran(log, minutes_ago, payload);
+    }
+
+    fn note(&mut self, log: &AgentLog, minutes_ago: u64, text: &str) {
+        let input = json!({ "text": text });
+        self.activity_tool(log, minutes_ago, "note", input);
+    }
+
+    fn now_line(&mut self, log: &AgentLog, minutes_ago: u64, text: &str) {
+        let input = json!({ "text": text });
+        self.activity_tool(log, minutes_ago, "now", input);
+    }
+
+    fn share(&mut self, log: &AgentLog, minutes_ago: u64, kind: &str, title: &str, target: &str) {
+        let input = json!({ "kind": kind, "title": title, "target": target });
+        self.activity_tool(log, minutes_ago, "share", input);
+    }
+
+    fn share_text(&mut self, log: &AgentLog, minutes_ago: u64, title: &str, body: &str) {
+        let input = json!({ "kind": "other", "title": title, "body": body });
+        self.activity_tool(log, minutes_ago, "share", input);
+    }
+
+    fn session_started(&mut self, log: &AgentLog, minutes_ago: u64, source: &str) {
+        let at_ms = self.ago(minutes_ago);
+        let harness = claude();
+        let (_, out) =
+            self.workspace
+                .session_context(&log.terminal, &harness, &log.session_id, source, at_ms);
+        self.deliver(out);
+    }
+
+    fn asked_for_note(&mut self, log: &AgentLog, minutes_ago: u64) {
+        let at_ms = self.ago(minutes_ago);
+        let harness = claude();
+        let out = self
+            .workspace
+            .asked_for_note(&log.terminal, &harness, &log.session_id, at_ms);
+        self.deliver(out);
     }
 }
 
@@ -538,155 +690,51 @@ const fn entry(minutes_ago: u64, tool: &'static str, text: &'static str) -> Fixt
     }
 }
 
-fn log_of(lines: &[FixtureEntry]) -> Vec<ActivityEntry> {
-    let now = now_ms();
-    let mut entries = Vec::new();
-    let numbered = (1..).zip(lines);
-    for (seq, line) in numbered {
-        let ago = line.minutes_ago * MS_PER_MINUTE;
-        let text = line.text.to_string();
-        let at_ms = now.saturating_sub(ago);
-        let step = match line.tool {
-            ASKED => {
-                entries.push(ActivityEntry {
-                    seq,
-                    at_ms,
-                    author: Author::User,
-                    kind: ActivityKind::Asked { text },
-                });
-                continue;
-            }
-            CHANGED => Step::Changed {
-                tool: "Edit".to_string(),
-                path: text,
-            },
-            tool => Step::Did {
-                tool: tool.to_string(),
-                summary: text,
-                failed: None,
-            },
-        };
-        entries.push(ActivityEntry {
-            seq,
-            at_ms,
-            author: Author::App,
-            kind: ActivityKind::Step { stretch: seq, step },
-        });
+fn session_at(index: usize) -> String {
+    format!("00000000-0000-4000-8000-{index:012}")
+}
+
+fn agent_log(index: usize) -> AgentLog {
+    AgentLog {
+        terminal: terminal_at(index),
+        session_id: session_at(index),
     }
-    entries
 }
 
-/// Writes a log as the workspace does: one open stretch, closed by a note and ended by a new turn.
-struct LogWriter {
-    entries: Vec<ActivityEntry>,
-    open: Option<u64>,
-    now: u64,
+fn tool_input(tool: &str, text: &str) -> Value {
+    let mut fields = TOOL_INPUTS.iter();
+    let field = fields.find(|(name, _)| *name == tool);
+    let mut input = Map::new();
+    if let Some((_, key)) = field {
+        input.insert(key.to_string(), Value::from(text));
+    }
+    Value::Object(input)
 }
 
-impl LogWriter {
-    fn new() -> Self {
-        Self {
-            entries: Vec::new(),
-            open: None,
-            now: now_ms(),
+fn pull_request_link(number: u64) -> String {
+    format!("{PULL_REQUESTS}{number}")
+}
+
+fn message_prompt(from: &Peer, text: &str) -> String {
+    let mut attributes = String::new();
+    if let Some(address) = &from.address {
+        let attribute = format!(" from=\"{address}\"");
+        attributes.push_str(&attribute);
+    }
+    if let Some(name) = &from.name {
+        let attribute = format!(" from-name=\"{name}\"");
+        attributes.push_str(&attribute);
+    }
+    format!("{MESSAGE_OPEN}{attributes}>\n{text}\n{MESSAGE_CLOSE}")
+}
+
+fn short_log(inputs: &mut Inputs, log: &AgentLog, entries: &[FixtureEntry]) {
+    for entry in entries {
+        if entry.tool == ASKED {
+            inputs.asked(log, entry.minutes_ago, entry.text);
+            continue;
         }
-    }
-
-    fn next_seq(&self) -> u64 {
-        let held = self.entries.len() as u64;
-        held + 1
-    }
-
-    fn push(&mut self, minutes_ago: u64, author: Author, kind: ActivityKind) {
-        let seq = self.next_seq();
-        let ago = minutes_ago * MS_PER_MINUTE;
-        let at_ms = self.now.saturating_sub(ago);
-        self.entries.push(ActivityEntry {
-            seq,
-            at_ms,
-            author,
-            kind,
-        });
-    }
-
-    fn asked(&mut self, minutes_ago: u64, text: &str) {
-        self.open = None;
-        let text = text.to_string();
-        self.push(minutes_ago, Author::User, ActivityKind::Asked { text });
-    }
-
-    fn session(&mut self, minutes_ago: u64, source: StartSource) {
-        self.open = None;
-        let kind = ActivityKind::SessionStarted { source };
-        self.push(minutes_ago, Author::App, kind);
-    }
-
-    fn heard(&mut self, minutes_ago: u64, from: Peer, text: &str) {
-        let text = text.to_string();
-        let kind = ActivityKind::MessageIn { text };
-        self.push(minutes_ago, Author::OtherAgent(from), kind);
-    }
-
-    fn step(&mut self, minutes_ago: u64, step: Step) {
-        let next = self.next_seq();
-        let stretch = *self.open.get_or_insert(next);
-        let kind = ActivityKind::Step { stretch, step };
-        self.push(minutes_ago, Author::App, kind);
-    }
-
-    /// A step as an earlier build wrote it, a stretch of its own.
-    fn old_step(&mut self, minutes_ago: u64, step: Step) {
-        let stretch = self.next_seq();
-        let kind = ActivityKind::Step { stretch, step };
-        self.push(minutes_ago, Author::App, kind);
-    }
-
-    fn sent(&mut self, minutes_ago: u64, to: Peer, text: &str) {
-        let next = self.next_seq();
-        let stretch = *self.open.get_or_insert(next);
-        let text = text.to_string();
-        let kind = ActivityKind::MessageOut { to, text, stretch };
-        self.push(minutes_ago, Author::Agent, kind);
-    }
-
-    fn shared(&mut self, minutes_ago: u64, thing: u64, title: &str) {
-        let title = title.to_string();
-        let kind = ActivityKind::Shared { thing, title };
-        self.push(minutes_ago, Author::Agent, kind);
-    }
-
-    fn asked_for_note(&mut self, minutes_ago: u64) {
-        self.push(minutes_ago, Author::App, ActivityKind::AskedForNote);
-    }
-
-    fn note(&mut self, minutes_ago: u64, text: &str) {
-        let stretch = self.open.take();
-        let text = text.to_string();
-        let kind = ActivityKind::Note { text, stretch };
-        self.push(minutes_ago, Author::Agent, kind);
-    }
-}
-
-fn did(tool: &str, summary: &str) -> Step {
-    Step::Did {
-        tool: tool.to_string(),
-        summary: summary.to_string(),
-        failed: None,
-    }
-}
-
-fn failed(tool: &str, summary: &str, error: &str) -> Step {
-    Step::Did {
-        tool: tool.to_string(),
-        summary: summary.to_string(),
-        failed: Some(error.to_string()),
-    }
-}
-
-fn changed(tool: &str, path: &str) -> Step {
-    Step::Changed {
-        tool: tool.to_string(),
-        path: path.to_string(),
+        inputs.step(log, entry.minutes_ago, entry.tool, entry.text);
     }
 }
 
@@ -704,61 +752,88 @@ fn addressed(address: &str) -> Peer {
     }
 }
 
-/// An earlier build's turn, then three sessions of plugin-written work: a plan, a nudged fix, a review round.
-fn full_log() -> Vec<ActivityEntry> {
-    let mut log = LogWriter::new();
-    log.asked(140, "find why test_flaky_retry fails on CI");
-    log.old_step(139, did("Glob", "tests/**/test_retry*.py"));
-    log.old_step(138, did("Read", "tests/sentry/test_retry.py"));
-    log.old_step(130, changed("Edit", "tests/sentry/test_retry.py"));
-    log.session(96, StartSource::New);
-    log.asked(
+/// A turn left with no note, then three sessions of plugin-written work: a plan, a nudged fix, a review round.
+fn full_story(inputs: &mut Inputs, log: &AgentLog, retries: usize) {
+    inputs.asked(log, 140, "find why test_flaky_retry fails on CI");
+    inputs.step(log, 139, "Glob", "tests/**/test_retry*.py");
+    inputs.step(log, 138, "Read", "tests/sentry/test_retry.py");
+    inputs.step(log, 130, "Edit", "tests/sentry/test_retry.py");
+    inputs.session_started(log, 96, STARTUP);
+    inputs.asked(
+        log,
         95,
         "Look into what closing a terminal sends, and write a plan. No code.",
     );
-    log.step(94, did("Read", "crates/runtime/src/pty.rs"));
-    log.step(93, did("Read", "crates/runtime/src/program.rs"));
-    log.step(92, did("Grep", "SIGHUP"));
-    log.step(92, did("Grep", "kill("));
-    log.step(91, did("Grep", "fn shutdown"));
-    log.step(88, changed("Write", "PLAN-sigkill.md"));
-    log.shared(87, 1, "SIGKILL grace-period plan");
-    log.note(87, PLAN_NOTE);
-    log.asked(70, "Quote hook script paths safely.");
-    log.step(69, did("Read", "crates/services/src/agent_hooks.rs"));
-    log.step(66, changed("Edit", "crates/services/src/agent_hooks.rs"));
-    log.step(64, did("Bash", "cargo test -p taco-services"));
-    log.asked_for_note(62);
-    log.note(61, NUDGED_NOTE);
-    log.session(50, StartSource::Compacted);
-    log.heard(49, named("code-83"), REVIEW_MESSAGE);
-    log.step(48, did("Read", "crates/terminal-view/src/shapes.rs"));
-    log.step(44, changed("Edit", "crates/terminal-view/src/shapes.rs"));
-    log.step(
+    inputs.step(log, 94, "Read", "crates/runtime/src/pty.rs");
+    inputs.step(log, 93, "Read", "crates/runtime/src/program.rs");
+    inputs.step(log, 92, "Grep", "SIGHUP");
+    inputs.step(log, 92, "Grep", "kill(");
+    inputs.step(log, 91, "Grep", "fn shutdown");
+    inputs.wrote(log, 88, PLAN_PATH);
+    inputs.share_text(
+        log,
+        87,
+        "Why closing a terminal leaves its shell running",
+        FINDING_BODY,
+    );
+    inputs.note(log, 87, PLAN_NOTE);
+    inputs.asked(log, 70, "Quote hook script paths safely.");
+    inputs.step(log, 69, "Read", "crates/services/src/agent_hooks.rs");
+    inputs.step(log, 66, "Edit", "crates/services/src/agent_hooks.rs");
+    for _ in 0..retries {
+        inputs.step(log, 65, "Bash", "cargo test -p taco-services");
+        inputs.step(log, 65, "Edit", "crates/services/src/agent_hooks.rs");
+    }
+    inputs.step(log, 64, "Bash", "cargo test -p taco-services");
+    inputs.asked_for_note(log, 62);
+    inputs.note(log, 61, NUDGED_NOTE);
+    inputs.session_started(log, 50, COMPACT);
+    let reviewer = named(REVIEWER);
+    inputs.heard(log, 49, &reviewer, REVIEW_MESSAGE);
+    inputs.step(log, 48, "Read", "crates/terminal-view/src/shapes.rs");
+    let reviewed = pull_request_link(155);
+    inputs.share(
+        log,
+        44,
+        "pull_request",
+        "#155 Draw block and box characters as shapes",
+        &reviewed,
+    );
+    inputs.step(log, 44, "Edit", "crates/terminal-view/src/shapes.rs");
+    inputs.failed_step(
+        log,
         43,
-        failed(
-            "Bash",
-            "cargo test -p taco-terminal-view",
-            "Exit code 101: test shapes::faint_lines_meet ... FAILED",
-        ),
+        "Bash",
+        "cargo test -p taco-terminal-view",
+        "Exit code 101\ntest shapes::faint_lines_meet ... FAILED",
     );
-    log.step(42, did("Bash", "cargo test -p taco-terminal-view"));
-    log.sent(40, named("code-83"), FIXED_MESSAGE);
-    log.asked(30, "Now rebase it onto main.");
-    log.step(29, did("Bash", "git fetch origin"));
-    log.step(
+    inputs.step(log, 42, "Bash", "cargo test -p taco-terminal-view");
+    inputs.sent(log, 40, REVIEWER, FIXED_MESSAGE);
+    let logo = checkout_file(CHECKOUT_IMAGE);
+    inputs.share(log, 38, "image", "The logo before and after", &logo);
+    inputs.asked(log, 30, "Now rebase it onto main.");
+    inputs.step(log, 29, "Bash", "git fetch origin");
+    inputs.failed_step(
+        log,
         28,
-        failed(
-            "Bash",
-            "git rebase origin/main",
-            "Exit code 1: CONFLICT (content): Merge conflict in crates/terminal-view/src/draw.rs",
-        ),
+        "Bash",
+        "git rebase origin/main",
+        "Exit code 1\nCONFLICT (content): Merge conflict in crates/terminal-view/src/draw.rs",
     );
-    log.step(20, did("Read", "crates/terminal-view/src/draw.rs"));
-    log.step(15, changed("Edit", "crates/terminal-view/src/draw.rs"));
-    log.heard(5, addressed(ADDRESS), HEADS_UP);
-    log.step(3, did("Bash", "git rebase --continue"));
-    log.entries
+    inputs.now_line(log, 25, NOW_LINE);
+    inputs.step(log, 20, "Read", "crates/terminal-view/src/draw.rs");
+    inputs.share(
+        log,
+        20,
+        "artifact",
+        "What was approved for Agent Activity",
+        ARTIFACT_LINK,
+    );
+    inputs.step(log, 15, "Edit", "crates/terminal-view/src/draw.rs");
+    inputs.pull_request_seen(log, 8, "gh pr ready 179", 179, "ready");
+    let heads_up_from = addressed(ADDRESS);
+    inputs.heard_mid_turn(log, 5, &heads_up_from, HEADS_UP);
+    inputs.step(log, 3, "Bash", "git rebase --continue");
 }
 
 fn checkout_file(relative: &str) -> String {
@@ -769,99 +844,6 @@ fn checkout_file(relative: &str) -> String {
         Err(_) => joined,
     };
     path.to_string_lossy().into_owned()
-}
-
-/// A now line and one shared thing of each kind, newest first, as the workspace keeps them.
-fn full_board() -> Board {
-    let now = now_ms();
-    let ago = |minutes: u64| now.saturating_sub(minutes * MS_PER_MINUTE);
-    let thing = |id: u64, minutes: u64, by: Author, kind: &str, title: &str, target| SharedThing {
-        id,
-        at_ms: ago(minutes),
-        by,
-        kind: kind.to_string(),
-        title: title.to_string(),
-        target,
-    };
-    let merged = SharedTarget::PullRequest {
-        url: Some("https://github.com/ldelvoye/taco-shells/pull/155".to_string()),
-        number: 155,
-        state: PrState::Merged,
-        checked_ms: None,
-    };
-    let open = SharedTarget::PullRequest {
-        url: Some("https://github.com/ldelvoye/taco-shells/pull/179".to_string()),
-        number: 179,
-        state: PrState::Open,
-        checked_ms: Some(ago(6)),
-    };
-    let link = SharedTarget::Link {
-        url: "https://claude.ai/artifact/9NXFTKtkNKmvbxjMDsn1zL".to_string(),
-    };
-    let image = SharedTarget::File {
-        path: checkout_file(CHECKOUT_IMAGE),
-    };
-    let document = SharedTarget::File {
-        path: checkout_file(CHECKOUT_DOCUMENT),
-    };
-    let finding_length = FINDING_BODY.chars().count() as u64;
-    let text = SharedTarget::Text {
-        characters: finding_length,
-    };
-    let shared = vec![
-        thing(
-            6,
-            8,
-            Author::App,
-            "Pull request",
-            "#179 ldelvoye/taco-shells",
-            open,
-        ),
-        thing(
-            5,
-            20,
-            Author::OtherAgent(named("code-83")),
-            "Review",
-            "What was approved for Agent Activity",
-            link,
-        ),
-        thing(
-            4,
-            38,
-            Author::Agent,
-            "Images",
-            "The logo before and after",
-            image,
-        ),
-        thing(
-            3,
-            44,
-            Author::App,
-            "Pull request",
-            "#155 Draw block and box characters as shapes",
-            merged,
-        ),
-        thing(
-            2,
-            86,
-            Author::Agent,
-            "Plan",
-            "SIGKILL grace-period plan",
-            document,
-        ),
-        thing(
-            FINDING_ID,
-            87,
-            Author::Agent,
-            "Finding",
-            "Why closing a terminal leaves its shell running",
-            text,
-        ),
-    ];
-    Board {
-        now: Some(NOW_LINE.to_string()),
-        shared,
-    }
 }
 
 fn mixed(drawn: DrawnState) -> Shown {
