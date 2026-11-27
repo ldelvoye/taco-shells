@@ -10,7 +10,7 @@ use taco_settings::{Binding, Chord, CommandId, KeymapChange, command_for};
 
 use crate::drive::mark;
 use crate::look::{Look, SMALL_TEXT_SIZE};
-use crate::page::{
+use crate::page_parts::{
     BUTTON_RADIUS, CHIP_GAP, ROW_GAP, ROW_PADDING, UNREAD_OPACITY, chip, chip_text, form_column,
     group, page_foot, page_frame, page_header, text_button,
 };

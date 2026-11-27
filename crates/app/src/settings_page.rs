@@ -15,8 +15,9 @@ use crate::look::{Look, SMALL_TEXT_SIZE};
 use crate::motion::{
     Motion, Moved, SEGMENT_TIME, SWITCH_TIME, card_name, lerp, recorder, switch_amount,
 };
-use crate::page::{
-    CHIP_GAP, PageMove, ROW_GAP, ROW_PADDING, UNREAD_OPACITY, chip, form_column, group, page_foot,
+use crate::page::PageMove;
+use crate::page_parts::{
+    CHIP_GAP, ROW_GAP, ROW_PADDING, UNREAD_OPACITY, chip, form_column, group, page_foot,
     page_frame, page_header, text_button,
 };
 use crate::parts;

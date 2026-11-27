@@ -17,6 +17,7 @@ mod menu;
 mod middle;
 mod motion;
 mod page;
+mod page_parts;
 mod panels;
 mod parts;
 mod platform;
