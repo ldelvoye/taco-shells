@@ -33,17 +33,16 @@ mod enabled {
     use futures::channel::mpsc::{UnboundedSender, unbounded};
     use gpui::{
         AnyElement, AnyWindowHandle, App, AsyncApp, Bounds, Global, IntoElement, Keystroke,
-        Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-        PlatformInput, SharedString, Styled, Window, canvas, point, px,
+        Modifiers, MouseButton, Pixels, SharedString, Styled, Window, canvas, point, px,
     };
     use taco_drive::{Appearance, DriveReply, DriveRequest, Point, Rect, SOCKET_VARIABLE};
     use taco_protocol::TerminalId;
 
     use crate::appearance_of;
     use crate::look::Look;
+    use crate::synthetic_input;
     use crate::window::WindowView;
 
-    const DRAG_STEPS: u16 = 8;
     const ON_FIXTURES: &str = "the window runs on fixtures, with no terminals";
 
     #[derive(Default)]
@@ -220,29 +219,12 @@ mod enabled {
     ) -> Result<DriveReply, String> {
         let start = point(px(from.x), px(from.y));
         let end = point(px(to.x), px(to.y));
-        let mut events = vec![PlatformInput::MouseDown(MouseDownEvent {
-            button: MouseButton::Left,
-            position: start,
-            modifiers: Modifiers::default(),
-            click_count: 1,
-            first_mouse: false,
-        })];
-        for step in 1..=DRAG_STEPS {
-            let fraction = f32::from(step) / f32::from(DRAG_STEPS);
-            let x = from.x + (to.x - from.x) * fraction;
-            let y = from.y + (to.y - from.y) * fraction;
-            events.push(PlatformInput::MouseMove(MouseMoveEvent {
-                position: point(px(x), px(y)),
-                pressed_button: Some(MouseButton::Left),
-                modifiers: Modifiers::default(),
-            }));
-        }
-        events.push(PlatformInput::MouseUp(MouseUpEvent {
-            button: MouseButton::Left,
-            position: end,
-            modifiers: Modifiers::default(),
-            click_count: 1,
-        }));
+        let pressed = synthetic_input::press(start, MouseButton::Left);
+        let moves = synthetic_input::moves_through(start, end);
+        let released = synthetic_input::release(end, MouseButton::Left);
+        let mut events = vec![pressed];
+        events.extend(moves);
+        events.push(released);
 
         // Drawn after each event, as frames come between a real drag's events, so hover and drop targets are current.
         for event in events {

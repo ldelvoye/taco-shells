@@ -33,6 +33,8 @@ mod slot;
 #[cfg(feature = "render")]
 mod stand_in;
 mod strip;
+#[cfg(any(feature = "render", feature = "drive"))]
+mod synthetic_input;
 mod terminal_list;
 mod text_field;
 mod title_bar;
