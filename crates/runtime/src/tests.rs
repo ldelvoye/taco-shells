@@ -80,7 +80,6 @@ fn start(name: &str) -> TerminalStart {
     TerminalStart {
         id: id(name),
         directory: None,
-        directory_of: None,
         command: None,
         size: SIZE,
     }
@@ -385,15 +384,12 @@ fn an_exit_ends_the_view_after_the_last_output_and_the_terminal_is_gone() {
 #[test]
 fn opening_starts_one_shell_per_id_where_it_was_asked() {
     let (mut core, now) = opened(&["first"]);
-    core.shells_mut()
-        .directories
-        .insert(id("first"), "/repo/subdir".into());
 
     let again = core.handle(Input::Command(RuntimeCommand::Open(start("first"))), now);
     assert!(again.is_empty());
 
     let mut beside = start("beside");
-    beside.directory_of = Some(id("first"));
+    beside.directory = Some("/repo/subdir".into());
     beside.command = Some("claude --resume x\r".into());
     let effects = core.handle(Input::Command(RuntimeCommand::Open(beside)), now);
     assert_eq!(

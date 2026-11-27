@@ -7,8 +7,6 @@ use crate::sessions::{AgentSession, AgentSessions};
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct ShellStart {
     pub directory: Option<String>,
-    /// A terminal whose directory to start in, read by the runtime when the shell starts; used only without `directory`.
-    pub directory_of: Option<TerminalId>,
     pub command: Option<String>,
 }
 
@@ -19,7 +17,6 @@ pub fn fork_start(sessions: &AgentSessions, source: &TerminalId, name: &str) -> 
     let command = harness.fork_command(&session.session_id, name)?;
     let start = ShellStart {
         directory: Some(session.cwd.clone()),
-        directory_of: None,
         command: Some(command),
     };
     Some(start)
@@ -27,13 +24,12 @@ pub fn fork_start(sessions: &AgentSessions, source: &TerminalId, name: &str) -> 
 
 /// A restored agent session resumed where it runs; a plain shell there when its agent is gone or will not resume the id.
 pub fn resume_start(session: &AgentSession) -> ShellStart {
-    let command = match harness_of(&session.harness.0) {
-        Some(harness) => harness.resume_command(&session.session_id),
-        None => None,
-    };
+    let mut command = None;
+    if let Some(harness) = harness_of(&session.harness.0) {
+        command = harness.resume_command(&session.session_id);
+    }
     ShellStart {
         directory: Some(session.cwd.clone()),
-        directory_of: None,
         command,
     }
 }
