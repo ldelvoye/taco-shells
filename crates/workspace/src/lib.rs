@@ -15,10 +15,6 @@ mod workspace;
 #[cfg(test)]
 mod tests;
 
-pub use log::KEPT_ENTRIES;
 pub use outbound::Outbound;
-pub use save::SAVE_DEBOUNCE_MS;
-pub use storage::{
-    ACTIVITY_DIRECTORY, ELECTRON_COPY_FILE, FileStorage, Storage, UNREADABLE_COPY_FILE,
-};
+pub use storage::{FileStorage, Storage};
 pub use workspace::{Options, Workspace};
