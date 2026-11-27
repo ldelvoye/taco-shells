@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::process::Command;
 
+use crate::bump::Version;
 use crate::repo;
 
 const FALLBACK_SHORT: &str = "0.0.0";
@@ -45,14 +46,11 @@ fn tag_version(description: &str) -> String {
         None => without_v.len(),
     };
     let tag = &without_v[..tag_end];
-    let numbers: Vec<&str> = tag.split('.').collect();
-    let all_numeric = numbers
-        .iter()
-        .all(|number| !number.is_empty() && number.chars().all(|digit| digit.is_ascii_digit()));
-    if numbers.len() == 3 && all_numeric {
-        return tag.to_string();
+    let parsed = Version::parse(tag);
+    match parsed {
+        Some(version) => version.to_string(),
+        None => FALLBACK_SHORT.to_string(),
     }
-    FALLBACK_SHORT.to_string()
 }
 
 #[cfg(test)]
