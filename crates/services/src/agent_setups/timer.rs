@@ -1,12 +1,8 @@
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Instant;
 
 use taco_protocol::TerminalId;
-
-use super::{Shared, check_terminal, refresh};
 
 pub(super) enum TimerMessage {
     Schedule(TerminalId, Instant),
@@ -20,6 +16,12 @@ enum Next {
     Message(TimerMessage),
     Due,
     Closed,
+}
+
+pub(super) struct TimerWork {
+    pub(super) stopping: Box<dyn Fn() -> bool + Send>,
+    pub(super) check: Box<dyn Fn(&TerminalId) + Send>,
+    pub(super) refresh: Box<dyn Fn() + Send>,
 }
 
 fn next_message(messages: &Receiver<TimerMessage>, earliest: Option<Instant>) -> Next {
@@ -38,8 +40,8 @@ fn next_message(messages: &Receiver<TimerMessage>, earliest: Option<Instant>) ->
     }
 }
 
-fn run_due_checks(shared: &Shared, pending: &mut HashMap<TerminalId, Instant>) {
-    if shared.stopping.load(Ordering::SeqCst) {
+fn run_due_checks(work: &TimerWork, pending: &mut HashMap<TerminalId, Instant>) {
+    if (work.stopping)() {
         return;
     }
     let now = Instant::now();
@@ -53,23 +55,23 @@ fn run_due_checks(shared: &Shared, pending: &mut HashMap<TerminalId, Instant>) {
         pending.remove(terminal);
     }
     for terminal in &due {
-        if shared.stopping.load(Ordering::SeqCst) {
+        if (work.stopping)() {
             return;
         }
-        let check = std::panic::AssertUnwindSafe(|| check_terminal(shared, terminal));
+        let check = std::panic::AssertUnwindSafe(|| (work.check)(terminal));
         let _ = std::panic::catch_unwind(check);
     }
 }
 
-fn run_refresh(shared: &Shared) {
-    if shared.stopping.load(Ordering::SeqCst) {
+fn run_refresh(work: &TimerWork) {
+    if (work.stopping)() {
         return;
     }
-    let refreshing = std::panic::AssertUnwindSafe(|| refresh(shared));
+    let refreshing = std::panic::AssertUnwindSafe(|| (work.refresh)());
     let _ = std::panic::catch_unwind(refreshing);
 }
 
-pub(super) fn timer_loop(shared: Arc<Shared>, messages: Receiver<TimerMessage>) {
+pub(super) fn timer_loop(work: TimerWork, messages: Receiver<TimerMessage>) {
     let mut pending: HashMap<TerminalId, Instant> = HashMap::new();
     loop {
         let earliest = pending.values().min().copied();
@@ -84,9 +86,9 @@ pub(super) fn timer_loop(shared: Arc<Shared>, messages: Receiver<TimerMessage>) 
             Next::Message(TimerMessage::Cancel(terminal)) => {
                 pending.remove(&terminal);
             }
-            Next::Message(TimerMessage::Refresh) => run_refresh(&shared),
+            Next::Message(TimerMessage::Refresh) => run_refresh(&work),
             Next::Message(TimerMessage::Stop) => return,
-            Next::Due => run_due_checks(&shared, &mut pending),
+            Next::Due => run_due_checks(&work, &mut pending),
             Next::Closed => return,
         }
     }

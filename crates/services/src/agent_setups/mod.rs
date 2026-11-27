@@ -26,7 +26,7 @@ pub use notices::{
 };
 use notices::{Recorded, not_loaded_notice_of, notice_of, recorded_of};
 use taco_protocol::TOKEN_FILE_NAME;
-use timer::{TimerMessage, timer_loop};
+use timer::{TimerMessage, TimerWork, timer_loop};
 use version::{check_version, current_version, installed_version, probed_harness};
 
 const SUBMIT_CHECK_DELAY: Duration = Duration::from_secs(1);
@@ -424,8 +424,15 @@ impl AgentSetups {
             check_version(&shared);
         }
         let (sender, messages) = mpsc::channel();
-        let for_thread = Arc::clone(&shared);
-        let thread = thread::spawn(move || timer_loop(for_thread, messages));
+        let for_stopping = Arc::clone(&shared);
+        let for_check = Arc::clone(&shared);
+        let for_refresh = Arc::clone(&shared);
+        let work = TimerWork {
+            stopping: Box::new(move || for_stopping.stopping.load(Ordering::SeqCst)),
+            check: Box::new(move |terminal| check_terminal(&for_check, terminal)),
+            refresh: Box::new(move || refresh(&for_refresh)),
+        };
+        let thread = thread::spawn(move || timer_loop(work, messages));
         let setups = AgentSetups {
             shared,
             submit_delay,
