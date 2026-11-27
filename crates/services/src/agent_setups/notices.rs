@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use taco_agents::Version;
 use taco_protocol::{HarnessId, TerminalId};
 
 use super::Reading;
@@ -72,7 +73,7 @@ fn old_setup_text(product_name: &str) -> String {
     )
 }
 
-pub fn too_old_reason(product_name: &str, minimum: (u32, u32, u32), version: &str) -> String {
+pub fn too_old_reason(product_name: &str, minimum: Version, version: &str) -> String {
     let (major, minor, patch) = minimum;
     format!(
         "Agent Activity needs {product_name} {major}.{minor}.{patch} or later; this Mac has {version}."

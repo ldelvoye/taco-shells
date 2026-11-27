@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use taco_agents::{HARNESSES, HarnessSetup};
+use taco_agents::{HARNESSES, HarnessSetup, Version};
 use taco_protocol::HarnessId;
 
 use crate::agent_hooks::{has_managed_entries, remove_managed_entries};
@@ -120,7 +120,7 @@ pub(crate) fn plugin_dirs_reading(agent: &Agent, user_text: Option<&str>) -> Plu
 pub(crate) fn read_state(
     agent: &Agent,
     activity_on: bool,
-    version: Option<(u32, u32, u32)>,
+    version: Option<Version>,
 ) -> AgentSetupState {
     let installed = agent.paths.agent_directory.exists();
     let text = settings_text(&agent.paths.settings_path);
