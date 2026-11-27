@@ -293,7 +293,8 @@ mod tests {
         assert!(storage.write_save(OURS));
         assert!(!unreadable_copy.exists(), "our own save is not copied");
         let electron = r#"{"version":1,"groups":[]}"#;
-        for unreadable in [electron, r#"{"version":3,"rows":[]}"#, "not json"] {
+        let no_rows = r#"{"version":2}"#;
+        for unreadable in [electron, no_rows, r#"{"version":3,"rows":[]}"#, "not json"] {
             fs::write(&save, unreadable).unwrap();
             assert!(storage.write_save(OURS));
             assert_eq!(fs::read_to_string(&unreadable_copy).unwrap(), unreadable);
