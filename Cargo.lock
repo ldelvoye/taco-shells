@@ -5108,6 +5108,7 @@ dependencies = [
  "libc",
  "serde_json",
  "taco-protocol",
+ "tempfile",
 ]
 
 [[package]]
@@ -5143,10 +5144,12 @@ dependencies = [
  "plist",
  "serde_json",
  "taco-agents",
+ "taco-plugin",
  "taco-protocol",
  "taco-settings",
  "tempfile",
  "ureq",
+ "uuid",
 ]
 
 [[package]]

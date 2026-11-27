@@ -1,13 +1,15 @@
 use std::io::{Read, Write};
 use std::process::ExitCode;
+use std::time::{Duration, Instant};
 
 use taco_plugin::{
-    PostError, Surroundings, allow_answer, ancestor_pids, port_file, post, posts_at_all, posts_for,
-    read_port, serve, serves,
+    ANCESTOR_LIMIT, CONFIG_DIRECTORY_VARIABLE, HOME_VARIABLE, Surroundings, ancestor_pids,
+    may_post, permission_answer, port_file, post, posts_for, read_port, read_token, send_posts,
+    serve, serves,
 };
 use taco_protocol::PORT_FILE_VARIABLE;
 
-const CONFIG_DIRECTORY_VARIABLE: &str = "TACO_SHELLS_CONFIG_DIR";
+const HOOK_DEADLINE: Duration = Duration::from_millis(250);
 
 fn run_mcp() -> std::io::Result<()> {
     let surroundings = Surroundings::from_environment();
@@ -21,7 +23,7 @@ fn run_allow() -> std::io::Result<()> {
     let mut hook_input = String::new();
     std::io::stdin().read_to_string(&mut hook_input)?;
 
-    let answer = allow_answer(&hook_input);
+    let answer = permission_answer(&hook_input);
     if let Some(answer) = answer {
         let mut stdout = std::io::stdout();
         writeln!(stdout, "{answer}")?;
@@ -31,11 +33,12 @@ fn run_allow() -> std::io::Result<()> {
 }
 
 fn run_hook() -> std::io::Result<()> {
+    let deadline = Instant::now() + HOOK_DEADLINE;
     let mut raw_payload = String::new();
     std::io::stdin().read_to_string(&mut raw_payload)?;
 
     let surroundings = Surroundings::from_environment();
-    if !posts_at_all(&surroundings) {
+    if !may_post(&surroundings) {
         return Ok(());
     }
 
@@ -45,7 +48,7 @@ fn run_hook() -> std::io::Result<()> {
 
     let port_file_variable = std::env::var_os(PORT_FILE_VARIABLE);
     let config_dir_variable = std::env::var_os(CONFIG_DIRECTORY_VARIABLE);
-    let home = std::env::var_os("HOME");
+    let home = std::env::var_os(HOME_VARIABLE);
     let Some(path) = port_file(port_file_variable, config_dir_variable, home) else {
         return Ok(());
     };
@@ -53,20 +56,18 @@ fn run_hook() -> std::io::Result<()> {
         return Ok(());
     };
 
-    // Six ancestors reaches the pane's shell through the usual agent and wrapper layers; too few and the pane is never placed.
-    let pids = ancestor_pids(std::os::unix::process::parent_id(), 6);
-    let posts = posts_for(&payload, &raw_payload, &pids);
-    for next in &posts {
-        let sent = post(port, next);
-        if sent == Err(PostError::Refused) {
-            break;
-        }
-    }
+    let pids = ancestor_pids(std::os::unix::process::parent_id(), ANCESTOR_LIMIT);
+    let token = read_token(&path);
+    let posts = posts_for(&payload, &pids);
+    send_posts(&posts, |request| {
+        post(port, request, token.as_deref(), deadline)
+    });
     Ok(())
 }
 
 fn main() -> ExitCode {
     let mode = std::env::args().nth(1);
+    // A hook never fails the agent: every outcome exits 0, within the hook's deadline.
     if mode.as_deref() == Some("hook") {
         let _ = run_hook();
         return ExitCode::SUCCESS;

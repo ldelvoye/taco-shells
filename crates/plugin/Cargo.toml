@@ -13,3 +13,6 @@ path = "src/main.rs"
 taco-protocol.workspace = true
 serde_json.workspace = true
 libc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

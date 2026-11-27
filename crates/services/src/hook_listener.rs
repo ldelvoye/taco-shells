@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::path::PathBuf;
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
@@ -27,6 +28,10 @@ const AGENT_HOOK_BODY_CAP: u64 = 16 * 1024 * 1024;
 const HEAD_CAP: usize = 16 * 1024;
 const READ_CHUNK: usize = 64 * 1024;
 const HEAD_END: &[u8] = b"\r\n\r\n";
+const TOKEN_FILE_NAME: &str = "focus-token";
+const TOKEN_HEADER: &str = "x-taco-shells-token";
+const ACTIVITY_PREFIX: &str = "mcp__plugin_";
+const ACTIVITY_SUFFIXES: [&str; 3] = ["_activity__note", "_activity__now", "_activity__share"];
 // The hook scripts give up after a second, so a connection that is still sending by then is dead.
 const READ_DEADLINE: Duration = Duration::from_secs(1);
 const WAKE_TIMEOUT: Duration = Duration::from_millis(200);
@@ -45,11 +50,13 @@ struct Head {
     content_length: u64,
     chunked: bool,
     has_origin: bool,
+    token: Option<String>,
 }
 
 pub struct HookListener {
     port: Option<u16>,
     port_file: PathBuf,
+    token_file: PathBuf,
     stopping: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
@@ -67,9 +74,11 @@ impl HookListener {
         on_event: OnEvent,
     ) -> HookListener {
         let stopping = Arc::new(AtomicBool::new(false));
+        let token_file = port_file.with_file_name(TOKEN_FILE_NAME);
         let unbound = HookListener {
             port: None,
             port_file,
+            token_file,
             stopping: Arc::clone(&stopping),
             thread: None,
         };
@@ -81,11 +90,15 @@ impl HookListener {
         };
 
         let port = address.port();
+        let token = uuid::Uuid::new_v4().simple().to_string();
+        write_token_file(&unbound.token_file, &token);
         let port_text = port.to_string();
         let _ = fs::write(&unbound.port_file, port_text);
 
         let serving = Arc::clone(&stopping);
-        let thread = thread::spawn(move || serve(&listener, &serving, read_deadline, &*on_event));
+        let thread = thread::spawn(move || {
+            serve(&listener, &serving, read_deadline, &token, &*on_event);
+        });
         let mut bound = unbound;
         bound.port = Some(port);
         bound.thread = Some(thread);
@@ -115,6 +128,7 @@ impl HookListener {
 
         // Only the instance that bound a port wrote the port file; with every port taken, another instance owns it.
         let _ = fs::remove_file(&self.port_file);
+        let _ = fs::remove_file(&self.token_file);
     }
 }
 
@@ -122,6 +136,27 @@ impl Drop for HookListener {
     fn drop(&mut self) {
         self.shut_down();
     }
+}
+
+fn write_token_file(path: &Path, token: &str) {
+    let _ = fs::remove_file(path);
+    let opened = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path);
+    if let Ok(mut file) = opened {
+        let _ = file.write_all(token.as_bytes());
+    }
+}
+
+fn is_activity_tool(tool_name: &str) -> bool {
+    if !tool_name.starts_with(ACTIVITY_PREFIX) {
+        return false;
+    }
+    ACTIVITY_SUFFIXES
+        .iter()
+        .any(|suffix| tool_name.ends_with(suffix))
 }
 
 fn bind_first_free(ports: &[u16]) -> Option<TcpListener> {
@@ -140,6 +175,7 @@ fn serve(
     listener: &TcpListener,
     stopping: &AtomicBool,
     read_deadline: Duration,
+    token: &str,
     on_event: &(dyn Fn(ListenerEvent) + Send + Sync),
 ) {
     // One request at a time, so the app hears a session's start before its first state.
@@ -151,13 +187,14 @@ fn serve(
             continue;
         };
         let deadline = Instant::now() + read_deadline;
-        handle(stream, deadline, on_event);
+        handle(stream, deadline, token, on_event);
     }
 }
 
 fn handle(
     mut stream: TcpStream,
     deadline: Instant,
+    token: &str,
     on_event: &(dyn Fn(ListenerEvent) + Send + Sync),
 ) {
     let Some((head_bytes, leftover)) = read_head(&mut stream, deadline) else {
@@ -212,7 +249,8 @@ fn handle(
     // Answered before any work on the body, so a hook that blocks the agent never waits on the app.
     respond(&mut stream, 200);
 
-    let message = parse_message(&head.route, &body);
+    let sent_token = head.token.as_deref();
+    let message = parse_message(&head.route, &body, sent_token, token);
     if let Some(message) = message {
         on_event(ListenerEvent::Hook(message));
     }
@@ -267,6 +305,7 @@ fn parse_head(bytes: &[u8]) -> Option<Head> {
     let mut content_length = 0;
     let mut chunked = false;
     let mut has_origin = false;
+    let mut token = None;
     for line in lines {
         let Some((name, value)) = line.split_once(':') else {
             continue;
@@ -280,6 +319,8 @@ fn parse_head(bytes: &[u8]) -> Option<Head> {
             chunked = lowered.contains("chunked");
         } else if name.eq_ignore_ascii_case("origin") {
             has_origin = true;
+        } else if name.eq_ignore_ascii_case(TOKEN_HEADER) {
+            token = Some(value.to_string());
         }
     }
 
@@ -289,6 +330,7 @@ fn parse_head(bytes: &[u8]) -> Option<Head> {
         content_length,
         chunked,
         has_origin,
+        token,
     })
 }
 
@@ -352,9 +394,14 @@ fn body_cap(route: &str) -> Option<u64> {
     }
 }
 
-fn parse_message(route: &str, body: &[u8]) -> Option<HookMessage> {
+fn parse_message(
+    route: &str,
+    body: &[u8],
+    sent_token: Option<&str>,
+    token: &str,
+) -> Option<HookMessage> {
     if route == AGENT_HOOK_ROUTE {
-        return parse_hook_message(body);
+        return parse_hook_message(body, sent_token, token);
     }
 
     let value: Value = serde_json::from_slice(body).ok()?;
@@ -365,7 +412,7 @@ fn parse_message(route: &str, body: &[u8]) -> Option<HookMessage> {
     Some(HookMessage { pids, call })
 }
 
-fn parse_hook_message(body: &[u8]) -> Option<HookMessage> {
+fn parse_hook_message(body: &[u8], sent_token: Option<&str>, token: &str) -> Option<HookMessage> {
     let fields: HashMap<String, Box<RawValue>> = serde_json::from_slice(body).ok()?;
 
     let pids_text = fields.get("pids")?;
@@ -381,6 +428,14 @@ fn parse_hook_message(body: &[u8]) -> Option<HookMessage> {
     let payload_text = payload_raw.get();
     let payload_value: Value = serde_json::from_str(payload_text).ok()?;
     let payload = payload_value.as_object()?;
+
+    let tool_name = read_text(payload, "tool_name");
+    let is_activity_call = tool_name.is_some_and(is_activity_tool);
+    // Any local process can post here, so an activity call counts only with the token the app wrote for its own hook.
+    if is_activity_call && sent_token != Some(token) {
+        return None;
+    }
+
     let session_id = read_session_id(harness, payload, "session_id")?;
     let event = read_text(payload, "hook_event_name")?;
 
@@ -697,6 +752,85 @@ mod tests {
         listener.stop();
     }
 
+    fn activity_post(tool_name: &str) -> String {
+        let payload = serde_json::json!({
+            "session_id": SESSION,
+            "hook_event_name": "PostToolUse",
+            "tool_name": tool_name,
+            "tool_input": {"text": "did a thing"},
+        });
+        let body = serde_json::json!({"pids": [1], "harness": "claude", "payload": payload});
+        body.to_string()
+    }
+
+    #[test]
+    fn activity_calls_need_the_apps_token() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let token_file = directory.path().join("focus-token");
+        let (sender, receiver) = mpsc::channel();
+        let listener = HookListener::start_on(
+            &[0],
+            directory.path().join("focus-port"),
+            TEST_DEADLINE,
+            Box::new(move |event| {
+                let _ = sender.send(event);
+            }),
+        );
+        let port = listener.port().unwrap();
+
+        let mode = fs::metadata(&token_file).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        let token = fs::read_to_string(&token_file).unwrap();
+        assert_eq!(token.len(), 32);
+
+        let note = activity_post("mcp__plugin_taco-shells-dev_activity__note");
+        let with_token = format!("X-Taco-Shells-Token: {token}\r\n");
+        let lowercase_token = format!("x-taco-shells-token: {token}\r\n");
+        let wrong_token = "X-Taco-Shells-Token: nope\r\n";
+
+        let status = post_with(port, "POST", AGENT_HOOK_ROUTE, &with_token, note.as_bytes());
+        assert_eq!(status, 200);
+        let delivered = next_event(&receiver);
+        assert!(matches!(
+            delivered,
+            ListenerEvent::Hook(HookMessage {
+                call: HookCall::AgentHook { .. },
+                ..
+            })
+        ));
+        let status = post_with(
+            port,
+            "POST",
+            AGENT_HOOK_ROUTE,
+            &lowercase_token,
+            note.as_bytes(),
+        );
+        assert_eq!(status, 200);
+        next_event(&receiver);
+
+        let status = post(port, "POST", AGENT_HOOK_ROUTE, note.as_bytes());
+        assert_eq!(status, 200);
+        let status = post_with(port, "POST", AGENT_HOOK_ROUTE, wrong_token, note.as_bytes());
+        assert_eq!(status, 200);
+        let share = activity_post("mcp__plugin_other_activity__share");
+        let status = post(port, "POST", AGENT_HOOK_ROUTE, share.as_bytes());
+        assert_eq!(status, 200);
+        let marker = post(port, "POST", ATTENTION_ROUTE, br#"{"pids":[9]}"#);
+        assert_eq!(marker, 200);
+        let next = next_event(&receiver);
+        assert_eq!(next, hook(vec![9], HookCall::Attention));
+
+        let ordinary = activity_post("Bash");
+        post(port, "POST", AGENT_HOOK_ROUTE, ordinary.as_bytes());
+        let event = next_event(&receiver);
+        assert!(matches!(event, ListenerEvent::Hook(_)));
+
+        listener.stop();
+        assert!(!token_file.exists());
+    }
+
     #[test]
     fn the_answer_comes_before_the_app_hears_of_it() {
         let (sender, events) = mpsc::channel();
@@ -815,6 +949,93 @@ mod tests {
         let mut calls = Vec::new();
         let mut hook_events = Vec::new();
         for _ in 0..expected_events {
+            let event = next_event(&receiver);
+            let ListenerEvent::Hook(message) = event else {
+                panic!("not a hook: {event:?}");
+            };
+            assert!(message.pids.contains(&std::process::id()));
+            match message.call {
+                HookCall::AgentHook { event, .. } => hook_events.push(event),
+                call => calls.push(call),
+            }
+        }
+        listener.stop();
+
+        let state = |signal| HookCall::AgentState {
+            harness: claude(),
+            session_id: SESSION.to_string(),
+            signal,
+        };
+        let expected = vec![
+            HookCall::AgentStart {
+                harness: claude(),
+                session_id: SESSION.to_string(),
+                cwd: "/tmp/work".to_string(),
+                has_conversation: true,
+            },
+            state(AgentSignal::Working),
+            state(AgentSignal::Needs),
+            HookCall::AgentEnd {
+                harness: claude(),
+                session_id: SESSION.to_string(),
+            },
+            HookCall::Attention,
+        ];
+        assert_eq!(calls.len(), expected.len(), "{calls:?}");
+        for call in &expected {
+            assert!(calls.contains(call), "missing {call:?} in {calls:?}");
+        }
+        hook_events.sort();
+        let names = [
+            "Notification",
+            "SessionEnd",
+            "SessionStart",
+            "UserPromptSubmit",
+        ];
+        assert_eq!(hook_events, names);
+    }
+
+    #[test]
+    fn the_plugin_hook_is_accepted() {
+        let (listener, port, receiver) = start_collecting();
+
+        let payloads = [
+            serde_json::json!({
+                "session_id": SESSION,
+                "hook_event_name": "SessionStart",
+                "cwd": "/tmp/work",
+                "source": "resume",
+            }),
+            serde_json::json!({
+                "session_id": SESSION,
+                "hook_event_name": "UserPromptSubmit",
+                "cwd": "/tmp/work",
+            }),
+            serde_json::json!({
+                "session_id": SESSION,
+                "hook_event_name": "Notification",
+                "notification_type": "permission_prompt",
+            }),
+            serde_json::json!({
+                "session_id": SESSION,
+                "hook_event_name": "SessionEnd",
+                "cwd": "/tmp/work",
+            }),
+        ];
+        let pids = [std::process::id()];
+        let mut sent = 0;
+        for payload in &payloads {
+            let posts = taco_plugin::posts_for(payload, &pids);
+            for next in &posts {
+                let status = post(port, "POST", next.route, next.body.as_bytes());
+                assert_eq!(status, 200, "{}", next.route);
+                sent += 1;
+            }
+        }
+
+        let mut calls = Vec::new();
+        let mut hook_events = Vec::new();
+        for _ in 0..sent {
             let event = next_event(&receiver);
             let ListenerEvent::Hook(message) = event else {
                 panic!("not a hook: {event:?}");

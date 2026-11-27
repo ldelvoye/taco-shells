@@ -11,6 +11,8 @@ pub const CONFIG_FOLDER: &str = ".taco-shells-dev";
 
 pub const SERVER_NAME: &str = "activity";
 pub const ENTRYPOINT_VARIABLE: &str = "CLAUDE_CODE_ENTRYPOINT";
+pub const CONFIG_DIRECTORY_VARIABLE: &str = "TACO_SHELLS_CONFIG_DIR";
+pub const HOME_VARIABLE: &str = "HOME";
 
 pub struct Surroundings {
     pub app: Option<String>,
@@ -36,9 +38,13 @@ pub fn serves(surroundings: &Surroundings) -> bool {
     }
 
     // A headless run started inside a terminal (claude -p) inherits the variables but has no panel.
+    !is_headless(surroundings)
+}
+
+pub fn is_headless(surroundings: &Surroundings) -> bool {
     match &surroundings.entrypoint {
-        Some(entrypoint) => !entrypoint.starts_with("sdk"),
-        None => true,
+        Some(entrypoint) => entrypoint.starts_with("sdk"),
+        None => false,
     }
 }
 
