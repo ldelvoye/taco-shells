@@ -301,10 +301,34 @@ fn panel_preview(
 
 #[cfg(test)]
 mod tests {
-    use gpui::{px, size};
+    use gpui::{Bounds, point, px, size};
     use taco_protocol::Edge;
 
-    use super::bounded_size;
+    use super::{STRIP_WIDTH, bounded_size, edge_near, size_for_pointer};
+
+    #[test]
+    fn left_and_right_win_the_corners_and_the_middle_is_no_edge() {
+        let area = Bounds::new(point(px(0.), px(0.)), size(px(1000.), px(800.)));
+        let cases = [
+            (point(px(10.), px(790.)), Some(Edge::Left)),
+            (point(px(990.), px(790.)), Some(Edge::Right)),
+            (point(px(500.), px(790.)), Some(Edge::Bottom)),
+            (point(px(500.), px(300.)), None),
+        ];
+        for (pointer, expected) in cases {
+            assert_eq!(edge_near(pointer, area), expected, "{pointer:?}");
+        }
+    }
+
+    #[test]
+    fn a_left_panel_starts_after_the_strip() {
+        let window = size(px(1000.), px(800.));
+        let pointer = point(px(300.), px(400.));
+        assert_eq!(
+            size_for_pointer(Edge::Left, pointer, window),
+            300. - STRIP_WIDTH
+        );
+    }
 
     #[test]
     fn a_panel_never_takes_more_than_half_the_window_or_less_than_a_usable_size() {

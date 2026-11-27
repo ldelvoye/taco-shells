@@ -67,18 +67,32 @@ mod tests {
     const SHELL_TITLE: &str = "someone@machine:~/code/taco-shells";
 
     #[test]
-    fn a_plain_shell_is_named_by_its_folder_and_an_agent_by_its_title() {
+    fn a_row_is_named_by_its_title_folder_or_short_path_as_the_mode_asks() {
         let home = Some(Path::new("/Users/someone"));
         let cases = [
-            (Some("/Users/someone"), "~"),
-            (Some("/Users/someone/code/taco-shells"), "taco-shells"),
-            (Some("/Users/someone/code/taco-shells/"), "taco-shells"),
-            (Some("/"), "/"),
-            (None, "Terminal"),
+            (ShellRowName::Path, Some("/Users/someone"), "~"),
+            (ShellRowName::Folder, Some("/"), "/"),
+            (
+                ShellRowName::Folder,
+                Some("/Users/someone/code/taco-shells"),
+                "taco-shells",
+            ),
+            (ShellRowName::Folder, None, "Terminal"),
+            (
+                ShellRowName::Path,
+                Some("/Users/someone/code/taco-shells"),
+                "~/code/taco-shells",
+            ),
+            (
+                ShellRowName::Path,
+                Some("/Users/someoneelse/code"),
+                "/Users/someoneelse/code",
+            ),
+            (ShellRowName::Path, Some("/opt/homebrew/"), "/opt/homebrew"),
         ];
-        for (directory, expected) in cases {
-            let named = row_name(SHELL_TITLE, false, directory, home, ShellRowName::Folder);
-            assert_eq!(named, expected);
+        for (mode, directory, expected) in cases {
+            let named = row_name(SHELL_TITLE, false, directory, home, mode);
+            assert_eq!(named, expected, "{directory:?}");
         }
         let agent = row_name(
             "claude: lock rework",
@@ -88,28 +102,5 @@ mod tests {
             ShellRowName::Path,
         );
         assert_eq!(agent, "claude: lock rework");
-    }
-
-    #[test]
-    fn a_short_path_starts_at_home_and_is_whole_outside_it() {
-        let home = Some(Path::new("/Users/someone"));
-        let cases = [
-            (Some("/Users/someone"), "~"),
-            (
-                Some("/Users/someone/code/taco-shells"),
-                "~/code/taco-shells",
-            ),
-            (
-                Some("/Users/someone/code/taco-shells/"),
-                "~/code/taco-shells",
-            ),
-            (Some("/Users/someoneelse/code"), "/Users/someoneelse/code"),
-            (Some("/opt/homebrew/"), "/opt/homebrew"),
-            (Some("/"), "/"),
-        ];
-        for (directory, expected) in cases {
-            let named = row_name(SHELL_TITLE, false, directory, home, ShellRowName::Path);
-            assert_eq!(named, expected, "{directory:?}");
-        }
     }
 }

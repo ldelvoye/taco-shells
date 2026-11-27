@@ -320,29 +320,11 @@ impl TextField {
     }
 
     fn offset_from_utf16(&self, offset: usize) -> usize {
-        let mut utf8_offset = 0;
-        let mut utf16_count = 0;
-        for ch in self.content.chars() {
-            if utf16_count >= offset {
-                break;
-            }
-            utf16_count += ch.len_utf16();
-            utf8_offset += ch.len_utf8();
-        }
-        utf8_offset
+        utf8_offset_from_utf16(&self.content, offset)
     }
 
     fn offset_to_utf16(&self, offset: usize) -> usize {
-        let mut utf16_offset = 0;
-        let mut utf8_count = 0;
-        for ch in self.content.chars() {
-            if utf8_count >= offset {
-                break;
-            }
-            utf8_count += ch.len_utf8();
-            utf16_offset += ch.len_utf16();
-        }
-        utf16_offset
+        utf16_offset_from_utf8(&self.content, offset)
     }
 
     fn range_to_utf16(&self, range: &Range<usize>) -> Range<usize> {
@@ -365,10 +347,7 @@ impl TextField {
 
     /// Whether the text changed.
     fn splice(&mut self, range: &Range<usize>, new_text: &str) -> bool {
-        let mut next = String::new();
-        next.push_str(&self.content[..range.start]);
-        next.push_str(new_text);
-        next.push_str(&self.content[range.end..]);
+        let next = spliced(&self.content, range, new_text);
         let changed = next != self.content;
         self.content = next;
         changed
@@ -834,6 +813,40 @@ pub fn bind_keys(cx: &mut App) {
     ]);
 }
 
+fn utf8_offset_from_utf16(text: &str, offset: usize) -> usize {
+    let mut utf8_offset = 0;
+    let mut utf16_count = 0;
+    for ch in text.chars() {
+        if utf16_count >= offset {
+            break;
+        }
+        utf16_count += ch.len_utf16();
+        utf8_offset += ch.len_utf8();
+    }
+    utf8_offset
+}
+
+fn utf16_offset_from_utf8(text: &str, offset: usize) -> usize {
+    let mut utf16_offset = 0;
+    let mut utf8_count = 0;
+    for ch in text.chars() {
+        if utf8_count >= offset {
+            break;
+        }
+        utf8_count += ch.len_utf8();
+        utf16_offset += ch.len_utf16();
+    }
+    utf16_offset
+}
+
+fn spliced(text: &str, range: &Range<usize>, new_text: &str) -> String {
+    let mut next = String::new();
+    next.push_str(&text[..range.start]);
+    next.push_str(new_text);
+    next.push_str(&text[range.end..]);
+    next
+}
+
 fn one_line(text: &str) -> String {
     let is_break = |c: char| c == '\r' || c == '\n';
     let trimmed = text.trim_matches(is_break);
@@ -871,6 +884,26 @@ mod tests {
         assert_eq!(scroll_showing(150., 120., 300., visible), 120.);
         // A line made shorter, by a deletion, gives back the scroll it no longer needs.
         assert_eq!(scroll_showing(250., 120., 150., visible), 150. - room);
+    }
+
+    #[test]
+    fn input_offsets_count_utf16_units_and_a_splice_can_span_an_emoji() {
+        let emoji = "a😀b";
+        let emoji_boundaries = [(0, 0), (1, 1), (3, 5), (4, 6)];
+        for (utf16, bytes) in emoji_boundaries {
+            assert_eq!(utf8_offset_from_utf16(emoji, utf16), bytes);
+            assert_eq!(utf16_offset_from_utf8(emoji, bytes), utf16);
+        }
+        let accented = "e\u{301}x";
+        let accented_boundaries = [(0, 0), (1, 1), (2, 3), (3, 4)];
+        for (utf16, bytes) in accented_boundaries {
+            assert_eq!(utf8_offset_from_utf16(accented, utf16), bytes);
+            assert_eq!(utf16_offset_from_utf8(accented, bytes), utf16);
+        }
+        let start = utf8_offset_from_utf16(emoji, 1);
+        let end = utf8_offset_from_utf16(emoji, 3);
+        let replaced = spliced(emoji, &(start..end), "-");
+        assert_eq!(replaced, "a-b");
     }
 
     #[test]

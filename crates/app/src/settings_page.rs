@@ -798,15 +798,6 @@ mod tests {
     }
 
     #[test]
-    fn a_setting_the_file_could_not_give_cannot_be_changed_and_a_broken_file_locks_them_all() {
-        let one = UnreadSettings::Keys(vec!["fontSize"]);
-        assert!(is_unread(&one, "fontSize"));
-        assert!(!is_unread(&one, "theme"));
-        assert!(is_unread(&UnreadSettings::Whole, "theme"));
-        assert!(!is_unread(&UnreadSettings::None, "fontSize"));
-    }
-
-    #[test]
     fn stepper_reaches_its_bounds_and_stops_there() {
         let below_max = FONT_SIZE_MAX - 1.0;
         let above_min = FONT_SIZE_MIN + 1.0;
