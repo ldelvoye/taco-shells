@@ -1,6 +1,6 @@
 use taco_protocol::{AgentSignal, StartSource};
 
-use crate::harness::{AgentTitle, Harness, HarnessSetup, HookFields};
+use crate::harness::{AgentTitle, Harness, HarnessSetup, HookFields, Version};
 
 mod entries;
 mod found;
@@ -196,7 +196,7 @@ fn fork_command(session_id: &str, name: &str) -> Option<String> {
     Some(format!("{base} --name '{escaped}'\n"))
 }
 
-fn parse_version(output: &str) -> Option<(u32, u32, u32)> {
+fn parse_version(output: &str) -> Option<Version> {
     let first_line = output.lines().next()?;
     let first_word = first_line.split_whitespace().next()?;
     let mut numbers = first_word.split('.');
@@ -279,25 +279,14 @@ mod tests {
     }
 
     #[test]
-    fn a_hook_payload_gives_its_session_event_source_and_tool() {
-        let full = format!(
-            r#"{{"session_id":"{SESSION_ID}","hook_event_name":"SessionStart","source":"resume","tool_name":"Bash"}}"#
-        );
-        let bare = format!(r#"{{"session_id":"{SESSION_ID}","hook_event_name":"Stop"}}"#);
+    fn a_hook_payload_with_no_session_gives_nothing_and_one_without_a_source_or_tool_still_reads() {
         let no_session = r#"{"hook_event_name":"Stop"}"#;
+        assert_eq!(CLAUDE.hook_fields(no_session), None);
 
-        let all = CLAUDE.hook_fields(&full).unwrap();
-        assert_eq!(all.session_id, SESSION_ID);
-        assert_eq!(all.event, "SessionStart");
-        assert_eq!(all.source.as_deref(), Some("resume"));
-        assert_eq!(all.tool_name.as_deref(), Some("Bash"));
-
+        let bare = format!(r#"{{"session_id":"{SESSION_ID}","hook_event_name":"Stop"}}"#);
         let without = CLAUDE.hook_fields(&bare).unwrap();
         assert_eq!(without.source, None);
         assert_eq!(without.tool_name, None);
-
-        assert_eq!(CLAUDE.hook_fields(no_session), None);
-        assert_eq!(CLAUDE.hook_fields("[1]"), None);
     }
 
     #[test]

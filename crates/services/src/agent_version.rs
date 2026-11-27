@@ -8,7 +8,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use taco_agents::Harness;
+use taco_agents::{Harness, Version};
 
 const PASSED_VARIABLES: [&str; 5] = ["HOME", "USER", "PATH", "LANG", "TMPDIR"];
 const RUN_LIMIT: Duration = Duration::from_secs(3);
@@ -171,7 +171,7 @@ pub(crate) fn find_program(home: &Path, command: &str) -> Option<PathBuf> {
     login_shell_program(command)
 }
 
-pub(crate) fn program_version(program: &Path, harness: &Harness) -> Option<(u32, u32, u32)> {
+pub(crate) fn program_version(program: &Path, harness: &Harness) -> Option<Version> {
     let setup = harness.setup()?;
     let flag = setup.version_flag;
     let direct = run_for_output(program, &[flag], RUN_LIMIT);
