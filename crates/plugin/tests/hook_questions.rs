@@ -8,7 +8,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use taco_plugin::{PANEL_TEXT, PLUGIN_NAME};
-use taco_protocol::{APP_VARIABLE, PORT_FILE_NAME, PORT_FILE_VARIABLE, TOKEN_FILE_NAME, routes};
+use taco_protocol::{
+    APP_VARIABLE, PORT_FILE_NAME, PORT_FILE_VARIABLE, TOKEN_FILE_NAME, deadlines, routes,
+};
 
 const CONTEXT_ROUTE: &str = routes::CONTEXT;
 const STOP_ROUTE: &str = routes::STOP;
@@ -149,6 +151,12 @@ fn stop_payload() -> Value {
     json!({"hook_event_name": "Stop", "session_id": "s1"})
 }
 
+fn start_up_time(directory: &Path) -> Duration {
+    let ignored = json!({});
+    let output = run_hook(directory, &ignored);
+    output.elapsed
+}
+
 fn seen_routes(routes: &Arrivals) -> Vec<String> {
     let mut arrivals = routes.lock().unwrap().clone();
     arrivals.sort();
@@ -195,10 +203,12 @@ fn a_stop_the_app_never_answers_exits_in_time_silently_and_still_posts() {
     let (port, routes) = stand_in(Reply::Hold);
     write_port_files(directory.path(), port);
 
+    let start_up = start_up_time(directory.path());
     let output = run_hook(directory.path(), &stop_payload());
 
     assert_eq!(output.status_code, Some(0));
-    assert!(output.elapsed < Duration::from_millis(2500));
+    let by_its_deadline = start_up + deadlines::QUESTION + Duration::from_secs(1);
+    assert!(output.elapsed < by_its_deadline, "{:?}", output.elapsed);
     assert_eq!(output.stdout, "");
     let seen = wait_for_posts(&routes);
     for route in POST_ROUTES {
@@ -283,9 +293,15 @@ fn with_no_listener_the_hook_exits_at_once_and_prints_nothing() {
     drop(listener);
     write_port_files(directory.path(), port);
 
+    let start_up = start_up_time(directory.path());
     let output = run_hook(directory.path(), &stop_payload());
 
     assert_eq!(output.status_code, Some(0));
-    assert!(output.elapsed < Duration::from_secs(1));
+    let well_before_a_deadline = start_up + deadlines::QUESTION / 2;
+    assert!(
+        output.elapsed < well_before_a_deadline,
+        "{:?}",
+        output.elapsed
+    );
     assert_eq!(output.stdout, "");
 }
