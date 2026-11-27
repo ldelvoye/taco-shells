@@ -1,0 +1,324 @@
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+
+use jsonc_parser::cst::{CstInputValue, CstObjectProp, CstRootNode};
+use jsonc_parser::parse_to_serde_value;
+use serde_json::{Value, json};
+use taco_settings::JSONC_PARSE_OPTIONS;
+
+use crate::agent_hooks::{HookEdit, properties_named, uneditable_problem, unreadable_problem};
+use crate::agent_setup_state::PluginDirs;
+use crate::file_write::replace_file;
+
+pub(crate) const MANAGED_SETTINGS_PATH: &str =
+    "/Library/Application Support/ClaudeCode/managed-settings.json";
+
+const PLUGIN_DIRS_VARIABLE: &str = "CLAUDE_CODE_PLUGIN_DIRS";
+const ENV_KEY: &str = "env";
+const RECORD_FILE_NAME: &str = "claude-plugin-dirs.json";
+const SETTINGS_FIELD: &str = "settings";
+const ENTRY_FIELD: &str = "entry";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PluginDirsRecord {
+    pub(crate) settings: PathBuf,
+    pub(crate) entry: String,
+}
+
+enum Located {
+    Missing,
+    Ambiguous,
+    Found(CstObjectProp),
+}
+
+fn plugin_dirs_value(text: &str) -> Option<String> {
+    let parsed = parse_to_serde_value(text, &JSONC_PARSE_OPTIONS);
+    let Ok(Some(Value::Object(root))) = parsed else {
+        return None;
+    };
+    let env = root.get(ENV_KEY)?;
+    let variable = env.get(PLUGIN_DIRS_VARIABLE)?;
+    let value = variable.as_str()?;
+    Some(value.to_string())
+}
+
+fn expand_home(entry: &str, home: &Path) -> String {
+    let home_text = home.to_string_lossy();
+    if entry == "~" {
+        return home_text.into_owned();
+    }
+    if let Some(rest) = entry.strip_prefix("~/") {
+        return format!("{home_text}/{rest}");
+    }
+    entry.to_string()
+}
+
+fn without_trailing_slash(text: &str) -> &str {
+    match text.strip_suffix('/') {
+        Some(trimmed) => trimmed,
+        None => text,
+    }
+}
+
+fn lists_folder(value: &str, folder: &Path, home: &Path) -> bool {
+    let folder_text = folder.to_string_lossy();
+    for entry in value.split(':') {
+        let expanded = expand_home(entry, home);
+        let trimmed = without_trailing_slash(&expanded);
+        if trimmed == folder_text {
+            return true;
+        }
+    }
+    false
+}
+
+pub(crate) fn plugin_dirs_of(
+    user_text: Option<&str>,
+    user_file: &Path,
+    managed_text: Option<&str>,
+    folder: &Path,
+    home: &Path,
+) -> PluginDirs {
+    let managed_value = managed_text.and_then(plugin_dirs_value);
+    if let Some(value) = &managed_value
+        && !lists_folder(value, folder, home)
+    {
+        return PluginDirs::ManagedHides;
+    }
+    let user_value = user_text.and_then(plugin_dirs_value);
+    if let Some(value) = &user_value
+        && !lists_folder(value, folder, home)
+    {
+        return PluginDirs::Hides {
+            file: user_file.to_path_buf(),
+        };
+    }
+    if managed_value.is_some() || user_value.is_some() {
+        return PluginDirs::Lists;
+    }
+    PluginDirs::Unset
+}
+
+fn locate(root: &CstRootNode) -> Located {
+    let Some(object) = root.object_value() else {
+        return Located::Missing;
+    };
+    let env_count = properties_named(&object, ENV_KEY);
+    if env_count == 0 {
+        return Located::Missing;
+    }
+    if env_count > 1 {
+        return Located::Ambiguous;
+    }
+    let Some(env) = object.object_value(ENV_KEY) else {
+        return Located::Missing;
+    };
+    let variable_count = properties_named(&env, PLUGIN_DIRS_VARIABLE);
+    if variable_count == 0 {
+        return Located::Missing;
+    }
+    if variable_count > 1 {
+        return Located::Ambiguous;
+    }
+    match env.get(PLUGIN_DIRS_VARIABLE) {
+        Some(property) => Located::Found(property),
+        None => Located::Missing,
+    }
+}
+
+fn string_of(property: &CstObjectProp) -> Option<String> {
+    let node = property.value()?;
+    let literal = node.as_string_lit()?;
+    literal.decoded_value().ok()
+}
+
+pub(crate) fn append_folder(text: &str, folder: &Path, home: &Path, label: &str) -> HookEdit {
+    let parsed = CstRootNode::parse(text, &JSONC_PARSE_OPTIONS);
+    let Ok(root) = parsed else {
+        return HookEdit::Refused(unreadable_problem(label));
+    };
+    let property = match locate(&root) {
+        Located::Missing => return HookEdit::Unchanged,
+        Located::Ambiguous => return HookEdit::Refused(uneditable_problem(label)),
+        Located::Found(property) => property,
+    };
+    let Some(old) = string_of(&property) else {
+        return HookEdit::Unchanged;
+    };
+    if lists_folder(&old, folder, home) {
+        return HookEdit::Unchanged;
+    }
+    let folder_text = folder.to_string_lossy();
+    let mut joined = folder_text.to_string();
+    if !old.is_empty() {
+        joined = format!("{old}:{folder_text}");
+    }
+    property.set_value(CstInputValue::from(joined));
+    HookEdit::Changed(root.to_string())
+}
+
+pub(crate) fn remove_folder(text: &str, entry: &str, label: &str) -> HookEdit {
+    let parsed = CstRootNode::parse(text, &JSONC_PARSE_OPTIONS);
+    let Ok(root) = parsed else {
+        return HookEdit::Refused(unreadable_problem(label));
+    };
+    let property = match locate(&root) {
+        Located::Missing => return HookEdit::Unchanged,
+        Located::Ambiguous => return HookEdit::Refused(uneditable_problem(label)),
+        Located::Found(property) => property,
+    };
+    let Some(old) = string_of(&property) else {
+        return HookEdit::Unchanged;
+    };
+    let mut entries: Vec<&str> = old.split(':').collect();
+    let position = entries.iter().rposition(|candidate| *candidate == entry);
+    let Some(position) = position else {
+        return HookEdit::Unchanged;
+    };
+    entries.remove(position);
+    let joined = entries.join(":");
+    property.set_value(CstInputValue::from(joined));
+    HookEdit::Changed(root.to_string())
+}
+
+fn record_path(config_directory: &Path) -> PathBuf {
+    config_directory.join(RECORD_FILE_NAME)
+}
+
+pub(crate) fn write_record(config_directory: &Path, record: &PluginDirsRecord) -> io::Result<()> {
+    fs::create_dir_all(config_directory)?;
+    let body = json!({
+        SETTINGS_FIELD: record.settings.to_string_lossy(),
+        ENTRY_FIELD: record.entry,
+    });
+    let text = body.to_string();
+    let path = record_path(config_directory);
+    replace_file(&path, &text)
+}
+
+pub(crate) fn read_record(config_directory: &Path) -> Option<PluginDirsRecord> {
+    let path = record_path(config_directory);
+    let text = fs::read_to_string(path).ok()?;
+    let value: Value = serde_json::from_str(&text).ok()?;
+    let settings_value = value.get(SETTINGS_FIELD)?;
+    let settings = settings_value.as_str()?;
+    let entry_value = value.get(ENTRY_FIELD)?;
+    let entry = entry_value.as_str()?;
+    Some(PluginDirsRecord {
+        settings: PathBuf::from(settings),
+        entry: entry.to_string(),
+    })
+}
+
+pub(crate) fn remove_record(config_directory: &Path) -> io::Result<()> {
+    let path = record_path(config_directory);
+    let removed = fs::remove_file(path);
+    match removed {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+        _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const LABEL: &str = "settings.json";
+    const FOLDER: &str = "/h/.taco-shells/claude-plugin";
+    const USER_FILE: &str = r#"{
+  // mine
+  "model": "opus",
+  "env": {
+    "OTHER": "1", // keep
+    "CLAUDE_CODE_PLUGIN_DIRS": "~/.claude/mods/face-band"
+  },
+  "theme": "dark"
+}
+"#;
+
+    fn folder() -> PathBuf {
+        PathBuf::from(FOLDER)
+    }
+
+    fn home() -> PathBuf {
+        PathBuf::from("/h")
+    }
+
+    fn with_value(value: &str) -> String {
+        let key = format!("\"{PLUGIN_DIRS_VARIABLE}\": \"{value}\"");
+        format!("{{\"env\": {{{key}}}}}")
+    }
+
+    #[test]
+    fn a_listed_entry_matches_only_this_builds_folder() {
+        let folder = folder();
+        let home = home();
+        let cases = [
+            ("~/.taco-shells/claude-plugin", true),
+            ("/a:~/.taco-shells/claude-plugin", true),
+            ("~/.taco-shells/claude-plugin/", true),
+            ("/h/.taco-shells/claude-plugin", true),
+            ("~/.claude/mods/face-band", false),
+            ("~/.taco-shells-dev/claude-plugin", false),
+            ("", false),
+        ];
+        for (value, expected) in cases {
+            assert_eq!(lists_folder(value, &folder, &home), expected, "{value}");
+        }
+    }
+
+    #[test]
+    fn a_managed_value_wins_and_a_user_value_that_lacks_the_folder_hides_it() {
+        let folder = folder();
+        let home = home();
+        let file = PathBuf::from("/h/.claude/settings.json");
+        let lacking = with_value("/other");
+        let listing = with_value("/other:~/.taco-shells/claude-plugin");
+        let no_env = "{\"model\": \"opus\"}";
+
+        let managed_over_user =
+            plugin_dirs_of(Some(&listing), &file, Some(&lacking), &folder, &home);
+        assert_eq!(managed_over_user, PluginDirs::ManagedHides);
+        let hides = plugin_dirs_of(Some(&lacking), &file, None, &folder, &home);
+        assert_eq!(hides, PluginDirs::Hides { file: file.clone() });
+        let lists = plugin_dirs_of(Some(&listing), &file, None, &folder, &home);
+        assert_eq!(lists, PluginDirs::Lists);
+        let unset = plugin_dirs_of(Some(no_env), &file, None, &folder, &home);
+        assert_eq!(unset, PluginDirs::Unset);
+    }
+
+    #[test]
+    fn appending_changes_only_the_one_string() {
+        let folder = folder();
+        let home = home();
+
+        let edit = append_folder(USER_FILE, &folder, &home, LABEL);
+
+        let expected = USER_FILE.replace("face-band\"", &format!("face-band:{FOLDER}\""));
+        assert_eq!(edit, HookEdit::Changed(expected));
+        let absent = "{\"env\": {\"OTHER\": \"1\"}}";
+        assert_eq!(
+            append_folder(absent, &folder, &home, LABEL),
+            HookEdit::Unchanged
+        );
+        let listed = with_value("~/.taco-shells/claude-plugin");
+        assert_eq!(
+            append_folder(&listed, &folder, &home, LABEL),
+            HookEdit::Unchanged
+        );
+        let broken = append_folder("{ not json", &folder, &home, LABEL);
+        assert!(matches!(broken, HookEdit::Refused(_)));
+    }
+
+    #[test]
+    fn removing_takes_out_only_the_exact_entry() {
+        let appended = USER_FILE.replace("face-band\"", &format!("face-band:{FOLDER}\""));
+
+        let edit = remove_folder(&appended, FOLDER, LABEL);
+
+        assert_eq!(edit, HookEdit::Changed(USER_FILE.to_string()));
+        let edited = appended.replace(FOLDER, &format!("{FOLDER}/"));
+        assert_eq!(remove_folder(&edited, FOLDER, LABEL), HookEdit::Unchanged);
+    }
+}

@@ -32,11 +32,11 @@ struct HookRef {
     groups_in_event: usize,
 }
 
-fn unreadable_problem(label: &str) -> String {
+pub(crate) fn unreadable_problem(label: &str) -> String {
     format!("{label} could not be read as JSON, so nothing was changed.")
 }
 
-fn uneditable_problem(label: &str) -> String {
+pub(crate) fn uneditable_problem(label: &str) -> String {
     format!("{label} could not be edited, so nothing was changed.")
 }
 
@@ -194,7 +194,7 @@ fn insert_groups(source: &str, missing: &[(&HookEntry, String)]) -> Option<Strin
 }
 
 // The narrowest removal that leaves no empty group, event list or "hooks" object behind.
-fn properties_named(object: &CstObject, name: &str) -> usize {
+pub(crate) fn properties_named(object: &CstObject, name: &str) -> usize {
     let properties = object.properties();
     let mut count = 0;
     for property in properties {
