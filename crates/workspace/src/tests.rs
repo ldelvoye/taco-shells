@@ -325,7 +325,7 @@ fn a_fork_opens_under_its_source_with_the_agents_fork_line_and_nothing_else_is_f
 }
 
 #[test]
-fn a_close_goes_through_the_runtime_and_the_last_exit_ends_the_app_once() {
+fn a_close_goes_through_the_runtime_and_the_last_exit_leaves_an_empty_list() {
     let mut workspace = workspace();
     ask(
         &mut workspace,
@@ -383,6 +383,12 @@ fn a_close_goes_through_the_runtime_and_the_last_exit_ends_the_app_once() {
     let only_the_state = matches!(out.as_slice(), [Outbound::State(_)]);
     assert!(only_the_state, "{out:?}");
     assert_eq!(listed(&workspace), "");
+
+    ask(
+        &mut workspace,
+        WorkspaceRequest::OpenTerminal { file: None },
+    );
+    assert_eq!(listed(&workspace), "[t3]");
 }
 
 #[test]
