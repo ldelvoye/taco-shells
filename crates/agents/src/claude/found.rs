@@ -5,7 +5,7 @@ use taco_protocol::{PrState, SharedTarget};
 
 use super::shared::{
     ARTIFACT_KIND, DOCUMENT_KIND, IMAGE_KIND, LINK_PREFIX, MAX_TARGET_CHARACTERS,
-    MAX_TITLE_CHARACTERS, PULL_REQUEST_KIND, pull_request_of, repository_of,
+    MAX_TITLE_CHARACTERS, PULL_REQUEST_KIND, pull_request_of,
 };
 use super::text::{text_at, whole_text_at, written, written_at};
 use crate::harness::{Found, PullRequestSeen};
@@ -33,11 +33,13 @@ fn found_pull_request(parsed: &Value) -> Option<Found> {
     let number = operation.pointer("/number")?.as_u64()?;
     let action = operation.pointer("/action")?.as_str()?;
     let mut url = None;
+    let mut repository = None;
     let given = operation.pointer("/url");
     if let Some(Value::String(given)) = given
-        && let Some((plain, _)) = pull_request_of(given)
+        && let Some(link) = pull_request_of(given)
     {
-        url = Some(plain);
+        url = Some(link.url);
+        repository = Some(link.repository);
     }
     // the response never says "draft", so the flag on the whole command does, wherever it comes in a long one
     let command = parsed.pointer("/tool_input/command");
@@ -55,9 +57,7 @@ fn found_pull_request(parsed: &Value) -> Option<Found> {
         _ => return None,
     };
     let mut title = format!("#{number}");
-    if let Some(url) = &url
-        && let Some(repository) = repository_of(url)
-    {
+    if let Some(repository) = &repository {
         title = format!("#{number} {repository}");
     }
     Some(Found::PullRequest(PullRequestSeen {
