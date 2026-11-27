@@ -21,6 +21,7 @@ const SNIFFED_BYTES: usize = 8 * 1024;
 /// A text past this is cut where it is drawn; laying out a whole megabyte would stall every frame.
 const SHOWN_CHARACTERS: usize = 100_000;
 const IMAGE_EXTENSIONS: [&str; 6] = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
+const TAB_COLUMNS: usize = 4;
 const BODY_FONT: &str = "Menlo";
 const BODY_TEXT_SIZE: f32 = 12.;
 const BODY_PADDING: f32 = 20.;
@@ -146,8 +147,9 @@ fn reveal(path: PathBuf, reason: &str) -> Content {
     Content::Reveal { path, reason }
 }
 
-// Cut once, when the text arrives, rather than on every frame it is drawn.
-fn text_content(mut whole: String) -> Content {
+// Cut and tabs expanded once, when the text arrives, rather than on every frame it is drawn.
+fn text_content(arrived: String) -> Content {
+    let mut whole = with_tabs_expanded(arrived);
     let cut_at = whole.char_indices().nth(SHOWN_CHARACTERS);
     let Some((at, _)) = cut_at else {
         return Content::Text {
@@ -160,6 +162,30 @@ fn text_content(mut whole: String) -> Content {
         shown: whole,
         cut: true,
     }
+}
+
+// A tab drawn as a tab costs a frame its budget at a hundred thousand of them; spaces to the next stop cost nothing.
+fn with_tabs_expanded(text: String) -> String {
+    if !text.contains('\t') {
+        return text;
+    }
+    let mut expanded = String::with_capacity(text.len());
+    let mut column = 0;
+    for character in text.chars() {
+        if character == '\t' {
+            let to_next_stop = TAB_COLUMNS - column % TAB_COLUMNS;
+            let spaces = " ".repeat(to_next_stop);
+            expanded.push_str(&spaces);
+            column += to_next_stop;
+            continue;
+        }
+        expanded.push(character);
+        column += 1;
+        if character == '\n' {
+            column = 0;
+        }
+    }
+    expanded
 }
 
 pub fn shared_view(opened: &OpenedThing, look: &Look, cx: &mut Context<WindowView>) -> Div {
@@ -304,6 +330,21 @@ mod tests {
         assert!(is_image("/Users/me/view-check/logo-after.PNG"));
         assert!(!is_image("/Users/me/PLAN-sigkill.md"));
         assert!(!is_image("/Users/me/pictures.png/notes"));
+    }
+
+    #[test]
+    fn a_tab_becomes_spaces_to_the_next_stop_of_four_counted_from_its_line() {
+        let cases = [
+            ("a\tb", "a   b"),
+            ("\tx", "    x"),
+            ("abcd\te", "abcd    e"),
+            ("ab\n\tc", "ab\n    c"),
+            ("no tabs", "no tabs"),
+        ];
+        for (arrived, shown) in cases {
+            let expanded = with_tabs_expanded(arrived.to_string());
+            assert_eq!(expanded, shown, "{arrived:?}");
+        }
     }
 
     #[test]
