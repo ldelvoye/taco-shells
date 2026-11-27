@@ -19,7 +19,7 @@ const DRAIN_BYTES: usize = 1024 * 1024;
 pub(super) struct Reader {
     pub(super) id: TerminalId,
     pub(super) master: File,
-    /// A copy of the pty's slave, held until the last output is read: macOS throws away unread output once the slave's last copy closes.
+    /// A copy of the pty's slave, held until the last output is read: macOS discards unread output shortly after the slave's last copy closes. No test can show it, since the reader wakes at the exit, before the discard.
     pub(super) shell_side: OwnedFd,
     /// Readable once the waiter has seen the shell exit.
     pub(super) wake: OwnedFd,
