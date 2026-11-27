@@ -1,7 +1,7 @@
 use taco_protocol::{
     ActivityEvent, ActivityKind, ActivityRequest, AgentSignal, Author, ConfigFile, DrawnState,
-    HarnessId, HookCall, HookEvent, Peer, RowState, RuntimeCommand, RuntimeReport, TabGroupId,
-    TerminalId, TerminalStart, WorkspaceRequest,
+    HarnessId, HookCall, HookEvent, Peer, RowState, RuntimeCommand, RuntimeReport, SharedTarget,
+    TabGroupId, TerminalId, TerminalStart, WorkspaceRequest,
 };
 
 use std::collections::BTreeMap;
@@ -1223,6 +1223,87 @@ fn a_shared_thing_tops_shared_logs_a_line_of_its_own_and_opens_to_its_text() {
         shared_lists(&loaded),
         vec![vec!["Plan (Document)", "Finding (Note)"]],
         "Shared is kept through a relaunch"
+    );
+}
+
+#[test]
+fn the_app_adds_what_the_agent_opened_or_wrote_and_shows_a_pull_requests_state_once_seen() {
+    let mut workspace = workspace();
+    let watch = ActivityRequest::Watch {
+        terminal: Some(id("t1")),
+    };
+    let gh = |workspace: &mut Workspace, operation: serde_json::Value, at_ms: u64| {
+        let payload = serde_json::json!({
+            "tool_name": "Bash",
+            "tool_input": { "command": "gh pr" },
+            "tool_response": { "gitOperation": { "pr": operation } },
+        });
+        let call = HookCall::AgentHook {
+            harness: claude(),
+            session_id: SESSION.into(),
+            event: "PostToolUse".into(),
+            payload: payload.to_string(),
+        };
+        hook(workspace, "t1", call, at_ms);
+    };
+    let shared_pull = serde_json::json!({ "kind": "pull_request", "title": "Older fix", "target": "https://github.com/o/r/pull/12" });
+    shared_by_agent(&mut workspace, shared_pull);
+    gh(
+        &mut workspace,
+        serde_json::json!({ "number": 12, "action": "merged" }),
+        500,
+    );
+    let opened = serde_json::json!({ "number": 13, "url": "https://github.com/o/r/pull/13", "action": "created" });
+    gh(&mut workspace, opened, 900);
+    let wrote = serde_json::json!({
+        "tool_name": "Write",
+        "tool_input": { "file_path": "/work/PLAN.md" },
+        "tool_response": { "type": "create", "filePath": "/work/PLAN.md" },
+    });
+    tool_used(&mut workspace, "t1", wrote);
+
+    let out = workspace.activity(watch);
+    let Some(ActivityEvent::Loaded { entries, board, .. }) = activity(&out).pop() else {
+        panic!("watching t1 loads its board");
+    };
+    let things: Vec<String> = board
+        .shared
+        .into_iter()
+        .map(|thing| {
+            let mut line = format!("{} by {:?}", thing.title, thing.by);
+            if let SharedTarget::PullRequest {
+                state, checked_ms, ..
+            } = thing.target
+            {
+                line = format!("{line}, {state:?} seen at {checked_ms:?}");
+            }
+            line
+        })
+        .collect();
+    let expected = [
+        "PLAN.md by App",
+        "#13 o/r by App, Open seen at Some(900)",
+        "Older fix by Agent, Merged seen at Some(500)",
+    ];
+    assert_eq!(
+        things, expected,
+        "the merge is seen on the agent's own link by its number"
+    );
+    let shared_lines: Vec<(String, Author)> = entries
+        .into_iter()
+        .filter_map(|entry| match entry.kind {
+            ActivityKind::Shared { title, .. } => Some((title, entry.author)),
+            _ => None,
+        })
+        .collect();
+    let expected_lines = vec![
+        ("Older fix".to_string(), Author::Agent),
+        ("#13 o/r".to_string(), Author::App),
+        ("PLAN.md".to_string(), Author::App),
+    ];
+    assert_eq!(
+        shared_lines, expected_lines,
+        "a merge changes the thing in place, with no line of its own"
     );
 }
 

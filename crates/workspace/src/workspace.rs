@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use taco_agents::{EntryRead, HARNESSES, default_harness, harness_of};
+use taco_agents::{EntryRead, Found, HARNESSES, PullRequestSeen, default_harness, harness_of};
 use taco_protocol::{
     ActivityEntry, ActivityEvent, ActivityKind, ActivityRequest, AgentLabel, AgentSignal,
     Arrangement, Author, Board, ConfigFile, DrawnState, HarnessId, HookCall, HookEvent, Panels,
-    RequestReply, Row, RowState, RuntimeCommand, RuntimeReport, TabGroup, TabGroupId, TerminalId,
-    TerminalSize, TerminalStart, WorkspaceRequest,
+    RequestReply, Row, RowState, RuntimeCommand, RuntimeReport, SharedThing, TabGroup, TabGroupId,
+    TerminalId, TerminalSize, TerminalStart, WorkspaceRequest,
 };
 use taco_rules::{
     add_row, add_row_to, apply_drop, can_fork, close_panel, close_row, create_tab_group,
@@ -14,7 +14,7 @@ use taco_rules::{
     ungroup_tab_group,
 };
 
-use crate::board::{NowLine, Sharing, TerminalBoard};
+use crate::board::{NowLine, Seen, Sharing, TerminalBoard};
 use crate::log::{Log, line_of};
 use crate::rows::{
     AgentRows, Signalled, apply_idle_title, apply_on_screen, apply_question, apply_signal,
@@ -790,6 +790,24 @@ impl Workspace {
                 };
                 self.share(terminal, sharing, out);
             }
+            EntryRead::Found(Found::Thing {
+                kind,
+                title,
+                target,
+            }) => {
+                let sharing = Sharing {
+                    by: Author::App,
+                    kind,
+                    title,
+                    target: Some(target),
+                    body: None,
+                    at_ms: now_ms,
+                };
+                self.share(terminal, sharing, out);
+            }
+            EntryRead::Found(Found::PullRequest(seen)) => {
+                self.pull_request_seen(terminal, seen, now_ms, out);
+            }
         }
     }
 
@@ -803,6 +821,39 @@ impl Workspace {
             self.options.storage.write_state(terminal, &text);
         }
         self.board_changed(terminal, shown_before, out);
+        self.log_shared(terminal, thing, at_ms, out);
+    }
+
+    // A pull request the agent opened joins Shared with a line in the log; one it merged or closed changes in place.
+    fn pull_request_seen(
+        &mut self,
+        terminal: &TerminalId,
+        seen: PullRequestSeen,
+        now_ms: u64,
+        out: &mut Vec<Outbound>,
+    ) {
+        let shown_before = self.watched_board(terminal);
+        let board = loaded_board(&mut self.boards, self.options.storage.as_ref(), terminal);
+        let outcome = board.pull_request_seen(seen, now_ms);
+        if outcome == Seen::Nothing {
+            return;
+        }
+        if let Some(text) = board.text() {
+            self.options.storage.write_state(terminal, &text);
+        }
+        self.board_changed(terminal, shown_before, out);
+        if let Seen::Added(thing) = outcome {
+            self.log_shared(terminal, thing, now_ms, out);
+        }
+    }
+
+    fn log_shared(
+        &mut self,
+        terminal: &TerminalId,
+        thing: SharedThing,
+        at_ms: u64,
+        out: &mut Vec<Outbound>,
+    ) {
         let by = thing.by.clone();
         let kind = ActivityKind::Shared {
             thing: thing.id,

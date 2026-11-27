@@ -1,8 +1,17 @@
 use serde::{Deserialize, Serialize};
-use taco_protocol::{Author, Board, SharedTarget, SharedThing};
+use taco_agents::PullRequestSeen;
+use taco_protocol::{Author, Board, PrState, SharedTarget, SharedThing};
 
 /// How many things Shared keeps; the oldest goes as a new one comes.
 pub const KEPT_THINGS: usize = 100;
+
+/// What seeing a pull request did to Shared.
+#[derive(Debug, PartialEq)]
+pub enum Seen {
+    Added(SharedThing),
+    Updated,
+    Nothing,
+}
 
 /// The agent's line on what it is doing now, kept with the session that wrote it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -107,6 +116,81 @@ impl TerminalBoard {
         let kept = shared.find(|kept| kept.thing.id == thing)?;
         kept.body.clone()
     }
+
+    /// A pull request a gh command touched, seen at `now_ms`: the one kept for it takes the state it was seen in,
+    /// and one the app has not kept is added when the command gave its link.
+    pub fn pull_request_seen(&mut self, seen: PullRequestSeen, now_ms: u64) -> Seen {
+        if let Some(index) = self.pull_request_index(seen.url.as_deref(), seen.number) {
+            // an edit says nothing of the state, so there is nothing to change
+            let Some(state) = seen.state else {
+                return Seen::Nothing;
+            };
+            let SharedTarget::PullRequest {
+                state: kept_state,
+                checked_ms,
+                ..
+            } = &mut self.shared[index].thing.target
+            else {
+                return Seen::Nothing;
+            };
+            *kept_state = state;
+            *checked_ms = Some(now_ms);
+            return Seen::Updated;
+        }
+        // a merge or close names only a number, which on its own could be any repository's
+        let Some(url) = seen.url else {
+            return Seen::Nothing;
+        };
+        // an edit's state is a guess until something sees it
+        let mut state = PrState::Open;
+        let mut checked_ms = None;
+        if let Some(seen_state) = seen.state {
+            state = seen_state;
+            checked_ms = Some(now_ms);
+        }
+        let sharing = Sharing {
+            by: Author::App,
+            kind: seen.kind,
+            title: seen.title,
+            target: Some(SharedTarget::PullRequest {
+                url: Some(url),
+                number: seen.number,
+                state,
+                checked_ms,
+            }),
+            body: None,
+            at_ms: now_ms,
+        };
+        let thing = self.share(sharing);
+        Seen::Added(thing)
+    }
+
+    // The pull request kept with this link. With no link, the one kept with this number, only when no other kept
+    // pull request has that number: two would be two repositories', and the command does not say which.
+    fn pull_request_index(&self, url: Option<&str>, number: u64) -> Option<usize> {
+        let is_pull_request = |index: &usize| {
+            let target = &self.shared[*index].thing.target;
+            matches!(target, SharedTarget::PullRequest { .. })
+        };
+        let indices = 0..self.shared.len();
+        let mut pull_requests = indices.filter(is_pull_request);
+        if let Some(url) = url {
+            return pull_requests.find(|index| {
+                let target = &self.shared[*index].thing.target;
+                matches!(target, SharedTarget::PullRequest { url: Some(kept), .. } if kept == url)
+            });
+        }
+        let with_the_number: Vec<usize> = pull_requests
+            .filter(|index| {
+                let target = &self.shared[*index].thing.target;
+                matches!(target, SharedTarget::PullRequest { number: kept, .. } if *kept == number)
+            })
+            .collect();
+        match with_the_number.as_slice() {
+            [only] => Some(*only),
+            _ => None,
+        }
+    }
 }
 
 fn text_target(body: Option<&str>) -> SharedTarget {
@@ -207,6 +291,70 @@ mod tests {
             titles(&board),
             ["merged", "ours again", "theirs"],
             "the same link is one pull request; the same number in another repository, or with no link, is not"
+        );
+    }
+
+    #[test]
+    fn a_seen_pull_request_takes_its_state_by_link_or_by_a_number_only_one_kept_has() {
+        let seen = |url: Option<&str>, number: u64, state: Option<PrState>| PullRequestSeen {
+            url: url.map(str::to_string),
+            number,
+            state,
+            kind: "Pull request".into(),
+            title: format!("#{number}"),
+        };
+        let states = |board: &TerminalBoard| {
+            let things = board
+                .shared
+                .iter()
+                .filter_map(|kept| match &kept.thing.target {
+                    SharedTarget::PullRequest {
+                        url,
+                        state,
+                        checked_ms,
+                        ..
+                    } => Some((url.clone(), *state, *checked_ms)),
+                    _ => None,
+                });
+            things.collect::<Vec<_>>()
+        };
+        let ours = "https://github.com/o/r/pull/7";
+        let theirs = "https://github.com/x/y/pull/7";
+        let mut board = TerminalBoard::default();
+        let added = board.pull_request_seen(seen(Some(ours), 7, Some(PrState::Open)), 10);
+        assert!(matches!(added, Seen::Added(_)));
+        let merged_alone = board.pull_request_seen(seen(None, 7, Some(PrState::Merged)), 20);
+        assert_eq!(
+            merged_alone,
+            Seen::Updated,
+            "one kept #7, so the number is enough"
+        );
+
+        board.pull_request_seen(seen(Some(theirs), 7, Some(PrState::Draft)), 30);
+        let ambiguous = board.pull_request_seen(seen(None, 7, Some(PrState::Closed)), 40);
+        assert_eq!(
+            ambiguous,
+            Seen::Nothing,
+            "two kept #7s, so a bare number changes neither"
+        );
+        let by_link = board.pull_request_seen(seen(Some(theirs), 7, Some(PrState::Open)), 50);
+        assert_eq!(by_link, Seen::Updated);
+        let edited = board.pull_request_seen(seen(Some(ours), 7, None), 60);
+        assert_eq!(edited, Seen::Nothing, "an edit changes no state");
+        assert_eq!(
+            states(&board),
+            vec![
+                (Some(theirs.to_string()), PrState::Open, Some(50)),
+                (Some(ours.to_string()), PrState::Merged, Some(20)),
+            ]
+        );
+        let unknown = "https://github.com/o/r/pull/8";
+        board.pull_request_seen(seen(Some(unknown), 8, None), 70);
+        let (_, state, checked_ms) = states(&board)[0].clone();
+        assert_eq!(
+            (state, checked_ms),
+            (PrState::Open, None),
+            "a new one seen only in an edit has no state anyone saw"
         );
     }
 }
