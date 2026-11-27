@@ -69,6 +69,7 @@ const SHOW_FEWER: &str = "Show fewer";
 const PILL_RADIUS: f32 = 8.;
 const NO_LONGER_SHARED: &str = "no longer in Shared";
 const FAILED_MARK: &str = "×";
+const FAILED_WITHOUT_ERROR: &str = "It failed.";
 const CLOSE_SIZE: f32 = 14.;
 pub const MS_PER_MINUTE: u64 = 60_000;
 const MINUTES_PER_HOUR: u64 = 60;
@@ -829,9 +830,9 @@ fn item_element(item: &LogItem, input: &ActivityInput, cx: &mut Context<WindowVi
         LogItem::Working { at_ms, steps } => {
             let mut body = Vec::new();
             if let Some(newest) = steps.steps.last() {
-                let newest_text = step_text(newest);
-                body.push(peek(&newest_text, input.look));
-                if let Some(error) = failure_of(newest) {
+                let line = step_line(newest);
+                body.push(peek(&line.text, input.look));
+                if let Some(error) = &line.failed {
                     let failure = failure_line(error, input.look);
                     body.push(failure.into_any_element());
                 }
@@ -947,7 +948,11 @@ fn entry(
 // In the normal ink with a mark, never the needs colour, which means "this terminal needs you".
 fn failure_line(error: &str, look: &Look) -> Div {
     let mark = div().flex_none().child(FAILED_MARK);
-    let words = div().min_w_0().child(error.to_string());
+    let mut said = error.to_string();
+    if error.trim().is_empty() {
+        said = FAILED_WITHOUT_ERROR.to_string();
+    }
+    let words = div().min_w_0().child(said);
     div()
         .flex()
         .items_start()
