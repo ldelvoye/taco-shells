@@ -11,7 +11,8 @@ use taco_services::AgentMenuAction;
 
 use super::WindowView;
 use crate::activity_log::ActivityLog;
-use crate::shared_view::{Content, OpenedThing, file_content, is_https};
+use crate::addresses::{SHARED_SCHEMES, may_open};
+use crate::shared_view::{Content, OpenedThing, file_content};
 
 impl WindowView {
     /// Watches the selected terminal's log while Agent Activity is open, and nothing while it is closed.
@@ -66,7 +67,7 @@ impl WindowView {
         };
         let content = match &thing.target {
             SharedTarget::Link { url } | SharedTarget::PullRequest { url: Some(url), .. } => {
-                if is_https(url) {
+                if may_open(url, &SHARED_SCHEMES) {
                     cx.open_url(url);
                     return;
                 }
