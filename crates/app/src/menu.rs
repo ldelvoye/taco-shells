@@ -7,7 +7,6 @@ use taco_services::{APPLICATION_NAME, AgentMenuAction, AgentMenuEntry};
 use crate::window::Shown;
 
 const AGENTS: &str = "Agents";
-const SHOW_HOOK_SCRIPTS: &str = "Show Hook Scripts in Finder";
 
 actions!(
     taco_shells,
@@ -19,7 +18,6 @@ actions!(
         Minimize,
         Zoom,
         RestartToUpdate,
-        ShowHookScripts,
         // Carried by the menu's caption lines, which are drawn disabled and never run.
         Caption,
     ]
@@ -91,10 +89,7 @@ fn agent_submenu(entry: &AgentMenuEntry) -> MenuItem {
         action: menu.action,
     };
     let action = MenuItem::action(menu.action_label.clone(), clicked).disabled(!menu.enabled);
-    let mut items = vec![status, action];
-    let show_scripts = MenuItem::action(SHOW_HOOK_SCRIPTS, ShowHookScripts);
-    items.push(MenuItem::separator());
-    items.push(show_scripts);
+    let items = vec![status, action];
     let submenu = Menu::new(entry.product_name.clone()).items(items);
     MenuItem::submenu(submenu)
 }

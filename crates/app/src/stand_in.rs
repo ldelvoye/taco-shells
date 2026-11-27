@@ -2,7 +2,6 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::rc::Rc;
 
 use futures::channel::mpsc::unbounded;
@@ -21,7 +20,6 @@ use taco_settings::{Appearance, Config, KeymapChange, SettingChange, apply_setti
 use crate::link::{Ports, ServicesOutput, ServicesPort, WindowOutput, WindowSender, WorkspacePort};
 use crate::window::Shown;
 
-const CHECKOUT_HOOKS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../hooks");
 // Without a config to write into, the stand-in refuses every write.
 const REFUSED_WRITE: &str = "settings.json is read-only, so nothing was changed.";
 const STAND_IN_LABEL: &str = "stand-in";
@@ -287,10 +285,6 @@ impl ServicesPort for StandIn {
 
     fn apply_update(&self) {
         self.publish(WindowOutput::Services(ServicesOutput::QuitForUpdate));
-    }
-
-    fn hooks_directory(&self) -> PathBuf {
-        PathBuf::from(CHECKOUT_HOOKS)
     }
 
     fn write_setting(&self, change: SettingChange) {
