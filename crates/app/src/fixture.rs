@@ -1,11 +1,12 @@
-//! Made-up states the window can be drawn from.
+//! Made-up states the window can be drawn from, each built only through the inputs the host sends the real workspace.
+//! No fixture draws a draft, merged or closed pull request pill yet; only "Open, seen" and a pull request with no pill.
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
 use serde_json::{Map, Value, json};
-use taco_identity::CURRENT;
+use taco_agents::{activity_tool_prefix, reduced_payload};
 use taco_protocol::{
     AgentSignal, DrawnState, HarnessId, HookCall, HookEvent, Panel, Peer, RequestReply, RowState,
     RuntimeReport, TabGroupId, TerminalId, WorkspaceRequest,
@@ -472,7 +473,7 @@ impl Inputs {
             harness: claude(),
             session_id: session_id.to_string(),
             event: NOTIFICATION.to_string(),
-            payload: payload.to_string(),
+            payload: as_the_plugin_sends(&payload),
         };
         self.hook(terminal, call);
     }
@@ -483,7 +484,7 @@ impl Inputs {
             harness: claude(),
             session_id: log.session_id.clone(),
             event: event.to_string(),
-            payload: payload.to_string(),
+            payload: as_the_plugin_sends(&payload),
         };
         self.hook_at(&log.terminal, call, at_ms);
     }
@@ -584,8 +585,8 @@ impl Inputs {
     }
 
     fn activity_tool(&mut self, log: &AgentLog, minutes_ago: u64, tool: &str, input: Value) {
-        let app = CURRENT.agent_app_name;
-        let name = format!("mcp__plugin_{app}_activity__{tool}");
+        let prefix = activity_tool_prefix();
+        let name = format!("{prefix}{tool}");
         let payload = json!({ "tool_name": name, "tool_input": input });
         self.tool_ran(log, minutes_ago, payload);
     }
@@ -627,6 +628,12 @@ impl Inputs {
             .asked_for_note(&log.terminal, &harness, &log.session_id, at_ms);
         self.deliver(out);
     }
+}
+
+// Trimmed as the plugin trims a payload before the app sees it, so a fixture shows only what the app can.
+fn as_the_plugin_sends(payload: &Value) -> String {
+    let reduced = reduced_payload(payload);
+    reduced.to_string()
 }
 
 fn claude() -> HarnessId {
