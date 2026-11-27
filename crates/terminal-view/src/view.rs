@@ -195,26 +195,17 @@ impl View {
 
     /// What `press` sends to the program, under its current modes. Empty before `Attached`.
     pub fn key(&mut self, keys: &mut KeyEncoder, press: &KeyPress) -> Result<Vec<u8>, Error> {
-        let Some(terminal) = self.terminal.as_mut() else {
+        let Some(terminal) = self.terminal.as_ref() else {
             return Ok(Vec::new());
         };
-        let bytes = keys.encode(terminal, press)?;
-        // Typing brings the view back to the newest output.
-        if !bytes.is_empty() {
-            terminal.scroll(Scroll::Bottom)?;
-        }
-        Ok(bytes)
+        keys.encode(terminal, press)
     }
 
     pub fn paste_bytes(&mut self, text: &str) -> Result<Vec<u8>, Error> {
-        let Some(terminal) = self.terminal.as_mut() else {
+        let Some(terminal) = self.terminal.as_ref() else {
             return Ok(Vec::new());
         };
-        let bytes = terminal.paste_bytes(text)?;
-        if !bytes.is_empty() {
-            terminal.scroll(Scroll::Bottom)?;
-        }
-        Ok(bytes)
+        terminal.paste_bytes(text)
     }
 
     pub fn is_attached(&self) -> bool {
@@ -529,31 +520,5 @@ mod tests {
         assert_eq!(view.selection().as_deref(), Some("kept"));
         view.apply(TerminalEvent::Cleared { id: id() }).unwrap();
         assert_eq!(view.selection(), None);
-    }
-
-    #[test]
-    fn typing_brings_a_scrolled_back_view_to_the_newest_output() {
-        let source = Terminal::new(SIZE).unwrap();
-        let mut view = View::new(1, config()).unwrap();
-        let (event, _) = attached(1, &source);
-        view.apply(event).unwrap();
-        let lines: String = (0..50).map(|line| format!("line {line}\r\n")).collect();
-        view.apply(output(&lines)).unwrap();
-        view.scroll(Scroll::Lines(-20)).unwrap();
-        assert_eq!(texts(&mut view)[0], "line 27");
-
-        let mut keys = KeyEncoder::new().unwrap();
-        let press = KeyPress {
-            key: taco_ghostty::input::Key::Char('a'),
-            mods: taco_ghostty::input::Mods {
-                ctrl: true,
-                ..Default::default()
-            },
-            text: "a",
-            repeat: false,
-        };
-        let sent = view.key(&mut keys, &press).unwrap();
-        assert_eq!(sent, b"\x01");
-        assert_eq!(texts(&mut view)[0], "line 47");
     }
 }

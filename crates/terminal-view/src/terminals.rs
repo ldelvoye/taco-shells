@@ -226,7 +226,7 @@ impl Terminals {
             return;
         };
         if let Ok(bytes) = view.paste_bytes(text) {
-            self.views.write(id.clone(), bytes);
+            self.views.type_into(id.clone(), bytes);
         }
         self.send_requests();
         cx.notify();
@@ -234,7 +234,7 @@ impl Terminals {
 
     /// Bytes as if typed: the line-editing commands come through here.
     pub fn type_bytes(&mut self, id: &TerminalId, bytes: &[u8]) {
-        self.views.write(id.clone(), bytes.to_vec());
+        self.views.type_into(id.clone(), bytes.to_vec());
         self.send_requests();
     }
 
@@ -327,7 +327,7 @@ impl Terminals {
             return;
         };
         if let Ok(bytes) = view.key(&mut self.keys, press) {
-            self.views.write(id, bytes);
+            self.views.type_into(id, bytes);
         }
         self.send_requests();
     }
