@@ -1,7 +1,4 @@
-node_modules/
-out/
 target/
-dist.noindex/
 build/
 
 # Leftover VSCodium build tree from the abandoned fork.
