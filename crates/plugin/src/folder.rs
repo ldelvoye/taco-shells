@@ -10,6 +10,17 @@ fn file(path: String, content: Value) -> (PathBuf, String) {
     (PathBuf::from(path), format!("{content:#}\n"))
 }
 
+fn hook_command_group(is_async: bool) -> Value {
+    let mut hook = json!({
+        "type": "command",
+        "command": "\"${CLAUDE_PLUGIN_ROOT}/libexec/taco-shells-plugin\" hook",
+    });
+    if is_async {
+        hook["async"] = Value::Bool(true);
+    }
+    json!({"hooks": [hook]})
+}
+
 pub fn plugin_files(stamp: &str) -> Vec<(PathBuf, String)> {
     let marketplace = json!({
         "name": PLUGIN_NAME,
@@ -28,7 +39,7 @@ pub fn plugin_files(stamp: &str) -> Vec<(PathBuf, String)> {
     let mcp = json!({
         "mcpServers": {
             SERVER_NAME: {
-                "command": "${CLAUDE_PLUGIN_ROOT}/bin/taco-shells-plugin",
+                "command": "${CLAUDE_PLUGIN_ROOT}/libexec/taco-shells-plugin",
                 "args": ["mcp"],
                 // Without it the tools wait behind tool search and an agent rarely loads them.
                 "alwaysLoad": true,
@@ -36,15 +47,26 @@ pub fn plugin_files(stamp: &str) -> Vec<(PathBuf, String)> {
         }
     });
     let matcher = format!("{}.*", tool_name_prefix());
+    let allow_group = json!({
+        "matcher": matcher,
+        "hooks": [{
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/libexec/taco-shells-plugin\" allow",
+        }],
+    });
+    // Sync where the app must hear the event before the agent goes on; async elsewhere so a hook never slows it.
     let hooks = json!({
         "hooks": {
-            "PreToolUse": [{
-                "matcher": matcher,
-                "hooks": [{
-                    "type": "command",
-                    "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/taco-shells-plugin\" allow",
-                }],
-            }]
+            // The allow group first: it must answer before Claude Code asks the user.
+            "PreToolUse": [allow_group, hook_command_group(true)],
+            "SessionStart": [hook_command_group(false)],
+            "SessionEnd": [hook_command_group(false)],
+            "UserPromptSubmit": [hook_command_group(true)],
+            "PostToolUse": [hook_command_group(false)],
+            "PostToolUseFailure": [hook_command_group(false)],
+            "StopFailure": [hook_command_group(true)],
+            "Notification": [hook_command_group(false)],
+            "Stop": [hook_command_group(false)],
         }
     });
 
@@ -78,6 +100,8 @@ mod tests {
         let mcp = parsed(&files, ".mcp.json");
         assert_eq!(mcp["mcpServers"][SERVER_NAME]["alwaysLoad"], true);
         assert_eq!(mcp["mcpServers"][SERVER_NAME]["args"], json!(["mcp"]));
+        let mcp_command = mcp["mcpServers"][SERVER_NAME]["command"].as_str().unwrap();
+        assert!(mcp_command.contains("/libexec/"));
 
         let hooks = parsed(&files, "hooks.json");
         let matcher = hooks["hooks"]["PreToolUse"][0]["matcher"].as_str().unwrap();
@@ -85,6 +109,34 @@ mod tests {
         for name in TOOL_NAMES {
             let approved = format!("{}{name}", tool_name_prefix());
             assert!(approved.starts_with(matcher_prefix));
+        }
+
+        let pre_tool_groups = hooks["hooks"]["PreToolUse"].as_array().unwrap();
+        let allow_command = pre_tool_groups[0]["hooks"][0]["command"].as_str().unwrap();
+        assert!(allow_command.ends_with("allow"));
+        assert!(!allow_command.contains("/bin/"));
+
+        let expected = [
+            ("SessionStart", false),
+            ("SessionEnd", false),
+            ("UserPromptSubmit", true),
+            ("PreToolUse", true),
+            ("PostToolUse", false),
+            ("PostToolUseFailure", false),
+            ("StopFailure", true),
+            ("Notification", false),
+            ("Stop", false),
+        ];
+        for (event, is_async) in expected {
+            let groups = hooks["hooks"][event].as_array().unwrap();
+            let last_group = groups.last().unwrap();
+            let hook = &last_group["hooks"][0];
+            let async_flag = hook.get("async").map(|flag| flag == &json!(true));
+            if is_async {
+                assert_eq!(async_flag, Some(true), "{event}");
+            } else {
+                assert_eq!(async_flag, None, "{event}");
+            }
         }
     }
 }

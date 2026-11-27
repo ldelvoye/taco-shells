@@ -29,6 +29,7 @@ fn a_shell_is_told_the_runtimes_own_app_over_the_one_the_runtime_inherited() {
         context: ShellContext {
             app: "taco-shells-dev".into(),
             port_file: "/dev-config/focus-port".into(),
+            plugin_directory: "/dev-config/claude-plugin".into(),
         },
     };
     let (inputs, received) = mpsc::channel();

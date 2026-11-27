@@ -48,6 +48,8 @@ pub struct ShellContext {
     pub app: String,
     /// This app's `focus-port` file.
     pub port_file: PathBuf,
+    /// This app's agent plugin, which new shells load while Agent Activity is on.
+    pub plugin_directory: PathBuf,
 }
 
 pub enum RuntimeEvent {
@@ -114,11 +116,14 @@ impl RuntimeClient {
 
         let mut port_file_argument = OsString::from("--port-file=");
         port_file_argument.push(&context.port_file);
+        let mut plugin_directory_argument = OsString::from("--plugin-dir=");
+        plugin_directory_argument.push(&context.plugin_directory);
         let mut command = Command::new(program);
         command.arg(format!("--control-fd={CONTROL_FD}"));
         command.arg(format!("--terminals-fd={TERMINALS_FD}"));
         command.arg(format!("--app={}", context.app));
         command.arg(port_file_argument);
+        command.arg(plugin_directory_argument);
         command.stdin(Stdio::null());
         // Between fork and exec only async-signal-safe calls. The copies at 3 and 4 stay open across exec; the ones above close.
         unsafe {
@@ -374,6 +379,7 @@ exit {code};
         ShellContext {
             app: "taco-shells-test".into(),
             port_file: PathBuf::from("/nonexistent/focus-port"),
+            plugin_directory: PathBuf::from("/nonexistent/claude-plugin"),
         }
     }
 

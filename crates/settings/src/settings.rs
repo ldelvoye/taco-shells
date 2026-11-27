@@ -9,7 +9,7 @@ const BOOLEAN_REQUIREMENT: &str = "must be true or false";
 const CURSOR_STYLE_REQUIREMENT: &str = "must be \"block\", \"underline\" or \"bar\"";
 const SHELL_ROW_NAME_REQUIREMENT: &str = "must be \"folder\" or \"path\"";
 const CHECK_LABEL: &str = "settings.json";
-const SETTING_KEYS: [&str; 10] = [
+const SETTING_KEYS: [&str; 11] = [
     "theme",
     "fontFamily",
     "fontSize",
@@ -19,6 +19,7 @@ const SETTING_KEYS: [&str; 10] = [
     "cursorStyle",
     "restoreOnLaunch",
     "manageAgentHooks",
+    "agentActivity",
     "shellRowName",
 ];
 
@@ -57,6 +58,7 @@ pub enum SettingChange {
     CursorStyle(CursorStyle),
     RestoreOnLaunch(bool),
     ManageAgentHooks(bool),
+    AgentActivity(bool),
     ShellRowName(ShellRowName),
 }
 
@@ -71,6 +73,7 @@ pub struct Settings {
     pub cursor_style: CursorStyle,
     pub restore_on_launch: bool,
     pub manage_agent_hooks: bool,
+    pub agent_activity: bool,
     pub shell_row_name: ShellRowName,
 }
 
@@ -98,6 +101,7 @@ impl Default for Settings {
             cursor_style: CursorStyle::Block,
             restore_on_launch: true,
             manage_agent_hooks: true,
+            agent_activity: false,
             shell_row_name: ShellRowName::Folder,
         }
     }
@@ -125,6 +129,7 @@ impl SettingChange {
             SettingChange::CursorStyle(_) => "cursorStyle",
             SettingChange::RestoreOnLaunch(_) => "restoreOnLaunch",
             SettingChange::ManageAgentHooks(_) => "manageAgentHooks",
+            SettingChange::AgentActivity(_) => "agentActivity",
             SettingChange::ShellRowName(_) => "shellRowName",
         }
     }
@@ -154,6 +159,7 @@ impl SettingChange {
             }
             SettingChange::RestoreOnLaunch(on) => Value::from(*on),
             SettingChange::ManageAgentHooks(on) => Value::from(*on),
+            SettingChange::AgentActivity(on) => Value::from(*on),
             SettingChange::ShellRowName(name) => {
                 let text = match name {
                     ShellRowName::Folder => "folder",
@@ -301,6 +307,11 @@ fn apply_setting(
         ),
         "manageAgentHooks" => assign(
             &mut settings.manage_agent_hooks,
+            value.as_bool(),
+            BOOLEAN_REQUIREMENT,
+        ),
+        "agentActivity" => assign(
+            &mut settings.agent_activity,
             value.as_bool(),
             BOOLEAN_REQUIREMENT,
         ),
@@ -462,6 +473,7 @@ mod tests {
             SettingChange::CursorStyle(CursorStyle::Bar),
             SettingChange::RestoreOnLaunch(false),
             SettingChange::ManageAgentHooks(false),
+            SettingChange::AgentActivity(true),
             SettingChange::ShellRowName(ShellRowName::Path),
         ];
         for change in cases {
@@ -504,6 +516,10 @@ mod tests {
                 },
                 SettingChange::ManageAgentHooks(on) => Settings {
                     manage_agent_hooks: *on,
+                    ..base.clone()
+                },
+                SettingChange::AgentActivity(on) => Settings {
+                    agent_activity: *on,
                     ..base.clone()
                 },
                 SettingChange::ShellRowName(name) => Settings {

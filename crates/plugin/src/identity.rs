@@ -4,7 +4,6 @@ use taco_protocol::APP_VARIABLE;
 pub const PLUGIN_NAME: &str = "taco-shells";
 #[cfg(not(taco_stable))]
 pub const PLUGIN_NAME: &str = "taco-shells-dev";
-
 pub const SERVER_NAME: &str = "activity";
 pub const ENTRYPOINT_VARIABLE: &str = "CLAUDE_CODE_ENTRYPOINT";
 
@@ -32,9 +31,13 @@ pub fn serves(surroundings: &Surroundings) -> bool {
     }
 
     // A headless run started inside a terminal (claude -p) inherits the variables but has no panel.
+    !is_headless(surroundings)
+}
+
+pub fn is_headless(surroundings: &Surroundings) -> bool {
     match &surroundings.entrypoint {
-        Some(entrypoint) => !entrypoint.starts_with("sdk"),
-        None => true,
+        Some(entrypoint) => entrypoint.starts_with("sdk"),
+        None => false,
     }
 }
 

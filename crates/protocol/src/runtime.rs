@@ -53,6 +53,10 @@ pub enum RuntimeCommand {
         shape: CursorShape,
         blink: bool,
     },
+    /// Whether new shells are told to load the app's agent plugin. Off until it is sent; running shells keep what they had.
+    AgentPlugin {
+        on: bool,
+    },
     /// A question, answered by a `RuntimeReport::Answer` carrying the same `ask`.
     Ask {
         ask: u64,
