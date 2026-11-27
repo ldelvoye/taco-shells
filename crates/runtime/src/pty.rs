@@ -4,7 +4,7 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
@@ -43,7 +43,7 @@ pub struct ShellContext {
     /// `taco-shells` or `taco-shells-dev`.
     pub app: String,
     /// The app's `focus-port` file.
-    pub port_file: String,
+    pub port_file: PathBuf,
 }
 
 struct Shell {
@@ -136,7 +136,7 @@ impl PtyShells {
         if std::env::var_os("LANG").is_none() {
             command.env("LANG", "en_US.UTF-8");
         }
-        // Over any inherited from the runtime: a Dev app opened from a stable app's terminal carries the stable app's.
+        // Overrides what the runtime inherited: a Dev app opened from a stable app's terminal would otherwise pass on the stable app's.
         command.env(APP_VARIABLE, &self.program.context.app);
         command.env(PORT_FILE_VARIABLE, &self.program.context.port_file);
         let shell_side = slave.try_clone()?;
