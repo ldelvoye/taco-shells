@@ -1,5 +1,6 @@
 //! The arrangement of terminals and everything that changes it.
 
+mod asking;
 mod board;
 mod log;
 mod rows;

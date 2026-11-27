@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
 use taco_agents::StepContext;
-use taco_protocol::{ActivityEntry, ActivityKind, Author, Peer, Step};
+use taco_protocol::{ActivityEntry, ActivityKind, Author, Peer, StartSource, Step};
 
 /// How many entries other than steps a terminal's log keeps; older ones go as new ones come.
 pub const KEPT_ENTRIES: usize = 1_000;
@@ -256,6 +256,34 @@ impl Log {
 
     pub fn newest(&self) -> Page {
         self.page_ending_at(self.entries.len())
+    }
+
+    /// The steps of the open stretch, oldest first: the work since the agent's last note in this turn.
+    pub fn open_steps(&self) -> Vec<&Step> {
+        let Some(open) = self.open_stretch else {
+            return Vec::new();
+        };
+        let steps = self.entries.iter().filter_map(|entry| match &entry.kind {
+            ActivityKind::Step { stretch, step } if *stretch == open => Some(step),
+            _ => None,
+        });
+        steps.collect()
+    }
+
+    /// The notes of the session now running, newest first: those since a new or cleared start. A resume or a
+    /// compaction carries the same conversation on, so it does not end them.
+    pub fn session_notes_newest_first(&self) -> Vec<&str> {
+        let mut notes = Vec::new();
+        for entry in self.entries.iter().rev() {
+            match &entry.kind {
+                ActivityKind::Note { text, .. } => notes.push(text.as_str()),
+                ActivityKind::SessionStarted {
+                    source: StartSource::New | StartSource::Cleared,
+                } => break,
+                _ => {}
+            }
+        }
+        notes
     }
 
     /// The page just before the entry numbered `before`.
