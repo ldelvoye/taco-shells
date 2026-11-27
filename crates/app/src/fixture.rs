@@ -193,7 +193,7 @@ pub enum Fixture {
     ActivityNarrow,
     /// The same log sent a page at a time, the newest page starting inside a noted stretch.
     Paged,
-    /// The quiet one on a plain shell where Claude Code runs but Agent Activity is off, or still on the old hooks.
+    /// The quiet one on a plain shell where Claude Code runs but Agent Activity is off.
     SetupOff,
     /// The quiet one on a plain shell where Claude Code is too old for Agent Activity.
     SetupTooOld,

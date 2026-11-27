@@ -67,12 +67,6 @@ pub fn offer_text(product_name: &str) -> String {
     format!("{product_name} is running here but isn't set up, so its activity can't show.")
 }
 
-fn old_setup_text(product_name: &str) -> String {
-    format!(
-        "{product_name} still reports through this app's old hooks. Set up moves it to the plugin."
-    )
-}
-
 pub fn too_old_reason(product_name: &str, minimum: Version, version: &str) -> String {
     let (major, minor, patch) = minimum;
     format!(
@@ -144,12 +138,6 @@ pub(super) fn notice_of(
                 action: AgentMenuAction::SetUp,
             };
             notice(kind, offer_text(product_name))
-        }
-        AgentSetupState::OldSetup => {
-            let kind = AgentSetupNoticeKind::Offer {
-                action: AgentMenuAction::SetUp,
-            };
-            notice(kind, old_setup_text(product_name))
         }
         AgentSetupState::PluginDirsHidden { file } => {
             let kind = AgentSetupNoticeKind::Offer {

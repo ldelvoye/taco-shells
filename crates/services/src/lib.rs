@@ -1,7 +1,6 @@
 //! The parts of the app that touch the user's machine outside a terminal.
 
 mod agent_flow;
-mod agent_hooks;
 mod agent_plugin_dirs;
 mod agent_setup_state;
 mod agent_setups;
@@ -11,7 +10,6 @@ mod config_store;
 mod config_writer;
 mod file_write;
 mod hook_listener;
-mod hook_scripts;
 mod mac;
 mod plugin_dirs;
 mod plugin_folder;

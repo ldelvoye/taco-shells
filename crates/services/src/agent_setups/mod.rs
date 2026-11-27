@@ -13,11 +13,10 @@ use std::time::{Duration, Instant};
 use taco_agents::Version;
 use taco_protocol::{HarnessId, TerminalId};
 
-use crate::agent_flow::{Agent, agents_of, read_state, remove_old_setup};
+use crate::agent_flow::{Agent, agents_of, read_state};
 use crate::agent_plugin_dirs::{add_plugin_folder, hides_plugin_folder, remove_plugin_folder};
 use crate::agent_setup_state::{AgentMenuAction, AgentSetupState, agent_menu_of};
 use crate::config_files::plugin_directory_path;
-use crate::hook_scripts::{hooks_directory, stub_hook_scripts};
 use crate::plugin_folder::refresh_plugin_folder;
 use crate::sync::lock;
 pub use notices::{
@@ -31,7 +30,6 @@ use version::{check_version, current_version, installed_version, probed_harness}
 
 const SUBMIT_CHECK_DELAY: Duration = Duration::from_secs(1);
 const NOT_LOADED_DELAY: Duration = Duration::from_secs(5);
-const OLD_HOOKS_PROBLEM: &str = "settings.json still has the app's old hooks";
 const NO_TOKEN_PROBLEM: &str =
     "The app couldn't write its token file, so agents' activity can't reach it.";
 const NO_PROGRAM_PROBLEM: &str = "The app's own plugin program could not be found.";
@@ -110,7 +108,7 @@ fn real_env(name: &str) -> Option<String> {
 fn is_awaiting(state: &AgentSetupState) -> bool {
     matches!(
         state,
-        AgentSetupState::Off | AgentSetupState::OldSetup | AgentSetupState::PluginDirsHidden { .. }
+        AgentSetupState::Off | AgentSetupState::PluginDirsHidden { .. }
     )
 }
 
@@ -290,7 +288,7 @@ fn refresh_plugin(shared: &Shared) -> Vec<String> {
     problems
 }
 
-fn set_up(shared: &Arc<Shared>, agent: &Agent, state: &AgentSetupState) -> SetUpOutcome {
+fn set_up(shared: &Arc<Shared>, agent: &Agent) -> SetUpOutcome {
     let mut problems = refresh_plugin(shared);
     if !problems.is_empty() {
         return SetUpOutcome {
@@ -298,14 +296,8 @@ fn set_up(shared: &Arc<Shared>, agent: &Agent, state: &AgentSetupState) -> SetUp
             changed_file: None,
         };
     }
-    // The click is the user's own consent, so a development build may make this one write into the agent's settings.
-    if *state == AgentSetupState::OldSetup {
-        let removed = remove_old_setup(agent);
-        if let Err(reason) = removed {
-            problems.push(format!("{OLD_HOOKS_PROBLEM}: {reason}"));
-        }
-    }
     let mut changed_file = None;
+    // The click is the user's own consent, so a development build may make this one write into the agent's settings.
     if hides_plugin_folder(agent) {
         // Claude Code applies a settings env block over the shell's, so the folder must be in the user's own value to load.
         let added = add_plugin_folder(agent, &shared.files.config_directory);
@@ -373,7 +365,6 @@ impl AgentSetups {
         submit_delay: Duration,
         not_loaded_delay: Duration,
     ) -> (AgentSetups, Vec<String>) {
-        let hooks = hooks_directory(&files.config_directory);
         let state = State {
             seen: BTreeMap::new(),
             exited: BTreeSet::new(),
@@ -402,11 +393,6 @@ impl AgentSetups {
         if activity_on {
             let refreshed = refresh_plugin(&shared);
             problems.extend(refreshed);
-        }
-        if hooks.is_dir() {
-            // The Electron app's settings.json entries may still call these until Set up removes them; a stub answers with nothing.
-            let stubbed = stub_hook_scripts(&hooks);
-            problems.extend(stubbed);
         }
         let (view, awaiting, watching) = compute(&shared);
         {
@@ -567,7 +553,7 @@ impl AgentSetups {
         let fresh = agent_menu_of(&state, product_name);
         // The menu may have changed since it was drawn, so a click acts only if it would still be offered.
         if fresh.enabled && fresh.action == clicked {
-            let outcome = set_up(&self.shared, agent, &state);
+            let outcome = set_up(&self.shared, agent);
             let recorded = recorded_of(outcome.problems, outcome.changed_file);
             let mut shared_state = lock(&self.shared.state);
             shared_state.recorded.insert(harness.clone(), recorded);
@@ -637,13 +623,11 @@ impl Drop for AgentSetups {
 mod tests {
     use std::collections::HashMap;
     use std::fs;
-    use std::path::Path;
     use std::sync::atomic::AtomicUsize;
     use std::sync::mpsc::Receiver;
 
     use tempfile::TempDir;
 
-    use crate::agent_hooks::electron_fixture::{electron_hooks, electron_settings};
     use crate::plugin_dirs::read_record;
 
     use super::notices::{NOT_LOADED_REASON, not_loaded_text};
@@ -653,11 +637,9 @@ mod tests {
     const UNEDITABLE: &str =
         "{\"env\": {\"A\": \"1\"}, \"env\": {\"CLAUDE_CODE_PLUGIN_DIRS\": \"/a\"}}";
     const WAIT: Duration = Duration::from_secs(2);
-    const MINE_KEYS: &str = "{\n  // mine\n  \"model\": \"opus\",\n";
-    const STUB: &str = "#!/bin/sh\nexit 0\n";
 
     struct Environment {
-        temp: TempDir,
+        _temp: TempDir,
         agent: Agent,
         agents: Vec<Agent>,
         config: PathBuf,
@@ -711,7 +693,7 @@ mod tests {
         }
         let agent = agents[0].clone();
         Environment {
-            temp,
+            _temp: temp,
             agent,
             agents,
             config,
@@ -893,83 +875,6 @@ mod tests {
         view.notices[0].clone()
     }
 
-    fn mine_with(settings: &str) -> String {
-        settings.replacen("{\n", MINE_KEYS, 1)
-    }
-
-    fn other_hooks(environment: &Environment) -> PathBuf {
-        let other_config = environment.temp.path().join("other-config");
-        hooks_directory(&other_config)
-    }
-
-    fn other_channel(environment: &Environment) -> String {
-        let other_hooks = other_hooks(environment);
-        let settings = electron_settings(&other_hooks, "{}");
-        mine_with(&settings)
-    }
-
-    fn both_channels(environment: &Environment) -> String {
-        let other_hooks = other_hooks(environment);
-        let theirs = electron_hooks(&other_hooks, "{}");
-        let ours_hooks = &environment.agent.paths.hooks_directory;
-        let settings = electron_settings(ours_hooks, &theirs);
-        mine_with(&settings)
-    }
-
-    fn assert_stubbed(directory: &Path) {
-        for name in ["taco-shells-attention.sh", "taco-shells-claude-session.sh"] {
-            let text = fs::read_to_string(directory.join(name)).unwrap();
-            assert_eq!(text, STUB, "{name}");
-        }
-    }
-
-    #[test]
-    fn the_click_on_an_old_setup_moves_off_only_this_builds_entries() {
-        let environment = environment();
-        let theirs = other_channel(&environment);
-        let ours_too = both_channels(&environment);
-        let settings_path = environment.agent.paths.settings_path.clone();
-        fs::write(&settings_path, &ours_too).unwrap();
-        let fixture = fixture_with(environment, false);
-        let seen = seen_claude(&fixture, "one");
-        let offer = only_notice(&fixture);
-        assert!(is_offer(&offer.kind));
-        assert!(offer.text.contains("still reports"), "{}", offer.text);
-
-        fixture.setups.act(&claude(), AgentMenuAction::SetUp);
-
-        let after = fs::read_to_string(&settings_path).unwrap();
-        assert_eq!(after, theirs);
-        let config = &fixture.environment.config;
-        let plugin_directory = plugin_directory_path(config);
-        let manifest = plugin_directory.join(".claude-plugin/plugin.json");
-        assert!(manifest.is_file());
-        let turned_on = fixture.switch.turned_on.load(Ordering::SeqCst);
-        assert_eq!(turned_on, 1);
-        let done = only_notice(&fixture);
-        assert_eq!(done.kind, AgentSetupNoticeKind::Done);
-        assert_eq!(done.terminals, vec![seen]);
-    }
-
-    #[test]
-    fn the_click_leaves_a_file_without_this_builds_entries_byte_for_byte() {
-        let environment = environment();
-        let theirs = other_channel(&environment);
-        let settings_path = environment.agent.paths.settings_path.clone();
-        fs::write(&settings_path, &theirs).unwrap();
-        let before = fs::read(&settings_path).unwrap();
-        let fixture = fixture_with(environment, false);
-        seen_claude(&fixture, "one");
-
-        fixture.setups.act(&claude(), AgentMenuAction::SetUp);
-
-        let after = fs::read(&settings_path).unwrap();
-        assert_eq!(after, before);
-        let done = only_notice(&fixture);
-        assert_eq!(done.kind, AgentSetupNoticeKind::Done);
-        assert_eq!(done.detail, None);
-    }
-
     fn hidden_environment() -> Environment {
         let environment = environment();
         let settings_path = environment.agent.paths.settings_path.clone();
@@ -1081,36 +986,6 @@ mod tests {
         let problem = only_notice(&fixture);
         assert_eq!(problem.kind, AgentSetupNoticeKind::Problem);
         assert_eq!(problem.text, NO_TOKEN_PROBLEM);
-    }
-
-    #[test]
-    fn a_start_with_an_old_hooks_folder_leaves_both_scripts_as_stubs() {
-        for on in [false, true] {
-            let environment = environment();
-            let hooks = hooks_directory(&environment.config);
-            fs::create_dir_all(&hooks).unwrap();
-            for name in ["taco-shells-attention.sh", "taco-shells-claude-session.sh"] {
-                fs::write(hooks.join(name), "#!/bin/sh\necho real\n").unwrap();
-            }
-
-            let _fixture = fixture_with(environment, on);
-
-            assert_stubbed(&hooks);
-        }
-    }
-
-    #[test]
-    fn a_start_without_a_hooks_folder_creates_nothing() {
-        for on in [false, true] {
-            let environment = environment();
-            let hooks = hooks_directory(&environment.config);
-
-            let fixture = fixture_with(environment, on);
-            fixture.setups.activity_changed(!on);
-            fixture.setups.activity_changed(on);
-
-            assert!(!hooks.exists());
-        }
     }
 
     #[test]
@@ -1406,18 +1281,12 @@ mod tests {
     #[test]
     fn a_click_that_cannot_prepare_the_hooks_leaves_the_agents_settings_alone() {
         let environment = environment();
-        let ours_too = both_channels(&environment);
-        let settings_path = environment.agent.paths.settings_path.clone();
-        fs::write(&settings_path, &ours_too).unwrap();
-        let before = fs::read(&settings_path).unwrap();
         fs::remove_file(&environment.program).unwrap();
         let fixture = fixture_with(environment, false);
         seen_claude(&fixture, "one");
 
         fixture.setups.act(&claude(), AgentMenuAction::SetUp);
 
-        let after = fs::read(&settings_path).unwrap();
-        assert_eq!(after, before);
         let turned_on = fixture.switch.turned_on.load(Ordering::SeqCst);
         assert_eq!(turned_on, 0);
         assert_eq!(only_notice(&fixture).kind, AgentSetupNoticeKind::Problem);
