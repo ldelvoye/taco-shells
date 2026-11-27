@@ -12,14 +12,17 @@ use taco_protocol::{
     ConfigFile, CursorShape, DrawnState, HarnessId, RuntimeCommand, RuntimeReport,
 };
 use taco_rules::default_panels;
-use taco_services::{AgentMenuAction, config_directory, config_file_path, read_config_texts};
+use taco_services::{
+    AGENT_APP_NAME, AgentMenuAction, config_directory, config_file_path, focus_port_path,
+    read_config_texts,
+};
 use taco_settings::{
     Config, CursorStyle, KeymapChange, SettingChange, palette_for, resolve_config,
 };
 use taco_workspace::{FileStorage, Options};
 
 use crate::link::{ServicesPort, WindowReceiver};
-use crate::runtime_client::{RuntimeClient, RuntimeEvent};
+use crate::runtime_client::{RuntimeClient, RuntimeEvent, ShellContext};
 use crate::services_host::ServicesHost;
 use crate::workspace_host::{RuntimeCommands, WorkspaceHost, new_terminal_id};
 
@@ -91,7 +94,11 @@ pub fn start(system_is_dark: bool) -> Result<Started, String> {
     let on_event = move |event| {
         let _ = events.send(event);
     };
-    let started = RuntimeClient::start(&program, on_event);
+    let context = ShellContext {
+        app: AGENT_APP_NAME.to_string(),
+        port_file: focus_port_path(&directory),
+    };
+    let started = RuntimeClient::start(&program, &context, on_event);
     let started =
         started.map_err(|error| format!("The terminal runtime did not start: {error}"))?;
     let runtime = started.client;

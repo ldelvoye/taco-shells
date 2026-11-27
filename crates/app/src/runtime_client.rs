@@ -1,6 +1,7 @@
 //! The app's side of the terminal runtime: starting `taco-shells-runtime`, its control connection, and its exit.
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::io;
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
@@ -39,6 +40,14 @@ struct StopPatience {
     exit: Duration,
     after_sigterm: Duration,
     after_sigkill: Duration,
+}
+
+/// What the runtime tells every shell about this app.
+pub struct ShellContext {
+    /// `taco-shells` or `taco-shells-dev`.
+    pub app: String,
+    /// This app's `focus-port` file.
+    pub port_file: PathBuf,
 }
 
 pub enum RuntimeEvent {
@@ -86,13 +95,15 @@ impl RuntimeClient {
     /// Starts it with two socket pairs at descriptors 3 and 4; `on_event` runs on the client's reader thread, in arrival order.
     pub fn start(
         program: &Path,
+        context: &ShellContext,
         on_event: impl FnMut(RuntimeEvent) + Send + 'static,
     ) -> io::Result<RuntimeStart> {
-        RuntimeClient::start_with(program, on_event, STOP_PATIENCE)
+        RuntimeClient::start_with(program, context, on_event, STOP_PATIENCE)
     }
 
     fn start_with(
         program: &Path,
+        context: &ShellContext,
         on_event: impl FnMut(RuntimeEvent) + Send + 'static,
         patience: StopPatience,
     ) -> io::Result<RuntimeStart> {
@@ -101,9 +112,13 @@ impl RuntimeClient {
         let control_fd = control_end.as_raw_fd();
         let terminals_fd = terminals_end.as_raw_fd();
 
+        let mut port_file_argument = OsString::from("--port-file=");
+        port_file_argument.push(&context.port_file);
         let mut command = Command::new(program);
         command.arg(format!("--control-fd={CONTROL_FD}"));
         command.arg(format!("--terminals-fd={TERMINALS_FD}"));
+        command.arg(format!("--app={}", context.app));
+        command.arg(port_file_argument);
         command.stdin(Stdio::null());
         // Between fork and exec only async-signal-safe calls. The copies at 3 and 4 stay open across exec; the ones above close.
         unsafe {
@@ -352,7 +367,14 @@ exit {code};
     const SCHEDULING: Duration = Duration::from_millis(300);
 
     fn started_quick(program: &Path) -> RuntimeStart {
-        RuntimeClient::start_with(program, |_| {}, QUICK).unwrap()
+        RuntimeClient::start_with(program, &test_context(), |_| {}, QUICK).unwrap()
+    }
+
+    fn test_context() -> ShellContext {
+        ShellContext {
+            app: "taco-shells-test".into(),
+            port_file: PathBuf::from("/nonexistent/focus-port"),
+        }
     }
 
     /// Stops it on a thread of its own, so a stop that hangs fails the test instead of hanging it, and holds it to the sum of its steps.
@@ -434,7 +456,7 @@ exit {code};
         }
         let (events, received) = mpsc::channel();
         let program = stand_in("dies", 7);
-        let started = RuntimeClient::start(&program, move |event| {
+        let started = RuntimeClient::start(&program, &test_context(), move |event| {
             let _ = events.send(event);
         })
         .unwrap();
@@ -466,7 +488,7 @@ exit {code};
         // A runtime that goes because it was asked to is not reported as dying.
         let (events, received) = mpsc::channel();
         let program = stand_in("stops", 0);
-        let started = RuntimeClient::start(&program, move |event| {
+        let started = RuntimeClient::start(&program, &test_context(), move |event| {
             let _ = events.send(event);
         })
         .unwrap();

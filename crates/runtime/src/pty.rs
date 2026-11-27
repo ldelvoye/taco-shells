@@ -11,7 +11,7 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use taco_protocol::{TerminalId, TerminalSize};
+use taco_protocol::{APP_VARIABLE, PORT_FILE_VARIABLE, TerminalId, TerminalSize};
 
 use crate::budget::{Budget, Budgets};
 use crate::core::Input;
@@ -35,6 +35,15 @@ pub struct ShellProgram {
     pub home: String,
     /// The open-file limit the runtime was started with, given back to each shell when the runtime raised its own.
     pub open_file_limit: Option<libc::rlimit>,
+    pub context: ShellContext,
+}
+
+/// What every shell is told about the app it runs in, as the app gave it at launch.
+pub struct ShellContext {
+    /// `taco-shells` or `taco-shells-dev`.
+    pub app: String,
+    /// The app's `focus-port` file.
+    pub port_file: String,
 }
 
 struct Shell {
@@ -55,7 +64,7 @@ pub struct PtyShells {
 
 impl ShellProgram {
     /// The user's login shell, the way macOS terminals start one. Before any thread starts: `getpwuid` is not thread-safe.
-    pub fn login() -> ShellProgram {
+    pub fn login(context: ShellContext) -> ShellProgram {
         let user = unsafe { libc::getuid() };
         let record = unsafe { libc::getpwuid(user) };
         let mut path = String::new();
@@ -87,6 +96,7 @@ impl ShellProgram {
             arguments: vec!["-l".to_string()],
             home,
             open_file_limit: None,
+            context,
         }
     }
 }
@@ -126,6 +136,9 @@ impl PtyShells {
         if std::env::var_os("LANG").is_none() {
             command.env("LANG", "en_US.UTF-8");
         }
+        // Over any inherited from the runtime: a Dev app opened from a stable app's terminal carries the stable app's.
+        command.env(APP_VARIABLE, &self.program.context.app);
+        command.env(PORT_FILE_VARIABLE, &self.program.context.port_file);
         let shell_side = slave.try_clone()?;
         command.stdin(Stdio::from(slave.try_clone()?));
         command.stdout(Stdio::from(slave.try_clone()?));
@@ -561,6 +574,13 @@ mod tests {
     /// Prints whether SIGTERM is blocked in the process running it.
     const REPORT_MASK: &str = r#"my $old = POSIX::SigSet->new; sigprocmask(SIG_BLOCK, POSIX::SigSet->new, $old); print "sigterm blocked: ", ($old->ismember(SIGTERM) ? 1 : 0), "\n""#;
 
+    fn test_context() -> ShellContext {
+        ShellContext {
+            app: "taco-shells-test".into(),
+            port_file: "/nonexistent/focus-port".into(),
+        }
+    }
+
     /// Reads the shell's output until `ready` says enough has come, and gives back its exit if it came first.
     fn read_until(
         received: &Receiver<Input>,
@@ -611,6 +631,7 @@ mod tests {
                 rlim_cur: 200,
                 rlim_max: libc::RLIM_INFINITY,
             }),
+            context: test_context(),
         };
         let mut shells = PtyShells::new(program, inputs, Arc::new(Budgets::default()));
         let id = TerminalId("pty".into());
@@ -674,6 +695,7 @@ mod tests {
             arguments: vec!["-MPOSIX".into(), "-e".into(), REPORT_MASK.into()],
             home: "/".into(),
             open_file_limit: None,
+            context: test_context(),
         };
         let mut shells = PtyShells::new(program, inputs, Arc::new(Budgets::default()));
         let id = TerminalId("signals".into());
@@ -697,6 +719,7 @@ mod tests {
             arguments: vec!["-e".into(), print_then_exit],
             home: "/".into(),
             open_file_limit: None,
+            context: test_context(),
         };
         let budgets = Arc::new(Budgets::default());
         let mut shells = PtyShells::new(program, inputs, budgets.clone());

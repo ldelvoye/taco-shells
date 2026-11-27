@@ -12,6 +12,12 @@ pub const CONFIG_DIRECTORY_NAME: &str = ".taco-shells";
 #[cfg(not(taco_stable))]
 pub const CONFIG_DIRECTORY_NAME: &str = ".taco-shells-dev";
 
+/// The build's name as its shells and agent plugin see it.
+#[cfg(taco_stable)]
+pub const AGENT_APP_NAME: &str = "taco-shells";
+#[cfg(not(taco_stable))]
+pub const AGENT_APP_NAME: &str = "taco-shells-dev";
+
 pub const CONFIG_DIRECTORY_VARIABLE: &str = "TACO_SHELLS_CONFIG_DIR";
 
 #[cfg(taco_stable)]
