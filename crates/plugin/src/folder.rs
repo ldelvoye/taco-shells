@@ -21,19 +21,10 @@ fn hook_command_group(is_async: bool) -> Value {
     json!({"hooks": [hook]})
 }
 
-pub fn plugin_files(stamp: &str) -> Vec<(PathBuf, String)> {
-    let marketplace = json!({
-        "name": PLUGIN_NAME,
-        "owner": {"name": "Taco Shells"},
-        "plugins": [{
-            "name": PLUGIN_NAME,
-            "source": format!("./{PLUGIN_NAME}"),
-            "description": DESCRIPTION,
-        }],
-    });
+pub fn plugin_files(version: &str) -> Vec<(PathBuf, String)> {
     let manifest = json!({
         "name": PLUGIN_NAME,
-        "version": stamp,
+        "version": version,
         "description": DESCRIPTION,
     });
     let mcp = json!({
@@ -70,12 +61,10 @@ pub fn plugin_files(stamp: &str) -> Vec<(PathBuf, String)> {
         }
     });
 
-    let marketplace_path = String::from(".claude-plugin/marketplace.json");
-    let manifest_path = format!("{PLUGIN_NAME}/.claude-plugin/plugin.json");
-    let mcp_path = format!("{PLUGIN_NAME}/.mcp.json");
-    let hooks_path = format!("{PLUGIN_NAME}/hooks/hooks.json");
+    let manifest_path = String::from(".claude-plugin/plugin.json");
+    let mcp_path = String::from(".mcp.json");
+    let hooks_path = String::from("hooks/hooks.json");
     vec![
-        file(marketplace_path, marketplace),
         file(manifest_path, manifest),
         file(mcp_path, mcp),
         file(hooks_path, hooks),
@@ -96,6 +85,17 @@ mod tests {
     #[test]
     fn describes_the_plugin_folder() {
         let files = plugin_files("2026.11.26");
+
+        let paths: Vec<&str> = files
+            .iter()
+            .map(|(path, _)| path.to_str().unwrap())
+            .collect();
+        let expected_paths = [
+            ".claude-plugin/plugin.json",
+            ".mcp.json",
+            "hooks/hooks.json",
+        ];
+        assert_eq!(paths, expected_paths);
 
         let mcp = parsed(&files, ".mcp.json");
         assert_eq!(mcp["mcpServers"][SERVER_NAME]["alwaysLoad"], true);

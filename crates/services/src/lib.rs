@@ -7,6 +7,7 @@ mod agent_setup_state;
 mod agent_setups;
 #[cfg(test)]
 mod build_identity;
+mod claude_version;
 mod config_files;
 mod config_store;
 mod config_writer;
@@ -14,6 +15,7 @@ mod file_write;
 mod hook_listener;
 mod identity;
 mod mac;
+mod plugin_folder;
 mod sync;
 mod updater;
 
@@ -30,6 +32,7 @@ pub use agent_setups::{
     AgentMenuEntry, AgentSetupNotice, AgentSetupNoticeKind, AgentSetupView, AgentSetups,
     AgentSetupsHost,
 };
+pub use claude_version::{MINIMUM_VERSION, claude_version, find_claude, is_too_old, parse_version};
 pub use config_files::{
     config_file_path, focus_port_path, plugin_directory_path, read_config_texts, seed_config_files,
     unreadable_problems,
@@ -41,4 +44,5 @@ pub use identity::{
     AGENT_APP_NAME, APPLICATION_NAME, CONFIG_DIRECTORY_NAME, CONFIG_DIRECTORY_VARIABLE, IS_STABLE,
     config_directory,
 };
+pub use plugin_folder::{PROGRAM_PATH, refresh_plugin_folder};
 pub use updater::{UpdateEvent, Updater, UpdaterHost};
