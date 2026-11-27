@@ -10,7 +10,7 @@ use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 
 use taco_protocol::{TerminalId, TerminalSize};
@@ -215,13 +215,17 @@ impl PtyShells {
                 let status;
                 match waited {
                     Ok(()) => {
-                        reaped = waiter_reaped.lock().expect("reaped lock");
+                        reaped = waiter_reaped
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner);
                         status = child.wait();
                     }
                     Err(error) => {
                         eprintln!("a shell could not be waited on without reaping it: {error}");
                         status = child.wait();
-                        reaped = waiter_reaped.lock().expect("reaped lock");
+                        reaped = waiter_reaped
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner);
                     }
                 }
                 let code = match status {
@@ -403,7 +407,7 @@ fn set_close_on_exec(fd: RawFd) {
 
 /// SIGHUP to the shell's process group, as a terminal closing does; the shell leads its group.
 fn hang_up(pid: u32, reaped: &Mutex<bool>) {
-    let reaped = reaped.lock().expect("reaped lock");
+    let reaped = reaped.lock().unwrap_or_else(PoisonError::into_inner);
     if *reaped {
         return;
     }
