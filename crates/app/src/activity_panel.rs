@@ -477,9 +477,15 @@ fn no_agent_element(line: &NoAgentLine, look: &Look, cx: &mut Context<WindowView
             action,
             text,
         } => {
-            let shown = text_cell(text);
+            let shown = div().min_w_0().child(text.clone());
             let button = set_up_button(harness, *action, look, cx);
-            row.child(shown).child(button)
+            div()
+                .flex()
+                .flex_col()
+                .items_start()
+                .gap(px(8.))
+                .child(shown)
+                .child(button)
         }
         NoAgentLine::Unavailable { text, reason } => {
             let shown = div().min_w_0().child(text.clone());
