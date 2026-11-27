@@ -4,24 +4,17 @@ use gpui::{
 };
 use taco_protocol::{Edge, Panel, PanelPlace, Panels};
 
-use crate::assets::{AGENT_ACTIVITY_ICON, SETTINGS_ICON, TERMINALS_ICON};
+use crate::assets::SETTINGS_ICON;
 use crate::drive::mark;
 use crate::look::{ICON_SIZE, Look, STRIP_BUTTON_SIZE, STRIP_WIDTH};
 use crate::page::PageMove;
-use crate::panels::driver_name_of;
+use crate::panels::{driver_name_of, icon_of};
 use crate::window::WindowView;
 
 const SETTINGS_MARK: &str = "strip:settings";
 const SETTINGS_ID: &str = "strip-button:settings";
 const EDGE_BAR_THICKNESS: f32 = 2.;
 const EDGE_BAR_LENGTH: f32 = 12.;
-
-pub fn icon_of(panel: Panel) -> &'static str {
-    match panel {
-        Panel::Terminals => TERMINALS_ICON,
-        Panel::AgentActivity => AGENT_ACTIVITY_ICON,
-    }
-}
 
 /// The strip of icons down the left edge: the panels in a fixed order, then Settings at the foot.
 pub fn strip(
@@ -30,16 +23,12 @@ pub fn strip(
     look: &Look,
     cx: &mut Context<WindowView>,
 ) -> Div {
-    let terminals_place = panels.place(Panel::Terminals);
-    let terminals = panel_button(Panel::Terminals, terminals_place, look, cx);
-    let agent_activity_place = panels.place(Panel::AgentActivity);
-    let agent_activity = panel_button(Panel::AgentActivity, agent_activity_place, look, cx);
     let settings_button = button(SETTINGS_ICON, settings_open, look);
     let marked = mark(settings_button, SETTINGS_MARK);
     let settings = marked
         .id(SETTINGS_ID)
         .on_click(cx.listener(|view, _, _, cx| view.move_pages(PageMove::ToggleSettings, cx)));
-    div()
+    let mut column = div()
         .flex()
         .flex_col()
         .flex_none()
@@ -48,11 +37,13 @@ pub fn strip(
         .w(px(STRIP_WIDTH))
         .py(px(6.))
         .border_r_1()
-        .border_color(look.hairline)
-        .child(terminals)
-        .child(agent_activity)
-        .child(div().flex_1())
-        .child(settings)
+        .border_color(look.hairline);
+    for panel in Panel::ALL {
+        let place = panels.place(panel);
+        let panel_icon = panel_button(panel, place, look, cx);
+        column = column.child(panel_icon);
+    }
+    column.child(div().flex_1()).child(settings)
 }
 
 fn panel_button(

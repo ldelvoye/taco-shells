@@ -9,7 +9,7 @@ use taco_rules::{DropPoint, drop_for};
 use super::{Awaited, WindowView};
 use crate::look::{ROW_HEIGHT, STRIP_WIDTH, TITLE_BAR_HEIGHT};
 use crate::page::PageMove;
-use crate::panels::{PanelDrag, ResizeDrag, edge_near, place_of, size_for_pointer};
+use crate::panels::{PanelDrag, ResizeDrag, edge_near, size_for_pointer};
 use crate::popups::{Popup, RenameStep, rename_step};
 use crate::slot::{Slot, SlotLine, opened_height};
 use crate::terminal_list::ListDrag;
@@ -106,7 +106,7 @@ impl WindowView {
 
     pub(crate) fn toggle_panel(&self, panel: Panel) {
         let drawn = self.drawn();
-        let place = place_of(&drawn.panels, panel);
+        let place = drawn.panels.place(panel);
         if place.open {
             self.close_panel(panel);
             return;

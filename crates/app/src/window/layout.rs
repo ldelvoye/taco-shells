@@ -6,7 +6,7 @@ use gpui::{
     AnyElement, Context, Div, InteractiveElement, IntoElement, ParentElement, Styled, div, px,
 };
 use taco_protocol::{DrawnState, Edge, Panel, PanelPlace};
-use taco_rules::{DropMark, selected_terminal};
+use taco_rules::{DropMark, open_on, selected_terminal};
 
 use super::WindowView;
 use crate::activity_panel::{ActivityInput, activity_panel, now_ms};
@@ -14,7 +14,7 @@ use crate::banners::{Notices, banner_cards, banners_of};
 use crate::drive::mark;
 use crate::look::{STRIP_WIDTH, TITLE_BAR_HEIGHT};
 use crate::motion::{PAGE_TIME, progress};
-use crate::panels::{bounded_size, docked, landing_preview, open_on, place_of};
+use crate::panels::{bounded_size, docked, landing_preview};
 use crate::shared_view::shared_view;
 use crate::strip::strip;
 use crate::terminal_list::{ListInput, terminal_list};
@@ -48,18 +48,22 @@ impl WindowView {
         if pages_open {
             return body.child(center);
         }
-        if let Some((panel, place)) = open_on(&drawn.panels, Edge::Bottom) {
+        let panels = &drawn.panels;
+        if let Some(panel) = open_on(panels, Edge::Bottom) {
+            let place = panels.place(panel);
             center = center.child(self.panel(panel, place, drawn, mark, cx));
         }
-        if let Some((panel, place)) = open_on(&drawn.panels, Edge::Left) {
+        if let Some(panel) = open_on(panels, Edge::Left) {
+            let place = panels.place(panel);
             body = body.child(self.panel(panel, place, drawn, mark, cx));
         }
         body = body.child(center);
-        if let Some((panel, place)) = open_on(&drawn.panels, Edge::Right) {
+        if let Some(panel) = open_on(panels, Edge::Right) {
+            let place = panels.place(panel);
             body = body.child(self.panel(panel, place, drawn, mark, cx));
         }
         if let Some((panel, edge)) = self.panel_target {
-            let place = place_of(&drawn.panels, panel);
+            let place = panels.place(panel);
             let size = bounded_size(edge, place.size, self.viewport);
             let preview = landing_preview(panel, edge, size, look);
             body = body.child(preview);

@@ -3,9 +3,9 @@ use gpui::{
     InteractiveElement, IntoElement, ParentElement, Pixels, Point, Render, Size,
     StatefulInteractiveElement, Styled, Window, div, px, svg,
 };
-use taco_protocol::{Edge, Panel, PanelPlace, Panels};
+use taco_protocol::{Edge, Panel};
 
-use crate::assets::CLOSE_ICON;
+use crate::assets::{AGENT_ACTIVITY_ICON, CLOSE_ICON, TERMINALS_ICON};
 use crate::drive::mark;
 use crate::look::{FONT_FAMILY, Look, PANEL_TITLE_HEIGHT, SMALL_TEXT_SIZE, STRIP_WIDTH, TEXT_SIZE};
 use crate::parts::element_id;
@@ -93,14 +93,11 @@ pub fn driver_name_of(panel: Panel) -> &'static str {
     }
 }
 
-/// The panel open on an edge, if any: at most one is, which `rules` keeps true.
-pub fn open_on(panels: &Panels, edge: Edge) -> Option<(Panel, &PanelPlace)> {
-    let panel = taco_rules::open_on(panels, edge)?;
-    Some((panel, panels.place(panel)))
-}
-
-pub fn place_of(panels: &Panels, panel: Panel) -> &PanelPlace {
-    panels.place(panel)
+pub fn icon_of(panel: Panel) -> &'static str {
+    match panel {
+        Panel::Terminals => TERMINALS_ICON,
+        Panel::AgentActivity => AGENT_ACTIVITY_ICON,
+    }
 }
 
 /// A panel's size with the pointer at `pointer` in a window of `window` size: at least a usable minimum, at most half the window.
