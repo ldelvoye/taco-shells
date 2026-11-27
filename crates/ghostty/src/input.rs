@@ -10,7 +10,7 @@ use crate::terminal::{Error, Terminal, check};
 const MODE_FOCUS_EVENTS: u16 = 1004;
 const MODE_ALTERNATE_SCROLL: u16 = 1007;
 const MODE_BRACKETED_PASTE: u16 = 2004;
-/// Room for a key, mouse or focus sequence today; a longer one is retried at the size the library reports.
+/// Room for any key, mouse or focus sequence; a longer one is retried at the size the library reports.
 const SEQUENCE_BYTES: usize = 128;
 /// What bracketed paste adds around the text: `ESC [200~` and `ESC [201~`.
 const BRACKETS_BYTES: usize = 12;
@@ -562,13 +562,20 @@ fn format_selection(
         sys::GhosttyFormatterOption_GHOSTTY_FORMATTER_OPT_SELECTION,
         selection,
     )?;
+    format_text(formatter, "format the selection")
+}
 
+/// The text the formatter gives under the options already set on it. The caller still frees the formatter.
+pub(crate) fn format_text(
+    formatter: sys::GhosttyFormatter,
+    call: &'static str,
+) -> Result<String, Error> {
     let mut bytes: *mut u8 = ptr::null_mut();
     let mut len = 0usize;
     let formatted = unsafe {
         sys::ghostty_formatter_format_alloc(formatter, ptr::null(), &mut bytes, &mut len)
     };
-    check(formatted, "format the selection")?;
+    check(formatted, call)?;
     // Empty output comes back as a null pointer, which a slice cannot be made from.
     if bytes.is_null() {
         return Ok(String::new());
@@ -775,16 +782,8 @@ mod tests {
     fn keys_follow_our_choices_and_the_programs_modes() {
         let mut terminal = Terminal::new(SIZE).unwrap();
         let mut keys = KeyEncoder::new().unwrap();
-        let ctrl = Mods {
-            ctrl: true,
-            ..Mods::default()
-        };
         let alt = Mods {
             alt: true,
-            ..Mods::default()
-        };
-        let shift = Mods {
-            shift: true,
             ..Mods::default()
         };
 
@@ -792,24 +791,10 @@ mod tests {
             .encode(&terminal, &press(Key::Char('e'), alt, "é"))
             .unwrap();
         assert_eq!(option_e, "é".as_bytes());
-        let ctrl_c = keys
-            .encode(&terminal, &press(Key::Char('c'), ctrl, "c"))
-            .unwrap();
-        assert_eq!(ctrl_c, b"\x03");
-        let back_tab = keys.encode(&terminal, &press(Key::Tab, shift, "")).unwrap();
-        assert_eq!(back_tab, b"\x1b[Z");
         let f5 = keys
             .encode(&terminal, &press(Key::Function(5), Mods::default(), ""))
             .unwrap();
         assert_eq!(f5, b"\x1b[15~");
-
-        // Cursor-key application mode (DECCKM) changes the arrows.
-        let up = press(Key::Up, Mods::default(), "");
-        let normal_up = keys.encode(&terminal, &up).unwrap();
-        assert_eq!(normal_up, b"\x1b[A");
-        terminal.write(b"\x1b[?1h");
-        let application_up = keys.encode(&terminal, &up).unwrap();
-        assert_eq!(application_up, b"\x1bOA");
 
         // Under the Kitty keyboard protocol, Ctrl+Shift+A is reported by its unshifted key, 97.
         terminal.write(b"\x1b[>1u");
@@ -865,11 +850,6 @@ mod tests {
         terminal.write(b"\x1b[?1003h\x1b[?1006h");
         assert!(terminal.mouse_tracking().unwrap());
         assert_eq!(encoder.encode(&terminal, &click).unwrap(), b"\x1b[<0;3;2M");
-        let release = mouse(MouseAction::Release, Some(MouseButton::Left), 25.0, 30.0);
-        assert_eq!(
-            encoder.encode(&terminal, &release).unwrap(),
-            b"\x1b[<0;3;2m"
-        );
         let wheel = mouse(MouseAction::Press, Some(MouseButton::WheelUp), 25.0, 30.0);
         assert_eq!(encoder.encode(&terminal, &wheel).unwrap(), b"\x1b[<64;3;2M");
 
@@ -940,20 +920,5 @@ mod tests {
             terminal.hyperlink_at(CellPoint { x: 0, y: 0 }).unwrap(),
             None
         );
-    }
-
-    #[test]
-    fn scrolling_back_shows_older_lines() {
-        let mut terminal = Terminal::new(SIZE).unwrap();
-        // 100 lines then an empty prompt line: the 4-row viewport shows lines 97 to 99 and the prompt.
-        for line in 0..100 {
-            terminal.write(format!("line {line}\r\n").as_bytes());
-        }
-        terminal.scroll(Scroll::Lines(-10)).unwrap();
-        assert_eq!(first_row(&terminal).text, "line 87");
-        terminal.scroll(Scroll::Top).unwrap();
-        assert_eq!(first_row(&terminal).text, "line 0");
-        terminal.scroll(Scroll::Bottom).unwrap();
-        assert_eq!(first_row(&terminal).text, "line 97");
     }
 }

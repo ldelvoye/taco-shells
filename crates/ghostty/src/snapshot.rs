@@ -115,3 +115,66 @@ unsafe extern "C" fn append(userdata: *mut c_void, data: *const u8, len: usize) 
     bytes.extend_from_slice(piece);
     true
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Step;
+    use crate::testing::{numbered_lines, plain_text};
+    use taco_protocol::TerminalSize;
+
+    const SIZE: TerminalSize = TerminalSize { cols: 80, rows: 24 };
+
+    fn encoded(terminal: &Terminal) -> Vec<u8> {
+        let snapshot = Snapshot::take(terminal).unwrap();
+        let mut bytes = snapshot.screen().to_vec();
+        for part in snapshot.history() {
+            bytes.extend_from_slice(part);
+        }
+        bytes
+    }
+
+    #[test]
+    fn a_terminal_restored_part_by_part_is_the_terminal_it_came_from() {
+        let mut source = Terminal::new(SIZE).unwrap();
+        source.set_scrollback(20_000).unwrap();
+        let history = numbered_lines(15_000);
+        source.write(&history);
+        // A color a program set, the alternate screen over the history, and a sequence cut in half.
+        source.write(b"\x1b]4;2;rgb:12/34/56\x07\x1b[?1049h\x1b[5;5Hfull screen\x1b[3");
+
+        let snapshot = Snapshot::take(&source).unwrap();
+        let parts: Vec<&[u8]> = snapshot.history().collect();
+        assert!(
+            parts.len() >= 2,
+            "15,000 lines of history should take more than one part"
+        );
+
+        let mut restored = Terminal::restore(snapshot.screen()).unwrap();
+        assert_eq!(restored.cursor().unwrap(), source.cursor().unwrap());
+        assert_eq!(plain_text(&restored), plain_text(&source));
+
+        let (last, earlier) = parts.split_last().unwrap();
+        for part in earlier {
+            restored.push_history(part, false);
+            assert_eq!(restored.step_history().unwrap(), Step::Waiting);
+        }
+        restored.push_history(last, true);
+
+        let mut applied = 0;
+        loop {
+            let step = restored.step_history().unwrap();
+            if step == Step::Finished {
+                break;
+            }
+            applied += 1;
+            if applied == 1 {
+                let live = b"1mred\x1b[0m and more";
+                source.write(live);
+                restored.write(live);
+            }
+        }
+        assert!(applied > 1);
+        assert_eq!(encoded(&restored), encoded(&source));
+    }
+}

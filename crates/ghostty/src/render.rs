@@ -8,7 +8,7 @@ use std::ptr;
 use taco_protocol::{Rgb, TerminalSize};
 
 use crate::sys;
-use crate::terminal::{Error, Terminal, check};
+use crate::terminal::{Error, PALETTE_SIZE, Terminal, check};
 
 // The style flags are C macros, which the bindings do not carry.
 const FLAG_BOLD: u16 = 1 << 0;
@@ -20,7 +20,6 @@ const FLAG_INVISIBLE: u16 = 1 << 5;
 const FLAG_STRIKETHROUGH: u16 = 1 << 6;
 const FLAG_OVERLINE: u16 = 1 << 7;
 const UNDERLINE_MASK: u16 = 0x7 << sys::GHOSTTY_STYLE_UNDERLINE_SHIFT;
-const PALETTE_SIZE: usize = 256;
 
 /// How much of the viewport changed since the last `Frame::clean`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -600,7 +599,6 @@ fn from_sys(color: sys::GhosttyColorRgb) -> Rgb {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use taco_protocol::TerminalColors;
 
     const SIZE: TerminalSize = TerminalSize { cols: 20, rows: 4 };
 
@@ -708,32 +706,18 @@ mod tests {
     }
 
     #[test]
-    fn the_frame_reports_the_cursor_and_the_colors_set() {
+    fn the_frame_reports_the_cursor_and_has_a_cursor_color_only_after_a_program_sets_one() {
         let mut terminal = Terminal::new(SIZE).unwrap();
-        let mut ansi = [rgb(0); 16];
-        ansi[1] = rgb(0xf0646c);
-        let colors = TerminalColors {
-            foreground: rgb(0xd6d0c9),
-            background: rgb(0x191918),
-            cursor: rgb(0xece7e1),
-            cursor_text: rgb(0x191918),
-            selection: rgb(0x3a3836),
-            ansi,
-        };
-        terminal.set_colors(&colors).unwrap();
+        let mut state = RenderState::new().unwrap();
+        assert_eq!(state.update(&terminal).unwrap().colors().cursor, None);
+
         // A bar cursor at column 4 of row 2, and a cursor color the program set.
         terminal.write(b"\x1b[5 q\x1b[3;5H\x1b]12;rgb:12/34/56\x07");
-
-        let mut state = RenderState::new().unwrap();
         let frame = state.update(&terminal).unwrap();
         let cursor = frame.cursor().unwrap();
         assert_eq!(cursor.position, Some((4, 2)));
         assert_eq!(cursor.shape, CursorShape::Bar);
-        let read = frame.colors();
-        assert_eq!(read.foreground, colors.foreground);
-        assert_eq!(read.background, colors.background);
-        assert_eq!(read.palette[1], ansi[1]);
-        assert_eq!(read.cursor, Some(rgb(0x123456)));
+        assert_eq!(frame.colors().cursor, Some(rgb(0x123456)));
         assert_eq!(frame.size().unwrap(), SIZE);
     }
 }

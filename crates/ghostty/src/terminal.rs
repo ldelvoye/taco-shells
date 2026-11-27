@@ -9,7 +9,7 @@ use crate::sys;
 
 /// The longest unfinished sequence a snapshot can carry: 65 MiB, the library's own limit for one.
 const CONTINUATION_BYTES: usize = 65 * 1024 * 1024;
-const PALETTE_SIZE: usize = 256;
+pub(crate) const PALETTE_SIZE: usize = 256;
 
 /// A call into the library that did not succeed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,7 +133,7 @@ impl Terminal {
         Ok(terminal)
     }
 
-    pub fn as_raw(&self) -> sys::GhosttyTerminal {
+    pub(crate) fn as_raw(&self) -> sys::GhosttyTerminal {
         self.raw
     }
 
@@ -298,7 +298,7 @@ impl Terminal {
         Ok(Some(title))
     }
 
-    pub fn title(&self) -> Result<String, Error> {
+    fn title(&self) -> Result<String, Error> {
         let mut title = sys::GhosttyString {
             ptr: ptr::null(),
             len: 0,
@@ -402,4 +402,114 @@ unsafe extern "C" fn on_size(
     size.cell_width = effects.cell_width_px;
     size.cell_height = effects.cell_height_px;
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::{numbered_lines, plain_text};
+
+    const SIZE: TerminalSize = TerminalSize { cols: 80, rows: 24 };
+
+    fn scrollback_rows(terminal: &Terminal) -> usize {
+        let mut rows = 0usize;
+        terminal
+            .get(
+                sys::GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_SCROLLBACK_ROWS,
+                &mut rows,
+            )
+            .unwrap();
+        rows
+    }
+
+    #[test]
+    fn the_scrollback_is_a_line_limit_past_the_library_byte_cap() {
+        let mut terminal = Terminal::new(SIZE).unwrap();
+        terminal.set_scrollback(5_000).unwrap();
+        let history = numbered_lines(6_000);
+        terminal.write(&history);
+        // History is dropped a page at a time, so the limit is met to within a page.
+        let kept = scrollback_rows(&terminal);
+        assert!(kept >= 4_500, "kept {kept} lines");
+    }
+
+    #[test]
+    fn clear_keeps_the_cursor_line_at_the_top_and_drops_the_scrollback() {
+        let mut terminal = Terminal::new(SIZE).unwrap();
+        let history = numbered_lines(100);
+        terminal.write(&history);
+        terminal.write(b"one\r\ntwo\r\nprompt $ ");
+        terminal.clear().unwrap();
+
+        assert_eq!(scrollback_rows(&terminal), 0);
+        let expected = Cursor {
+            x: 9,
+            y: 0,
+            visible: true,
+        };
+        assert_eq!(terminal.cursor().unwrap(), expected);
+        assert_eq!(plain_text(&terminal).trim_end(), "prompt $");
+    }
+
+    #[test]
+    fn a_title_change_is_reported_once() {
+        let mut terminal = Terminal::new(SIZE).unwrap();
+        assert_eq!(terminal.take_title().unwrap(), None);
+        terminal.write(b"\x1b]2;claude: fixing the tests\x07");
+        let title = terminal.take_title().unwrap();
+        assert_eq!(title.as_deref(), Some("claude: fixing the tests"));
+        assert_eq!(terminal.take_title().unwrap(), None);
+    }
+
+    #[test]
+    fn color_queries_are_answered_from_the_theme_over_the_standard_palette() {
+        let mut terminal = Terminal::new(SIZE).unwrap();
+        terminal.answer_queries().unwrap();
+        let mut ansi = [Rgb { r: 0, g: 0, b: 0 }; 16];
+        ansi[1] = Rgb {
+            r: 0xf0,
+            g: 0x64,
+            b: 0x6c,
+        };
+        let colors = TerminalColors {
+            foreground: Rgb {
+                r: 0xd6,
+                g: 0xd0,
+                b: 0xc9,
+            },
+            background: Rgb {
+                r: 0x19,
+                g: 0x19,
+                b: 0x18,
+            },
+            cursor: Rgb {
+                r: 0xec,
+                g: 0xe7,
+                b: 0xe1,
+            },
+            cursor_text: Rgb {
+                r: 0x19,
+                g: 0x19,
+                b: 0x18,
+            },
+            selection: Rgb {
+                r: 0x3a,
+                g: 0x38,
+                b: 0x36,
+            },
+            ansi,
+        };
+        terminal.set_colors(&colors).unwrap();
+
+        terminal.write(b"\x1b]10;?\x07\x1b]11;?\x07\x1b]12;?\x07\x1b]4;1;?\x07\x1b]4;200;?\x07");
+        let reply_bytes = terminal.take_replies();
+        let replies = String::from_utf8(reply_bytes).unwrap();
+        assert!(replies.contains("10;rgb:d6d6/d0d0/c9c9"), "{replies:?}");
+        assert!(replies.contains("11;rgb:1919/1919/1818"), "{replies:?}");
+        assert!(replies.contains("12;rgb:ecec/e7e7/e1e1"), "{replies:?}");
+        assert!(replies.contains("4;1;rgb:f0f0/6464/6c6c"), "{replies:?}");
+        // Past the theme's sixteen the palette stays the standard cube.
+        assert!(replies.contains("4;200;rgb:ffff/0000/d7d7"), "{replies:?}");
+        assert!(terminal.take_replies().is_empty());
+    }
 }
