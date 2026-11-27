@@ -1,69 +1,44 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::path::{Path, PathBuf};
+mod notices;
+mod timer;
+mod version;
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use taco_agents::{HARNESSES, Harness, Version};
+use taco_agents::Version;
 use taco_protocol::{HarnessId, TerminalId};
 
-use crate::agent_flow::{
-    Agent, add_plugin_folder, agents_of, hides_plugin_folder, hooks_directory, read_state,
-    remove_old_setup, remove_plugin_folder, stub_hook_scripts,
-};
-use crate::agent_setup_state::{
-    AgentMenu, AgentMenuAction, AgentSetupState, agent_menu_of, runs_agent,
-};
-use crate::agent_version::{find_program, program_version};
+use crate::agent_flow::{Agent, agents_of, read_state, remove_old_setup};
+use crate::agent_plugin_dirs::{add_plugin_folder, hides_plugin_folder, remove_plugin_folder};
+use crate::agent_setup_state::{AgentMenuAction, AgentSetupState, agent_menu_of};
 use crate::config_files::plugin_directory_path;
+use crate::hook_scripts::{hooks_directory, stub_hook_scripts};
 use crate::plugin_folder::refresh_plugin_folder;
 use crate::sync::lock;
+pub use notices::{
+    AgentMenuEntry, AgentSetupNotice, AgentSetupNoticeKind, AgentSetupView, changed_file_text,
+    done_text, offer_text, plugin_dirs_hidden_text, too_old_reason,
+};
+use notices::{Recorded, not_loaded_notice_of, notice_of, recorded_of};
 use taco_protocol::TOKEN_FILE_NAME;
+use timer::{TimerMessage, timer_loop};
+use version::{check_version, current_version, installed_version, probed_harness};
 
 const SUBMIT_CHECK_DELAY: Duration = Duration::from_secs(1);
 const NOT_LOADED_DELAY: Duration = Duration::from_secs(5);
-const NOT_LOADED_REASON: &str = "It may have been started before Agent Activity was on, or with its own plugin settings. Start it again in a new terminal.";
 const OLD_HOOKS_PROBLEM: &str = "settings.json still has the app's old hooks";
 const NO_TOKEN_PROBLEM: &str =
     "The app couldn't write its token file, so agents' activity can't reach it.";
-const VERSION_THREAD_NAME: &str = "agent-version";
 const NO_PROGRAM_PROBLEM: &str = "The app's own plugin program could not be found.";
+const SCRIPT_RUNNER: &str = "node";
 
 type ForegroundCommands = Box<dyn Fn(&TerminalId) -> Vec<String> + Send + Sync>;
 type VersionFinder = Box<dyn Fn() -> Option<Version> + Send + Sync>;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AgentSetupNoticeKind {
-    Offer { action: AgentMenuAction },
-    Unavailable { reason: String },
-    Done,
-    Problem,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AgentSetupNotice {
-    pub harness: HarnessId,
-    pub kind: AgentSetupNoticeKind,
-    pub text: String,
-    /// A quieter second line: only a Done whose click changed the agent's settings file has one.
-    pub detail: Option<String>,
-    pub terminals: Vec<TerminalId>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AgentMenuEntry {
-    pub harness: HarnessId,
-    pub product_name: String,
-    pub menu: AgentMenu,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
-pub struct AgentSetupView {
-    pub menus: Vec<AgentMenuEntry>,
-    pub notices: Vec<AgentSetupNotice>,
-}
 
 pub struct AgentSetupsHost {
     pub is_on: Box<dyn Fn() -> bool + Send + Sync>,
@@ -77,26 +52,6 @@ pub(crate) struct SetupFiles {
     pub(crate) config_directory: PathBuf,
     pub(crate) plugin_program: Option<PathBuf>,
     pub(crate) app_version: String,
-}
-
-#[derive(Clone)]
-enum Recorded {
-    Problem(String),
-    Done { changed_file: Option<String> },
-}
-
-enum TimerMessage {
-    Schedule(TerminalId, Instant),
-    Cancel(TerminalId),
-    Refresh,
-    // Sent at shutdown, since a PluginHeard handle keeps a sender alive and the channel never closes.
-    Stop,
-}
-
-enum Next {
-    Message(TimerMessage),
-    Due,
-    Closed,
 }
 
 struct Reading<'a> {
@@ -147,188 +102,11 @@ fn real_env(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
-fn installed_version(home: Option<&Path>, harness: &'static Harness) -> Option<Version> {
-    let home = home?;
-    let setup = harness.setup()?;
-    let command = setup.commands[0];
-    let program = find_program(home, command)?;
-    program_version(&program, harness)
-}
-
-fn probed_harness() -> Option<&'static Harness> {
-    for harness in HARNESSES {
-        if harness.setup().is_some() {
-            return Some(*harness);
-        }
-    }
-    None
-}
-
 fn is_awaiting(state: &AgentSetupState) -> bool {
     matches!(
         state,
         AgentSetupState::Off | AgentSetupState::OldSetup | AgentSetupState::PluginDirsHidden { .. }
     )
-}
-
-pub fn plugin_dirs_hidden_text(product_name: &str, variable: &str, file: &str) -> String {
-    format!(
-        "{product_name} can't load this app's plugin, because {file} sets {variable}. Set up adds this app's folder to it."
-    )
-}
-
-fn plugin_dirs_managed_reason(product_name: &str, variable: &str) -> String {
-    format!("{product_name}'s managed settings set {variable}, so this app's plugin can't load.")
-}
-
-fn plugin_dirs_managed_text(product_name: &str) -> String {
-    format!("{product_name} is running here but can't load this app's plugin.")
-}
-
-fn not_loaded_text(product_name: &str) -> String {
-    format!("{product_name} here didn't load this app's plugin.")
-}
-
-pub fn offer_text(product_name: &str) -> String {
-    format!("{product_name} is running here but isn't set up, so its activity can't show.")
-}
-
-fn old_setup_text(product_name: &str) -> String {
-    format!(
-        "{product_name} still reports through this app's old hooks. Set up moves it to the plugin."
-    )
-}
-
-pub fn too_old_reason(product_name: &str, minimum: (u32, u32, u32), version: &str) -> String {
-    let (major, minor, patch) = minimum;
-    format!(
-        "Agent Activity needs {product_name} {major}.{minor}.{patch} or later; this Mac has {version}."
-    )
-}
-
-pub fn done_text(product_name: &str) -> String {
-    format!("Set up. Start {product_name} in a new terminal to see it here.")
-}
-
-pub fn changed_file_text(file: &str) -> String {
-    format!("One line changed in {file}.")
-}
-
-fn recorded_of(problems: Vec<String>, changed_file: Option<String>) -> Recorded {
-    if problems.is_empty() {
-        return Recorded::Done { changed_file };
-    }
-    let text = problems.join(" ");
-    Recorded::Problem(text)
-}
-
-fn notice_of(
-    reading: &Reading,
-    recorded: Option<&Recorded>,
-    seen: Option<&BTreeSet<TerminalId>>,
-) -> Option<AgentSetupNotice> {
-    let seen = seen?;
-    if seen.is_empty() {
-        return None;
-    }
-    let product_name = reading.agent.setup.product_name;
-    let variable = reading.agent.setup.plugin_variable;
-    let minimum = reading.agent.setup.minimum_version;
-    let harness = reading.agent.harness_id.clone();
-    let terminals: Vec<TerminalId> = seen.iter().cloned().collect();
-    let notice_with = |kind: AgentSetupNoticeKind, text: String, detail: Option<String>| {
-        Some(AgentSetupNotice {
-            harness: harness.clone(),
-            kind,
-            text,
-            detail,
-            terminals: terminals.clone(),
-        })
-    };
-    let notice = |kind: AgentSetupNoticeKind, text: String| notice_with(kind, text, None);
-
-    if let Some(Recorded::Problem(problem)) = recorded {
-        return notice(AgentSetupNoticeKind::Problem, problem.clone());
-    }
-    let hides_done = matches!(
-        reading.state,
-        AgentSetupState::NotInstalled
-            | AgentSetupState::TooOld { .. }
-            | AgentSetupState::PluginDirsManaged
-    );
-    if let Some(Recorded::Done { changed_file }) = recorded
-        && !hides_done
-    {
-        let text = done_text(product_name);
-        let file = changed_file.as_deref();
-        let detail = file.map(changed_file_text);
-        return notice_with(AgentSetupNoticeKind::Done, text, detail);
-    }
-    match &reading.state {
-        AgentSetupState::Off => {
-            let kind = AgentSetupNoticeKind::Offer {
-                action: AgentMenuAction::SetUp,
-            };
-            notice(kind, offer_text(product_name))
-        }
-        AgentSetupState::OldSetup => {
-            let kind = AgentSetupNoticeKind::Offer {
-                action: AgentMenuAction::SetUp,
-            };
-            notice(kind, old_setup_text(product_name))
-        }
-        AgentSetupState::PluginDirsHidden { file } => {
-            let kind = AgentSetupNoticeKind::Offer {
-                action: AgentMenuAction::SetUp,
-            };
-            let text = plugin_dirs_hidden_text(product_name, variable, file);
-            notice(kind, text)
-        }
-        AgentSetupState::PluginDirsManaged => {
-            let reason = plugin_dirs_managed_reason(product_name, variable);
-            let kind = AgentSetupNoticeKind::Unavailable { reason };
-            notice(kind, plugin_dirs_managed_text(product_name))
-        }
-        AgentSetupState::TooOld { version } => {
-            let reason = too_old_reason(product_name, minimum, version);
-            let kind = AgentSetupNoticeKind::Unavailable { reason };
-            notice(kind, offer_text(product_name))
-        }
-        _ => None,
-    }
-}
-
-fn not_loaded_notice_of(
-    reading: &Reading,
-    recorded: Option<&Recorded>,
-    unloaded: Option<&BTreeSet<TerminalId>>,
-) -> Option<AgentSetupNotice> {
-    if reading.state != AgentSetupState::On {
-        return None;
-    }
-    let unloaded = unloaded?;
-    if unloaded.is_empty() {
-        return None;
-    }
-    if let Some(Recorded::Done { .. }) = recorded {
-        return None;
-    }
-    let product_name = reading.agent.setup.product_name;
-    let text = not_loaded_text(product_name);
-    let reason = NOT_LOADED_REASON.to_string();
-    let terminals = unloaded.iter().cloned().collect();
-    Some(AgentSetupNotice {
-        harness: reading.agent.harness_id.clone(),
-        kind: AgentSetupNoticeKind::Unavailable { reason },
-        text,
-        detail: None,
-        terminals,
-    })
-}
-
-fn current_version(shared: &Shared) -> Option<Version> {
-    let version = lock(&shared.version);
-    *version
 }
 
 fn read_all(shared: &Shared) -> Vec<Reading<'_>> {
@@ -405,6 +183,43 @@ fn has_exited(shared: &Shared, terminal: &TerminalId) -> bool {
     state.exited.contains(terminal)
 }
 
+fn base_name_of(word: &str) -> &str {
+    let slash = word.rfind('/');
+    match slash {
+        Some(index) => &word[index + 1..],
+        None => word,
+    }
+}
+
+fn runs_command(command_line: &str, commands: &[&str]) -> bool {
+    let words: Vec<&str> = command_line.split_whitespace().collect();
+    let Some(first) = words.first() else {
+        return false;
+    };
+    let program = base_name_of(first);
+    if commands.contains(&program) {
+        return true;
+    }
+    // A CLI installed through npm shows in the process list as "node <path>/<name>".
+    if program != SCRIPT_RUNNER {
+        return false;
+    }
+    let Some(second) = words.get(1) else {
+        return false;
+    };
+    let script = base_name_of(second);
+    commands.contains(&script)
+}
+
+pub fn runs_agent(command_lines: &[String], commands: &[&str]) -> bool {
+    for command_line in command_lines {
+        if runs_command(command_line, commands) {
+            return true;
+        }
+    }
+    false
+}
+
 fn check_terminal(shared: &Shared, terminal: &TerminalId) {
     if has_exited(shared, terminal) {
         return;
@@ -451,105 +266,6 @@ fn check_terminal(shared: &Shared, terminal: &TerminalId) {
     }
     if changed {
         refresh(shared);
-    }
-}
-
-fn next_message(messages: &Receiver<TimerMessage>, earliest: Option<Instant>) -> Next {
-    let Some(due) = earliest else {
-        return match messages.recv() {
-            Ok(message) => Next::Message(message),
-            Err(_) => Next::Closed,
-        };
-    };
-    let now = Instant::now();
-    let wait = due.saturating_duration_since(now);
-    match messages.recv_timeout(wait) {
-        Ok(message) => Next::Message(message),
-        Err(RecvTimeoutError::Timeout) => Next::Due,
-        Err(RecvTimeoutError::Disconnected) => Next::Closed,
-    }
-}
-
-fn run_due_checks(shared: &Shared, pending: &mut HashMap<TerminalId, Instant>) {
-    if shared.stopping.load(Ordering::SeqCst) {
-        return;
-    }
-    let now = Instant::now();
-    let mut due = Vec::new();
-    for (terminal, at) in pending.iter() {
-        if *at <= now {
-            due.push(terminal.clone());
-        }
-    }
-    for terminal in &due {
-        pending.remove(terminal);
-    }
-    for terminal in &due {
-        if shared.stopping.load(Ordering::SeqCst) {
-            return;
-        }
-        let check = std::panic::AssertUnwindSafe(|| check_terminal(shared, terminal));
-        let _ = std::panic::catch_unwind(check);
-    }
-}
-
-fn run_refresh(shared: &Shared) {
-    if shared.stopping.load(Ordering::SeqCst) {
-        return;
-    }
-    let refreshing = std::panic::AssertUnwindSafe(|| refresh(shared));
-    let _ = std::panic::catch_unwind(refreshing);
-}
-
-fn timer_loop(shared: Arc<Shared>, messages: Receiver<TimerMessage>) {
-    let mut pending: HashMap<TerminalId, Instant> = HashMap::new();
-    loop {
-        let earliest = pending.values().min().copied();
-        let next = next_message(&messages, earliest);
-        match next {
-            Next::Message(TimerMessage::Schedule(terminal, due)) => {
-                let slot = pending.entry(terminal).or_insert(due);
-                if due < *slot {
-                    *slot = due;
-                }
-            }
-            Next::Message(TimerMessage::Cancel(terminal)) => {
-                pending.remove(&terminal);
-            }
-            Next::Message(TimerMessage::Refresh) => run_refresh(&shared),
-            Next::Message(TimerMessage::Stop) => return,
-            Next::Due => run_due_checks(&shared, &mut pending),
-            Next::Closed => return,
-        }
-    }
-}
-
-fn find_version_now(shared: &Shared) {
-    let found = (shared.find_version)();
-    {
-        let mut version = lock(&shared.version);
-        *version = found;
-    }
-    shared.checking_version.store(false, Ordering::SeqCst);
-    if !shared.stopping.load(Ordering::SeqCst) {
-        refresh(shared);
-    }
-}
-
-fn check_version(shared: &Arc<Shared>) {
-    let claimed =
-        shared
-            .checking_version
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst);
-    if claimed.is_err() {
-        return;
-    }
-    let for_thread = Arc::clone(shared);
-    let builder = thread::Builder::new().name(VERSION_THREAD_NAME.to_string());
-    // Off the caller's thread: this runs the user's login shell, and a slow startup file must cost a late line, never a late window.
-    let spawned = builder.spawn(move || find_version_now(&for_thread));
-    if spawned.is_err() {
-        shared.checking_version.store(false, Ordering::SeqCst);
     }
 }
 
@@ -908,14 +624,18 @@ impl Drop for AgentSetups {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::fs;
+    use std::path::Path;
     use std::sync::atomic::AtomicUsize;
+    use std::sync::mpsc::Receiver;
 
     use tempfile::TempDir;
 
     use crate::agent_hooks::electron_fixture::{electron_hooks, electron_settings};
     use crate::plugin_dirs::read_record;
 
+    use super::notices::{NOT_LOADED_REASON, not_loaded_text};
     use super::*;
 
     const HIDDEN: &str = "{\n  // mine\n  \"env\": {\n    \"CLAUDE_CODE_PLUGIN_DIRS\": \"~/.claude/mods/face-band\"\n  },\n  \"model\": \"opus\"\n}\n";
@@ -1690,5 +1410,25 @@ mod tests {
         let turned_on = fixture.switch.turned_on.load(Ordering::SeqCst);
         assert_eq!(turned_on, 0);
         assert_eq!(only_notice(&fixture).kind, AgentSetupNoticeKind::Problem);
+    }
+
+    #[test]
+    fn an_agent_runs_as_its_program_or_as_node_running_its_script() {
+        let commands = ["claude"];
+        let runs = [
+            "claude --resume x",
+            "node /usr/lib/node_modules/@anthropic-ai/claude-code/claude",
+            "/opt/bin/claude",
+            "node /x/claude",
+        ];
+        for line in runs {
+            let lines = [line.to_string()];
+            assert!(runs_agent(&lines, &commands), "{line}");
+        }
+        let does_not_run = ["vim claude.md", "node", "", "node /x/cli.js"];
+        for line in does_not_run {
+            let lines = [line.to_string()];
+            assert!(!runs_agent(&lines, &commands), "{line}");
+        }
     }
 }

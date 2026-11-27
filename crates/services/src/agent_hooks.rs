@@ -1,19 +1,14 @@
 use std::path::Path;
 
-use jsonc_parser::cst::{CstNode, CstObject, CstRootNode};
+use jsonc_parser::cst::{CstNode, CstRootNode};
 use jsonc_parser::parse_to_serde_value;
 use serde_json::{Map, Value};
 use taco_settings::JSONC_PARSE_OPTIONS;
 
+use crate::settings_edit::{HookEdit, properties_named, uneditable_problem, unreadable_problem};
+
 const HOOKS_KEY: &str = "hooks";
 const SETTINGS_LABEL: &str = "settings.json";
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum HookEdit {
-    Changed(String),
-    Unchanged,
-    Refused(String),
-}
 
 struct HookRef {
     event: String,
@@ -22,14 +17,6 @@ struct HookRef {
     command: String,
     hooks_in_group: usize,
     groups_in_event: usize,
-}
-
-pub(crate) fn unreadable_problem(label: &str) -> String {
-    format!("{label} could not be read as JSON, so nothing was changed.")
-}
-
-pub(crate) fn uneditable_problem(label: &str) -> String {
-    format!("{label} could not be edited, so nothing was changed.")
 }
 
 fn parse_value(text: &str) -> Option<Value> {
@@ -91,18 +78,6 @@ fn is_managed_command(command: &str, hooks_directory: &Path) -> bool {
     let prefix = format!("{directory}/");
     let quoted_prefix = format!("\"{prefix}");
     command.starts_with(&prefix) || command.starts_with(&quoted_prefix)
-}
-
-pub(crate) fn properties_named(object: &CstObject, name: &str) -> usize {
-    let properties = object.properties();
-    let mut count = 0;
-    for property in properties {
-        let decoded = property.decoded_name();
-        if decoded.as_deref() == Some(name) {
-            count += 1;
-        }
-    }
-    count
 }
 
 fn command_of(hook_node: &CstNode) -> Option<String> {
