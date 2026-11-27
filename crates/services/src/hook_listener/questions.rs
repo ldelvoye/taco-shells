@@ -6,7 +6,7 @@ use std::time::Instant;
 use taco_protocol::routes::STOP;
 use taco_protocol::{ContextAnswer, HookMessage, StopAnswer};
 
-use super::http::respond_with_body;
+use super::http::write_response;
 use super::messages::parse_hook_message;
 use super::{ListenerEvent, Serving};
 
@@ -55,11 +55,11 @@ pub(super) fn ask_question(
     let token = serving.token.as_str();
     let on_event = &serving.on_event;
     if sent_token != Some(token) {
-        respond_with_body(&mut stream, NO_ANSWER);
+        write_response(&mut stream, 200, Some(NO_ANSWER));
         return;
     }
     let Some(parsed) = parse_hook_message(body, sent_token, token) else {
-        respond_with_body(&mut stream, NO_ANSWER);
+        write_response(&mut stream, 200, Some(NO_ANSWER));
         return;
     };
 
@@ -79,7 +79,7 @@ pub(super) fn ask_question(
     if spawned.is_err()
         && let Ok(mut spare) = spare
     {
-        respond_with_body(&mut spare, NO_ANSWER);
+        write_response(&mut spare, 200, Some(NO_ANSWER));
     }
 }
 
@@ -120,7 +120,7 @@ fn answer_question(
     }
 
     let answer = final_answer(kind, placed, content);
-    let written = respond_with_body(&mut stream, &answer.body);
+    let written = write_response(&mut stream, 200, Some(&answer.body));
     if written && let Some(on_delivered) = answer.on_delivered {
         on_delivered();
     }

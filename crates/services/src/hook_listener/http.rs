@@ -135,7 +135,7 @@ pub(super) fn drain_body(
     true
 }
 
-pub(super) fn respond(stream: &mut TcpStream, status: u16) {
+pub(super) fn write_response(stream: &mut TcpStream, status: u16, body: Option<&str>) -> bool {
     let reason = match status {
         200 => "OK",
         400 => "Bad Request",
@@ -143,22 +143,17 @@ pub(super) fn respond(stream: &mut TcpStream, status: u16) {
         404 => "Not Found",
         _ => "Payload Too Large",
     };
-    let body = match status {
+    let plain_body = match status {
         200 => "ok",
         _ => "",
     };
+    let (content_type, text) = match body {
+        Some(json) => ("Content-Type: application/json\r\n", json),
+        None => ("", plain_body),
+    };
     let response = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    let _ = stream.set_write_timeout(Some(READ_DEADLINE));
-    let _ = stream.write_all(response.as_bytes());
-}
-
-pub(super) fn respond_with_body(stream: &mut TcpStream, body: &str) -> bool {
-    let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
+        "HTTP/1.1 {status} {reason}\r\n{content_type}Content-Length: {}\r\nConnection: close\r\n\r\n{text}",
+        text.len()
     );
     let _ = stream.set_write_timeout(Some(READ_DEADLINE));
     let written = stream.write_all(response.as_bytes());
