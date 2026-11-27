@@ -1,7 +1,7 @@
 use taco_protocol::{
-    ActivityEvent, ActivityKind, ActivityRequest, AgentSignal, ConfigFile, DrawnState, HarnessId,
-    HookCall, HookEvent, RowState, RuntimeCommand, RuntimeReport, TabGroupId, TerminalId,
-    TerminalStart, WorkspaceRequest,
+    ActivityEvent, ActivityKind, ActivityRequest, AgentSignal, Author, ConfigFile, DrawnState,
+    HarnessId, HookCall, HookEvent, Peer, RowState, RuntimeCommand, RuntimeReport, TabGroupId,
+    TerminalId, TerminalStart, WorkspaceRequest,
 };
 
 use std::collections::BTreeMap;
@@ -873,9 +873,78 @@ fn stretches(workspace: &mut Workspace, terminal: &str) -> Vec<String> {
         } => format!("note in {stretch}"),
         ActivityKind::Note { stretch: None, .. } => "note alone".to_string(),
         ActivityKind::Asked { .. } => "asked".to_string(),
+        ActivityKind::MessageIn { .. } => match entry.author {
+            Author::OtherAgent(Peer {
+                name: Some(name), ..
+            }) => format!("message from {name}"),
+            _ => "message from someone".to_string(),
+        },
+        ActivityKind::MessageOut { stretch, .. } => format!("sent {} in {stretch}", entry.seq),
         other => format!("{other:?}"),
     });
     lines.collect()
+}
+
+#[test]
+fn messages_are_lines_of_their_own_and_a_subagents_late_step_keeps_to_its_turn() {
+    let mut workspace = workspace();
+    let step_of = |workspace: &mut Workspace, command: &str, turn: &str, subagent: bool| {
+        let mut payload = serde_json::json!({
+            "tool_name": "Bash",
+            "tool_input": { "command": command },
+            "prompt_id": turn,
+        });
+        if subagent {
+            payload["agent_id"] = serde_json::json!("helper-1");
+        }
+        tool_used(workspace, "t1", payload);
+    };
+    let messages = r#"<cross-session-message from="uds:/tmp/cc-socks/9873.sock" from-name="code-83">
+Look into the logo.
+</cross-session-message><cross-session-message from="uds:/tmp/cc-socks/9879.sock" from-name="code-f1">
+The route is up.
+</cross-session-message>"#;
+    prompted_in(&mut workspace, "t1", "turn-a", messages);
+    step_of(&mut workspace, "cargo test", "turn-a", false);
+    let sent = serde_json::json!({
+        "tool_name": "SendMessage",
+        "tool_input": { "to": "code-83", "summary": "s", "message": "On it" },
+        "tool_response": { "success": true },
+        "prompt_id": "turn-a",
+    });
+    tool_used(&mut workspace, "t1", sent);
+    noted(&mut workspace, "t1", "Found it");
+    // a background helper finishing after the note
+    step_of(&mut workspace, "grep logo", "turn-a", true);
+    prompted_in(&mut workspace, "t1", "turn-b", "Next");
+    step_of(&mut workspace, "ls", "turn-b", false);
+    step_of(&mut workspace, "grep again", "turn-a", true);
+    step_of(&mut workspace, "pwd", "turn-b", true);
+    // only a subagent keeps to an older turn: the agent's own step joins what is open
+    step_of(&mut workspace, "date", "turn-a", false);
+    // a message that starts a new turn closes the stretch, as a prompt does
+    let reply = r#"<cross-session-message from="uds:/tmp/cc-socks/9873.sock" from-name="code-83">
+Merged.
+</cross-session-message>"#;
+    prompted_in(&mut workspace, "t1", "turn-c", reply);
+    step_of(&mut workspace, "git pull", "turn-c", false);
+
+    let expected = [
+        "message from code-83",
+        "message from code-f1",
+        "step 2 in 2",
+        "sent 3 in 2",
+        "note in 2",
+        "step 5 in 2",
+        "asked",
+        "step 7 in 7",
+        "step 8 in 2",
+        "step 9 in 7",
+        "step 10 in 7",
+        "message from code-83",
+        "step 12 in 12",
+    ];
+    assert_eq!(stretches(&mut workspace, "t1"), expected);
 }
 
 #[test]

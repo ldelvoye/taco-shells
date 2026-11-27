@@ -21,8 +21,17 @@ pub struct Peer {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Step {
-    Did { tool: String, summary: String },
-    Changed { tool: String, path: String },
+    Did {
+        tool: String,
+        summary: String,
+        /// The first line of a failed tool's error, "Exit code 1"; none for a tool that succeeded.
+        #[serde(default)]
+        failed: Option<String>,
+    },
+    Changed {
+        tool: String,
+        path: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -224,7 +233,11 @@ fn earlier_entry(seq: u64, at_ms: u64, kind: EarlierKind) -> ActivityEntry {
                 kind: ActivityKind::Asked { text },
             };
         }
-        EarlierKind::Did { tool, summary } => Step::Did { tool, summary },
+        EarlierKind::Did { tool, summary } => Step::Did {
+            tool,
+            summary,
+            failed: None,
+        },
         EarlierKind::Changed { tool, path } => Step::Changed { tool, path },
     };
     ActivityEntry {

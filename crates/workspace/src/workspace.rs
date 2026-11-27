@@ -735,22 +735,43 @@ impl Workspace {
                 if let Some(question) = agent.question_of(&event, &payload) {
                     apply_question(&mut self.rows, terminal, &session_id, question);
                 }
-                let Some(read) = agent.entry_of(&event, &payload) else {
-                    return;
-                };
-                match read {
-                    EntryRead::Asked { text, turn } => {
-                        self.log_entry(terminal, out, |log| log.append_prompt(text, turn, now_ms));
-                    }
-                    EntryRead::Step(step) => {
-                        self.log_entry(terminal, out, |log| log.append_step(step, now_ms));
-                    }
-                    EntryRead::Note { text } => {
-                        self.log_entry(terminal, out, |log| log.append_note(text, now_ms));
-                    }
-                    EntryRead::Now { text } => self.set_now(terminal, &session_id, text, out),
+                let reads = agent.entries_of(&event, &payload);
+                for read in reads {
+                    self.read_into_activity(terminal, &session_id, read, now_ms, out);
                 }
             }
+        }
+    }
+
+    fn read_into_activity(
+        &mut self,
+        terminal: &TerminalId,
+        session_id: &str,
+        read: EntryRead,
+        now_ms: u64,
+        out: &mut Vec<Outbound>,
+    ) {
+        match read {
+            EntryRead::Asked { text, turn } => {
+                self.log_entry(terminal, out, |log| log.append_prompt(text, turn, now_ms));
+            }
+            EntryRead::MessageIn { from, text, turn } => {
+                self.log_entry(terminal, out, |log| {
+                    log.append_message_in(from, text, turn, now_ms)
+                });
+            }
+            EntryRead::Step { step, context } => {
+                self.log_entry(terminal, out, |log| log.append_step(step, &context, now_ms));
+            }
+            EntryRead::MessageOut { to, text, context } => {
+                self.log_entry(terminal, out, |log| {
+                    log.append_message_out(to, text, &context, now_ms)
+                });
+            }
+            EntryRead::Note { text } => {
+                self.log_entry(terminal, out, |log| log.append_note(text, now_ms));
+            }
+            EntryRead::Now { text } => self.set_now(terminal, session_id, text, out),
         }
     }
 

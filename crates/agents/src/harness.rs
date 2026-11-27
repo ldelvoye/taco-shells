@@ -1,6 +1,14 @@
-use taco_protocol::{AgentSignal, HarnessId, Step};
+use taco_protocol::{AgentSignal, HarnessId, Peer, Step};
 
-/// What a hook's payload adds to Agent Activity: the user's prompt, a step the agent took, a note it wrote, or its now line.
+/// Where a step was taken: the agent's turn, by its id, and whether one of the agent's subagents took it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct StepContext {
+    pub turn: Option<String>,
+    pub subagent: bool,
+}
+
+/// What a hook's payload adds to Agent Activity: the user's prompt, a message from another agent, a step the agent took,
+/// a message it sent, a note it wrote, or its now line.
 #[derive(Clone, Debug, PartialEq)]
 pub enum EntryRead {
     Asked {
@@ -8,7 +16,20 @@ pub enum EntryRead {
         /// The id of the agent's turn; a prompt sent while a turn runs carries that turn's.
         turn: Option<String>,
     },
-    Step(Step),
+    MessageIn {
+        from: Peer,
+        text: String,
+        turn: Option<String>,
+    },
+    Step {
+        step: Step,
+        context: StepContext,
+    },
+    MessageOut {
+        to: Peer,
+        text: String,
+        context: StepContext,
+    },
     Note {
         text: String,
     },
@@ -58,7 +79,7 @@ pub struct Harness {
     pub(crate) resume_line: fn(&str) -> Option<String>,
     pub(crate) fork_line: Option<fn(&str, &str) -> Option<String>>,
     pub(crate) question_reader: Option<fn(&str, &str) -> Option<String>>,
-    pub(crate) entry_reader: Option<fn(&str, &str) -> Option<EntryRead>>,
+    pub(crate) entry_reader: Option<fn(&str, &str) -> Vec<EntryRead>>,
     pub(crate) setup: Option<&'static HarnessSetup>,
 }
 
@@ -116,9 +137,11 @@ impl Harness {
         reader(event, payload)
     }
 
-    /// The Agent Activity entry a hook's payload makes, or none when it makes none.
-    pub fn entry_of(&self, event: &str, payload: &str) -> Option<EntryRead> {
-        let reader = self.entry_reader?;
+    /// The Agent Activity entries a hook's payload makes, oldest first: one prompt can hold several messages.
+    pub fn entries_of(&self, event: &str, payload: &str) -> Vec<EntryRead> {
+        let Some(reader) = self.entry_reader else {
+            return Vec::new();
+        };
         reader(event, payload)
     }
 

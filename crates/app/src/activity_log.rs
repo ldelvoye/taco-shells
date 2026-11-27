@@ -447,7 +447,11 @@ mod tests {
             let stretch = self.stretch();
             let summary = self.next_seq().to_string();
             let tool = "Bash".to_string();
-            let step = Step::Did { tool, summary };
+            let step = Step::Did {
+                tool,
+                summary,
+                failed: None,
+            };
             self.push(Author::App, ActivityKind::Step { stretch, step });
             self
         }
@@ -456,7 +460,11 @@ mod tests {
             let stretch = self.next_seq();
             let summary = stretch.to_string();
             let tool = "Bash".to_string();
-            let step = Step::Did { tool, summary };
+            let step = Step::Did {
+                tool,
+                summary,
+                failed: None,
+            };
             self.push(Author::App, ActivityKind::Step { stretch, step });
             self
         }
