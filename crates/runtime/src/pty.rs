@@ -9,7 +9,6 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -29,6 +28,11 @@ const SIGNAL_EXIT_BASE: i32 = 128;
 /// What an exit reports when its status could not be read.
 const UNKNOWN_EXIT_CODE: i32 = 1;
 
+#[cfg(test)]
+thread_local! {
+    static HANG_UPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 /// The program each terminal runs, and where it starts when no directory is given or the one given is not a directory.
 pub struct ShellProgram {
     pub path: String,
@@ -41,8 +45,8 @@ pub struct ShellProgram {
 
 struct Shell {
     pid: u32,
-    /// Set once the shell has been waited for: its pid may then belong to another process.
-    reaped: Arc<AtomicBool>,
+    /// Set once the shell has been waited for, which happens only under this lock: a hang-up holding it never reaches a pid given to another process.
+    reaped: Arc<Mutex<bool>>,
     master: OwnedFd,
     writes: Sender<Vec<u8>>,
 }
@@ -165,7 +169,7 @@ impl PtyShells {
         let pid = child.id();
 
         let budget = self.budgets.open(id);
-        let reaped = Arc::new(AtomicBool::new(false));
+        let reaped = Arc::new(Mutex::new(false));
         let ends = ThreadEnds {
             shell_side,
             wake_reader,
@@ -195,7 +199,7 @@ impl PtyShells {
         mut child: std::process::Child,
         master: &OwnedFd,
         budget: Arc<Budget>,
-        reaped: &Arc<AtomicBool>,
+        reaped: &Arc<Mutex<bool>>,
         ends: ThreadEnds,
     ) -> io::Result<Sender<Vec<u8>>> {
         let exit_code = Arc::new(Mutex::new(None));
@@ -206,11 +210,26 @@ impl PtyShells {
         thread::Builder::new()
             .name(format!("wait {}", id.0))
             .spawn(move || {
-                let code = match child.wait() {
+                let waited = wait_without_reaping(child.id());
+                let mut reaped;
+                let status;
+                match waited {
+                    Ok(()) => {
+                        reaped = waiter_reaped.lock().expect("reaped lock");
+                        status = child.wait();
+                    }
+                    Err(error) => {
+                        eprintln!("a shell could not be waited on without reaping it: {error}");
+                        status = child.wait();
+                        reaped = waiter_reaped.lock().expect("reaped lock");
+                    }
+                }
+                let code = match status {
                     Ok(status) => exit_code_of(status),
                     Err(_) => UNKNOWN_EXIT_CODE,
                 };
-                waiter_reaped.store(true, Ordering::SeqCst);
+                *reaped = true;
+                drop(reaped);
                 *waiter_exit_code.lock().expect("exit code lock") = Some(code);
                 // The reader may be waiting on its budget rather than polling, so both are woken.
                 waiter_budget.close();
@@ -383,12 +402,33 @@ fn set_close_on_exec(fd: RawFd) {
 }
 
 /// SIGHUP to the shell's process group, as a terminal closing does; the shell leads its group.
-fn hang_up(pid: u32, reaped: &AtomicBool) {
-    if reaped.load(Ordering::SeqCst) {
+fn hang_up(pid: u32, reaped: &Mutex<bool>) {
+    let reaped = reaped.lock().expect("reaped lock");
+    if *reaped {
         return;
     }
     let group = pid as libc::pid_t;
     unsafe { libc::killpg(group, libc::SIGHUP) };
+    #[cfg(test)]
+    {
+        let sent = HANG_UPS.get();
+        HANG_UPS.set(sent + 1);
+    }
+}
+
+fn wait_without_reaping(pid: u32) -> io::Result<()> {
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    let options = libc::WEXITED | libc::WNOWAIT;
+    loop {
+        let waited = unsafe { libc::waitid(libc::P_PID, pid as libc::id_t, &mut info, options) };
+        if waited == 0 {
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
 }
 
 fn exit_code_of(status: std::process::ExitStatus) -> i32 {
@@ -599,5 +639,55 @@ mod tests {
         assert_eq!(exited, Err(7));
         // With the pty's last copy closed, the printer's next write fails and it stops.
         shells.forget(&id);
+    }
+
+    fn exited_unreaped(pid: u32) -> bool {
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let options = libc::WEXITED | libc::WNOWAIT | libc::WNOHANG;
+        let waited = unsafe { libc::waitid(libc::P_PID, pid as libc::id_t, &mut info, options) };
+        let exited = unsafe { info.si_pid() };
+        waited == 0 && exited == pid as libc::pid_t
+    }
+
+    #[test]
+    fn a_shell_is_reaped_only_while_nothing_can_hang_it_up_and_never_hung_up_after() {
+        let _alone = one_at_a_time();
+        let (inputs, _received) = mpsc::channel();
+        let budgets = Arc::new(Budgets::default());
+        let mut shells = perl_shells("<STDIN>; exit 5;".into(), inputs, budgets);
+        let id = TerminalId("reaped".into());
+        shells.start(&id, None, SIZE);
+        let pid = shells.shell_pid(&id).unwrap();
+        let reaped = shells.shells[&id].reaped.clone();
+
+        let held = reaped.lock().unwrap();
+        shells.write(&id, b"go\n");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !exited_unreaped(pid) {
+            assert!(
+                Instant::now() < deadline,
+                "the shell was never seen exited and still unreaped"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        thread::sleep(Duration::from_millis(200));
+        let while_held = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        assert_eq!(while_held, 0, "the exited shell is still ours to signal");
+        assert!(!*held, "no reap is recorded while the lock is held");
+        drop(held);
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !*reaped.lock().unwrap() {
+            assert!(Instant::now() < deadline, "the reap was never recorded");
+            thread::sleep(Duration::from_millis(10));
+        }
+        let after_reap = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        assert_eq!(after_reap, -1, "the reaped pid is no longer ours");
+
+        let before = HANG_UPS.get();
+        shells.close(&id);
+        shells.stop_all();
+        let after = HANG_UPS.get();
+        assert_eq!(after, before, "a hang-up was sent after the reap");
     }
 }

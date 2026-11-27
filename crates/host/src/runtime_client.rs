@@ -80,8 +80,16 @@ struct Shared {
     asks: Mutex<Option<HashMap<u64, mpsc::Sender<Option<RuntimeAnswer>>>>>,
     stopping: AtomicBool,
     patience: Patience,
-    exit: Mutex<Option<ExitStatus>>,
+    exit: Mutex<Exit>,
     exited: Condvar,
+    #[cfg(test)]
+    signals_sent: AtomicU64,
+}
+
+#[derive(Clone, Copy)]
+enum Exit {
+    Running,
+    Reaped(Option<ExitStatus>),
 }
 
 impl RuntimeClient {
@@ -160,20 +168,38 @@ impl RuntimeClient {
             asks: Mutex::new(Some(HashMap::new())),
             stopping: AtomicBool::new(false),
             patience,
-            exit: Mutex::new(None),
+            exit: Mutex::new(Exit::Running),
             exited: Condvar::new(),
+            #[cfg(test)]
+            signals_sent: AtomicU64::new(0),
         });
 
         let waiter_shared = shared.clone();
+        // Reaped only under the exit lock, so a signal sent while holding it never reaches a pid given to another process.
         thread::Builder::new()
             .name("wait for the runtime".into())
             .spawn(move || {
-                let status = child.wait();
-                let mut exit = waiter_shared
-                    .exit
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner);
-                *exit = status.ok();
+                let waited = wait_without_reaping(waiter_shared.pid);
+                let mut exit;
+                let status;
+                match waited {
+                    Ok(()) => {
+                        exit = waiter_shared
+                            .exit
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner);
+                        status = child.wait().ok();
+                    }
+                    Err(error) => {
+                        eprintln!("the runtime could not be waited on without reaping it: {error}");
+                        status = child.wait().ok();
+                        exit = waiter_shared
+                            .exit
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner);
+                    }
+                }
+                *exit = Exit::Reaped(status);
                 waiter_shared.exited.notify_all();
             })?;
 
@@ -260,7 +286,17 @@ impl RuntimeClient {
     }
 
     fn signal(&self, signal: libc::c_int) {
+        let exit = self
+            .shared
+            .exit
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if !exit.running() {
+            return;
+        }
         unsafe { libc::kill(self.shared.pid as libc::pid_t, signal) };
+        #[cfg(test)]
+        self.shared.signals_sent.fetch_add(1, Ordering::SeqCst);
     }
 
     /// Whether the runtime has exited, waiting up to `patience` for it.
@@ -273,9 +309,22 @@ impl RuntimeClient {
         let (exit, _) = self
             .shared
             .exited
-            .wait_timeout_while(exit, patience, |status| status.is_none())
+            .wait_timeout_while(exit, patience, |exit| exit.running())
             .unwrap_or_else(PoisonError::into_inner);
-        exit.is_some()
+        !exit.running()
+    }
+}
+
+impl Exit {
+    fn running(&self) -> bool {
+        matches!(self, Exit::Running)
+    }
+
+    fn status(&self) -> Option<ExitStatus> {
+        match self {
+            Exit::Running => None,
+            Exit::Reaped(status) => *status,
+        }
     }
 }
 
@@ -307,9 +356,9 @@ fn read_reports(
     let exit = shared.exit.lock().unwrap_or_else(PoisonError::into_inner);
     let exit = shared
         .exited
-        .wait_while(exit, |status| status.is_none())
+        .wait_while(exit, |exit| exit.running())
         .unwrap_or_else(PoisonError::into_inner);
-    let status = *exit;
+    let status = exit.status();
     drop(exit);
     if shared.stopping.load(Ordering::SeqCst) {
         return;
@@ -334,6 +383,21 @@ fn write_commands(mut control: UnixStream, queued: Receiver<RuntimeCommand>) {
             return;
         }
         eprintln!("a command for the runtime was not sent: {error}");
+    }
+}
+
+fn wait_without_reaping(pid: u32) -> io::Result<()> {
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    let options = libc::WEXITED | libc::WNOWAIT;
+    loop {
+        let waited = unsafe { libc::waitid(libc::P_PID, pid as libc::id_t, &mut info, options) };
+        if waited == 0 {
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
     }
 }
 
@@ -363,6 +427,7 @@ fn how_it_ended(status: Option<ExitStatus>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crossbeam_channel::TrySendError;
     use std::os::unix::fs::PermissionsExt;
     use std::time::Instant;
 
@@ -446,7 +511,15 @@ exit {code};
             .expect("the stop returned within the sum of its steps");
         let took = began.elapsed();
         assert!(took <= bound + SCHEDULING, "the stop took {took:?}");
-        *client.shared.exit.lock().unwrap()
+        client.shared.exit.lock().unwrap().status()
+    }
+
+    fn exited_unreaped(pid: u32) -> bool {
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let options = libc::WEXITED | libc::WNOWAIT | libc::WNOHANG;
+        let waited = unsafe { libc::waitid(libc::P_PID, pid as libc::id_t, &mut info, options) };
+        let exited = unsafe { info.si_pid() };
+        waited == 0 && exited == pid as libc::pid_t
     }
 
     #[test]
@@ -512,7 +585,7 @@ exit {code};
             panic!("the runtime is reported as dead");
         };
         assert_eq!(reason, STALLED);
-        let exit = *started.client.shared.exit.lock().unwrap();
+        let exit = started.client.shared.exit.lock().unwrap().status();
         let killed_by = exit.and_then(|status| status.signal());
         assert_eq!(killed_by, Some(libc::SIGKILL));
     }
@@ -607,5 +680,55 @@ exit {code};
         started.client.stop();
         // The reader drops `on_event` as it ends, so this returns once it has, with an event only if it sent one.
         assert!(received.recv().is_err());
+    }
+
+    #[test]
+    fn a_runtime_is_reaped_only_while_nothing_can_signal_it_and_never_signalled_after() {
+        let program = stand_in("reaped-under-the-lock", 5);
+        let started = started_quick(&program.path);
+        let client = &started.client;
+        let pid = client.shared.pid;
+
+        let held = client.shared.exit.lock().unwrap();
+        client.send(RuntimeCommand::Scrollback { lines: 1 });
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !exited_unreaped(pid) {
+            assert!(
+                Instant::now() < deadline,
+                "the stand-in was never seen exited and still unreaped"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        thread::sleep(Duration::from_millis(200));
+        let while_held = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        assert_eq!(while_held, 0, "the exited runtime is still ours to signal");
+        assert!(held.running(), "no reap is recorded while the lock is held");
+        drop(held);
+
+        let reaped = client.wait_for_exit(Duration::from_secs(2));
+        assert!(reaped, "the reap is recorded once the lock is free");
+        let after_reap = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        assert_eq!(after_reap, -1, "the reaped pid is no longer ours");
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let queued = client
+                .shared
+                .commands
+                .try_send(RuntimeCommand::Scrollback { lines: 1 });
+            if let Err(TrySendError::Disconnected(_)) = queued {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the writer never gave up on the gone runtime, so a stop would not reach its signals"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        let before = client.shared.signals_sent.load(Ordering::SeqCst);
+        client.stop();
+        client.end_stalled();
+        let after = client.shared.signals_sent.load(Ordering::SeqCst);
+        assert_eq!(after, before, "a signal was sent after the reap");
     }
 }
