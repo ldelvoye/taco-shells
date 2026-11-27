@@ -513,8 +513,9 @@ fn full_board() -> Board {
     let document = SharedTarget::File {
         path: checkout_file(CHECKOUT_DOCUMENT),
     };
+    let finding_length = FINDING_BODY.chars().count() as u64;
     let text = SharedTarget::Text {
-        characters: FINDING_BODY.chars().count(),
+        characters: finding_length,
     };
     let shared = vec![
         thing(
