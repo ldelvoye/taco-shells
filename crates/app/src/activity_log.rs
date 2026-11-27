@@ -303,12 +303,16 @@ fn stretch_members(entries: &[ActivityEntry]) -> BTreeMap<u64, Members> {
     stretches
 }
 
+// A compaction or a resume carries the same turn on, so only a new or a cleared session starts one.
 fn newest_turn_start(entries: &[ActivityEntry]) -> Option<u64> {
     let mut newest = None;
     for entry in entries {
         let starts_a_turn = matches!(
             entry.kind,
-            ActivityKind::Asked { .. } | ActivityKind::SessionStarted { .. }
+            ActivityKind::Asked { .. }
+                | ActivityKind::SessionStarted {
+                    source: StartSource::New | StartSource::Cleared
+                }
         );
         if starts_a_turn {
             newest = Some(entry.seq);
@@ -440,6 +444,15 @@ mod tests {
             self.open = None;
             let text = "a prompt".to_string();
             self.push(Author::User, ActivityKind::Asked { text });
+            self
+        }
+
+        fn started(&mut self, source: StartSource) -> &mut Self {
+            let ends_the_stretch = matches!(source, StartSource::New | StartSource::Cleared);
+            if ends_the_stretch {
+                self.open = None;
+            }
+            self.push(Author::App, ActivityKind::SessionStarted { source });
             self
         }
 
@@ -600,6 +613,17 @@ mod tests {
         writer.ran().noted();
         let noted_while_working = outline(&log_items(&writer.log(), true));
         assert_eq!(noted_while_working[0], "note 17 #16 [16]");
+
+        writer.asked().ran().started(StartSource::Compacted);
+        let compacted = outline(&log_items(&writer.log(), true));
+        assert_eq!(compacted[..2], ["session 20", "working #19 [19]"]);
+
+        writer.started(StartSource::New);
+        let new_session = outline(&log_items(&writer.log(), true));
+        assert_eq!(
+            new_session[..3],
+            ["session 21", "session 20", "unnoted #19 [19]"]
+        );
     }
 
     #[test]
