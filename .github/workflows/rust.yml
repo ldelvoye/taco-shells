@@ -14,6 +14,11 @@ on:
       - "rust-toolchain.toml"
       - ".cargo/**"
       - ".github/workflows/rust.yml"
+      # Read into the bundle or the app at build time.
+      - "hooks/**"
+      - "resources/**"
+      - "branding/**"
+      - "install.sh"
   push:
     branches: [main]
     paths: *rust-paths
