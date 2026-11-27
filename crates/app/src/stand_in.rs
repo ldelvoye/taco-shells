@@ -6,6 +6,7 @@ use std::rc::Rc;
 
 use futures::channel::mpsc::unbounded;
 use serde_json::Map;
+use taco_host::{ServicesOutput, ServicesPort, WindowOutput, WindowSender, WorkspacePort};
 use taco_protocol::{
     ActivityEntry, ActivityEvent, ActivityRequest, Arrangement, Board, DrawnState, HarnessId,
     Panels, RequestReply, TabGroupId, TerminalId, WorkspaceRequest,
@@ -17,7 +18,7 @@ use taco_rules::{
 use taco_services::{AgentMenuAction, AgentSetupNoticeKind, AgentSetupView, done_text};
 use taco_settings::{Appearance, Config, KeymapChange, SettingChange, apply_settings_layer};
 
-use crate::link::{Ports, ServicesOutput, ServicesPort, WindowOutput, WindowSender, WorkspacePort};
+use crate::link::Ports;
 use crate::window::Shown;
 
 // Without a config to write into, the stand-in refuses every write.
