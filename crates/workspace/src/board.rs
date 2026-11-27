@@ -85,11 +85,16 @@ impl TerminalBoard {
     pub fn share(&mut self, sharing: Sharing) -> SharedThing {
         let id = self.next_thing;
         self.next_thing += 1;
-        let target = match sharing.target {
+        let mut target = match sharing.target {
             Some(target) => target,
             None => text_target(sharing.body.as_deref()),
         };
         if !matches!(target, SharedTarget::Text { .. }) {
+            let mut kept_things = self.shared.iter();
+            let replaced = kept_things.find(|kept| same_place(&kept.thing.target, &target));
+            if let Some(replaced) = replaced {
+                keep_seen_state(&replaced.thing.target, &mut target);
+            }
             self.shared
                 .retain(|kept| !same_place(&kept.thing.target, &target));
         }
@@ -199,6 +204,29 @@ fn text_target(body: Option<&str>) -> SharedTarget {
         characters = body.chars().count() as u64;
     }
     SharedTarget::Text { characters }
+}
+
+// A share never sees a pull request's state, so a state the app saw outlasts sharing the pull request again.
+fn keep_seen_state(replaced: &SharedTarget, target: &mut SharedTarget) {
+    let SharedTarget::PullRequest {
+        state: seen_state,
+        checked_ms: Some(seen_ms),
+        ..
+    } = replaced
+    else {
+        return;
+    };
+    let SharedTarget::PullRequest {
+        state, checked_ms, ..
+    } = target
+    else {
+        return;
+    };
+    if checked_ms.is_some() {
+        return;
+    }
+    *state = *seen_state;
+    *checked_ms = Some(*seen_ms);
 }
 
 // The same link, file or pull request. A pull request is known by its link: a number alone can be any repository's.
@@ -355,6 +383,33 @@ mod tests {
             (state, checked_ms),
             (PrState::Open, None),
             "a new one seen only in an edit has no state anyone saw"
+        );
+
+        // the app sees a draft opened, then the agent shares the same pull request
+        let drafted = "https://github.com/o/r/pull/9";
+        board.pull_request_seen(seen(Some(drafted), 9, Some(PrState::Draft)), 80);
+        let shared_as = |state: PrState, checked_ms: Option<u64>| {
+            let mut sharing = text_sharing("Fix the logo (draft)".into());
+            sharing.target = Some(SharedTarget::PullRequest {
+                url: Some(drafted.into()),
+                number: 9,
+                state,
+                checked_ms,
+            });
+            sharing
+        };
+        let shared = board.share(shared_as(PrState::Open, None));
+        assert_eq!(shared.title, "Fix the logo (draft)", "the agent's words");
+        assert_eq!(
+            states(&board)[0],
+            (Some(drafted.to_string()), PrState::Draft, Some(80)),
+            "the state the app saw outlasts the share"
+        );
+        board.share(shared_as(PrState::Merged, Some(90)));
+        assert_eq!(
+            states(&board)[0],
+            (Some(drafted.to_string()), PrState::Merged, Some(90)),
+            "a state seen later wins"
         );
     }
 }
