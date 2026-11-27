@@ -6,7 +6,6 @@ const STATUS_OLD_SETUP: &str = "Set up the old way";
 const STATUS_ON: &str = "On";
 const STATUS_PLUGIN_DIRS_HIDDEN: &str = "Its settings hide the plugin";
 const STATUS_PLUGIN_DIRS_MANAGED: &str = "Blocked by managed settings";
-const SCRIPT_RUNNER: &str = "node";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PluginDirs {
@@ -112,43 +111,6 @@ pub fn agent_menu_of(state: &AgentSetupState, product_name: &str) -> AgentMenu {
     }
 }
 
-fn base_name_of(word: &str) -> &str {
-    let slash = word.rfind('/');
-    match slash {
-        Some(index) => &word[index + 1..],
-        None => word,
-    }
-}
-
-fn runs_command(command_line: &str, commands: &[&str]) -> bool {
-    let words: Vec<&str> = command_line.split_whitespace().collect();
-    let Some(first) = words.first() else {
-        return false;
-    };
-    let program = base_name_of(first);
-    if commands.contains(&program) {
-        return true;
-    }
-    // A CLI installed through npm shows in the process list as "node <path>/<name>".
-    if program != SCRIPT_RUNNER {
-        return false;
-    }
-    let Some(second) = words.get(1) else {
-        return false;
-    };
-    let script = base_name_of(second);
-    commands.contains(&script)
-}
-
-pub fn runs_agent(command_lines: &[String], commands: &[&str]) -> bool {
-    for command_line in command_lines {
-        if runs_command(command_line, commands) {
-            return true;
-        }
-    }
-    false
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,26 +197,6 @@ mod tests {
             let menu = agent_menu_of(&state, "Claude Code");
             assert_eq!(menu.enabled, enabled, "{state:?}");
             assert_eq!(menu.action, AgentMenuAction::SetUp);
-        }
-    }
-
-    #[test]
-    fn an_agent_runs_as_its_program_or_as_node_running_its_script() {
-        let commands = ["claude"];
-        let runs = [
-            "claude --resume x",
-            "node /usr/lib/node_modules/@anthropic-ai/claude-code/claude",
-            "/opt/bin/claude",
-            "node /x/claude",
-        ];
-        for line in runs {
-            let lines = [line.to_string()];
-            assert!(runs_agent(&lines, &commands), "{line}");
-        }
-        let does_not_run = ["vim claude.md", "node", "", "node /x/cli.js"];
-        for line in does_not_run {
-            let lines = [line.to_string()];
-            assert!(!runs_agent(&lines, &commands), "{line}");
         }
     }
 }

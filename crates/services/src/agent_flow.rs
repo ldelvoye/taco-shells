@@ -1,29 +1,17 @@
-use std::fs;
-use std::io;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use taco_agents::{HARNESSES, HarnessSetup};
 use taco_protocol::HarnessId;
 
-use crate::agent_hooks::{HookEdit, has_managed_entries, remove_managed_entries};
+use crate::agent_hooks::{has_managed_entries, remove_managed_entries};
 use crate::agent_setup_state::{
-    AgentSetupFacts, AgentSetupState, PluginDirs, agent_setup_state_of, shown_with_tilde,
+    AgentSetupFacts, AgentSetupState, PluginDirs, agent_setup_state_of,
 };
 use crate::config_files::plugin_directory_path;
 use crate::file_write::{read_text, write_if_unchanged};
-use crate::plugin_dirs::{
-    Appended, MANAGED_SETTINGS_PATH, PluginDirsRecord, append_folder, plugin_dirs_of, read_record,
-    remove_record, restore_value, write_record,
-};
-
-const HOOKS_DIRECTORY_NAME: &str = "hooks";
-const SCRIPT_MODE: u32 = 0o755;
-const HOOK_SCRIPT_NAMES: [&str; 2] = ["taco-shells-attention.sh", "taco-shells-claude-session.sh"];
-const STUB_SCRIPT: &str = "#!/bin/sh\nexit 0\n";
-
-static STUB_WRITES: AtomicU64 = AtomicU64::new(0);
+use crate::hook_scripts::hooks_directory;
+use crate::plugin_dirs::{MANAGED_SETTINGS_PATH, plugin_dirs_of};
+use crate::settings_edit::HookEdit;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AgentPaths {
@@ -40,38 +28,6 @@ pub(crate) struct Agent {
     pub(crate) harness_id: HarnessId,
     pub(crate) setup: &'static HarnessSetup,
     pub(crate) paths: AgentPaths,
-}
-
-pub fn hooks_directory(config_directory: &Path) -> PathBuf {
-    config_directory.join(HOOKS_DIRECTORY_NAME)
-}
-
-fn write_stub(target: &Path, name: &str) -> io::Result<()> {
-    let process = std::process::id();
-    let counter = STUB_WRITES.fetch_add(1, Ordering::Relaxed);
-    let temporary_name = format!(".{name}.{process}.{counter}.taco-tmp");
-    let temporary = target.with_file_name(temporary_name);
-    let written = fs::write(&temporary, STUB_SCRIPT);
-    let mode = fs::Permissions::from_mode(SCRIPT_MODE);
-    let marked = written.and_then(|()| fs::set_permissions(&temporary, mode));
-    let renamed = marked.and_then(|()| fs::rename(&temporary, target));
-    if renamed.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    renamed
-}
-
-pub fn stub_hook_scripts(destination: &Path) -> Vec<String> {
-    let mut problems = Vec::new();
-    for name in HOOK_SCRIPT_NAMES {
-        let target = destination.join(name);
-        let stubbed = write_stub(&target, name);
-        if let Err(error) = stubbed {
-            let shown = target.display();
-            problems.push(format!("{shown} could not be replaced: {error}"));
-        }
-    }
-    problems
 }
 
 fn agent_paths_of(
@@ -116,12 +72,16 @@ pub(crate) fn agents_of(
     agents
 }
 
-fn read_settings(path: &Path) -> Result<Option<String>, String> {
+pub(crate) fn read_settings(path: &Path) -> Result<Option<String>, String> {
     let shown = path.display().to_string();
     read_text(path, &shown)
 }
 
-fn write_settings(path: &Path, original: Option<&str>, text: &str) -> Result<(), String> {
+pub(crate) fn write_settings(
+    path: &Path,
+    original: Option<&str>,
+    text: &str,
+) -> Result<(), String> {
     let shown = path.display().to_string();
     write_if_unchanged(path, &shown, original, text)
 }
@@ -134,11 +94,11 @@ fn write_edit(agent: &Agent, original: Option<&str>, edit: HookEdit) -> Result<(
     }
 }
 
-fn label_of(agent: &Agent) -> String {
+pub(crate) fn label_of(agent: &Agent) -> String {
     agent.paths.settings_path.display().to_string()
 }
 
-fn plugin_dirs_reading(agent: &Agent, user_text: Option<&str>) -> PluginDirs {
+pub(crate) fn plugin_dirs_reading(agent: &Agent, user_text: Option<&str>) -> PluginDirs {
     let managed_read = read_settings(&agent.paths.managed_settings_path);
     let managed_readable = managed_read.ok();
     let managed_text = managed_readable.flatten();
@@ -175,86 +135,6 @@ pub(crate) fn read_state(
     agent_setup_state_of(&facts)
 }
 
-pub(crate) fn hides_plugin_folder(agent: &Agent) -> bool {
-    let read = read_settings(&agent.paths.settings_path);
-    let readable = read.ok();
-    let text = readable.flatten();
-    let reading = plugin_dirs_reading(agent, text.as_deref());
-    matches!(reading, PluginDirs::Hides { .. })
-}
-
-fn not_added_problem(file: &str, reason: &str) -> String {
-    format!("This app's plugin folder could not be added to {file}: {reason}")
-}
-
-fn not_taken_out_problem(file: &str, reason: &str) -> String {
-    format!("This app's plugin folder could not be taken out of {file}: {reason}")
-}
-
-/// The settings file the folder was added to, shown with `~`, or none when nothing needed writing.
-pub(crate) fn add_plugin_folder(
-    agent: &Agent,
-    config_directory: &Path,
-) -> Result<Option<String>, String> {
-    let file = label_of(agent);
-    let read = read_settings(&agent.paths.settings_path);
-    let found = read.map_err(|reason| not_added_problem(&file, &reason))?;
-    let Some(text) = found else {
-        return Ok(None);
-    };
-    let folder = &agent.paths.plugin_folder;
-    let home = &agent.paths.home;
-    let variable = agent.setup.plugin_variable;
-    let edit = append_folder(&text, folder, home, &file, variable);
-    let (changed, before, after) = match edit {
-        Appended::Changed {
-            text,
-            before,
-            after,
-        } => (text, before, after),
-        Appended::Unchanged => return Ok(None),
-        Appended::Refused(reason) => return Err(not_added_problem(&file, &reason)),
-    };
-    let record = PluginDirsRecord {
-        settings: agent.paths.settings_path.clone(),
-        before,
-        after,
-    };
-    let recorded = write_record(config_directory, &record);
-    recorded.map_err(|error| not_added_problem(&file, &error.to_string()))?;
-    let original = Some(text.as_str());
-    let written = write_settings(&agent.paths.settings_path, original, &changed);
-    if let Err(reason) = written {
-        let _ = remove_record(config_directory);
-        return Err(not_added_problem(&file, &reason));
-    }
-    let shown = shown_with_tilde(&agent.paths.settings_path, home);
-    Ok(Some(shown))
-}
-
-pub(crate) fn remove_plugin_folder(config_directory: &Path, variable: &str) -> Result<(), String> {
-    let Some(record) = read_record(config_directory) else {
-        return Ok(());
-    };
-    let file = record.settings.display().to_string();
-    let read = read_settings(&record.settings);
-    let found = read.map_err(|reason| not_taken_out_problem(&file, &reason))?;
-    let mut written = Ok(());
-    if let Some(text) = found {
-        let edit = restore_value(&text, &record.before, &record.after, &file, variable);
-        match edit {
-            HookEdit::Changed(changed) => {
-                written = write_settings(&record.settings, Some(text.as_str()), &changed);
-            }
-            HookEdit::Unchanged => {}
-            HookEdit::Refused(reason) => return Err(not_taken_out_problem(&file, &reason)),
-        }
-    }
-    written.map_err(|reason| not_taken_out_problem(&file, &reason))?;
-    let removed = remove_record(config_directory);
-    removed.map_err(|error| not_taken_out_problem(&file, &error.to_string()))
-}
-
 pub(crate) fn remove_old_setup(agent: &Agent) -> Result<(), String> {
     let read = read_settings(&agent.paths.settings_path)?;
     let Some(text) = read else {
@@ -268,7 +148,8 @@ pub(crate) fn remove_old_setup(agent: &Agent) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::symlink;
+    use std::fs;
+    use std::os::unix::fs::{PermissionsExt, symlink};
 
     use serde_json::Value;
     use tempfile::TempDir;

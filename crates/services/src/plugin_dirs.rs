@@ -7,9 +7,9 @@ use jsonc_parser::parse_to_serde_value;
 use serde_json::{Value, json};
 use taco_settings::JSONC_PARSE_OPTIONS;
 
-use crate::agent_hooks::{HookEdit, properties_named, uneditable_problem, unreadable_problem};
 use crate::agent_setup_state::PluginDirs;
 use crate::file_write::replace_file;
+use crate::settings_edit::{HookEdit, properties_named, uneditable_problem, unreadable_problem};
 
 pub(crate) const MANAGED_SETTINGS_PATH: &str =
     "/Library/Application Support/ClaudeCode/managed-settings.json";
