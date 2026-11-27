@@ -24,6 +24,8 @@ pub struct Log {
     open_stretch: Option<u64>,
     /// The `prompt_id` of the agent's current turn; a message that arrives during the turn carries the same one.
     turn: Option<String>,
+    /// The agent session the open stretch and the turn belong to.
+    session: Option<String>,
 }
 
 /// A page of entries, oldest first, and whether nothing older is kept.
@@ -121,8 +123,14 @@ impl Log {
         self.append(Author::User, kind, at_ms)
     }
 
-    /// A new agent session in the terminal: the open stretch ends with no note, and so does the turn.
-    pub fn session_started(&mut self) {
+    /// An agent session starting in the terminal. A new session ends the open stretch with no note, and the turn with it;
+    /// the same session starting again, as after a compaction, carries on with both.
+    pub fn session_started(&mut self, session_id: &str) {
+        let same_session = self.session.as_deref() == Some(session_id);
+        if same_session {
+            return;
+        }
+        self.session = Some(session_id.to_string());
         self.open_stretch = None;
         self.turn = None;
     }

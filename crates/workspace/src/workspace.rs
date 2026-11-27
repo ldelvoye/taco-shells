@@ -679,10 +679,8 @@ impl Workspace {
                     cwd,
                 };
                 self.sessions.record_start(terminal, session);
-                // a log not loaded yet has no stretch open
-                if let Some(log) = self.logs.get_mut(terminal) {
-                    log.session_started();
-                }
+                let log = loaded_log(&mut self.logs, self.options.storage.as_ref(), terminal);
+                log.session_started(&session_id);
                 let mut signal = AgentSignal::Start;
                 if has_conversation {
                     signal = AgentSignal::Resume;
