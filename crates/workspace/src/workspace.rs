@@ -521,7 +521,6 @@ impl Workspace {
         let start = TerminalStart {
             id: terminal,
             directory: shell.directory,
-            directory_of: shell.directory_of,
             command: shell.command,
             size: INITIAL_SIZE,
         };

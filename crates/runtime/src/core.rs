@@ -191,12 +191,7 @@ impl<S: Shells> Core<S> {
             return;
         }
 
-        let mut requested = start.directory;
-        if requested.is_none()
-            && let Some(other) = &start.directory_of
-        {
-            requested = self.shells.directory(other);
-        }
+        let requested = start.directory;
 
         let terminal = match self.new_terminal(start.size) {
             Ok(terminal) => terminal,

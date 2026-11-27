@@ -27,10 +27,8 @@ pub struct CellSize {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TerminalStart {
     pub id: TerminalId,
-    /// The directory to start in. When none, `directory_of` is tried, then the home directory.
+    /// The directory to start in; the home directory when none.
     pub directory: Option<String>,
-    /// A terminal whose current directory to start in, looked up when the shell is started.
-    pub directory_of: Option<TerminalId>,
     /// Typed into the shell once it has started.
     pub command: Option<String>,
     pub size: TerminalSize,
