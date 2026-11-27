@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use taco_agents::{HARNESSES, Harness};
 use taco_protocol::{HarnessId, TerminalId};
 
 use crate::agent_flow::{
@@ -15,7 +16,7 @@ use crate::agent_flow::{
 use crate::agent_setup_state::{
     AgentMenu, AgentMenuAction, AgentSetupState, agent_menu_of, runs_agent,
 };
-use crate::claude_version::{MINIMUM_VERSION, claude_version, find_claude};
+use crate::agent_version::{find_program, program_version};
 use crate::config_files::plugin_directory_path;
 use crate::plugin_folder::refresh_plugin_folder;
 use crate::sync::lock;
@@ -147,10 +148,21 @@ fn real_env(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
-fn installed_claude_version(home: Option<&Path>) -> Option<Version> {
+fn installed_version(home: Option<&Path>, harness: &'static Harness) -> Option<Version> {
     let home = home?;
-    let claude = find_claude(home)?;
-    claude_version(&claude)
+    let setup = harness.setup()?;
+    let command = setup.commands[0];
+    let program = find_program(home, command)?;
+    program_version(&program, harness)
+}
+
+fn probed_harness() -> Option<&'static Harness> {
+    for harness in HARNESSES {
+        if harness.setup().is_some() {
+            return Some(*harness);
+        }
+    }
+    None
 }
 
 fn is_awaiting(state: &AgentSetupState) -> bool {
@@ -160,16 +172,14 @@ fn is_awaiting(state: &AgentSetupState) -> bool {
     )
 }
 
-pub fn plugin_dirs_hidden_text(product_name: &str, file: &str) -> String {
+pub fn plugin_dirs_hidden_text(product_name: &str, variable: &str, file: &str) -> String {
     format!(
-        "{product_name} can't load this app's plugin, because {file} sets CLAUDE_CODE_PLUGIN_DIRS. Set up adds this app's folder to it."
+        "{product_name} can't load this app's plugin, because {file} sets {variable}. Set up adds this app's folder to it."
     )
 }
 
-fn plugin_dirs_managed_reason(product_name: &str) -> String {
-    format!(
-        "{product_name}'s managed settings set CLAUDE_CODE_PLUGIN_DIRS, so this app's plugin can't load."
-    )
+fn plugin_dirs_managed_reason(product_name: &str, variable: &str) -> String {
+    format!("{product_name}'s managed settings set {variable}, so this app's plugin can't load.")
 }
 
 fn plugin_dirs_managed_text(product_name: &str) -> String {
@@ -190,8 +200,8 @@ fn old_setup_text(product_name: &str) -> String {
     )
 }
 
-pub fn too_old_reason(product_name: &str, version: &str) -> String {
-    let (major, minor, patch) = MINIMUM_VERSION;
+pub fn too_old_reason(product_name: &str, minimum: (u32, u32, u32), version: &str) -> String {
+    let (major, minor, patch) = minimum;
     format!(
         "Agent Activity needs {product_name} {major}.{minor}.{patch} or later; this Mac has {version}."
     )
@@ -223,6 +233,8 @@ fn notice_of(
         return None;
     }
     let product_name = reading.agent.setup.product_name;
+    let variable = reading.agent.setup.plugin_variable;
+    let minimum = reading.agent.setup.minimum_version;
     let harness = reading.agent.harness_id.clone();
     let terminals: Vec<TerminalId> = seen.iter().cloned().collect();
     let notice_with = |kind: AgentSetupNoticeKind, text: String, detail: Option<String>| {
@@ -270,15 +282,16 @@ fn notice_of(
             let kind = AgentSetupNoticeKind::Offer {
                 action: AgentMenuAction::SetUp,
             };
-            notice(kind, plugin_dirs_hidden_text(product_name, file))
+            let text = plugin_dirs_hidden_text(product_name, variable, file);
+            notice(kind, text)
         }
         AgentSetupState::PluginDirsManaged => {
-            let reason = plugin_dirs_managed_reason(product_name);
+            let reason = plugin_dirs_managed_reason(product_name, variable);
             let kind = AgentSetupNoticeKind::Unavailable { reason };
             notice(kind, plugin_dirs_managed_text(product_name))
         }
         AgentSetupState::TooOld { version } => {
-            let reason = too_old_reason(product_name, version);
+            let reason = too_old_reason(product_name, minimum, version);
             let kind = AgentSetupNoticeKind::Unavailable { reason };
             notice(kind, offer_text(product_name))
         }
@@ -611,8 +624,10 @@ impl AgentSetups {
             Some(home) => agents_of(&config_directory, &real_env, home),
             None => Vec::new(),
         };
-        let find_version: VersionFinder =
-            Box::new(move || installed_claude_version(home.as_deref()));
+        let find_version: VersionFinder = Box::new(move || {
+            let harness = probed_harness()?;
+            installed_version(home.as_deref(), harness)
+        });
         let files = SetupFiles {
             config_directory,
             plugin_program,
@@ -721,9 +736,13 @@ impl AgentSetups {
             check_version(&self.shared);
         } else {
             // Only while the line is still exactly what this app wrote; otherwise it is the user's.
-            let taken_out = remove_plugin_folder(&self.shared.files.config_directory);
-            if let Err(problem) = taken_out {
-                problems.push(problem);
+            let config_directory = &self.shared.files.config_directory;
+            for agent in &self.shared.agents {
+                let variable = agent.setup.plugin_variable;
+                let taken_out = remove_plugin_folder(config_directory, variable);
+                if let Err(problem) = taken_out {
+                    problems.push(problem);
+                }
             }
             let mut state = lock(&self.shared.state);
             state
@@ -1248,7 +1267,8 @@ mod tests {
         let offer_view = next_offer_covering(&views, &id);
         let product_name = environment.agent.setup.product_name;
         let shown = settings_path.display().to_string();
-        let expected = plugin_dirs_hidden_text(product_name, &shown);
+        let variable = environment.agent.setup.plugin_variable;
+        let expected = plugin_dirs_hidden_text(product_name, variable, &shown);
         assert_eq!(offer_view.notices[0].text, expected);
         let menu = &offer_view.menus[0].menu;
         assert_eq!(menu.status, "Its settings hide the plugin");

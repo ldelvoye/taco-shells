@@ -4,7 +4,7 @@ mod agent_flow;
 mod agent_hooks;
 mod agent_setup_state;
 mod agent_setups;
-mod claude_version;
+mod agent_version;
 mod config_files;
 mod config_store;
 mod config_writer;
@@ -26,7 +26,6 @@ pub use agent_setups::{
     AgentSetupsHost, PluginHeard, changed_file_text, done_text, offer_text,
     plugin_dirs_hidden_text, too_old_reason,
 };
-pub use claude_version::{MINIMUM_VERSION, claude_version, find_claude, is_too_old, parse_version};
 pub use config_files::{
     ConfigRead, config_file_path, focus_port_path, plugin_directory_path, read_config_files,
     seed_config_files,

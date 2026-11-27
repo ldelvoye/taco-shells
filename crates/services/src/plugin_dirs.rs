@@ -14,7 +14,6 @@ use crate::file_write::replace_file;
 pub(crate) const MANAGED_SETTINGS_PATH: &str =
     "/Library/Application Support/ClaudeCode/managed-settings.json";
 
-const PLUGIN_DIRS_VARIABLE: &str = "CLAUDE_CODE_PLUGIN_DIRS";
 const ENV_KEY: &str = "env";
 const RECORD_FILE_NAME: &str = "claude-plugin-dirs.json";
 const SETTINGS_FIELD: &str = "settings";
@@ -45,14 +44,14 @@ enum Located {
     Found(CstObjectProp),
 }
 
-fn plugin_dirs_value(text: &str) -> Option<String> {
+fn plugin_dirs_value(text: &str, variable: &str) -> Option<String> {
     let parsed = parse_to_serde_value(text, &JSONC_PARSE_OPTIONS);
     let Ok(Some(Value::Object(root))) = parsed else {
         return None;
     };
     let env = root.get(ENV_KEY)?;
-    let variable = env.get(PLUGIN_DIRS_VARIABLE)?;
-    let value = variable.as_str()?;
+    let entry = env.get(variable)?;
+    let value = entry.as_str()?;
     Some(value.to_string())
 }
 
@@ -92,14 +91,15 @@ pub(crate) fn plugin_dirs_of(
     managed_text: Option<&str>,
     folder: &Path,
     home: &Path,
+    variable: &str,
 ) -> PluginDirs {
-    let managed_value = managed_text.and_then(plugin_dirs_value);
+    let managed_value = managed_text.and_then(|text| plugin_dirs_value(text, variable));
     if let Some(value) = &managed_value
         && !lists_folder(value, folder, home)
     {
         return PluginDirs::ManagedHides;
     }
-    let user_value = user_text.and_then(plugin_dirs_value);
+    let user_value = user_text.and_then(|text| plugin_dirs_value(text, variable));
     if let Some(value) = &user_value
         && !lists_folder(value, folder, home)
     {
@@ -113,7 +113,7 @@ pub(crate) fn plugin_dirs_of(
     PluginDirs::Unset
 }
 
-fn locate(root: &CstRootNode) -> Located {
+fn locate(root: &CstRootNode, variable: &str) -> Located {
     let Some(object) = root.object_value() else {
         return Located::Missing;
     };
@@ -127,14 +127,14 @@ fn locate(root: &CstRootNode) -> Located {
     let Some(env) = object.object_value(ENV_KEY) else {
         return Located::Missing;
     };
-    let variable_count = properties_named(&env, PLUGIN_DIRS_VARIABLE);
+    let variable_count = properties_named(&env, variable);
     if variable_count == 0 {
         return Located::Missing;
     }
     if variable_count > 1 {
         return Located::Ambiguous;
     }
-    match env.get(PLUGIN_DIRS_VARIABLE) {
+    match env.get(variable) {
         Some(property) => Located::Found(property),
         None => Located::Missing,
     }
@@ -146,12 +146,18 @@ fn string_of(property: &CstObjectProp) -> Option<String> {
     literal.decoded_value().ok()
 }
 
-pub(crate) fn append_folder(text: &str, folder: &Path, home: &Path, label: &str) -> Appended {
+pub(crate) fn append_folder(
+    text: &str,
+    folder: &Path,
+    home: &Path,
+    label: &str,
+    variable: &str,
+) -> Appended {
     let parsed = CstRootNode::parse(text, &JSONC_PARSE_OPTIONS);
     let Ok(root) = parsed else {
         return Appended::Refused(unreadable_problem(label));
     };
-    let property = match locate(&root) {
+    let property = match locate(&root, variable) {
         Located::Missing => return Appended::Unchanged,
         Located::Ambiguous => return Appended::Refused(uneditable_problem(label)),
         Located::Found(property) => property,
@@ -175,12 +181,18 @@ pub(crate) fn append_folder(text: &str, folder: &Path, home: &Path, label: &str)
     }
 }
 
-pub(crate) fn restore_value(text: &str, before: &str, after: &str, label: &str) -> HookEdit {
+pub(crate) fn restore_value(
+    text: &str,
+    before: &str,
+    after: &str,
+    label: &str,
+    variable: &str,
+) -> HookEdit {
     let parsed = CstRootNode::parse(text, &JSONC_PARSE_OPTIONS);
     let Ok(root) = parsed else {
         return HookEdit::Refused(unreadable_problem(label));
     };
-    let property = match locate(&root) {
+    let property = match locate(&root, variable) {
         Located::Missing => return HookEdit::Unchanged,
         Located::Ambiguous => return HookEdit::Refused(uneditable_problem(label)),
         Located::Found(property) => property,
@@ -262,8 +274,13 @@ mod tests {
         PathBuf::from("/h")
     }
 
+    fn variable() -> &'static str {
+        taco_agents::CLAUDE.setup().unwrap().plugin_variable
+    }
+
     fn with_value(value: &str) -> String {
-        let key = format!("\"{PLUGIN_DIRS_VARIABLE}\": \"{value}\"");
+        let variable = variable();
+        let key = format!("\"{variable}\": \"{value}\"");
         format!("{{\"env\": {{{key}}}}}")
     }
 
@@ -294,14 +311,22 @@ mod tests {
         let listing = with_value("/other:~/.taco-shells/claude-plugin");
         let no_env = "{\"model\": \"opus\"}";
 
-        let managed_over_user =
-            plugin_dirs_of(Some(&listing), &file, Some(&lacking), &folder, &home);
+        let variable = variable();
+
+        let managed_over_user = plugin_dirs_of(
+            Some(&listing),
+            &file,
+            Some(&lacking),
+            &folder,
+            &home,
+            variable,
+        );
         assert_eq!(managed_over_user, PluginDirs::ManagedHides);
-        let hides = plugin_dirs_of(Some(&lacking), &file, None, &folder, &home);
+        let hides = plugin_dirs_of(Some(&lacking), &file, None, &folder, &home, variable);
         assert_eq!(hides, PluginDirs::Hides { file: file.clone() });
-        let lists = plugin_dirs_of(Some(&listing), &file, None, &folder, &home);
+        let lists = plugin_dirs_of(Some(&listing), &file, None, &folder, &home, variable);
         assert_eq!(lists, PluginDirs::Lists);
-        let unset = plugin_dirs_of(Some(no_env), &file, None, &folder, &home);
+        let unset = plugin_dirs_of(Some(no_env), &file, None, &folder, &home, variable);
         assert_eq!(unset, PluginDirs::Unset);
     }
 
@@ -309,8 +334,9 @@ mod tests {
     fn appending_changes_only_the_one_string() {
         let folder = folder();
         let home = home();
+        let variable = variable();
 
-        let edit = append_folder(USER_FILE, &folder, &home, LABEL);
+        let edit = append_folder(USER_FILE, &folder, &home, LABEL, variable);
 
         let expected = USER_FILE.replace("face-band\"", &format!("face-band:{FOLDER}\""));
         let before = "~/.claude/mods/face-band".to_string();
@@ -325,26 +351,26 @@ mod tests {
         );
         let absent = "{\"env\": {\"OTHER\": \"1\"}}";
         assert_eq!(
-            append_folder(absent, &folder, &home, LABEL),
+            append_folder(absent, &folder, &home, LABEL, variable),
             Appended::Unchanged
         );
         let listed = with_value("~/.taco-shells/claude-plugin");
         assert_eq!(
-            append_folder(&listed, &folder, &home, LABEL),
+            append_folder(&listed, &folder, &home, LABEL, variable),
             Appended::Unchanged
         );
-        let number = format!("{{\"env\": {{\"{PLUGIN_DIRS_VARIABLE}\": 5}}}}");
+        let number = format!("{{\"env\": {{\"{variable}\": 5}}}}");
         assert_eq!(
-            append_folder(&number, &folder, &home, LABEL),
+            append_folder(&number, &folder, &home, LABEL, variable),
             Appended::Unchanged
         );
-        let key = format!("\"{PLUGIN_DIRS_VARIABLE}\"");
+        let key = format!("\"{variable}\"");
         let duplicated = format!("{{\"env\": {{{key}: \"/a\", {key}: \"/b\"}}}}");
-        let ambiguous = append_folder(&duplicated, &folder, &home, LABEL);
+        let ambiguous = append_folder(&duplicated, &folder, &home, LABEL, variable);
         assert!(matches!(ambiguous, Appended::Refused(_)));
-        let restored = restore_value(&duplicated, "/a", "/b", LABEL);
+        let restored = restore_value(&duplicated, "/a", "/b", LABEL, variable);
         assert!(matches!(restored, HookEdit::Refused(_)));
-        let broken = append_folder("{ not json", &folder, &home, LABEL);
+        let broken = append_folder("{ not json", &folder, &home, LABEL, variable);
         assert!(matches!(broken, Appended::Refused(_)));
     }
 
@@ -354,19 +380,21 @@ mod tests {
         let after = format!("{before}:{FOLDER}");
         let appended = USER_FILE.replace("face-band\"", &format!("face-band:{FOLDER}\""));
 
-        let edit = restore_value(&appended, before, &after, LABEL);
+        let variable = variable();
+
+        let edit = restore_value(&appended, before, &after, LABEL, variable);
 
         assert_eq!(edit, HookEdit::Changed(USER_FILE.to_string()));
         let with_slash = appended.replace(FOLDER, &format!("{FOLDER}/"));
         let retyped = appended.replace(&after, &format!("{FOLDER}:{before}"));
         let other = appended.replace("face-band", "other");
         let absent = "{\"env\": {\"OTHER\": \"1\"}}";
-        let number = format!("{{\"env\": {{\"{PLUGIN_DIRS_VARIABLE}\": 5}}}}");
+        let number = format!("{{\"env\": {{\"{variable}\": 5}}}}");
         for changed in [with_slash.as_str(), &retyped, &other, absent, &number] {
-            let edit = restore_value(changed, before, &after, LABEL);
+            let edit = restore_value(changed, before, &after, LABEL, variable);
             assert_eq!(edit, HookEdit::Unchanged, "{changed}");
         }
-        let broken = restore_value("{ not json", before, &after, LABEL);
+        let broken = restore_value("{ not json", before, &after, LABEL, variable);
         assert!(matches!(broken, HookEdit::Refused(_)));
     }
 }

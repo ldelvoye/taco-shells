@@ -1,11 +1,11 @@
 use std::path::Path;
 
 use serde_json::{Value, json};
-use taco_agents::reduced_payload;
+use taco_agents::{CLAUDE, reduced_payload};
 use taco_protocol::routes::{AGENT_HOOK, CONTEXT, SESSION_END, SESSION_START, SESSION_STATE, STOP};
 use taco_protocol::{
     AgentHookBody, ContextAnswer, HarnessId, SessionEndBody, SessionStartBody, SessionStateBody,
-    StopAnswer, TOKEN_FILE_NAME,
+    StartSource, StopAnswer, TOKEN_FILE_NAME,
 };
 
 use crate::panel_text::PANEL_TEXT;
@@ -51,8 +51,11 @@ fn event_post(payload: &Value, event: &str, session_id: &str, pids: &[u32]) -> O
     if event == "SessionStart" {
         let cwd = text_field(payload, "cwd")?;
         let source = text_field(payload, "source");
-        let has_conversation =
-            source.as_deref() == Some("resume") || source.as_deref() == Some("compact");
+        let started = match &source {
+            Some(source) => CLAUDE.start_source(source),
+            None => StartSource::New,
+        };
+        let has_conversation = matches!(started, StartSource::Resumed | StartSource::Compacted);
         let body = SessionStartBody {
             pids: pids.to_vec(),
             harness: harness_id(),

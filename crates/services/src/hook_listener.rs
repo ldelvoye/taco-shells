@@ -10,7 +10,6 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use serde_json::value::RawValue;
-use serde_json::{Map, Value};
 use taco_agents::{ACTIVITY_SERVER, ACTIVITY_TOOLS, Harness, harness_of};
 use taco_protocol::routes::{AGENT_HOOK, CONTEXT, SESSION_END, SESSION_START, SESSION_STATE, STOP};
 use taco_protocol::{
@@ -693,28 +692,25 @@ fn parse_hook_message(body: &[u8], sent_token: Option<&str>, token: &str) -> Opt
     let pids = non_empty(parsed.pids)?;
 
     let payload_text = parsed.payload.get();
-    let payload_value: Value = serde_json::from_str(payload_text).ok()?;
-    let payload = payload_value.as_object()?;
+    let fields = harness.hook_fields(payload_text)?;
 
-    let tool_name = text_field(payload, "tool_name");
+    let tool_name = fields.tool_name.as_deref();
     let is_activity_call = tool_name.is_some_and(is_any_channels_activity_call);
     // Any local process can post here, so an activity call counts only with the token the app wrote for its own hook.
     if is_activity_call && sent_token != Some(token) {
         return None;
     }
 
-    let session_text = text_field(payload, "session_id")?;
-    let session_id = checked_session_id(harness, String::from(session_text))?;
-    let event = text_field(payload, "hook_event_name")?;
+    let session_id = checked_session_id(harness, fields.session_id)?;
     let mut source = String::new();
-    if let Some(text) = text_field(payload, "source") {
-        source = String::from(text);
+    if let Some(text) = fields.source {
+        source = text;
     }
 
     let call = HookCall::AgentHook {
         harness: harness.id(),
         session_id,
-        event: event.to_string(),
+        event: fields.event,
         payload: payload_text.to_string(),
     };
     let message = HookMessage { pids, call };
@@ -733,11 +729,6 @@ fn checked_session_id(harness: &Harness, session_id: String) -> Option<String> {
         return None;
     }
     Some(session_id)
-}
-
-fn text_field<'a>(payload: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
-    let value = payload.get(key)?;
-    value.as_str()
 }
 
 #[cfg(test)]

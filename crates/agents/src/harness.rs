@@ -1,4 +1,6 @@
-use taco_protocol::{AgentSignal, HarnessId, Peer, PrState, SharedTarget, Step};
+use taco_protocol::{AgentSignal, HarnessId, Peer, PrState, SharedTarget, StartSource, Step};
+
+type Version = (u32, u32, u32);
 
 /// Where a step was taken: the agent's turn, by its id, and whether one of the agent's subagents took it.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -89,6 +91,17 @@ pub struct HarnessSetup {
     /// The config directory's name under home when the variable is unset.
     pub default_config_directory: &'static str,
     pub settings_file: &'static str,
+    pub plugin_variable: &'static str,
+    pub version_flag: &'static str,
+    pub minimum_version: (u32, u32, u32),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HookFields {
+    pub session_id: String,
+    pub event: String,
+    pub source: Option<String>,
+    pub tool_name: Option<String>,
 }
 
 /// What the app knows about one coding agent.
@@ -102,6 +115,9 @@ pub struct Harness {
     pub(crate) fork_line: Option<fn(&str, &str) -> Option<String>>,
     pub(crate) question_reader: Option<fn(&str, &str) -> Option<String>>,
     pub(crate) entry_reader: Option<fn(&str, &str) -> Vec<EntryRead>>,
+    pub(crate) version_reader: Option<fn(&str) -> Option<Version>>,
+    pub(crate) hook_reader: Option<fn(&str) -> Option<HookFields>>,
+    pub(crate) start_source_reader: Option<fn(&str) -> StartSource>,
     pub(crate) setup: Option<&'static HarnessSetup>,
 }
 
@@ -165,6 +181,28 @@ impl Harness {
             return Vec::new();
         };
         reader(event, payload)
+    }
+
+    pub fn plugin_variable(&self) -> Option<&'static str> {
+        let setup = self.setup?;
+        Some(setup.plugin_variable)
+    }
+
+    pub fn version_of(&self, output: &str) -> Option<(u32, u32, u32)> {
+        let reader = self.version_reader?;
+        reader(output)
+    }
+
+    pub fn hook_fields(&self, payload: &str) -> Option<HookFields> {
+        let reader = self.hook_reader?;
+        reader(payload)
+    }
+
+    pub fn start_source(&self, source: &str) -> StartSource {
+        let Some(reader) = self.start_source_reader else {
+            return StartSource::New;
+        };
+        reader(source)
     }
 
     /// The hooks the app can wire; an agent without them has no Agents menu entry and no setup line.

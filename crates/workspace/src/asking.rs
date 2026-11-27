@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use taco_agents::CUT_MARK;
-use taco_protocol::{StartSource, Step};
+use taco_protocol::Step;
 
 // How much of its own account a compacted agent is handed back, in characters, its last line included.
 const MAX_CONTEXT_CHARACTERS: usize = 2_000;
@@ -21,16 +21,6 @@ const STEPS_WORTH_A_NOTE: usize = 3;
 const CONTEXT_HEADING: &str = "Your earlier notes from this session, as you wrote them in Taco Shells' Agent Activity, newest first:";
 const NOW_PREFIX: &str = "What you were doing: ";
 const NUDGE_OPENING: &str = "Before you finish, write a short note for the user with the activity note tool. Since your last note you";
-
-/// How a session started, from Claude Code's `source`; a value it does not know counts as a new session.
-pub fn start_source(source: &str) -> StartSource {
-    match source {
-        "resume" => StartSource::Resumed,
-        "compact" => StartSource::Compacted,
-        "clear" => StartSource::Cleared,
-        _ => StartSource::New,
-    }
-}
 
 /// The now line and the newest notes that fit, for an agent whose context was just compacted; none when there is
 /// nothing to hand back. Notes that do not fit are counted rather than cut.
@@ -224,17 +214,5 @@ mod tests {
         let text = nudge_text(&[&long_name], Some("/work")).unwrap();
         assert_eq!(text.chars().count(), MAX_NUDGE_CHARACTERS);
         assert!(text.ends_with(CUT_MARK));
-    }
-
-    #[test]
-    fn clear_is_a_cleared_start_and_a_source_claude_code_has_no_name_for_is_a_new_one() {
-        let cases = [
-            ("clear", StartSource::Cleared),
-            ("fork", StartSource::New),
-            ("", StartSource::New),
-        ];
-        for (source, expected) in cases {
-            assert_eq!(start_source(source), expected, "{source:?}");
-        }
     }
 }

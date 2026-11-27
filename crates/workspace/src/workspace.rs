@@ -256,10 +256,14 @@ impl Workspace {
         if !self.holds_known_agent(terminal, harness) {
             return (None, out);
         }
+        let Some(known) = taco_agents::harness_of(&harness.0) else {
+            return (None, out);
+        };
+        let started = known.start_source(source);
         let storage = self.options.storage.as_mut();
         let context = self
             .activity
-            .session_context(storage, terminal, session_id, source, now_ms, &mut out);
+            .session_context(storage, terminal, session_id, started, now_ms, &mut out);
         (context, out)
     }
 

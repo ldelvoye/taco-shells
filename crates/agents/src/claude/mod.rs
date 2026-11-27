@@ -1,6 +1,6 @@
-use taco_protocol::AgentSignal;
+use taco_protocol::{AgentSignal, StartSource};
 
-use crate::harness::{AgentTitle, Harness, HarnessSetup};
+use crate::harness::{AgentTitle, Harness, HarnessSetup, HookFields};
 
 mod entries;
 mod found;
@@ -43,6 +43,9 @@ static SETUP: HarnessSetup = HarnessSetup {
     config_directory_variable: "CLAUDE_CONFIG_DIR",
     default_config_directory: ".claude",
     settings_file: "settings.json",
+    plugin_variable: "CLAUDE_CODE_PLUGIN_DIRS",
+    version_flag: "--version",
+    minimum_version: (2, 1, 280),
 };
 
 pub static CLAUDE: Harness = Harness {
@@ -55,6 +58,9 @@ pub static CLAUDE: Harness = Harness {
     fork_line: Some(fork_command),
     question_reader: Some(question_of),
     entry_reader: Some(entries::read_entries),
+    version_reader: Some(parse_version),
+    hook_reader: Some(hook_fields_of),
+    start_source_reader: Some(start_source_of),
     setup: Some(&SETUP),
 };
 
@@ -190,12 +196,109 @@ fn fork_command(session_id: &str, name: &str) -> Option<String> {
     Some(format!("{base} --name '{escaped}'\n"))
 }
 
+fn parse_version(output: &str) -> Option<(u32, u32, u32)> {
+    let first_line = output.lines().next()?;
+    let first_word = first_line.split_whitespace().next()?;
+    let mut numbers = first_word.split('.');
+    let major_text = numbers.next()?;
+    let minor_text = numbers.next()?;
+    let patch_text = numbers.next()?;
+    let major = major_text.parse().ok()?;
+    let minor = minor_text.parse().ok()?;
+    let patch_digits = leading_digits(patch_text);
+    let patch = patch_digits.parse().ok()?;
+    Some((major, minor, patch))
+}
+
+fn leading_digits(text: &str) -> &str {
+    let digit_count = text.chars().take_while(char::is_ascii_digit).count();
+    &text[..digit_count]
+}
+
+fn text_field<'a>(
+    object: &'a serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Option<&'a str> {
+    let value = object.get(key)?;
+    value.as_str()
+}
+
+fn hook_fields_of(payload: &str) -> Option<HookFields> {
+    let parsed: serde_json::Value = serde_json::from_str(payload).ok()?;
+    let object = parsed.as_object()?;
+    let session_id = text_field(object, "session_id")?;
+    let event = text_field(object, "hook_event_name")?;
+    let source = text_field(object, "source");
+    let tool_name = text_field(object, "tool_name");
+    Some(HookFields {
+        session_id: session_id.to_string(),
+        event: event.to_string(),
+        source: source.map(str::to_string),
+        tool_name: tool_name.map(str::to_string),
+    })
+}
+
+/// How a session started, from Claude Code's hook source; a value it does not know counts as a new session.
+fn start_source_of(source: &str) -> StartSource {
+    match source {
+        "resume" => StartSource::Resumed,
+        "compact" => StartSource::Compacted,
+        "clear" => StartSource::Cleared,
+        _ => StartSource::New,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const SESSION_ID: &str = "123e4567-e89b-12d3-a456-426614174000";
     const INJECTED: &str = "$(rm -rf /)";
+
+    #[test]
+    fn reads_the_leading_version() {
+        assert_eq!(parse_version("2.1.332 (Claude Code)"), Some((2, 1, 332)));
+        assert_eq!(parse_version("10.0.1\n"), Some((10, 0, 1)));
+        assert_eq!(parse_version("Claude Code"), None);
+        assert_eq!(parse_version(""), None);
+        assert_eq!(parse_version("2.1.332-beta.1"), Some((2, 1, 332)));
+    }
+
+    #[test]
+    fn each_claude_start_source_maps_to_its_kind_and_an_unknown_one_is_new() {
+        let cases = [
+            ("resume", StartSource::Resumed),
+            ("compact", StartSource::Compacted),
+            ("clear", StartSource::Cleared),
+            ("fork", StartSource::New),
+            ("", StartSource::New),
+        ];
+        for (source, expected) in cases {
+            assert_eq!(CLAUDE.start_source(source), expected, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn a_hook_payload_gives_its_session_event_source_and_tool() {
+        let full = format!(
+            r#"{{"session_id":"{SESSION_ID}","hook_event_name":"SessionStart","source":"resume","tool_name":"Bash"}}"#
+        );
+        let bare = format!(r#"{{"session_id":"{SESSION_ID}","hook_event_name":"Stop"}}"#);
+        let no_session = r#"{"hook_event_name":"Stop"}"#;
+
+        let all = CLAUDE.hook_fields(&full).unwrap();
+        assert_eq!(all.session_id, SESSION_ID);
+        assert_eq!(all.event, "SessionStart");
+        assert_eq!(all.source.as_deref(), Some("resume"));
+        assert_eq!(all.tool_name.as_deref(), Some("Bash"));
+
+        let without = CLAUDE.hook_fields(&bare).unwrap();
+        assert_eq!(without.source, None);
+        assert_eq!(without.tool_name, None);
+
+        assert_eq!(CLAUDE.hook_fields(no_session), None);
+        assert_eq!(CLAUDE.hook_fields("[1]"), None);
+    }
 
     #[test]
     fn a_session_id_is_a_uuid_in_either_case_and_nothing_else() {

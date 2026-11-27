@@ -6,7 +6,7 @@ use taco_protocol::{
     StartSource, TerminalId,
 };
 
-use crate::asking::{context_text, nudge_text, start_source};
+use crate::asking::{context_text, nudge_text};
 use crate::board::{NowLine, Seen, Sharing, TerminalBoard};
 use crate::log::{Log, line_of};
 use crate::outbound::Outbound;
@@ -70,11 +70,10 @@ impl Activity {
         storage: &mut dyn Storage,
         terminal: &TerminalId,
         session_id: &str,
-        source: &str,
+        source: StartSource,
         now_ms: u64,
         out: &mut Vec<Outbound>,
     ) -> Option<String> {
-        let source = start_source(source);
         let started = ActivityKind::SessionStarted { source };
         self.log_entry(storage, terminal, out, |log| {
             log.append(Author::App, started, now_ms)
