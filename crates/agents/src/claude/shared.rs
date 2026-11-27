@@ -10,9 +10,16 @@ pub(super) const ARTIFACT_KIND: &str = "Artifact";
 pub(super) const LINK_PREFIX: &str = "https://";
 const PULL_REQUEST_PREFIX: &str = "https://github.com/";
 
-// A pull request's plain link and number, ("https://github.com/o/r/pull/155", 155) from ".../pull/155#discussion",
-// so one pull request shared from two of its pages is the same thing.
-pub(super) fn pull_request_of(url: &str) -> Option<(String, u64)> {
+/// A pull request's plain link, its number and its "owner/name" repository.
+pub(super) struct PullRequestLink {
+    pub(super) url: String,
+    pub(super) number: u64,
+    pub(super) repository: String,
+}
+
+// A pull request's plain link, "https://github.com/o/r/pull/155" from ".../pull/155#discussion", so one pull request
+// shared from two of its pages is the same thing.
+pub(super) fn pull_request_of(url: &str) -> Option<PullRequestLink> {
     let rest = url.strip_prefix(PULL_REQUEST_PREFIX)?;
     let mut parts = rest.split('/');
     let owner = parts.next()?;
@@ -33,14 +40,9 @@ pub(super) fn pull_request_of(url: &str) -> Option<(String, u64)> {
     }
     let number: u64 = digits.parse().ok()?;
     let plain = format!("{PULL_REQUEST_PREFIX}{owner}/{repository}/pull/{number}");
-    Some((plain, number))
-}
-
-// "ldelvoye/taco-shells" from "https://github.com/ldelvoye/taco-shells/pull/155".
-pub(super) fn repository_of(url: &str) -> Option<String> {
-    let rest = url.strip_prefix(PULL_REQUEST_PREFIX)?;
-    let mut parts = rest.split('/');
-    let owner = parts.next()?;
-    let name = parts.next()?;
-    Some(format!("{owner}/{name}"))
+    Some(PullRequestLink {
+        url: plain,
+        number,
+        repository: format!("{owner}/{repository}"),
+    })
 }

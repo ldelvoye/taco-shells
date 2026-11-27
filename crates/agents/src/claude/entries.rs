@@ -125,11 +125,11 @@ fn share_entry(parsed: &Value) -> Option<EntryRead> {
 // the agent's working directory. Anything else, such as another scheme or a home-relative path, opens nothing.
 fn target_of(target: &str, cwd: Option<&str>) -> Option<SharedTarget> {
     if target.starts_with(LINK_PREFIX) {
-        if let Some((url, number)) = pull_request_of(target) {
+        if let Some(link) = pull_request_of(target) {
             // open until something checks it, which checked_ms records
             return Some(SharedTarget::PullRequest {
-                url: Some(url),
-                number,
+                url: Some(link.url),
+                number: link.number,
                 state: PrState::Open,
                 checked_ms: None,
             });
