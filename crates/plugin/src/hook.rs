@@ -1,9 +1,8 @@
-use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde_json::{Map, Value, json};
 
-use crate::identity::{CONFIG_FOLDER, PLUGIN_NAME, Surroundings, is_headless, tool_name_prefix};
+use crate::identity::tool_name_prefix;
 use crate::post::PostError;
 use crate::tools::TOOL_NAMES;
 
@@ -13,7 +12,6 @@ const END_ROUTE: &str = "/agent-session/end";
 const STATE_ROUTE: &str = "/agent-session/state";
 const HOOK_ROUTE: &str = "/agent-session/hook";
 const HARNESS: &str = "claude";
-const PORT_FILE_NAME: &str = "focus-port";
 const TOKEN_FILE_NAME: &str = "focus-token";
 const FAILURE_EVENT: &str = "PostToolUseFailure";
 // One character over the workspace's own cap, so a text cut here still shows as cut.
@@ -296,43 +294,6 @@ pub fn send_posts(posts: &[Post], mut send: impl FnMut(&Post) -> Result<(), Post
     attempted
 }
 
-pub fn may_post(surroundings: &Surroundings) -> bool {
-    // A headless run gets no posts, so it never becomes the terminal's newest agent session.
-    if is_headless(surroundings) {
-        return false;
-    }
-
-    // Unlike serves, a shell without the app variable still posts, as the old scripts did, and the listener places it.
-    match &surroundings.app {
-        Some(app) => app == PLUGIN_NAME,
-        None => true,
-    }
-}
-
-pub fn port_file(
-    port_file_variable: Option<OsString>,
-    config_dir_variable: Option<OsString>,
-    home: Option<OsString>,
-) -> Option<PathBuf> {
-    if let Some(path) = port_file_variable {
-        return Some(PathBuf::from(path));
-    }
-
-    if let Some(directory) = config_dir_variable {
-        let directory = PathBuf::from(directory);
-        return Some(directory.join(PORT_FILE_NAME));
-    }
-
-    match home {
-        Some(home) => {
-            let home = PathBuf::from(home);
-            let folder = home.join(CONFIG_FOLDER);
-            Some(folder.join(PORT_FILE_NAME))
-        }
-        None => None,
-    }
-}
-
 pub fn read_token(port_path: &Path) -> Option<String> {
     let token_path = port_path.with_file_name(TOKEN_FILE_NAME);
     let content = std::fs::read_to_string(token_path).ok()?;
@@ -355,6 +316,7 @@ pub fn read_port(path: &Path) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::identity::PLUGIN_NAME;
 
     const PIDS: [u32; 2] = [42, 7];
 
@@ -524,32 +486,12 @@ mod tests {
     #[test]
     fn the_token_is_the_first_line_of_the_file_beside_the_port_file() {
         let directory = tempfile::tempdir().unwrap();
-        let port_path = directory.path().join(PORT_FILE_NAME);
+        let port_path = directory.path().join("focus-port");
         assert_eq!(read_token(&port_path), None);
 
         let token_path = directory.path().join(TOKEN_FILE_NAME);
         std::fs::write(token_path, "abc123\nignored\n").unwrap();
         assert_eq!(read_token(&port_path), Some(String::from("abc123")));
-    }
-
-    fn surroundings(app: Option<&str>, entrypoint: Option<&str>) -> Surroundings {
-        Surroundings {
-            app: app.map(String::from),
-            entrypoint: entrypoint.map(String::from),
-        }
-    }
-
-    #[test]
-    fn posts_unless_headless_or_in_the_other_apps_terminal() {
-        let other_channel = match PLUGIN_NAME {
-            "taco-shells" => "taco-shells-dev",
-            _ => "taco-shells",
-        };
-
-        assert!(!may_post(&surroundings(Some(PLUGIN_NAME), Some("sdk-cli"))));
-        assert!(!may_post(&surroundings(Some(other_channel), Some("cli"))));
-        assert!(may_post(&surroundings(None, Some("cli"))));
-        assert!(may_post(&surroundings(Some(PLUGIN_NAME), None)));
     }
 
     #[test]
@@ -579,24 +521,5 @@ mod tests {
         });
         assert_eq!(attempted, 2);
         assert_eq!(sent, ["0", "1"]);
-    }
-
-    #[test]
-    fn port_file_prefers_the_port_variable_then_the_config_dir_then_home() {
-        let port = Some(OsString::from("/p/port"));
-        let config = Some(OsString::from("/c"));
-        let home = Some(OsString::from("/h"));
-
-        let from_port = port_file(port.clone(), config.clone(), home.clone());
-        assert_eq!(from_port, Some(PathBuf::from("/p/port")));
-
-        let from_config = port_file(None, config.clone(), home.clone());
-        assert_eq!(from_config, Some(PathBuf::from("/c/focus-port")));
-
-        let from_home = port_file(None, None, home);
-        let expected = PathBuf::from("/h").join(CONFIG_FOLDER).join("focus-port");
-        assert_eq!(from_home, Some(expected));
-
-        assert_eq!(port_file(None, None, None), None);
     }
 }
