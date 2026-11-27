@@ -4,7 +4,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use taco_protocol::TerminalId;
-use taco_smoke::driver::Driver;
+use taco_smoke::chords::{NEW_TERMINAL, NEXT_ROW, PREVIOUS_ROW};
+use taco_smoke::driver::{Driver, terminals_of};
 use taco_smoke::launch;
 
 use crate::flags::Flags;
@@ -17,9 +18,6 @@ const POLL_PAUSE: Duration = Duration::from_millis(200);
 const TYPING_SPACING: Duration = Duration::from_millis(100);
 const QUIET_PAUSE: Duration = Duration::from_millis(500);
 const FLOOD_WARMUP: Duration = Duration::from_secs(1);
-const NEW_TERMINAL: &str = "cmd-t";
-const NEXT_ROW: &str = "cmd-shift-]";
-const PREVIOUS_ROW: &str = "cmd-shift-[";
 const INTERRUPT: &str = "\u{3}";
 const FLOOD_WIDTH: usize = 80;
 const FILL_LINES: u32 = 110_000;
@@ -135,17 +133,14 @@ fn wait_for(
 
 fn rows(driver: &mut Driver) -> Result<Rows, String> {
     let state = driver.drawn_state()?;
-    let Some(arrangement) = state.arrangement else {
-        return Ok(Rows {
-            terminals: Vec::new(),
-            selected: 0,
-        });
+    let terminals = terminals_of(&state);
+    let selected = match &state.arrangement {
+        Some(arrangement) => arrangement.selected,
+        None => 0,
     };
-    let listed = arrangement.rows.iter();
-    let terminals: Vec<TerminalId> = listed.map(|row| row.terminal.clone()).collect();
     Ok(Rows {
         terminals,
-        selected: arrangement.selected,
+        selected,
     })
 }
 

@@ -129,6 +129,15 @@ impl Driver {
     }
 }
 
+/// The terminals in the list, top to bottom, as a drawn state shows them; none when nothing is arranged.
+pub fn terminals_of(state: &DrawnState) -> Vec<TerminalId> {
+    let Some(arrangement) = &state.arrangement else {
+        return Vec::new();
+    };
+    let rows = arrangement.rows.iter();
+    rows.map(|row| row.terminal.clone()).collect()
+}
+
 fn expect_done(reply: DriveReply, request: &str) -> Result<(), String> {
     match reply {
         DriveReply::Done => Ok(()),
