@@ -60,6 +60,11 @@ jobs:
 
       - run: cargo fmt --all --check
 
+      # A config folder name spelled by hand outside crates/identity would let one channel touch the other's folder,
+      # and no binary scan can see it.
+      - name: Config folder names come only from crates/identity
+        run: "! git grep -n -E '\"\\.taco-shells(-dev)?\"' -- crates xtask smoke ':!crates/identity/src/lib.rs'"
+
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       # The code only tooling turns on: app's render and drive, terminal-view's capture, ghostty's bindings.
