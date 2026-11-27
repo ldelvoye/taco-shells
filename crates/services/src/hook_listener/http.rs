@@ -9,7 +9,7 @@ use super::READ_DEADLINE;
 
 const SMALL_BODY_CAP: u64 = 64 * 1024;
 const AGENT_HOOK_BODY_CAP: u64 = 16 * 1024 * 1024;
-const HEAD_CAP: usize = 16 * 1024;
+pub(super) const HEAD_CAP: usize = 16 * 1024;
 const READ_CHUNK: usize = 64 * 1024;
 const HEAD_END: &[u8] = b"\r\n\r\n";
 
@@ -47,6 +47,9 @@ pub(super) fn read_head(stream: &mut TcpStream, deadline: Instant) -> Option<(Ve
     let mut chunk = vec![0; READ_CHUNK];
     loop {
         if let Some(end) = find_head_end(&received) {
+            if end > HEAD_CAP {
+                return None;
+            }
             let leftover = received.split_off(end + HEAD_END.len());
             received.truncate(end);
             return Some((received, leftover));
