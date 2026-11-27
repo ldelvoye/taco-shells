@@ -1469,7 +1469,11 @@ mod tests {
         switch.on.store(false, Ordering::SeqCst);
         setups.activity_changed(false);
         setups.refresh();
+        assert!(setups.view().notices.is_empty());
 
+        switch.on.store(true, Ordering::SeqCst);
+        setups.activity_changed(true);
+        setups.refresh();
         assert!(setups.view().notices.is_empty());
     }
 
