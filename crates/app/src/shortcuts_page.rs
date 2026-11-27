@@ -1,15 +1,20 @@
 //! The keyboard shortcuts page, a page under Settings listing each command with its shortcuts.
 
-use gpui::{
-    Context, Div, Entity, FontWeight, ParentElement, StatefulInteractiveElement, Styled, div, px,
-};
-use taco_settings::{Binding, Chord, CommandId};
+use std::collections::HashMap;
 
-use crate::look::Look;
-use crate::page::{
-    BUTTON_RADIUS, CHIP_GAP, ROW_GAP, ROW_PADDING, chip, form_column, group, page_foot, page_frame,
-    page_header, text_button,
+use gpui::{
+    Context, Div, ElementId, Entity, FontWeight, InteractiveElement, ParentElement, SharedString,
+    Stateful, StatefulInteractiveElement, Styled, div, px,
 };
+use taco_settings::{Binding, Chord, CommandId, KeymapChange, command_for};
+
+use crate::drive::mark;
+use crate::look::{Look, SMALL_TEXT_SIZE};
+use crate::page::{
+    BUTTON_RADIUS, CHIP_GAP, ROW_GAP, ROW_PADDING, chip, chip_text, form_column, group, page_foot,
+    page_frame, page_header, text_button,
+};
+use crate::shell::{shell_orange, shell_outline};
 use crate::text_field::TextField;
 use crate::window::WindowView;
 
@@ -23,8 +28,23 @@ const ADD: &str = "+";
 const BACK_TO_DEFAULT: &str = "Back to default";
 const FOOT_TEXT: &str = "Changes are written to keybindings.json and apply at once.";
 const OPEN_FILE_LABEL: &str = "Open keybindings.json";
+const PRESS_KEYS: &str = "Press keys";
+const REMOVE: &str = "Remove";
+const CANCEL: &str = "Cancel";
+const USE_IT_HERE: &str = "Use it here";
+const NEEDS_MODIFIER: &str = "A shortcut needs cmd, ctrl or opt.";
 const SMALL_BUTTON_HEIGHT: f32 = 24.;
 const SMALL_BUTTON_PADDING: f32 = 8.;
+const CAPTURE_PADDING: f32 = 9.;
+const CAPTURE_RADIUS: f32 = 6.;
+const CAPTURE_OUTLINE: f32 = 2.;
+const CAPTURE_ANGLE: f32 = 90.;
+const CAPTURE_WASH: f32 = 0.12;
+const HINT_GAP: f32 = 4.;
+const CARD_PADDING: f32 = 10.;
+const CARD_RADIUS: f32 = 8.;
+const CARD_GAP: f32 = 8.;
+const UNREAD_OPACITY: f32 = 0.45;
 
 const GROUPS: [(&str, &[(CommandId, &str)]); 3] = [
     (
@@ -71,13 +91,71 @@ const MODIFIER_WORDS: [(&str, &str); 4] = [
     ("control", "ctrl"),
 ];
 
+// Keys that type no character, so shift alone is enough with them, as shift+enter is.
+const NON_CHARACTER_KEYS: [&str; 12] = [
+    "enter",
+    "tab",
+    "backspace",
+    "delete",
+    "up",
+    "down",
+    "left",
+    "right",
+    "home",
+    "end",
+    "pageup",
+    "pagedown",
+];
+
 /// Everything one drawing of the shortcuts page reads.
 pub struct ShortcutsInput<'a> {
     pub bindings: &'a [Binding],
     pub defaults: &'a [Binding],
     pub query: &'a str,
     pub search: &'a Entity<TextField>,
+    pub capture: Option<&'a Capture>,
+    /// Why each command's last change was not written, until it is changed again.
+    pub refused: &'a HashMap<CommandId, String>,
+    /// The file could not be read at all, so nothing on the page can change it.
+    pub unread: bool,
+    pub problems: &'a [String],
     pub look: &'a Look,
+}
+
+/// One command's row as the page draws it.
+struct Row<'a> {
+    command: CommandId,
+    name: &'static str,
+    chords: &'a [Chord],
+    /// Its chords are not the shipped ones, so "Back to default" shows.
+    changed: bool,
+}
+
+/// A shortcut being set on a row, from the click on a chip or + until it is written or cancelled.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Capture {
+    pub command: CommandId,
+    /// The chord being changed; none when one is being added.
+    pub changing: Option<Chord>,
+    /// The last keys pressed, kept while the row asks about them.
+    pub pending: Option<Chord>,
+    pub problem: Option<CaptureProblem>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaptureProblem {
+    NeedsModifier,
+    /// Another command has the chord; "Use it here" takes it.
+    Clash(CommandId),
+}
+
+/// What keys pressed while a row is capturing come to.
+#[derive(Debug, PartialEq)]
+pub enum Pressed {
+    Write(KeymapChange),
+    /// The command already has the chord, so there is nothing to write.
+    Unchanged,
+    Ask(CaptureProblem),
 }
 
 pub fn shortcuts_page(input: &ShortcutsInput, cx: &mut Context<WindowView>) -> Div {
@@ -85,7 +163,12 @@ pub fn shortcuts_page(input: &ShortcutsInput, cx: &mut Context<WindowView>) -> D
     let header = page_header(TITLE, Some(BACK), look, cx);
     let search = div().w_full().child(input.search.clone());
     let wanted = normalized_query(input.query);
-    let mut form = form_column().child(search);
+    let mut form = form_column();
+    if !input.problems.is_empty() {
+        let card = problem_card(input.problems, look, cx);
+        form = form.child(card);
+    }
+    form = form.child(search);
     let mut found_any = false;
     for (heading, commands) in GROUPS {
         let mut rows = Vec::new();
@@ -96,7 +179,13 @@ pub fn shortcuts_page(input: &ShortcutsInput, cx: &mut Context<WindowView>) -> D
             }
             let defaults = chords_for(input.defaults, command);
             let changed = differs(&chords, &defaults);
-            rows.push(command_row(name, &chords, changed, look));
+            let row = Row {
+                command,
+                name,
+                chords: &chords,
+                changed,
+            };
+            rows.push(command_row(&row, input, cx));
         }
         if rows.is_empty() {
             continue;
@@ -114,12 +203,23 @@ pub fn shortcuts_page(input: &ShortcutsInput, cx: &mut Context<WindowView>) -> D
     page_frame(SCROLL_ID, header, whole, look)
 }
 
-fn command_row(name: &str, chords: &[Chord], changed: bool, look: &Look) -> Div {
+fn command_row(row: &Row, input: &ShortcutsInput, cx: &mut Context<WindowView>) -> Div {
+    let look = input.look;
+    let command = row.command;
+    let mut capture = None;
+    let mut changing = None;
+    if let Some(open) = input.capture
+        && open.command == command
+    {
+        capture = Some(open);
+        changing = open.changing.as_ref();
+    }
+    let adding = capture.is_some() && changing.is_none();
     let label = div()
         .flex_1()
         .min_w_0()
         .font_weight(FontWeight::MEDIUM)
-        .child(name.to_string());
+        .child(row.name.to_string());
     let mut keys = div()
         .flex()
         .flex_wrap()
@@ -127,39 +227,256 @@ fn command_row(name: &str, chords: &[Chord], changed: bool, look: &Look) -> Div 
         .items_center()
         .justify_end()
         .gap(px(CHIP_GAP));
-    for chord in chords {
-        keys = keys.child(chip(chord, look));
+    for (index, chord) in row.chords.iter().enumerate() {
+        let being_changed = changing == Some(chord);
+        if being_changed {
+            keys = keys.child(capture_cap(capture, look));
+            continue;
+        }
+        let shown = chip(chord, look);
+        if input.unread {
+            keys = keys.child(shown.opacity(UNREAD_OPACITY));
+            continue;
+        }
+        let id = SharedString::from(format!("chip:{}:{index}", command.id()));
+        let changing = Some(chord.clone());
+        let clickable = div()
+            .id(ElementId::Name(id))
+            .cursor_pointer()
+            .child(shown)
+            .on_click(cx.listener(move |view, _, _, cx| {
+                view.start_capture(command, changing.clone(), cx);
+            }));
+        keys = keys.child(clickable);
     }
-    if chords.is_empty() {
+    if row.chords.is_empty() && !adding {
         let none = div().text_color(look.secondary_text).child(NONE);
         keys = keys.child(none);
     }
-    keys = keys.child(small_button(ADD, look));
-    if changed {
-        keys = keys.child(small_button(BACK_TO_DEFAULT, look));
+    if adding {
+        keys = keys.child(capture_cap(capture, look));
     }
-    div()
+    match capture {
+        Some(open) => keys = keys.children(capture_buttons(open, look, cx)),
+        None => keys = keys.children(row_buttons(row, input, cx)),
+    }
+    let line = div()
         .flex()
         .items_center()
         .justify_between()
         .gap(px(ROW_GAP))
+        .child(label)
+        .child(keys);
+    let mut shown_row = div()
+        .flex()
+        .flex_col()
         .py(px(ROW_PADDING))
         .border_t_1()
         .border_color(look.hairline)
-        .child(label)
-        .child(keys)
+        .child(line);
+    let hint = row_hint(command, capture, input, cx);
+    if let Some(hint) = hint {
+        shown_row = shown_row.child(hint);
+    }
+    shown_row
 }
 
-fn small_button(label: &'static str, look: &Look) -> Div {
+/// The chord being set: "Press keys" until keys are pressed, in the shell's outline.
+fn capture_cap(capture: Option<&Capture>, look: &Look) -> Div {
+    let mut text = PRESS_KEYS.to_string();
+    if let Some(open) = capture
+        && let Some(pending) = &open.pending
+    {
+        text = chip_text(pending);
+    }
+    let outline = shell_outline(CAPTURE_OUTLINE, CAPTURE_RADIUS, CAPTURE_ANGLE);
+    let wash = shell_orange().opacity(CAPTURE_WASH);
     div()
+        .relative()
+        .flex()
+        .flex_none()
+        .items_center()
+        .h(px(SMALL_BUTTON_HEIGHT))
+        .px(px(CAPTURE_PADDING))
+        .rounded(px(CAPTURE_RADIUS))
+        .bg(wash)
+        .text_color(look.text)
+        .font_weight(FontWeight::MEDIUM)
+        .child(text)
+        .child(outline)
+}
+
+fn capture_buttons(
+    capture: &Capture,
+    look: &Look,
+    cx: &mut Context<WindowView>,
+) -> Vec<Stateful<Div>> {
+    let mut buttons = Vec::new();
+    if capture.changing.is_some() {
+        let remove = small_button("shortcut-remove", REMOVE, look)
+            .on_click(cx.listener(|view, _, _, cx| view.remove_captured(cx)));
+        buttons.push(remove);
+    }
+    let cancel = small_button("shortcut-cancel", CANCEL, look)
+        .on_click(cx.listener(|view, _, _, cx| view.cancel_capture(cx)));
+    buttons.push(cancel);
+    buttons
+}
+
+fn row_buttons(
+    row: &Row,
+    input: &ShortcutsInput,
+    cx: &mut Context<WindowView>,
+) -> Vec<Stateful<Div>> {
+    let look = input.look;
+    let command = row.command;
+    let mut buttons = Vec::new();
+    if input.unread {
+        return buttons;
+    }
+    let add_id = SharedString::from(format!("shortcut-add:{}", command.id()));
+    let add = small_button(add_id.clone(), ADD, look)
+        .on_click(cx.listener(move |view, _, _, cx| view.start_capture(command, None, cx)));
+    buttons.push(mark(add, add_id));
+    if row.changed {
+        let reset_id = SharedString::from(format!("shortcut-reset:{}", command.id()));
+        let reset = small_button(reset_id, BACK_TO_DEFAULT, look)
+            .on_click(cx.listener(move |view, _, _, cx| view.reset_shortcut(command, cx)));
+        buttons.push(reset);
+    }
+    buttons
+}
+
+/// The line under a row: a question about the keys pressed, or why the last change was refused.
+fn row_hint(
+    command: CommandId,
+    capture: Option<&Capture>,
+    input: &ShortcutsInput,
+    cx: &mut Context<WindowView>,
+) -> Option<Div> {
+    let look = input.look;
+    let line = div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(px(CHIP_GAP))
+        .pt(px(HINT_GAP))
+        .text_size(px(SMALL_TEXT_SIZE))
+        .text_color(look.needs);
+    if let Some(open) = capture
+        && let Some(problem) = open.problem
+        && let Some(pending) = &open.pending
+    {
+        return Some(problem_line(line, problem, pending, look, cx));
+    }
+    let refusal = input.refused.get(&command)?;
+    Some(line.child(refusal.clone()))
+}
+
+fn problem_line(
+    line: Div,
+    problem: CaptureProblem,
+    pending: &Chord,
+    look: &Look,
+    cx: &mut Context<WindowView>,
+) -> Div {
+    match problem {
+        CaptureProblem::NeedsModifier => line.child(NEEDS_MODIFIER),
+        CaptureProblem::Clash(other) => {
+            let keys = chip_text(pending);
+            let said = format!("{keys} is the shortcut for {}.", name_of(other));
+            let take = text_button("shortcut-take", USE_IT_HERE, look)
+                .on_click(cx.listener(|view, _, _, cx| view.take_pending(cx)));
+            line.child(said).child(take)
+        }
+    }
+}
+
+fn small_button(id: impl Into<SharedString>, label: &'static str, look: &Look) -> Stateful<Div> {
+    let veil = look.strong_veil;
+    let text = look.text;
+    let name: SharedString = id.into();
+    div()
+        .id(ElementId::Name(name))
         .flex()
         .flex_none()
         .items_center()
         .h(px(SMALL_BUTTON_HEIGHT))
         .px(px(SMALL_BUTTON_PADDING))
         .rounded(px(BUTTON_RADIUS))
+        .cursor_pointer()
         .text_color(look.secondary_text)
+        .hover(move |style| style.bg(veil).text_color(text))
         .child(label)
+}
+
+fn problem_card(problems: &[String], look: &Look, cx: &mut Context<WindowView>) -> Div {
+    let mut card = div()
+        .flex()
+        .flex_col()
+        .items_start()
+        .gap(px(CARD_GAP))
+        .p(px(CARD_PADDING))
+        .rounded(px(CARD_RADIUS))
+        .bg(look.selected_card)
+        .border_1()
+        .border_color(look.hairline)
+        .text_color(look.text);
+    for problem in problems {
+        let line = div().child(problem.clone());
+        card = card.child(line);
+    }
+    let open = text_button("shortcuts-problems-open", OPEN_FILE_LABEL, look)
+        .on_click(cx.listener(|view, _, _, cx| view.open_keybindings_file(cx)));
+    card.child(open)
+}
+
+/// What keys pressed while a row captures come to; asked about rather than written when they need asking.
+pub fn pressed(capture: &Capture, chord: Chord, bindings: &[Binding]) -> Pressed {
+    if !is_allowed(&chord) {
+        return Pressed::Ask(CaptureProblem::NeedsModifier);
+    }
+    let owner = command_for(bindings, &chord);
+    if owner == Some(capture.command) {
+        return Pressed::Unchanged;
+    }
+    if let Some(other) = owner {
+        return Pressed::Ask(CaptureProblem::Clash(other));
+    }
+    let change = change_for(capture, chord);
+    Pressed::Write(change)
+}
+
+/// The change that puts `to` on the capturing row: in place of the chip being changed, or added beside the others.
+pub fn change_for(capture: &Capture, to: Chord) -> KeymapChange {
+    let command = capture.command;
+    match &capture.changing {
+        Some(from) => KeymapChange::Replace {
+            command,
+            from: from.clone(),
+            to,
+        },
+        None => KeymapChange::Add { command, chord: to },
+    }
+}
+
+/// A shortcut needs cmd, ctrl or opt; shift alone only with a key that types no character.
+fn is_allowed(chord: &Chord) -> bool {
+    if chord.cmd || chord.ctrl || chord.alt {
+        return true;
+    }
+    chord.shift && NON_CHARACTER_KEYS.contains(&chord.key.as_str())
+}
+
+fn name_of(command: CommandId) -> &'static str {
+    for (_, commands) in GROUPS {
+        for &(listed, name) in commands {
+            if listed == command {
+                return name;
+            }
+        }
+    }
+    command.id()
 }
 
 fn foot(look: &Look, cx: &mut Context<WindowView>) -> Div {
@@ -250,6 +567,82 @@ mod tests {
     fn finds(query: &str, name: &str, chords: &[Chord]) -> bool {
         let wanted = normalized_query(query);
         is_found(&wanted, name, chords)
+    }
+
+    fn bound(text: &str, command: CommandId) -> Binding {
+        Binding {
+            chord: chord(text),
+            command,
+        }
+    }
+
+    #[test]
+    fn keys_pressed_on_a_row_are_written_asked_about_or_left() {
+        let bindings = [
+            bound("cmd+t", CommandId::TerminalNew),
+            bound("cmd+k", CommandId::TerminalClear),
+        ];
+        let adding = Capture {
+            command: CommandId::TerminalNew,
+            changing: None,
+            pending: None,
+            problem: None,
+        };
+        let changing = Capture {
+            changing: Some(chord("cmd+t")),
+            ..adding.clone()
+        };
+        let cases = [
+            (
+                &adding,
+                "cmd+j",
+                Pressed::Write(KeymapChange::Add {
+                    command: CommandId::TerminalNew,
+                    chord: chord("cmd+j"),
+                }),
+            ),
+            (
+                &changing,
+                "cmd+j",
+                Pressed::Write(KeymapChange::Replace {
+                    command: CommandId::TerminalNew,
+                    from: chord("cmd+t"),
+                    to: chord("cmd+j"),
+                }),
+            ),
+            (
+                &adding,
+                "cmd+k",
+                Pressed::Ask(CaptureProblem::Clash(CommandId::TerminalClear)),
+            ),
+            (&adding, "cmd+t", Pressed::Unchanged),
+            (&adding, "j", Pressed::Ask(CaptureProblem::NeedsModifier)),
+            (
+                &adding,
+                "shift+j",
+                Pressed::Ask(CaptureProblem::NeedsModifier),
+            ),
+            (
+                &adding,
+                "shift+left",
+                Pressed::Write(KeymapChange::Add {
+                    command: CommandId::TerminalNew,
+                    chord: chord("shift+left"),
+                }),
+            ),
+            (
+                &adding,
+                "opt+j",
+                Pressed::Write(KeymapChange::Add {
+                    command: CommandId::TerminalNew,
+                    chord: chord("opt+j"),
+                }),
+            ),
+        ];
+        for (capture, keys, expected) in cases {
+            let result = pressed(capture, chord(keys), &bindings);
+            assert_eq!(result, expected, "{keys}");
+        }
     }
 
     #[test]

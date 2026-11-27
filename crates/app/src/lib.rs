@@ -320,6 +320,8 @@ fn shown_from(config: &Config) -> Shown {
         placeholder_screen: Vec::new(),
         setups: AgentSetupView::default(),
         bindings: config.bindings.clone(),
+        default_bindings: config.default_bindings.clone(),
+        unread_keybindings: config.unread_keybindings,
         settings: config.settings.clone(),
         unread: config.unread_settings.clone(),
     }

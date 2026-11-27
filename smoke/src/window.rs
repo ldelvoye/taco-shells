@@ -45,6 +45,11 @@ const SCROLLBACK_PART: &str = "settings:scrollback";
 const SETTINGS_FILE: &str = "settings.json";
 const TYPED_SCROLLBACK: &str = "5000";
 const WRITTEN_SCROLLBACK: &str = "\"scrollback\":5000";
+const OPEN_SHORTCUTS: &str = "cmd-shift-,";
+const ADD_NEW_TERMINAL_PART: &str = "shortcut-add:terminal.new";
+const KEYBINDINGS_FILE: &str = "keybindings.json";
+const PRESSED_SHORTCUT: &str = "cmd-j";
+const WRITTEN_SHORTCUT: &str = "\"cmd+j\":\"terminal.new\"";
 const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
 const PNG_HEADER_LENGTH: usize = 24;
 
@@ -216,24 +221,44 @@ pub fn a_typed_scrollback_is_written_to_the_settings_file(
     driver.text(TYPED_SCROLLBACK)?;
     driver.keys(&["enter"])?;
     let settings = smoke.config.join(SETTINGS_FILE);
-    let started = Instant::now();
-    loop {
-        let text = fs::read_to_string(&settings)
-            .map_err(|error| format!("could not read {}: {error}", settings.display()))?;
-        let compact: String = text.split_whitespace().collect();
-        if compact.contains(WRITTEN_SCROLLBACK) {
-            break;
-        }
-        if started.elapsed() >= SETTLE_DEADLINE {
-            return Err(format!(
-                "settings.json never gained {WRITTEN_SCROLLBACK}: {text}"
-            ));
-        }
-        thread::sleep(SETTLE_POLL);
-    }
+    file_gains(&settings, WRITTEN_SCROLLBACK)?;
     // The first Esc is the field's, the second closes the page.
     driver.keys(&["escape", "escape"])?;
     Ok(())
+}
+
+/// Keys pressed on a shortcut row, after its +, are written to keybindings.json for that command.
+pub fn a_shortcut_set_by_pressing_keys_is_written_to_the_keybindings_file(
+    smoke: &Smoke,
+    driver: &mut Driver,
+) -> Result<(), String> {
+    driver.keys(&[OPEN_SHORTCUTS])?;
+    let add = settled_bounds(driver, ADD_NEW_TERMINAL_PART)?;
+    let inside = center(&add);
+    driver.drag(inside, inside)?;
+    driver.keys(&[PRESSED_SHORTCUT])?;
+    let keybindings = smoke.config.join(KEYBINDINGS_FILE);
+    file_gains(&keybindings, WRITTEN_SHORTCUT)?;
+    // Back to Settings, then closed.
+    driver.keys(&["escape", "escape"])?;
+    Ok(())
+}
+
+/// Waits until the file holds `wanted`, compared with all whitespace taken out.
+fn file_gains(path: &Path, wanted: &str) -> Result<(), String> {
+    let started = Instant::now();
+    loop {
+        let text = fs::read_to_string(path)
+            .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+        let compact: String = text.split_whitespace().collect();
+        if compact.contains(wanted) {
+            return Ok(());
+        }
+        if started.elapsed() >= SETTLE_DEADLINE {
+            return Err(format!("{} never gained {wanted}: {text}", path.display()));
+        }
+        thread::sleep(SETTLE_POLL);
+    }
 }
 
 /// A bound chord runs its command once and types nothing; an unbound one reaches the shell. If either bracket chord

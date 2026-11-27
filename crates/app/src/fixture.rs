@@ -20,6 +20,7 @@ use crate::window::Shown;
 const CLAUDE: &str = "claude";
 const STATE_MINUTES_AGO: u64 = 52;
 const FONT_SIZE_PROBLEM: &str = "settings.json: \"fontSize\" must be a number between 1 and 72";
+const KEYBINDINGS_PROBLEM: &str = "keybindings.json: expected a comma at line 7";
 const OFFER_TEXT: &str =
     "Claude Code is running here but isn't set up, so its activity can't show.";
 
@@ -121,6 +122,8 @@ pub enum Fixture {
     Paths,
     /// The quiet one with some switches on and some off.
     Switches,
+    /// The quiet one with a keybindings.json that could not be read.
+    BrokenKeys,
 }
 
 struct FixtureRow {
@@ -146,6 +149,7 @@ impl Fixture {
             "broken" => Some(Self::Broken),
             "paths" => Some(Self::Paths),
             "switches" => Some(Self::Switches),
+            "brokenkeys" => Some(Self::BrokenKeys),
             _ => None,
         }
     }
@@ -158,6 +162,7 @@ impl Fixture {
             Self::Broken => broken(),
             Self::Paths => paths(),
             Self::Switches => switches(),
+            Self::BrokenKeys => broken_keys(),
         }
     }
 
@@ -255,6 +260,8 @@ fn mixed() -> Shown {
         placeholder_screen: screen.collect(),
         setups: offered_setup(),
         bindings: default_bindings(),
+        default_bindings: default_bindings(),
+        unread_keybindings: false,
         settings: Settings::default(),
         unread: UnreadSettings::None,
     }
@@ -263,6 +270,13 @@ fn mixed() -> Shown {
 fn quiet() -> Shown {
     let mut shown = mixed();
     shown.notices = Notices::default();
+    shown
+}
+
+fn broken_keys() -> Shown {
+    let mut shown = quiet();
+    shown.notices.config_problems = vec![KEYBINDINGS_PROBLEM.to_string()];
+    shown.unread_keybindings = true;
     shown
 }
 
@@ -293,6 +307,8 @@ fn empty() -> Shown {
         placeholder_screen: Vec::new(),
         setups: AgentSetupView::default(),
         bindings: default_bindings(),
+        default_bindings: default_bindings(),
+        unread_keybindings: false,
         settings: Settings::default(),
         unread: UnreadSettings::None,
     }

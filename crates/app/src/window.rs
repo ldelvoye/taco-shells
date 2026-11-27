@@ -6,8 +6,9 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 use gpui::{
     AnyElement, App, AppContext, Bounds, ClipboardItem, Context, Div, DragMoveEvent, Entity,
-    FocusHandle, Focusable, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Pixels,
-    Point, Render, Size, Styled, Subscription, Task, Window, div, point, px, size,
+    FocusHandle, Focusable, InteractiveElement, IntoElement, KeyDownEvent, Keystroke,
+    ParentElement, Pixels, Point, Render, Size, Styled, Subscription, Task, Window, div, point, px,
+    size,
 };
 use taco_protocol::{
     ActivityRequest, ConfigFile, Dragged, DrawnState, DropPlace, Edge, FocusMove, HarnessId, Panel,
@@ -16,8 +17,8 @@ use taco_protocol::{
 use taco_rules::{DropMark, DropPoint, drop_for, drop_mark_for, focus_target, selected_terminal};
 use taco_services::{AgentMenuAction, AgentSetupView};
 use taco_settings::{
-    Binding, CommandId, Config, ConfigTexts, SettingChange, Settings, UnreadSettings, command_for,
-    palette_for, resolve_config,
+    Binding, Chord, CommandId, Config, KeymapChange, SettingChange, Settings, UnreadSettings,
+    command_for, palette_for,
 };
 use taco_terminal_view::{Terminals, TerminalsEvent};
 
@@ -44,7 +45,9 @@ use crate::popups::{Popup, RenameStep, popup_layer, rename_step};
 use crate::settings_page::{
     SettingsFields, SettingsInput, Typed, TypedSetting, published_text, settings_page, typed,
 };
-use crate::shortcuts_page::{SEARCH_PLACEHOLDER, ShortcutsInput, shortcuts_page};
+use crate::shortcuts_page::{
+    Capture, Pressed, SEARCH_PLACEHOLDER, ShortcutsInput, change_for, pressed, shortcuts_page,
+};
 use crate::slot::{Slot, SlotLine, opened_height, slot_line_for};
 use crate::strip::strip;
 use crate::terminal_list::{ListDrag, ListInput, terminal_list};
@@ -70,6 +73,10 @@ pub struct Shown {
     pub placeholder_screen: Vec<String>,
     pub setups: AgentSetupView,
     pub bindings: Vec<Binding>,
+    /// The shipped bindings alone, which "Back to default" returns a command to.
+    pub default_bindings: Vec<Binding>,
+    /// keybindings.json could not be read, so the shortcuts page cannot change it.
+    pub unread_keybindings: bool,
     pub settings: Settings,
     pub unread: UnreadSettings,
 }
@@ -127,8 +134,10 @@ pub struct WindowView {
     page_wants_keyboard: Option<PageKeyboard>,
     shortcut_search: Entity<TextField>,
     shortcut_query: String,
-    /// The shipped bindings alone, which "Back to default" returns a command to.
-    default_bindings: Vec<Binding>,
+    /// A shortcut being set on the shortcuts page; while it is open, every key goes to it.
+    capture: Option<Capture>,
+    /// Why each command's last shortcut change was not written, until it is changed again.
+    keymap_refused: HashMap<CommandId, String>,
     /// The last page has just closed and the terminal on screen takes the keyboard back.
     terminal_wants_keyboard: bool,
     /// Why each setting's last write was refused, by its name in settings.json, until it is written again.
@@ -234,7 +243,8 @@ impl WindowView {
             page_wants_keyboard: None,
             shortcut_search,
             shortcut_query: String::new(),
-            default_bindings: shipped_bindings(),
+            capture: None,
+            keymap_refused: HashMap::new(),
             terminal_wants_keyboard: false,
             refused: HashMap::new(),
         }
@@ -283,6 +293,8 @@ impl WindowView {
                 }
                 self.look = Look::new(config.appearance);
                 self.shown.bindings = config.bindings;
+                self.shown.default_bindings = config.default_bindings;
+                self.shown.unread_keybindings = config.unread_keybindings;
                 self.shown.settings = config.settings;
                 self.shown.unread = config.unread_settings;
                 notices.config_problems = config.problems;
@@ -304,7 +316,9 @@ impl WindowView {
                 self.refused.insert(key, reason);
                 self.refresh_fields(cx);
             }
-            ServicesOutput::KeymapRefused { .. } => {}
+            ServicesOutput::KeymapRefused { command, reason } => {
+                self.keymap_refused.insert(command, reason);
+            }
         }
         cx.notify();
     }
@@ -563,6 +577,7 @@ impl WindowView {
         self.pages = after;
         if shortcuts_left {
             self.forget_search(cx);
+            self.capture = None;
         }
         let top = self.pages.last().copied();
         match top {
@@ -587,6 +602,88 @@ impl WindowView {
             .update(cx, |field, cx| field.set_text("", cx));
     }
 
+    /// Turns a chip, or the + when `changing` is none, into "Press keys".
+    pub(crate) fn start_capture(
+        &mut self,
+        command: CommandId,
+        changing: Option<Chord>,
+        cx: &mut Context<Self>,
+    ) {
+        self.capture = Some(Capture {
+            command,
+            changing,
+            pending: None,
+            problem: None,
+        });
+        // The page holds the keyboard, so no field types the keys pressed next.
+        self.page_wants_keyboard = Some(PageKeyboard::Page);
+        cx.notify();
+    }
+
+    pub(crate) fn cancel_capture(&mut self, cx: &mut Context<Self>) {
+        self.capture = None;
+        cx.notify();
+    }
+
+    fn capture_key(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) {
+        let escaped = keystroke.key == ESCAPE && !keystroke.modifiers.modified();
+        if escaped {
+            self.cancel_capture(cx);
+            return;
+        }
+        let Some(capture) = self.capture.as_mut() else {
+            return;
+        };
+        let chord = chord_of(keystroke);
+        let result = pressed(capture, chord.clone(), &self.shown.bindings);
+        match result {
+            Pressed::Write(change) => {
+                self.capture = None;
+                self.write_shortcut(change);
+            }
+            Pressed::Unchanged => self.capture = None,
+            Pressed::Ask(problem) => {
+                capture.pending = Some(chord);
+                capture.problem = Some(problem);
+            }
+        }
+        cx.notify();
+    }
+
+    /// "Use it here": the keys the row asked about are written, taking them from the command that had them.
+    pub(crate) fn take_pending(&mut self, cx: &mut Context<Self>) {
+        let Some(capture) = self.capture.take() else {
+            return;
+        };
+        if let Some(pending) = capture.pending.clone() {
+            let change = change_for(&capture, pending);
+            self.write_shortcut(change);
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn remove_captured(&mut self, cx: &mut Context<Self>) {
+        let Some(capture) = self.capture.take() else {
+            return;
+        };
+        if let Some(chord) = capture.changing {
+            let command = capture.command;
+            self.write_shortcut(KeymapChange::Remove { command, chord });
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn reset_shortcut(&mut self, command: CommandId, cx: &mut Context<Self>) {
+        self.write_shortcut(KeymapChange::Reset { command });
+        cx.notify();
+    }
+
+    fn write_shortcut(&mut self, change: KeymapChange) {
+        let command = change.command();
+        self.keymap_refused.remove(&command);
+        self.services.write_keybinding(change);
+    }
+
     pub(crate) fn change_setting(&mut self, change: SettingChange) {
         let key = change.key();
         self.refused.remove(key);
@@ -596,7 +693,10 @@ impl WindowView {
     // Esc in the search clears it and hands the keyboard to the page, so the next Esc goes back to Settings.
     fn search_said(&mut self, event: &TextFieldEvent, cx: &mut Context<Self>) {
         match event {
-            TextFieldEvent::Edited(text) => self.shortcut_query = text.clone(),
+            TextFieldEvent::Edited(text) => {
+                self.shortcut_query = text.clone();
+                self.capture = None;
+            }
             TextFieldEvent::Submitted => {}
             TextFieldEvent::Cancelled => {
                 self.forget_search(cx);
@@ -706,6 +806,11 @@ impl WindowView {
 
     /// Runs the command a key-down's chord is bound to; false when the window has nothing to run for it, so the key goes on to the terminal.
     fn key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        // A shortcut being set takes every key first, so pressing cmd+w sets cmd+w rather than closing anything.
+        if self.capture.is_some() {
+            self.capture_key(&event.keystroke, cx);
+            return true;
+        }
         // The name field keeps every key while it is open.
         if self.popup.is_some() {
             return false;
@@ -1137,9 +1242,13 @@ impl WindowView {
             Some(Page::Shortcuts) => {
                 let input = ShortcutsInput {
                     bindings: &self.shown.bindings,
-                    defaults: &self.default_bindings,
+                    defaults: &self.shown.default_bindings,
                     query: &self.shortcut_query,
                     search: &self.shortcut_search,
+                    capture: self.capture.as_ref(),
+                    refused: &self.keymap_refused,
+                    unread: self.shown.unread_keybindings,
+                    problems: &self.shown.notices.config_problems,
                     look,
                 };
                 let shown_page = shortcuts_page(&input, cx).track_focus(&self.page_focus);
@@ -1344,17 +1453,6 @@ fn keyboard_on_opening(page: Page) -> PageKeyboard {
         Page::Settings => PageKeyboard::Page,
         Page::Shortcuts => PageKeyboard::Search,
     }
-}
-
-fn shipped_bindings() -> Vec<Binding> {
-    let no_files = ConfigTexts {
-        settings: None,
-        keybindings: None,
-    };
-    // The bindings do not depend on the appearance.
-    let system_is_dark = false;
-    let shipped = resolve_config(&no_files, system_is_dark);
-    shipped.bindings
 }
 
 fn search_field(look: &Look, cx: &mut Context<WindowView>) -> Entity<TextField> {
