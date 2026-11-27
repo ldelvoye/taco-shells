@@ -1,5 +1,4 @@
 use std::ffi::OsString;
-use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::process::ExitCode;
 
@@ -61,23 +60,10 @@ fn parsed(arguments: &[OsString]) -> Option<Arguments> {
         context,
     } = launch::parsed(arguments)?;
     Some(Arguments {
-        control: open_fd(control)?,
-        terminals: open_fd(terminals)?,
+        control: program::adopt_connection(control)?,
+        terminals: program::adopt_connection(terminals)?,
         context,
     })
-}
-
-fn open_fd(fd: RawFd) -> Option<UnixStream> {
-    if fd <= libc::STDERR_FILENO {
-        return None;
-    }
-    // Inherited without close-on-exec, so set here: otherwise every shell would hold the app's connections.
-    let marked = unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
-    if marked < 0 {
-        return None;
-    }
-    let owned = unsafe { OwnedFd::from_raw_fd(fd) };
-    Some(UnixStream::from(owned))
 }
 
 /// Lifts the soft limit on open files to what the system allows, and gives back the limit it had, for the shells.

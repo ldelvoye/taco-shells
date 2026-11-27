@@ -1,4 +1,5 @@
 use std::io::{BufWriter, ErrorKind, Write};
+use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -226,6 +227,20 @@ fn spawn_signal_waiter(inputs: Sender<Input>) -> std::io::Result<()> {
             let _ = inputs.send(Input::Command(RuntimeCommand::Stop));
         })?;
     Ok(())
+}
+
+/// One of the connections the app handed over, at `fd`, or none if `fd` is a standard stream or not open.
+pub fn adopt_connection(fd: RawFd) -> Option<UnixStream> {
+    if fd <= libc::STDERR_FILENO {
+        return None;
+    }
+    // Inherited without close-on-exec, so set here: otherwise every shell would hold the app's connections.
+    let marked = unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
+    if marked < 0 {
+        return None;
+    }
+    let owned = unsafe { OwnedFd::from_raw_fd(fd) };
+    Some(UnixStream::from(owned))
 }
 
 /// The signals a stop arrives as. Blocked before any thread starts, so only the waiter receives them.

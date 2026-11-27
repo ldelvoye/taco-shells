@@ -412,7 +412,7 @@ mod tests {
     const TAIL_CHARS: usize = 80;
     /// Only a safety net, for each wait as a whole: every wait below ends on output the shell prints or on its exit.
     const PATIENCE: Duration = Duration::from_secs(5);
-    /// Prints whether SIGTERM is blocked, and how many devices the process holds besides its own terminal on 0 to 2.
+    /// Prints whether SIGTERM is blocked, and how many devices and sockets the process holds besides its own terminal on 0 to 2.
     const REPORT_INHERITED: &str = r#"my $old = POSIX::SigSet->new; sigprocmask(SIG_BLOCK, POSIX::SigSet->new, $old); my $devices = grep { my $fd; open($fd, "<&=", $_) && -c $fd } 3..255; print "sigterm blocked: ", ($old->ismember(SIGTERM) ? 1 : 0), ", other devices: $devices\n";"#;
 
     /// The runtime starts shells from one thread. Tests starting them on several at once could pass a pty one has just opened, before its close-on-exec is set, to a shell another starts.
@@ -555,11 +555,14 @@ mod tests {
         std::fs::remove_dir_all(&scratch).unwrap();
     }
 
-    /// The runtime blocks SIGTERM before its threads start; a shell must not inherit that, or `kill` would stop working in it, nor another terminal's pty.
+    /// The runtime blocks SIGTERM before its threads start; a shell must not inherit that, or `kill` would stop working in it, nor another terminal's pty, nor the app's connections.
     /// zsh happens to clear its own mask, and macOS's `ps` does not show one, so a program that leaves it alone reports it.
     #[test]
-    fn a_shell_starts_with_no_signal_blocked_and_no_other_terminal_open() {
+    fn a_shell_starts_with_no_signal_blocked_and_nothing_of_the_runtime_open() {
         let _alone = one_at_a_time();
+        // A connection as the runtime gets one, open across exec until it is adopted. A device stands in for the app's socket, which the perl below counts.
+        let handed_over = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY) };
+        let _adopted = crate::program::adopt_connection(handed_over).unwrap();
         let mut blocked: libc::sigset_t = unsafe { std::mem::zeroed() };
         let mut previous: libc::sigset_t = unsafe { std::mem::zeroed() };
         unsafe {
