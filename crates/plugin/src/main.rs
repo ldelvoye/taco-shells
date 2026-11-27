@@ -4,9 +4,8 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use taco_plugin::{
-    ANCESTOR_LIMIT, Request, Surroundings, ancestor_pids, ask, permission_answer, post, posts_for,
-    question_for, read_port, read_token, send_posts, serve, serves, session_start_output,
-    stop_output,
+    Request, Surroundings, ancestor_pids, ask, permission_answer, post, posts_for, question_for,
+    read_port, read_token, send_posts, serve, serves, session_start_output, stop_output,
 };
 use taco_protocol::routes::CONTEXT;
 use taco_protocol::{ContextAnswer, PORT_FILE_VARIABLE, StopAnswer, deadlines};
@@ -92,7 +91,7 @@ fn run_hook() -> std::io::Result<()> {
         return Ok(());
     };
 
-    let pids = ancestor_pids(std::os::unix::process::parent_id(), ANCESTOR_LIMIT);
+    let pids = ancestor_pids(std::os::unix::process::parent_id());
     let token = read_token(&path);
     let posts = posts_for(&payload, &pids);
     let token_text = token.as_deref();
