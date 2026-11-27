@@ -57,7 +57,7 @@ fn version_text(version: (u32, u32, u32)) -> String {
     format!("{major}.{minor}.{patch}")
 }
 
-fn shown_with_tilde(file: &Path, home: &Path) -> String {
+pub(crate) fn shown_with_tilde(file: &Path, home: &Path) -> String {
     let Ok(rest) = file.strip_prefix(home) else {
         return file.display().to_string();
     };

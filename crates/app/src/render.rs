@@ -42,13 +42,14 @@ pub enum Gesture {
 }
 
 /// Writes the window, drawn from `fixture` in `appearance` after `gestures`, to a PNG at `out`.
-/// `width` in window points, the app's usual width when none is given.
+/// `width` in window points, the app's usual width when none is given; `panel` the Agent Activity panel's, the fixture's when none is given.
 pub fn render_png(
     fixture: Fixture,
     appearance: Appearance,
     gestures: &[Gesture],
     out: &Path,
     width: Option<f32>,
+    panel: Option<f32>,
 ) -> Result<()> {
     let platform = gpui_platform::current_platform(HEADLESS);
     let assets = Assets::for_this_build();
@@ -66,7 +67,10 @@ pub fn render_png(
     }
     let image_size = size(px(window_width), px(WINDOW_HEIGHT));
     let window = cx.open_window(image_size, |_, cx| {
-        let shown = fixture.shown();
+        let mut shown = fixture.shown();
+        if let Some(size) = panel {
+            shown.drawn.panels.agent_activity.size = size;
+        }
         let look = Look::new(appearance);
         let mut writes = None;
         if fixture.applies_writes() {

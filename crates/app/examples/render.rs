@@ -12,8 +12,9 @@ use taco_app::Fixture;
 use taco_app::render::{Gesture, render_png};
 use taco_settings::Appearance;
 
-const USAGE: &str = "usage: render <mixed|quiet|empty|broken|paths|switches|brokenkeys> <light|dark> <out.png> [width:POINTS] [click:X,Y|rightclick:X,Y|drag:X,Y:X,Y|hold:X,Y:X,Y|scroll:X,Y:DOWN|type:TEXT|key:NAME|wait:MS]...";
+const USAGE: &str = "usage: render <mixed|quiet|empty|broken|paths|switches|brokenkeys> <light|dark> <out.png> [width:POINTS] [panel:POINTS] [click:X,Y|rightclick:X,Y|drag:X,Y:X,Y|hold:X,Y:X,Y|scroll:X,Y:DOWN|type:TEXT|key:NAME|wait:MS]...";
 const WIDTH_PREFIX: &str = "width:";
+const PANEL_PREFIX: &str = "panel:";
 
 struct Request {
     fixture: Fixture,
@@ -21,6 +22,7 @@ struct Request {
     out: PathBuf,
     gestures: Vec<Gesture>,
     width: Option<f32>,
+    panel: Option<f32>,
 }
 
 fn main() -> ExitCode {
@@ -35,6 +37,7 @@ fn main() -> ExitCode {
         &request.gestures,
         &request.out,
         request.width,
+        request.panel,
     );
     if let Err(error) = rendered {
         eprintln!("render failed: {error:#}");
@@ -56,10 +59,16 @@ fn parsed(arguments: &[String]) -> Option<Request> {
     };
     let mut gestures = Vec::new();
     let mut width = None;
+    let mut panel = None;
     for extra in extras {
         if let Some(points) = extra.strip_prefix(WIDTH_PREFIX) {
             let parsed: f32 = points.parse().ok()?;
             width = Some(parsed);
+            continue;
+        }
+        if let Some(points) = extra.strip_prefix(PANEL_PREFIX) {
+            let parsed: f32 = points.parse().ok()?;
+            panel = Some(parsed);
             continue;
         }
         gestures.push(gesture_from(extra)?);
@@ -70,6 +79,7 @@ fn parsed(arguments: &[String]) -> Option<Request> {
         out: PathBuf::from(out),
         gestures,
         width,
+        panel,
     };
     Some(request)
 }
