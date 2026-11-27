@@ -70,7 +70,7 @@ pub enum PageMove {
     OpenShortcuts,
     /// Esc and "‹ Settings": one page back.
     Back,
-    /// × and the close-terminal command.
+    /// ×, the close-terminal command, and the panels' strip buttons and command, whose panels a page hides.
     CloseAll,
 }
 
@@ -80,7 +80,6 @@ pub enum OverPage {
     Move(PageMove),
     /// It shows a terminal, so the pages close first.
     ShowTerminal,
-    Run,
     /// The terminal's own commands: left to whatever on the page has the keyboard.
     PassOn,
 }
@@ -124,7 +123,7 @@ pub fn over_page(command: CommandId) -> OverPage {
         CommandId::TerminalNew
         | CommandId::TerminalFocusNextGroup
         | CommandId::TerminalFocusPreviousGroup => OverPage::ShowTerminal,
-        CommandId::SidebarToggle => OverPage::Run,
+        CommandId::SidebarToggle => OverPage::Move(PageMove::CloseAll),
         _ => OverPage::PassOn,
     }
 }
@@ -258,10 +257,11 @@ pub fn text_button(id: &'static str, label: &'static str, look: &Look) -> Statef
         .child(label)
 }
 
-/// The line under a page's groups, saying where changes go, with a button for the file.
+/// The line under a page's groups, saying where changes go, with a button for the file that wraps under it when narrow.
 pub fn page_foot(text: &'static str, button: Stateful<Div>, look: &Look) -> Div {
     div()
         .flex()
+        .flex_wrap()
         .items_center()
         .gap(px(FOOT_GAP))
         .pt(px(FOOT_PADDING_TOP))
@@ -366,7 +366,7 @@ mod tests {
             ),
             (CommandId::TerminalNew, OverPage::ShowTerminal),
             (CommandId::TerminalFocusNextGroup, OverPage::ShowTerminal),
-            (CommandId::SidebarToggle, OverPage::Run),
+            (CommandId::SidebarToggle, OverPage::Move(PageMove::CloseAll)),
             (CommandId::TerminalPaste, OverPage::PassOn),
             (CommandId::TerminalKillLine, OverPage::PassOn),
         ];

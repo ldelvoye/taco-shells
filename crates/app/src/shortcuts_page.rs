@@ -218,15 +218,20 @@ fn command_row(row: &Row, input: &ShortcutsInput, cx: &mut Context<WindowView>) 
     let look = input.look;
     let command = row.command;
     let setting = row_setting(command, input.capture);
+    // In a narrow window the name truncates and the chips wrap, so the row never runs past the page.
     let label = div()
         .flex_1()
         .min_w_0()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_ellipsis()
         .font_weight(FontWeight::MEDIUM)
         .child(row.name.to_string());
     let mut keys = div()
         .flex()
         .flex_wrap()
-        .flex_none()
+        .flex_shrink(1.)
+        .min_w_0()
         .items_center()
         .justify_end()
         .gap(px(CHIP_GAP));

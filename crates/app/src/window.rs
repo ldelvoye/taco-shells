@@ -483,6 +483,15 @@ impl WindowView {
         found.name.clone()
     }
 
+    /// A panel's strip button: over a page, it closes the pages and shows the window as it was, toggling nothing unseen.
+    pub(crate) fn strip_panel_clicked(&mut self, panel: Panel, cx: &mut Context<Self>) {
+        if !self.pages.is_empty() {
+            self.move_pages(PageMove::CloseAll, cx);
+            return;
+        }
+        self.toggle_panel(panel);
+    }
+
     pub(crate) fn toggle_panel(&self, panel: Panel) {
         let drawn = self.drawn();
         let place = place_of(&drawn.panels, panel);
@@ -863,7 +872,6 @@ impl WindowView {
                 self.close_pages(cx);
                 self.run(command, cx);
             }
-            OverPage::Run => self.run(command, cx),
             OverPage::PassOn => return false,
         }
         true
@@ -1135,13 +1143,16 @@ impl WindowView {
             .min_w_0()
             .min_h_0()
             .child(middle);
-        if let Some((panel, place)) = open_on(&drawn.panels, Edge::Bottom) {
-            center = center.child(self.panel(panel, place, drawn, mark, cx));
-        }
-
         let pages_open = !self.pages.is_empty();
         let side_strip = strip(&drawn.panels, pages_open, look, cx);
         let mut body = div().relative().flex().flex_1().min_h_0().child(side_strip);
+        // A page stands alone beside the strip; the panels come back as they were when it closes.
+        if pages_open {
+            return body.child(center);
+        }
+        if let Some((panel, place)) = open_on(&drawn.panels, Edge::Bottom) {
+            center = center.child(self.panel(panel, place, drawn, mark, cx));
+        }
         if let Some((panel, place)) = open_on(&drawn.panels, Edge::Left) {
             body = body.child(self.panel(panel, place, drawn, mark, cx));
         }
