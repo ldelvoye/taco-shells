@@ -223,15 +223,16 @@ fn notice_of(
     let product_name = reading.agent.setup.product_name;
     let harness = reading.agent.harness_id.clone();
     let terminals: Vec<TerminalId> = seen.iter().cloned().collect();
-    let notice = |kind: AgentSetupNoticeKind, text: String| {
+    let notice_with = |kind: AgentSetupNoticeKind, text: String, detail: Option<String>| {
         Some(AgentSetupNotice {
             harness: harness.clone(),
             kind,
             text,
-            detail: None,
+            detail,
             terminals: terminals.clone(),
         })
     };
+    let notice = |kind: AgentSetupNoticeKind, text: String| notice_with(kind, text, None);
 
     if let Some(Recorded::Problem(problem)) = recorded {
         return notice(AgentSetupNoticeKind::Problem, problem.clone());
@@ -246,14 +247,9 @@ fn notice_of(
         && !hides_done
     {
         let text = done_text(product_name);
-        let detail = changed_file.as_deref().map(changed_file_text);
-        return Some(AgentSetupNotice {
-            harness,
-            kind: AgentSetupNoticeKind::Done,
-            text,
-            detail,
-            terminals,
-        });
+        let file = changed_file.as_deref();
+        let detail = file.map(changed_file_text);
+        return notice_with(AgentSetupNoticeKind::Done, text, detail);
     }
     match &reading.state {
         AgentSetupState::Off => {

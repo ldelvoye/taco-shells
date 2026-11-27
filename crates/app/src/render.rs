@@ -42,7 +42,8 @@ pub enum Gesture {
 }
 
 /// Writes the window, drawn from `fixture` in `appearance` after `gestures`, to a PNG at `out`.
-/// `width` in window points, the app's usual width when none is given; `panel` the Agent Activity panel's, the fixture's when none is given.
+/// `width` in window points, the app's usual width when none is given.
+/// `panel` is Agent Activity's width in points, the fixture's when none is given.
 pub fn render_png(
     fixture: Fixture,
     appearance: Appearance,
@@ -68,8 +69,8 @@ pub fn render_png(
     let image_size = size(px(window_width), px(WINDOW_HEIGHT));
     let window = cx.open_window(image_size, |_, cx| {
         let mut shown = fixture.shown();
-        if let Some(size) = panel {
-            shown.drawn.panels.agent_activity.size = size;
+        if let Some(panel_size) = panel {
+            shown.drawn.panels.agent_activity.size = panel_size;
         }
         let look = Look::new(appearance);
         let mut writes = None;

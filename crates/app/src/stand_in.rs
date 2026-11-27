@@ -18,7 +18,6 @@ use taco_rules::{
 use taco_services::{AgentMenuAction, AgentSetupNoticeKind, AgentSetupView, done_text};
 use taco_settings::{Appearance, Config, KeymapChange, SettingChange, apply_settings_layer};
 
-use crate::fixture::PRODUCT_NAME;
 use crate::link::{Ports, ServicesOutput, ServicesPort, WindowOutput, WindowSender, WorkspacePort};
 use crate::window::Shown;
 
@@ -26,6 +25,8 @@ const CHECKOUT_HOOKS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../hooks")
 // Without a config to write into, the stand-in refuses every write.
 const REFUSED_WRITE: &str = "settings.json is read-only, so nothing was changed.";
 const STAND_IN_LABEL: &str = "stand-in";
+/// The agent the stand-in and its fixtures speak of.
+pub(crate) const PRODUCT_NAME: &str = "Claude Code";
 const REFUSED_KEYMAP_WRITE: &str = "keybindings.json is read-only, so nothing was changed.";
 
 /// The agent logs and boards the stand-in answers from, by terminal.
