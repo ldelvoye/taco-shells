@@ -4,6 +4,7 @@ use gpui::{
     Bounds, Context, Div, ElementId, Entity, FontWeight, InteractiveElement, ParentElement, Pixels,
     SharedString, Stateful, StatefulInteractiveElement, Styled, div, px, transparent_black, white,
 };
+use taco_services::AGENT_APP_NAME;
 use taco_settings::{
     Binding, CommandId, CursorStyle, FONT_SIZE_MAX, FONT_SIZE_MIN, SettingChange, Settings,
     ShellRowName, ThemeChoice, UnreadSettings,
@@ -347,9 +348,10 @@ fn agents_group(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
         input,
         cx,
     );
-    let hint = Some(
-        "Agents in this app's terminals can write to the Agent Activity panel. Claude Code lists it in /plugin as the plugin taco-shells, inline.",
+    let description = format!(
+        "Agents in this app's terminals can write to the Agent Activity panel. Claude Code lists it in /plugin as the plugin {AGENT_APP_NAME}, inline."
     );
+    let hint = Some(description.as_str());
     let activity_shown = SettingChange::AgentActivity(settings.agent_activity);
     let label = "Agent Activity in this app's terminals";
     let activity_row = setting_row(&activity_shown, label, hint, activity, input);
