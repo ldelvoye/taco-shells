@@ -79,6 +79,9 @@ mod tests {
     use super::*;
     use std::sync::mpsc;
     use std::thread;
+    use std::time::Duration;
+
+    const HOLD_CHECK: Duration = Duration::from_millis(50);
 
     /// A reader on its own thread, which says when it has room to read again.
     fn waiting_reader(budget: &Arc<Budget>) -> (mpsc::Receiver<()>, thread::JoinHandle<()>) {
@@ -96,10 +99,9 @@ mod tests {
         let budget = Arc::new(Budget::default());
         budget.spend(BUDGET_BYTES);
         let (finished, reader) = waiting_reader(&budget);
-        assert!(
-            finished.try_recv().is_err(),
-            "a full budget lets no more be read"
-        );
+        // Long enough for a reader let through by mistake to say so.
+        let woke = finished.recv_timeout(HOLD_CHECK);
+        assert!(woke.is_err(), "a full budget lets no more be read");
         budget.give_back(BUDGET_BYTES / 2);
         reader.join().unwrap();
 

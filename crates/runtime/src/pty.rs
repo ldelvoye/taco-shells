@@ -1,9 +1,11 @@
+mod environment;
+mod reader;
+
 use std::collections::HashMap;
-use std::ffi::{CStr, OsStr, OsString};
+use std::ffi::CStr;
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -12,24 +14,19 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use taco_protocol::{APP_VARIABLE, PORT_FILE_VARIABLE, TerminalId, TerminalSize};
+use taco_protocol::{TerminalId, TerminalSize};
 
 use crate::budget::{Budget, Budgets};
 use crate::core::Input;
 use crate::platform;
 use crate::shells::Shells;
+use reader::Reader;
 
-/// The most read from a pty at once. One read is what another terminal's echo can wait behind.
-const READ_BYTES: usize = 64 * 1024;
 const FALLBACK_SHELL: &str = "/bin/zsh";
 /// A process ended by a signal reports 128 plus the signal, as shells do.
 const SIGNAL_EXIT_BASE: i32 = 128;
 /// What an exit reports when its status could not be read.
 const UNKNOWN_EXIT_CODE: i32 = 1;
-/// The most read after a shell has exited, before its exit is reported anyway.
-const DRAIN_BYTES: usize = 1024 * 1024;
-/// The plugin folders Claude Code loads for one session, joined with `:`.
-const PLUGIN_DIRECTORIES_VARIABLE: &str = "CLAUDE_CODE_PLUGIN_DIRS";
 
 /// The program each terminal runs, and where it starts when no directory is given or the one given is not a directory.
 pub struct ShellProgram {
@@ -55,8 +52,15 @@ struct Shell {
     pid: u32,
     /// Set once the shell has been waited for: its pid may then belong to another process.
     reaped: Arc<AtomicBool>,
-    master: Arc<OwnedFd>,
+    master: OwnedFd,
     writes: Sender<Vec<u8>>,
+}
+
+/// What a shell's threads take over besides their own copies of the master: the reader's copy of the slave, and the wake pipe from the waiter to the reader.
+struct ThreadEnds {
+    shell_side: OwnedFd,
+    wake_reader: OwnedFd,
+    wake_writer: OwnedFd,
 }
 
 /// The terminals' shells, each in a pty of its own, with a reader, a writer and a waiter thread.
@@ -136,24 +140,7 @@ impl PtyShells {
         let mut command = Command::new(&self.program.path);
         command.args(&self.program.arguments);
         command.current_dir(directory);
-        command.env("TERM", "xterm-256color");
-        command.env("COLORTERM", "truecolor");
-        // Most CLIs only emit OSC 8 hyperlinks for terminals they recognise by name.
-        command.env("FORCE_HYPERLINK", "1");
-        if std::env::var_os("LANG").is_none() {
-            command.env("LANG", "en_US.UTF-8");
-        }
-        // Overrides what the runtime inherited: a Dev app opened from a stable app's terminal would otherwise pass on the stable app's.
-        command.env(APP_VARIABLE, &self.program.context.app);
-        command.env(PORT_FILE_VARIABLE, &self.program.context.port_file);
-        let inherited_plugins = std::env::var_os(PLUGIN_DIRECTORIES_VARIABLE);
-        let own_plugin = &self.program.context.plugin_directory;
-        let plugins =
-            plugin_directories(inherited_plugins.as_deref(), own_plugin, self.agent_plugin);
-        match plugins {
-            Some(plugins) => command.env(PLUGIN_DIRECTORIES_VARIABLE, plugins),
-            None => command.env_remove(PLUGIN_DIRECTORIES_VARIABLE),
-        };
+        environment::apply(&mut command, &self.program.context, self.agent_plugin);
         let shell_side = slave.try_clone()?;
         command.stdin(Stdio::from(slave.try_clone()?));
         command.stdout(Stdio::from(slave.try_clone()?));
@@ -187,18 +174,13 @@ impl PtyShells {
         let pid = child.id();
 
         let budget = self.budgets.open(id);
-        let master = Arc::new(master);
         let reaped = Arc::new(AtomicBool::new(false));
-        let started = self.start_threads(
-            id,
-            child,
-            &master,
-            budget,
-            &reaped,
+        let ends = ThreadEnds {
             shell_side,
             wake_reader,
             wake_writer,
-        );
+        };
+        let started = self.start_threads(id, child, &master, budget, &reaped, ends);
         match started {
             Ok(writes) => Ok(Shell {
                 pid,
@@ -216,22 +198,20 @@ impl PtyShells {
     }
 
     /// The waiter starts first, so a shell that has started is always waited for.
-    #[allow(clippy::too_many_arguments)]
     fn start_threads(
         &self,
         id: &TerminalId,
         mut child: std::process::Child,
-        master: &Arc<OwnedFd>,
+        master: &OwnedFd,
         budget: Arc<Budget>,
         reaped: &Arc<AtomicBool>,
-        shell_side: OwnedFd,
-        wake_reader: OwnedFd,
-        wake_writer: OwnedFd,
+        ends: ThreadEnds,
     ) -> io::Result<Sender<Vec<u8>>> {
         let exit_code = Arc::new(Mutex::new(None));
         let waiter_budget = budget.clone();
         let waiter_exit_code = exit_code.clone();
         let waiter_reaped = reaped.clone();
+        let wake_writer = ends.wake_writer;
         thread::Builder::new()
             .name(format!("wait {}", id.0))
             .spawn(move || {
@@ -251,8 +231,8 @@ impl PtyShells {
         let reader = Reader {
             id: id.clone(),
             master: File::from(reader_master),
-            shell_side,
-            wake: wake_reader,
+            shell_side: ends.shell_side,
+            wake: ends.wake_reader,
             exit_code,
             budget,
             inputs: self.inputs.clone(),
@@ -360,170 +340,6 @@ impl Shells for PtyShells {
     }
 }
 
-/// The plugin folders a new shell gets: the inherited ones with the app's own added when on and taken out when off; none if none is left.
-fn plugin_directories(inherited: Option<&OsStr>, own: &Path, on: bool) -> Option<OsString> {
-    let own = own.as_os_str().as_bytes();
-    let mut kept: Vec<&[u8]> = Vec::new();
-    if let Some(inherited) = inherited {
-        let entries = inherited.as_bytes().split(|byte| *byte == b':');
-        for entry in entries {
-            if !entry.is_empty() && entry != own {
-                kept.push(entry);
-            }
-        }
-    }
-    if on {
-        kept.push(own);
-    }
-    if kept.is_empty() {
-        return None;
-    }
-    let joined = kept.join(&b':');
-    Some(OsString::from_vec(joined))
-}
-
-/// One shell's output, read in order and then its exit, so the exit always follows the last output.
-struct Reader {
-    id: TerminalId,
-    master: File,
-    /// A copy of the pty's slave, held until the last output is read: macOS throws away unread output once the slave's last copy closes.
-    shell_side: OwnedFd,
-    wake: OwnedFd,
-    exit_code: Arc<Mutex<Option<i32>>>,
-    budget: Arc<Budget>,
-    inputs: Sender<Input>,
-}
-
-enum Polled {
-    Readable,
-    Exited,
-    Interrupted,
-    Failed,
-}
-
-enum Drained {
-    Data(usize),
-    /// Nothing is left to read, or the pty cannot be read.
-    Closed,
-    /// The core has gone, so nothing more is wanted.
-    Unwanted,
-}
-
-impl Reader {
-    fn run(mut self) {
-        let mut buffer = vec![0u8; READ_BYTES];
-        let mut pty_open = true;
-        loop {
-            self.budget.wait_for_room();
-            match self.poll(pty_open) {
-                Polled::Exited => break,
-                Polled::Interrupted => {}
-                Polled::Readable => match self.read_once(&mut buffer) {
-                    Drained::Data(_) => {}
-                    // The exit is still to come.
-                    Drained::Closed => pty_open = false,
-                    Drained::Unwanted => return,
-                },
-                // Polling again would only spin: the exit is waited for on its own.
-                Polled::Failed => {
-                    self.wait_for_exit();
-                    break;
-                }
-            }
-        }
-
-        // The shell has exited: what it printed last is read before its exit is reported,
-        // up to a limit, so a process that outlives it and keeps printing cannot hold the exit back.
-        self.budget.close();
-        set_nonblocking(self.master.as_raw_fd());
-        let mut drained = 0;
-        while drained < DRAIN_BYTES {
-            match self.read_once(&mut buffer) {
-                Drained::Data(read) => drained += read,
-                Drained::Closed => break,
-                Drained::Unwanted => return,
-            }
-        }
-        drop(self.shell_side);
-
-        let recorded = *self.exit_code.lock().expect("exit code lock");
-        let mut code = UNKNOWN_EXIT_CODE;
-        if let Some(recorded) = recorded {
-            code = recorded;
-        }
-        let _ = self.inputs.send(Input::Exited { id: self.id, code });
-    }
-
-    fn poll(&self, pty_open: bool) -> Polled {
-        let mut fds = [
-            libc::pollfd {
-                fd: self.wake.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            },
-            libc::pollfd {
-                fd: self.master.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            },
-        ];
-        // The pty stays in the list only while some process still holds it.
-        let mut watched = 1;
-        if pty_open {
-            watched = 2;
-        }
-        let ready = unsafe { libc::poll(fds.as_mut_ptr(), watched, -1) };
-        if ready < 0 {
-            let error = io::Error::last_os_error();
-            if error.kind() == io::ErrorKind::Interrupted {
-                return Polled::Interrupted;
-            }
-            return Polled::Failed;
-        }
-        if fds[0].revents != 0 {
-            return Polled::Exited;
-        }
-        if pty_open && fds[1].revents != 0 {
-            return Polled::Readable;
-        }
-        Polled::Interrupted
-    }
-
-    fn wait_for_exit(&self) {
-        let mut byte = 0u8;
-        loop {
-            let pointer = &mut byte as *mut u8 as *mut libc::c_void;
-            let read = unsafe { libc::read(self.wake.as_raw_fd(), pointer, 1) };
-            let interrupted =
-                read < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted;
-            if !interrupted {
-                return;
-            }
-        }
-    }
-
-    fn read_once(&mut self, buffer: &mut [u8]) -> Drained {
-        let read = match self.master.read(buffer) {
-            Ok(read) => read,
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => return Drained::Data(0),
-            Err(_) => return Drained::Closed,
-        };
-        if read == 0 {
-            return Drained::Closed;
-        }
-        self.budget.spend(read);
-        let data = buffer[..read].to_vec();
-        let output = Input::Output {
-            id: self.id.clone(),
-            data,
-        };
-        if self.inputs.send(output).is_err() {
-            return Drained::Unwanted;
-        }
-        Drained::Data(read)
-    }
-}
-
 fn open_pty(size: TerminalSize) -> io::Result<(OwnedFd, OwnedFd)> {
     let mut master: RawFd = -1;
     let mut slave: RawFd = -1;
@@ -574,11 +390,6 @@ fn set_close_on_exec(fd: RawFd) {
     unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
 }
 
-fn set_nonblocking(fd: RawFd) {
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
-}
-
 /// SIGHUP to the shell's process group, as a terminal closing does; the shell leads its group.
 fn hang_up(pid: u32, reaped: &AtomicBool) {
     if reaped.load(Ordering::SeqCst) {
@@ -603,17 +414,17 @@ mod tests {
     use super::*;
     use crate::budget::BUDGET_BYTES;
     use std::sync::mpsc::Receiver;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     const SIZE: TerminalSize = TerminalSize { cols: 80, rows: 24 };
     /// How much of what a shell printed a failure shows.
     const TAIL_CHARS: usize = 80;
     /// Well past the point where macOS discards a closed slave's unread output.
     const PAST_DISCARD: Duration = Duration::from_millis(1500);
-    /// Only a safety net: every wait below ends on output the shell prints. Well under the suite's 20 s budget.
+    /// Only a safety net, for each wait as a whole: every wait below ends on output the shell prints or on its exit.
     const PATIENCE: Duration = Duration::from_secs(5);
-    /// Prints whether SIGTERM is blocked in the process running it.
-    const REPORT_MASK: &str = r#"my $old = POSIX::SigSet->new; sigprocmask(SIG_BLOCK, POSIX::SigSet->new, $old); print "sigterm blocked: ", ($old->ismember(SIGTERM) ? 1 : 0), "\n""#;
+    /// Prints whether SIGTERM is blocked, and how many devices the process holds besides its own terminal on 0 to 2.
+    const REPORT_INHERITED: &str = r#"my $old = POSIX::SigSet->new; sigprocmask(SIG_BLOCK, POSIX::SigSet->new, $old); my $devices = grep { my $fd; open($fd, "<&=", $_) && -c $fd } 3..255; print "sigterm blocked: ", ($old->ismember(SIGTERM) ? 1 : 0), ", other devices: $devices\n";"#;
 
     fn test_context() -> ShellContext {
         ShellContext {
@@ -623,66 +434,63 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_apps_plugin_is_added_to_the_inherited_ones_when_on_and_only_it_is_taken_out_when_off() {
-        let own = Path::new("/ours/claude-plugin");
-        let cases: [(Option<&str>, bool, Option<&str>); 9] = [
-            (None, false, None),
-            (Some("/theirs"), false, Some("/theirs")),
-            (None, true, Some("/ours/claude-plugin")),
-            (Some(""), true, Some("/ours/claude-plugin")),
-            (Some("/theirs"), true, Some("/theirs:/ours/claude-plugin")),
-            (
-                Some("/ours/claude-plugin:/theirs"),
-                true,
-                Some("/theirs:/ours/claude-plugin"),
-            ),
-            (Some("/ours/claude-plugin"), false, None),
-            (Some("/a:/ours/claude-plugin:/b"), false, Some("/a:/b")),
-            // Only the exact folder is ours.
-            (
-                Some("/ours/claude-plugin-old"),
-                false,
-                Some("/ours/claude-plugin-old"),
-            ),
-        ];
-        for (inherited, on, expected) in cases {
-            let inherited = inherited.map(OsStr::new);
-            let given = plugin_directories(inherited, own, on);
-            let expected = expected.map(OsString::from);
-            assert_eq!(given, expected, "inherited {inherited:?}, on {on}");
-        }
+    fn perl_shells(script: String, received_by: Sender<Input>, budgets: Arc<Budgets>) -> PtyShells {
+        let program = ShellProgram {
+            path: "/usr/bin/perl".into(),
+            arguments: vec!["-MPOSIX".into(), "-e".into(), script],
+            home: "/".into(),
+            open_file_limit: None,
+            context: test_context(),
+        };
+        PtyShells::new(program, received_by, budgets)
     }
 
-    /// Reads the shell's output until `ready` says enough has come, and gives back its exit if it came first.
+    /// What the shell printed until `ready` holds of it, or its exit code if it exited first.
     fn read_until(
         received: &Receiver<Input>,
         watched: &TerminalId,
         ready: impl Fn(&str) -> bool,
-    ) -> Option<i32> {
+    ) -> Result<String, i32> {
         let mut seen = String::new();
+        let deadline = Instant::now() + PATIENCE;
         loop {
-            let input = received.recv_timeout(PATIENCE);
+            let left = deadline.saturating_duration_since(Instant::now());
+            let input = received.recv_timeout(left);
             let Ok(input) = input else {
-                panic!("nothing more from {} after {seen:?}", watched.0);
+                panic!("nothing more from {} after {}", watched.0, described(&seen));
             };
             match input {
                 Input::Output { id, data } if id == *watched => {
                     let text = String::from_utf8_lossy(&data);
                     seen.push_str(&text);
                     if ready(&seen) {
-                        return None;
+                        return Ok(seen);
                     }
                 }
-                Input::Exited { id, code } if id == *watched => return Some(code),
+                Input::Exited { id, code } if id == *watched => {
+                    // Shown with a failure when the exit was not what the test waited for.
+                    eprintln!(
+                        "{} exited with {code} after {}",
+                        watched.0,
+                        described(&seen)
+                    );
+                    return Err(code);
+                }
                 Input::Output { .. } | Input::Exited { .. } => {}
                 other => panic!("unexpected {other:?}"),
             }
         }
     }
 
+    /// What a shell printed, for a failure: its length and how it ends.
+    fn described(seen: &str) -> String {
+        let reversed_tail: String = seen.chars().rev().take(TAIL_CHARS).collect();
+        let tail: String = reversed_tail.chars().rev().collect();
+        format!("{} bytes ending {tail:?}", seen.len())
+    }
+
     #[test]
-    fn a_shell_starts_where_asked_follows_its_cd_shows_its_program_and_exits_with_its_code() {
+    fn a_shell_starts_where_asked_with_its_limit_and_follows_its_cd_size_program_and_exit() {
         let scratch = std::env::temp_dir().join(format!("taco-runtime-pty-{}", std::process::id()));
         let inner = scratch.join("inner");
         std::fs::create_dir_all(&inner).unwrap();
@@ -717,11 +525,11 @@ mod tests {
         // Closing hangs the shell up, and a shell ended by a signal reports 128 plus it.
         shells.close(&missing);
         let hung_up = read_until(&received, &missing, |_| false);
-        assert_eq!(hung_up, Some(128 + libc::SIGHUP));
+        assert_eq!(hung_up, Err(128 + libc::SIGHUP));
 
         // The line as typed echoes `th""ere`; only running it prints `there`.
         shells.write(&id, b"cd inner && echo th\"\"ere $(ulimit -n)\n");
-        read_until(&received, &id, |seen| seen.contains("there 200\r\n"));
+        read_until(&received, &id, |seen| seen.contains("there 200\r\n")).unwrap();
         assert_eq!(shells.directory(&id), Some(inner_path));
         assert!(shells.at_prompt(&id));
 
@@ -731,29 +539,28 @@ mod tests {
         };
         shells.resize(&id, resized);
         shells.write(&id, b"echo si\"\"ze $(stty size)\n");
-        read_until(&received, &id, |seen| seen.contains("size 30 100\r\n"));
+        read_until(&received, &id, |seen| seen.contains("size 30 100\r\n")).unwrap();
 
         // `ping` comes back twice once cat runs: the terminal's echo, then cat's copy.
         shells.write(&id, b"cat\n");
         shells.write(&id, b"ping\n");
-        read_until(&received, &id, |seen| seen.matches("ping").count() >= 2);
+        read_until(&received, &id, |seen| seen.matches("ping").count() >= 2).unwrap();
         assert!(!shells.at_prompt(&id), "cat holds the foreground");
         assert_eq!(shells.foreground_commands(&id), ["cat"]);
 
         // What a shell prints as it exits is reported before its exit.
         shells.write(&id, b"\x04");
         shells.write(&id, b"echo by\"\"e; exit 3\n");
-        let exited_first = read_until(&received, &id, |seen| seen.contains("bye\r\n"));
-        assert_eq!(exited_first, None);
-        let code = read_until(&received, &id, |_| false);
-        assert_eq!(code, Some(3));
+        read_until(&received, &id, |seen| seen.contains("bye\r\n")).unwrap();
+        let exited = read_until(&received, &id, |_| false);
+        assert_eq!(exited, Err(3));
         std::fs::remove_dir_all(&scratch).unwrap();
     }
 
-    /// The runtime blocks SIGTERM before its threads start; a shell must not inherit that, or `kill` would stop working in it.
+    /// The runtime blocks SIGTERM before its threads start; a shell must not inherit that, or `kill` would stop working in it, nor another terminal's pty.
     /// zsh happens to clear its own mask, and macOS's `ps` does not show one, so a program that leaves it alone reports it.
     #[test]
-    fn a_shell_starts_with_no_signal_blocked_though_the_runtime_blocks_sigterm() {
+    fn a_shell_starts_with_no_signal_blocked_and_no_other_terminal_open() {
         let mut blocked: libc::sigset_t = unsafe { std::mem::zeroed() };
         let mut previous: libc::sigset_t = unsafe { std::mem::zeroed() };
         unsafe {
@@ -763,20 +570,17 @@ mod tests {
         }
 
         let (inputs, received) = mpsc::channel();
-        let program = ShellProgram {
-            path: "/usr/bin/perl".into(),
-            arguments: vec!["-MPOSIX".into(), "-e".into(), REPORT_MASK.into()],
-            home: "/".into(),
-            open_file_limit: None,
-            context: test_context(),
-        };
-        let mut shells = PtyShells::new(program, inputs, Arc::new(Budgets::default()));
-        let id = TerminalId("signals".into());
-        shells.start(&id, None, SIZE);
+        let budgets = Arc::new(Budgets::default());
+        let mut shells = perl_shells(REPORT_INHERITED.into(), inputs, budgets);
+        // The runtime holds the first shell's pty for as long as its terminal lives, so it is open when the second starts.
+        let first = TerminalId("first".into());
+        let second = TerminalId("second".into());
+        shells.start(&first, None, SIZE);
+        shells.start(&second, None, SIZE);
         unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, &previous, std::ptr::null_mut()) };
 
-        let reported = text_until(&received, &id, "\r\n");
-        assert_eq!(reported.trim(), "sigterm blocked: 0");
+        let reported = read_until(&received, &second, |seen| seen.contains("\r\n")).unwrap();
+        assert_eq!(reported.trim(), "sigterm blocked: 0, other devices: 0");
     }
 
     /// A budget's worth of filler stops the reader, so the last line is still unread when the shell exits.
@@ -787,55 +591,30 @@ mod tests {
             r#"$| = 1; print "x" x {BUDGET_BYTES}; select(undef, undef, undef, 0.2); print "last line\n";"#
         );
         let (inputs, received) = mpsc::channel();
-        let program = ShellProgram {
-            path: "/usr/bin/perl".into(),
-            arguments: vec!["-e".into(), print_then_exit],
-            home: "/".into(),
-            open_file_limit: None,
-            context: test_context(),
-        };
         let budgets = Arc::new(Budgets::default());
-        let mut shells = PtyShells::new(program, inputs, budgets.clone());
+        let mut shells = perl_shells(print_then_exit, inputs, budgets.clone());
         let id = TerminalId("last-line".into());
         shells.start(&id, None, SIZE);
 
         let filler = "x".repeat(BUDGET_BYTES);
-        text_until(&received, &id, &filler);
+        read_until(&received, &id, |seen| seen.contains(&filler)).unwrap();
         thread::sleep(PAST_DISCARD);
         budgets.give_back(&id, BUDGET_BYTES);
-        text_until(&received, &id, "last line\r\n");
+        read_until(&received, &id, |seen| seen.contains("last line\r\n")).unwrap();
     }
 
-    /// The shell's output up to the first `marker`. An exit before it fails at once, with what was seen.
-    fn text_until(received: &Receiver<Input>, watched: &TerminalId, marker: &str) -> String {
-        let mut seen = String::new();
-        while !seen.contains(marker) {
-            let input = received.recv_timeout(PATIENCE);
-            let Ok(input) = input else {
-                panic!("nothing more from {} after {}", watched.0, described(&seen));
-            };
-            match input {
-                Input::Output { id, data } if id == *watched => {
-                    let text = String::from_utf8_lossy(&data);
-                    seen.push_str(&text);
-                }
-                Input::Exited { id, code } if id == *watched => {
-                    panic!(
-                        "{} exited with {code} before {marker:?}, after {}",
-                        watched.0,
-                        described(&seen)
-                    );
-                }
-                _ => {}
-            }
-        }
-        seen
-    }
+    /// A process the shell left behind, deaf to the hang-up, holds the pty and prints until it is closed, or for 30 s should the test fail first.
+    #[test]
+    fn the_exit_of_a_shell_is_reported_though_a_process_it_left_behind_keeps_printing() {
+        let leave_a_printer = r#"$| = 1; if (fork() == 0) { $SIG{HUP} = "IGNORE"; alarm 30; while (print "x" x 65536) {} exit 0; } exit 7;"#;
+        let (inputs, received) = mpsc::channel();
+        let mut shells = perl_shells(leave_a_printer.into(), inputs, Arc::new(Budgets::default()));
+        let id = TerminalId("left-behind".into());
+        shells.start(&id, None, SIZE);
 
-    /// What a shell printed, for a failure: its length and how it ends.
-    fn described(seen: &str) -> String {
-        let reversed_tail: String = seen.chars().rev().take(TAIL_CHARS).collect();
-        let tail: String = reversed_tail.chars().rev().collect();
-        format!("{} bytes ending {tail:?}", seen.len())
+        let exited = read_until(&received, &id, |_| false);
+        assert_eq!(exited, Err(7));
+        // With the pty's last copy closed, the printer's next write fails and it stops.
+        shells.forget(&id);
     }
 }
