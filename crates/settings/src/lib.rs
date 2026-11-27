@@ -16,7 +16,8 @@ pub use config::{
 pub use jsonc::{JSONC_PARSE_OPTIONS, JsoncResult, parse_jsonc, set_top_level};
 pub use keymap_edit::{KeymapChange, edit_keymap};
 pub use keys::{
-    Binding, Chord, KeymapResolution, command_for, format_chord, parse_chord, resolve_keymap,
+    Binding, Chord, KeymapResolution, chords_for, command_for, differs_from_defaults,
+    file_chord_text, format_chord, modifier_spelling, parse_chord, resolve_keymap,
 };
 pub use settings::{
     CursorStyle, FONT_SIZE_MAX, FONT_SIZE_MIN, SettingChange, Settings, SettingsLayerResult,

@@ -127,23 +127,40 @@ pub fn format_chord(chord: &Chord) -> String {
     chord_text(chord, "alt")
 }
 
-pub(crate) fn file_chord_text(chord: &Chord) -> String {
+/// A chord as the file spells it, with "opt" for the option key: "cmd+opt+left".
+pub fn file_chord_text(chord: &Chord) -> String {
     chord_text(chord, "opt")
+}
+
+fn spelling_of(modifier: Modifier) -> &'static str {
+    match modifier {
+        Modifier::Cmd => "cmd",
+        Modifier::Ctrl => "ctrl",
+        Modifier::Alt => "opt",
+        Modifier::Shift => "shift",
+    }
+}
+
+/// The file's spelling of a modifier word: "command" and "meta" give "cmd", "option" and "alt" give "opt".
+pub fn modifier_spelling(word: &str) -> Option<&'static str> {
+    let modifier = modifier_for(word)?;
+    let spelling = spelling_of(modifier);
+    Some(spelling)
 }
 
 fn chord_text(chord: &Chord, option_word: &str) -> String {
     let mut parts: Vec<&str> = Vec::new();
     if chord.cmd {
-        parts.push("cmd");
+        parts.push(spelling_of(Modifier::Cmd));
     }
     if chord.ctrl {
-        parts.push("ctrl");
+        parts.push(spelling_of(Modifier::Ctrl));
     }
     if chord.alt {
         parts.push(option_word);
     }
     if chord.shift {
-        parts.push("shift");
+        parts.push(spelling_of(Modifier::Shift));
     }
     parts.push(&chord.key);
     parts.join("+")
@@ -228,10 +245,42 @@ pub fn command_for(bindings: &[Binding], chord: &Chord) -> Option<CommandId> {
     None
 }
 
+/// The command's chords, in the order the keymap holds them.
+pub fn chords_for(bindings: &[Binding], command: CommandId) -> Vec<Chord> {
+    let mut chords = Vec::new();
+    for binding in bindings {
+        if binding.command == command {
+            chords.push(binding.chord.clone());
+        }
+    }
+    chords
+}
+
+/// Whether a command's chords are not its defaults, in any order.
+pub fn differs_from_defaults(chords: &[Chord], defaults: &[Chord]) -> bool {
+    let same_count = chords.len() == defaults.len();
+    let all_default = chords.iter().all(|chord| defaults.contains(chord));
+    !(same_count && all_default)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn chord(text: &str) -> Chord {
+        parse_chord(text).expect(text)
+    }
+
+    #[test]
+    fn back_to_default_shows_only_when_the_chords_are_not_the_defaults() {
+        let both = [chord("cmd+t"), chord("cmd+n")];
+        let reversed = [chord("cmd+n"), chord("cmd+t")];
+        let one = [chord("cmd+t")];
+        assert!(!differs_from_defaults(&reversed, &both));
+        assert!(differs_from_defaults(&one, &both));
+        assert!(differs_from_defaults(&both, &one));
+    }
 
     fn map_from(value: Value) -> Map<String, Value> {
         match value {
