@@ -7,6 +7,7 @@ use gpui::{
 };
 use taco_settings::{Chord, CommandId};
 
+use crate::drive::mark;
 use crate::look::{FONT_FAMILY, Look, SMALL_TEXT_SIZE, TEXT_SIZE, TITLE_BAR_HEIGHT};
 use crate::window::WindowView;
 
@@ -16,6 +17,7 @@ pub const BUTTON_RADIUS: f32 = 6.;
 pub const BUTTON_PADDING_Y: f32 = 3.;
 pub const BUTTON_PADDING_X: f32 = 9.;
 pub const CHIP_GAP: f32 = 5.;
+const PAGE_COLUMN_MARK: &str = "page:column";
 const HEADER_PADDING_LEFT: f32 = 16.;
 const HEADER_PADDING_RIGHT: f32 = 10.;
 const HEADER_BUTTON_SIZE: f32 = 22.;
@@ -130,12 +132,13 @@ pub fn over_page(command: CommandId) -> OverPage {
 
 /// A page's header above its scrolling form; each page scrolls on its own id, so one never opens at the other's offset.
 pub fn page_frame(scroll_id: &'static str, header: Div, form: Div, look: &Look) -> Div {
+    let marked_form = mark(form, PAGE_COLUMN_MARK);
     let body = div()
         .id(scroll_id)
         .flex_1()
         .min_h_0()
         .overflow_y_scroll()
-        .child(form);
+        .child(marked_form);
     div()
         .flex()
         .flex_col()

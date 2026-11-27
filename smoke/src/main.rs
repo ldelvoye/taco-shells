@@ -19,7 +19,7 @@ const BEFORE_LAUNCH: [Check; 1] = [Check {
     run: bundle::holds_only_dev_names,
 }];
 
-const LAUNCHED: [LaunchedCheck; 10] = [
+const LAUNCHED: [LaunchedCheck; 11] = [
     LaunchedCheck {
         name: "the window draws rows",
         run: window::draws_rows,
@@ -43,6 +43,10 @@ const LAUNCHED: [LaunchedCheck; 10] = [
     LaunchedCheck {
         name: "a shortcut set by pressing keys on its row is written to keybindings.json",
         run: window::a_shortcut_set_by_pressing_keys_is_written_to_the_keybindings_file,
+    },
+    LaunchedCheck {
+        name: "a closing page fades where it was and a click on it changes nothing",
+        run: window::a_closing_page_stays_in_place_and_takes_no_clicks,
     },
     LaunchedCheck {
         name: "every marked part of the window has bounds, and nothing else does",

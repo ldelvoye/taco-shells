@@ -1205,15 +1205,28 @@ impl WindowView {
         if let Some((left, since)) = self.leaving {
             let gone = progress(since, now, PAGE_TIME, reduce_motion);
             if gone < 1. {
+                let remaining = 1. - gone;
                 let fading = self
                     .page_element(left, now, reduce_motion, cx)
+                    .opacity(remaining);
+                // gpui has no hit area that lets a click through, so the fading page is covered: a click on it in
+                // these few frames does nothing rather than reach a page that is already closed.
+                let shield = div()
+                    .id("leaving-page-shield")
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .occlude();
+                let leaving_area = div()
                     .absolute()
                     .top_0()
                     .bottom_0()
                     .left(px(STRIP_WIDTH))
                     .right_0()
-                    .opacity(1. - gone);
-                body = body.child(fading);
+                    .child(fading)
+                    .child(shield);
+                body = body.child(leaving_area);
             }
         }
         body
