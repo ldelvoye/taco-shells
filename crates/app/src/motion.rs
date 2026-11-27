@@ -108,23 +108,13 @@ pub fn lerp(from: f32, to: f32, amount: f32) -> f32 {
     from + (to - from) * amount
 }
 
-/// The switches and segments whose value differs between two configs, each with its old value.
+/// The settings whose value differs between two configs, each with its old value; a control animates only its own.
 pub fn moved_settings(before: &Settings, after: &Settings) -> Vec<SettingChange> {
     let olds = SettingChange::all(before);
     let news = SettingChange::all(after);
     let mut moved = Vec::new();
     for (old, new) in olds.into_iter().zip(news) {
-        if old == new {
-            continue;
-        }
-        let is_switch = switch_value(&old).is_some();
-        let is_segment = matches!(
-            old,
-            SettingChange::Theme(_)
-                | SettingChange::CursorStyle(_)
-                | SettingChange::ShellRowName(_)
-        );
-        if is_switch || is_segment {
+        if old != new {
             moved.push(old);
         }
     }
@@ -147,7 +137,7 @@ mod tests {
     }
 
     #[test]
-    fn every_switch_and_segment_that_changed_moves_from_its_old_value_and_nothing_else_does() {
+    fn every_setting_that_changed_moves_from_its_old_value_and_nothing_else_does() {
         let before = Settings::default();
         let mut after = before.clone();
         after.theme = ThemeChoice::Dark;
@@ -161,6 +151,7 @@ mod tests {
         let moved = moved_settings(&before, &after);
         let expected = vec![
             SettingChange::Theme(before.theme),
+            SettingChange::FontSize(before.font_size),
             SettingChange::CursorBlink(before.cursor_blink),
             SettingChange::CursorStyle(before.cursor_style),
             SettingChange::RestoreOnLaunch(before.restore_on_launch),
