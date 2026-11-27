@@ -74,7 +74,7 @@ const CLOSE_SIZE: f32 = 14.;
 pub const MS_PER_MINUTE: u64 = 60_000;
 const MINUTES_PER_HOUR: u64 = 60;
 
-/// The agent setup line for a terminal: alone when no agent shows there, and as a card above the log when one does.
+/// The agent setup line for a terminal.
 #[derive(Clone, Debug, PartialEq)]
 pub enum NoAgentLine {
     Shell,
@@ -189,9 +189,8 @@ pub fn activity_panel(input: &ActivityInput, cx: &mut Context<WindowView>) -> Di
         .gap(px(PANEL_PADDING))
         .p(px(PANEL_PADDING));
     if let Some(row) = input.agent_row {
-        // An agent that reported before Set up still shows here, so its terminal hears why it may go quiet.
         let setup = no_agent_for(input);
-        if setup != NoAgentLine::Shell {
+        if shows_beside_agent(&setup) {
             content = content.child(setup_card(&setup, look, cx));
         }
         if row.state == RowState::Needs
@@ -418,17 +417,26 @@ fn question_card(question: &str, look: &Look) -> Div {
         .gap(px(6.))
         .child(mark)
         .child(heading);
-    div()
+    card(look)
         .flex()
         .flex_col()
         .gap(px(4.))
+        .child(head)
+        .child(question.to_string())
+}
+
+// Only an outcome is drawn beside an agent: an offer or the too-old line would contradict the log under it.
+fn shows_beside_agent(line: &NoAgentLine) -> bool {
+    matches!(line, NoAgentLine::Outcome { .. })
+}
+
+fn card(look: &Look) -> Div {
+    div()
         .p(px(CARD_PADDING))
         .bg(look.selected_card)
         .border_1()
         .border_color(look.hairline)
         .rounded(px(CARD_RADIUS))
-        .child(head)
-        .child(question.to_string())
 }
 
 fn quiet_button(id: ElementId, label: &str, look: &Look) -> Stateful<Div> {
@@ -483,13 +491,7 @@ fn no_agent_element(line: &NoAgentLine, look: &Look, cx: &mut Context<WindowView
 
 fn setup_card(line: &NoAgentLine, look: &Look, cx: &mut Context<WindowView>) -> Div {
     let said = no_agent_element(line, look, cx);
-    div()
-        .p(px(CARD_PADDING))
-        .bg(look.selected_card)
-        .border_1()
-        .border_color(look.hairline)
-        .rounded(px(CARD_RADIUS))
-        .child(said)
+    card(look).child(said)
 }
 
 fn text_cell(text: &str) -> Div {
@@ -1259,6 +1261,7 @@ mod tests {
             text: text.clone(),
         };
         assert_eq!(no_agent_line(&here, &[offer]), expected);
+        assert!(!shows_beside_agent(&expected));
 
         let unavailable = notice(unavailable, "here");
         let expected = NoAgentLine::Unavailable {
@@ -1266,6 +1269,7 @@ mod tests {
             reason,
         };
         assert_eq!(no_agent_line(&here, &[unavailable]), expected);
+        assert!(!shows_beside_agent(&expected));
 
         for kind in [AgentSetupNoticeKind::Done, AgentSetupNoticeKind::Problem] {
             let outcome = notice(kind, "here");
@@ -1274,6 +1278,7 @@ mod tests {
                 text: text.clone(),
             };
             assert_eq!(no_agent_line(&here, &[outcome]), expected);
+            assert!(shows_beside_agent(&expected));
         }
     }
 }
