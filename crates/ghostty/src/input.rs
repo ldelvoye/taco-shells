@@ -43,7 +43,6 @@ pub struct Mods {
     pub shift: bool,
     pub ctrl: bool,
     pub alt: bool,
-    pub super_key: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,12 +64,8 @@ pub enum MouseAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseButton {
     Left,
-    Middle,
-    Right,
     WheelUp,
     WheelDown,
-    WheelLeft,
-    WheelRight,
 }
 
 /// The drawn grid in pixels, for turning a pointer position into a cell. Cell sizes must not be zero.
@@ -107,7 +102,6 @@ pub struct CellPoint {
 pub enum Scroll {
     /// Positive scrolls toward the newest output.
     Lines(isize),
-    Top,
     Bottom,
 }
 
@@ -379,10 +373,6 @@ impl Terminal {
                     sys::GhosttyTerminalScrollViewportTag_GHOSTTY_TERMINAL_SCROLL_VIEWPORT_DELTA;
                 behavior.value.delta = delta;
             }
-            Scroll::Top => {
-                behavior.tag =
-                    sys::GhosttyTerminalScrollViewportTag_GHOSTTY_TERMINAL_SCROLL_VIEWPORT_TOP;
-            }
             Scroll::Bottom => {
                 behavior.tag =
                     sys::GhosttyTerminalScrollViewportTag_GHOSTTY_TERMINAL_SCROLL_VIEWPORT_BOTTOM;
@@ -634,21 +624,14 @@ fn sys_mods(mods: Mods) -> sys::GhosttyMods {
     if mods.alt {
         bits |= sys::GHOSTTY_MODS_ALT as sys::GhosttyMods;
     }
-    if mods.super_key {
-        bits |= sys::GHOSTTY_MODS_SUPER as sys::GhosttyMods;
-    }
     bits
 }
 
 fn sys_button(button: MouseButton) -> sys::GhosttyMouseButton {
     match button {
         MouseButton::Left => sys::GhosttyMouseButton_GHOSTTY_MOUSE_BUTTON_LEFT,
-        MouseButton::Middle => sys::GhosttyMouseButton_GHOSTTY_MOUSE_BUTTON_MIDDLE,
-        MouseButton::Right => sys::GhosttyMouseButton_GHOSTTY_MOUSE_BUTTON_RIGHT,
         MouseButton::WheelUp => sys::GhosttyMouseButton_GHOSTTY_MOUSE_BUTTON_FOUR,
         MouseButton::WheelDown => sys::GhosttyMouseButton_GHOSTTY_MOUSE_BUTTON_FIVE,
-        MouseButton::WheelLeft => sys::GhosttyMouseButton_GHOSTTY_MOUSE_BUTTON_SIX,
-        MouseButton::WheelRight => sys::GhosttyMouseButton_GHOSTTY_MOUSE_BUTTON_SEVEN,
     }
 }
 

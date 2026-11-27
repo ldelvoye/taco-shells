@@ -14,11 +14,9 @@ use crate::terminal::{Error, PALETTE_SIZE, Terminal, check};
 const FLAG_BOLD: u16 = 1 << 0;
 const FLAG_ITALIC: u16 = 1 << 1;
 const FLAG_FAINT: u16 = 1 << 2;
-const FLAG_BLINK: u16 = 1 << 3;
 const FLAG_INVERSE: u16 = 1 << 4;
 const FLAG_INVISIBLE: u16 = 1 << 5;
 const FLAG_STRIKETHROUGH: u16 = 1 << 6;
-const FLAG_OVERLINE: u16 = 1 << 7;
 const UNDERLINE_MASK: u16 = 0x7 << sys::GHOSTTY_STYLE_UNDERLINE_SHIFT;
 
 /// How much of the viewport changed since the last `Frame::clean`.
@@ -43,8 +41,6 @@ pub enum CursorShape {
 pub struct FrameCursor {
     /// Column and row in the viewport, or none when the cursor is scrolled out of it.
     pub position: Option<(u16, u16)>,
-    /// True when the cursor is on the second cell of a wide character. False when there is no position.
-    pub wide_tail: bool,
     /// False when the program's modes hide the cursor.
     pub visible: bool,
     pub blinking: bool,
@@ -57,7 +53,7 @@ pub struct FrameColors {
     pub foreground: Rgb,
     /// Only when a program has set one.
     pub cursor: Option<Rgb>,
-    pub palette: [Rgb; PALETTE_SIZE],
+    palette: [Rgb; PALETTE_SIZE],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,26 +92,17 @@ pub struct Cell {
     pub bold: bool,
     pub italic: bool,
     pub faint: bool,
-    pub blink: bool,
     /// The drawer swaps foreground and background; the colors above are as the program set them.
     pub inverse: bool,
     pub invisible: bool,
     pub strikethrough: bool,
-    pub overline: bool,
     pub selected: bool,
-    pub hyperlink: bool,
 }
-
-/// An id that stays with a row as it scrolls, so work done for it can be kept while it is clean.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct RowId(pub [u64; 2]);
 
 /// One viewport row, refilled in place by `Frame::next_row`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
-    pub id: RowId,
     pub y: u16,
-    pub dirty: bool,
     /// Every cell's text, one after another; each `Cell::text` is a range of it.
     pub text: String,
     pub cells: Vec<Cell>,
@@ -318,10 +305,8 @@ impl Frame<'_> {
         )?;
 
         let mut position = None;
-        let mut wide_tail = false;
         if raw.viewport_has_value {
             position = Some((raw.viewport_x, raw.viewport_y));
-            wide_tail = raw.wide_tail;
         }
         let shape = match raw.visual_style {
             sys::GhosttyCursorStyle_GHOSTTY_CURSOR_STYLE_BAR => CursorShape::Bar,
@@ -332,7 +317,6 @@ impl Frame<'_> {
         };
         Ok(FrameCursor {
             position,
-            wide_tail,
             visible: raw.visible,
             blinking: raw.blinking,
             shape,
@@ -361,18 +345,6 @@ impl Frame<'_> {
         let Ok(y) = u16::try_from(viewport_y) else {
             return Err(unknown("read a row's position"));
         };
-        let mut id = sys::GhosttyRenderStateRowId { bits: [0, 0] };
-        let read = state.row_query(
-            sys::GhosttyRenderStateRowData_GHOSTTY_RENDER_STATE_ROW_DATA_ID,
-            &mut id,
-        );
-        check(read, "read a row's id")?;
-        let mut dirty = false;
-        let read = state.row_query(
-            sys::GhosttyRenderStateRowData_GHOSTTY_RENDER_STATE_ROW_DATA_DIRTY,
-            &mut dirty,
-        );
-        check(read, "read a row's dirty flag")?;
         let selection = row_selection(state)?;
 
         // The library fills the cells handle we own with this row's cells.
@@ -383,9 +355,7 @@ impl Frame<'_> {
         );
         check(read, "read a row's cells")?;
 
-        row.id = RowId(id.bits);
         row.y = y;
-        row.dirty = dirty;
         row.text.clear();
         row.cells.clear();
         let mut column: u16 = 0;
@@ -413,9 +383,7 @@ impl Frame<'_> {
 impl Row {
     pub fn new() -> Row {
         Row {
-            id: RowId([0, 0]),
             y: 0,
-            dirty: false,
             text: String::new(),
             cells: Vec::new(),
         }
@@ -478,13 +446,6 @@ fn read_cell(
     );
     check(read, "read a raw cell")?;
     let width = cell_width(raw)?;
-    let mut hyperlink = false;
-    let read = raw_cell_query(
-        raw,
-        sys::GhosttyCellData_GHOSTTY_CELL_DATA_HAS_HYPERLINK,
-        &mut hyperlink,
-    );
-    check(read, "read a cell's hyperlink flag")?;
 
     let start = text.len();
     state.read_text(text)?;
@@ -529,13 +490,10 @@ fn read_cell(
         bold: flags & FLAG_BOLD != 0,
         italic: flags & FLAG_ITALIC != 0,
         faint: flags & FLAG_FAINT != 0,
-        blink: flags & FLAG_BLINK != 0,
         inverse: flags & FLAG_INVERSE != 0,
         invisible: flags & FLAG_INVISIBLE != 0,
         strikethrough: flags & FLAG_STRIKETHROUGH != 0,
-        overline: flags & FLAG_OVERLINE != 0,
         selected,
-        hyperlink,
     })
 }
 
@@ -626,9 +584,7 @@ mod tests {
             b"\x1b[1;3;7ma\x1b[0m\xe6\x97\xa5\x1b[38;2;1;2;3mc\x1b[0m\x1b[4:3;58:5:1md\x1b[0m",
         );
         // e: faint, blinking, invisible, struck through, overlined, double underline in 24-bit color 9.
-        terminal.write(b"\x1b[2;5;8;9;53;21;58:2::0:0:9me\x1b[0m");
-        // f: a hyperlink.
-        terminal.write(b"\x1b]8;;https://example.com\x07f\x1b]8;;\x07\r\nnext");
+        terminal.write(b"\x1b[2;5;8;9;53;21;58:2::0:0:9me\x1b[0m\r\nnext");
         let mut state = RenderState::new().unwrap();
         let palette_1 = state.update(&terminal).unwrap().colors().palette[1];
         let rows = rows_of(&mut state, &terminal, false);
@@ -652,19 +608,15 @@ mod tests {
         assert_eq!(d.underline_color, Some(palette_1));
 
         let e = &first.cells[5];
-        assert!(e.faint && e.blink && e.invisible && e.strikethrough && e.overline);
+        assert!(e.faint && e.invisible && e.strikethrough);
         assert!(!e.bold && !e.italic && !e.inverse);
         assert_eq!(e.underline, Underline::Double);
         assert_eq!(e.underline_color, Some(rgb(0x000009)));
-
-        let f = &first.cells[6];
-        assert!(f.hyperlink && !e.hyperlink);
 
         // The second row is read into the same buffer and keeps none of the first.
         let second = &rows[1];
         assert_eq!(second.text, "next");
         assert_eq!(second.cells.len(), usize::from(SIZE.cols));
-        assert_ne!(second.id, first.id);
     }
 
     #[test]
@@ -680,7 +632,6 @@ mod tests {
         let ys: Vec<u16> = second.iter().map(|row| row.y).collect();
         assert_eq!(ys, vec![1]);
         assert_eq!(second[0].text, "changed");
-        assert!(second[0].dirty);
     }
 
     #[test]

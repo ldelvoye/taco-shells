@@ -42,7 +42,6 @@ pub fn mods_of(modifiers: Modifiers) -> Mods {
         shift: modifiers.shift,
         ctrl: modifiers.control,
         alt: modifiers.alt,
-        super_key: false,
     }
 }
 
