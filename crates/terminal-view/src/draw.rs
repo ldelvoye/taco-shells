@@ -10,12 +10,14 @@ use taco_protocol::Rgb;
 
 use crate::grid::CellMetrics;
 use crate::shapes::{Shape, cells_bounds, light_line, paint_shape, shape_of_text};
+use crate::view::Drawn;
 
 const FAINT_TEXT_ALPHA: f32 = 0.6;
 /// A block cursor lets the character under it show through.
 const BLOCK_CURSOR_ALPHA: f32 = 0.6;
 const TEXT_LINE_THICKNESS: f32 = 1.0;
 const CURSOR_LINE_THICKNESS: f32 = 2.0;
+const MARKED_TEXT_UNDERLINE: f32 = 1.0;
 
 /// A stretch of cells in one row whose background differs from the terminal's.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -76,6 +78,15 @@ pub struct Painting {
     pub shapes: Vec<CellShape>,
     pub runs: Vec<Run>,
     pub cursor: Option<CursorMark>,
+}
+
+/// What one frame paints, worked out before painting.
+pub struct Prepared {
+    pub drawn: Drawn,
+    pub marked_text: Option<String>,
+    pub cell: CellMetrics,
+    pub family: String,
+    pub font_size: f32,
 }
 
 /// The painting for `rows`. `selection` is the background a selected cell gets.
@@ -300,11 +311,6 @@ pub fn paint(
 ) {
     let cell_width = px(cell.width);
     let cell_height = px(cell.height);
-    let at = |column: u16, row: u16| {
-        let x = origin.x + cell_width * f32::from(column);
-        let y = origin.y + cell_height * f32::from(row);
-        point(x, y)
-    };
 
     // Backgrounds and shapes share device-pixel edges, so no sliver shows between them.
     let scale = window.scale_factor();
@@ -340,7 +346,7 @@ pub fn paint(
             force_width,
         );
         let _ = shaped.paint(
-            at(run.column, run.row),
+            cell.origin_of(origin, run.column, run.row),
             cell_height,
             TextAlign::Left,
             None,
@@ -350,7 +356,7 @@ pub fn paint(
     }
 
     if let Some(cursor) = painting.cursor {
-        let top_left = at(cursor.column, cursor.row);
+        let top_left = cell.origin_of(origin, cursor.column, cursor.row);
         let width = cell_width * f32::from(cursor.columns);
         let bounds = cursor_bounds(cursor.shape, top_left, width, cell_height);
         match cursor.shape {
@@ -367,6 +373,46 @@ pub fn paint(
             }
         }
     }
+}
+
+/// What an input method is composing, drawn underlined over the cursor.
+pub fn paint_marked_text(
+    prepared: &Prepared,
+    origin: Point<Pixels>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let Some(marked) = prepared.marked_text.as_ref() else {
+        return;
+    };
+    let Some(cursor) = prepared.drawn.painting.cursor else {
+        return;
+    };
+    let cell = prepared.cell;
+    let cell_height = px(cell.height);
+    let top_left = cell.origin_of(origin, cursor.column, cursor.row);
+    let color = cursor.color;
+    let run = TextRun {
+        len: marked.len(),
+        font: font(prepared.family.clone()),
+        color,
+        background_color: None,
+        underline: Some(UnderlineStyle {
+            thickness: px(MARKED_TEXT_UNDERLINE),
+            color: Some(color),
+            wavy: false,
+        }),
+        strikethrough: None,
+    };
+    let font_size = px(prepared.font_size);
+    let shaped = window
+        .text_system()
+        .shape_line(marked.clone().into(), font_size, &[run], None);
+    // Covered at its own width, which counts a wide character as two cells.
+    let cover = Bounds::new(top_left, size(shaped.width, cell_height));
+    let background = hsla(prepared.drawn.background);
+    window.paint_quad(fill(cover, background));
+    let _ = shaped.paint(top_left, cell_height, TextAlign::Left, None, window, cx);
 }
 
 fn cursor_bounds(

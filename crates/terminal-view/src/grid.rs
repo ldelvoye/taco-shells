@@ -1,11 +1,14 @@
 //! The terminal grid's measures: the cell the font gives, and how many cells fit the middle.
 
+use gpui::{App, Pixels, Point, font, point, px};
 use taco_protocol::{CellSize, TerminalSize};
 
 const MINIMUM_COLS: u16 = 2;
 const MINIMUM_ROWS: u16 = 1;
 /// The family a font list's `monospace` stands for.
 const PLATFORM_MONOSPACE: &str = "Menlo";
+/// The width of `m` as a share of the font size, for a font that cannot be measured.
+const FALLBACK_ADVANCE: f32 = 0.6;
 
 /// One cell in window pixels. Every view shares it, since they all draw in the same font.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -24,6 +27,29 @@ impl CellMetrics {
             height_px: height as u32,
         }
     }
+
+    /// The top-left corner of the cell at `column` and `row`, for a grid whose top-left corner is at `origin`.
+    pub fn origin_of(self, origin: Point<Pixels>, column: u16, row: u16) -> Point<Pixels> {
+        let x = origin.x + px(self.width) * f32::from(column);
+        let y = origin.y + px(self.height) * f32::from(row);
+        point(x, y)
+    }
+}
+
+/// The cell `family` gives at `size`: the advance of `m` across, ascent and descent down.
+pub fn measure(family: &str, size: f32, cx: &App) -> CellMetrics {
+    let text_system = cx.text_system();
+    let font_id = text_system.resolve_font(&font(family.to_string()));
+    let font_size = px(size);
+    let mut width = size * FALLBACK_ADVANCE;
+    if let Ok(advance) = text_system.advance(font_id, font_size, 'm') {
+        width = f32::from(advance.width);
+    }
+    let ascent = f32::from(text_system.ascent(font_id, font_size));
+    // font-kit reports the descent below the baseline as a negative number.
+    let descent = f32::from(text_system.descent(font_id, font_size)).abs();
+    let height = (ascent + descent).ceil();
+    CellMetrics { width, height }
 }
 
 /// The grid that fits `width` by `height` pixels: whole cells, at least 2 columns and 1 row.

@@ -1,6 +1,6 @@
 //! Which keystrokes a view encodes itself. Text typed without Ctrl goes through the input method instead, so dead keys and composed characters work, and Cmd chords belong to the app.
 
-use gpui::Keystroke;
+use gpui::{Keystroke, Modifiers};
 use taco_ghostty::input::{Key, KeyPress, Mods};
 
 /// The key press for `keystroke`, or none when the view leaves it to the input method or the app.
@@ -9,12 +9,7 @@ pub fn key_press(keystroke: &Keystroke, repeat: bool) -> Option<KeyPress<'_>> {
     if modifiers.platform {
         return None;
     }
-    let mods = Mods {
-        shift: modifiers.shift,
-        ctrl: modifiers.control,
-        alt: modifiers.alt,
-        super_key: false,
-    };
+    let mods = mods_of(modifiers);
     if let Some(key) = named_key(&keystroke.key) {
         return Some(KeyPress {
             key,
@@ -39,6 +34,15 @@ pub fn key_press(keystroke: &Keystroke, repeat: bool) -> Option<KeyPress<'_>> {
         text,
         repeat,
     })
+}
+
+pub fn mods_of(modifiers: Modifiers) -> Mods {
+    Mods {
+        shift: modifiers.shift,
+        ctrl: modifiers.control,
+        alt: modifiers.alt,
+        super_key: false,
+    }
 }
 
 fn typed_key(name: &str) -> Option<Key> {

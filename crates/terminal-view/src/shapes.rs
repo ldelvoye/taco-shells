@@ -9,12 +9,6 @@ const LIGHT_LINE_SHARE: f32 = 1.0 / 14.0;
 const LIGHT_SHADE: f32 = 0.25;
 const MEDIUM_SHADE: f32 = 0.5;
 const DARK_SHADE: f32 = 0.75;
-
-/// A rectangle inside a cell, in eighths of its width and height: x, y, width, height.
-type Eighths = [u8; 4];
-/// A rectangle in pixels: left, top, right, bottom.
-type Edges = [f32; 4];
-
 const UPPER_LEFT: Eighths = [0, 0, 4, 4];
 const UPPER_RIGHT: Eighths = [4, 0, 4, 4];
 const LOWER_LEFT: Eighths = [0, 4, 4, 4];
@@ -55,6 +49,11 @@ const BLOCKS: [&[Eighths]; 32] = [
     &[UPPER_RIGHT, LOWER_LEFT],
     &[UPPER_RIGHT, LOWER_LEFT, LOWER_RIGHT],
 ];
+
+/// A rectangle inside a cell, in eighths of its width and height: x, y, width, height.
+type Eighths = [u8; 4];
+/// A rectangle in pixels: left, top, right, bottom.
+type Edges = [f32; 4];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Weight {
