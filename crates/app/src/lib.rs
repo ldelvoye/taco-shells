@@ -2,6 +2,7 @@
 
 mod activity_log;
 mod activity_panel;
+mod addresses;
 mod assets;
 mod banners;
 mod done_checks;

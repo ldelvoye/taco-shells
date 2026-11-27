@@ -18,6 +18,7 @@ use taco_settings::{Binding, CommandId, Config, Settings, UnreadSettings, palett
 use taco_terminal_view::{Terminals, TerminalsEvent};
 
 use crate::activity_log::ActivityLog;
+use crate::addresses::{TERMINAL_SCHEMES, may_open};
 use crate::banners::{Dismissal, Notices};
 use crate::done_checks::DoneChecks;
 use crate::link::{
@@ -25,7 +26,7 @@ use crate::link::{
 };
 use crate::look::{FONT_FAMILY, Look, TEXT_SIZE};
 use crate::menu::{AgentMenuClicked, Minimize, Quit, RestartToUpdate, Zoom, set_menus};
-use crate::middle::{Attachable, opens_link};
+use crate::middle::Attachable;
 use crate::motion::{DrawnBounds, Moved, PAGE_TIME, moved_settings, progress};
 use crate::page::Page;
 use crate::panels::{PanelDrag, ResizeDrag};
@@ -365,7 +366,7 @@ impl WindowView {
             // A click put the keyboard in the terminal on screen: the selection it already shows, reported as a focus move.
             TerminalsEvent::Focused(terminal) => self.select(terminal, cx),
             TerminalsEvent::LinkClicked(url) => {
-                if opens_link(url) {
+                if may_open(url, &TERMINAL_SCHEMES) {
                     cx.open_url(url);
                 }
             }

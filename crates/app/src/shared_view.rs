@@ -19,7 +19,6 @@ const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
 const SNIFFED_BYTES: usize = 8 * 1024;
 /// A text past this is cut where it is drawn; laying out a whole megabyte would stall every frame.
 const SHOWN_CHARACTERS: usize = 100_000;
-const HTTPS: &str = "https://";
 const IMAGE_EXTENSIONS: [&str; 6] = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
 const BODY_FONT: &str = "Menlo";
 const BODY_TEXT_SIZE: f32 = 12.;
@@ -78,35 +77,6 @@ pub fn is_image(path: &str) -> bool {
     };
     let lowered = extension.to_ascii_lowercase();
     IMAGE_EXTENSIONS.contains(&lowered.as_str())
-}
-
-/// Whether an address may be handed to the browser: `https://` in any case, then a host with no user part, and no
-/// spaces, control or direction characters anywhere, which could make it read as another address.
-pub fn is_https(url: &str) -> bool {
-    let Some(scheme) = url.get(..HTTPS.len()) else {
-        return false;
-    };
-    if !scheme.eq_ignore_ascii_case(HTTPS) {
-        return false;
-    }
-    let mut characters = url.chars();
-    let disguised = characters.any(could_disguise);
-    if disguised {
-        return false;
-    }
-    let rest = &url[HTTPS.len()..];
-    let mut authority = rest;
-    if let Some(authority_end) = rest.find(['/', '?', '#']) {
-        authority = &rest[..authority_end];
-    }
-    let has_user = authority.contains('@');
-    let has_host = !authority.is_empty() && !authority.starts_with(':');
-    has_host && !has_user
-}
-
-fn could_disguise(character: char) -> bool {
-    let direction_mark = matches!(character, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}');
-    character.is_whitespace() || character.is_control() || direction_mark
 }
 
 /// What a shared file shows as; only a regular file is read, and no more than it would show.
@@ -343,20 +313,6 @@ mod tests {
         assert!(is_image("/Users/me/view-check/logo-after.PNG"));
         assert!(!is_image("/Users/me/PLAN-sigkill.md"));
         assert!(!is_image("/Users/me/pictures.png/notes"));
-    }
-
-    #[test]
-    fn only_an_https_address_with_a_host_goes_to_the_browser() {
-        assert!(is_https("https://github.com/ldelvoye/taco-shells/pull/155"));
-        assert!(is_https("HTTPS://claude.ai/artifact/x"));
-        assert!(!is_https("http://example.com"));
-        assert!(!is_https("https://"));
-        assert!(!is_https("https:///etc/passwd"));
-        assert!(!is_https("https://github.com@evil.example/pull/1"));
-        assert!(!is_https("https://:443/x"));
-        assert!(!is_https("https://git hub.com/x"));
-        assert!(!is_https("https://github.com/x\n"));
-        assert!(!is_https("https://\u{202E}moc.buhtig/x"));
     }
 
     #[test]

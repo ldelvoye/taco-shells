@@ -50,13 +50,6 @@ pub fn line_editing_bytes(command: CommandId) -> Option<&'static [u8]> {
     Some(bytes)
 }
 
-/// Whether a link may open from a terminal: the web and mail, never a file or an app's own scheme.
-pub fn opens_link(url: &str) -> bool {
-    let lowered = url.to_lowercase();
-    let schemes = ["http://", "https://", "mailto:"];
-    schemes.iter().any(|scheme| lowered.starts_with(scheme))
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
@@ -64,7 +57,7 @@ mod tests {
     use taco_protocol::{Arrangement, DrawnState, Row, TerminalId};
     use taco_rules::default_panels;
 
-    use super::{Attachable, attachable, opens_link};
+    use super::{Attachable, attachable};
 
     fn terminal(name: &str) -> TerminalId {
         TerminalId(name.to_string())
@@ -112,15 +105,5 @@ mod tests {
         let attach = attachable(&started);
         assert_eq!(attach.open, [terminal("a"), terminal("b"), terminal("c")]);
         assert_eq!(attach.on_screen, Some(terminal("b")));
-    }
-
-    #[test]
-    fn only_web_and_mail_links_open() {
-        assert!(opens_link("https://sentry.io/issues/1"));
-        assert!(opens_link("HTTP://example.com"));
-        assert!(opens_link("mailto:someone@example.com"));
-        assert!(!opens_link("file:///etc/passwd"));
-        assert!(!opens_link("javascript:alert(1)"));
-        assert!(!opens_link("vscode://open"));
     }
 }
