@@ -4,10 +4,11 @@ use std::fs::{self, OpenOptions};
 use std::io::Read;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use gpui::{
-    AnyElement, Context, Div, FontWeight, InteractiveElement, IntoElement, ObjectFit,
-    ParentElement, StatefulInteractiveElement, Styled, StyledImage, div, img, px,
+    AnyElement, Context, Div, FontWeight, Image, ImageFormat, InteractiveElement, IntoElement,
+    ObjectFit, ParentElement, StatefulInteractiveElement, Styled, StyledImage, div, img, px,
 };
 use taco_protocol::{SharedTarget, SharedThing, TerminalId};
 
@@ -20,7 +21,6 @@ const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
 const SNIFFED_BYTES: usize = 8 * 1024;
 /// A text past this is cut where it is drawn; laying out a whole megabyte would stall every frame.
 const SHOWN_CHARACTERS: usize = 100_000;
-const IMAGE_EXTENSIONS: [&str; 6] = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
 const TAB_COLUMNS: usize = 4;
 const BODY_FONT: &str = "Menlo";
 const BODY_TEXT_SIZE: f32 = 12.;
@@ -56,7 +56,8 @@ pub enum Content {
         shown: String,
         cut: bool,
     },
-    Image(PathBuf),
+    /// Drawn from the bytes this app read, never by opening the path again.
+    Image(Arc<Image>),
     /// Shown only by its path, with a way to find it in the Finder.
     Reveal {
         path: PathBuf,
@@ -74,11 +75,44 @@ pub fn opens(target: &SharedTarget) -> bool {
 }
 
 pub fn is_image(path: &str) -> bool {
-    let Some((_, extension)) = path.rsplit_once('.') else {
-        return false;
-    };
+    let format = image_format(path);
+    format.is_some()
+}
+
+fn image_format(path: &str) -> Option<ImageFormat> {
+    let (_, extension) = path.rsplit_once('.')?;
     let lowered = extension.to_ascii_lowercase();
-    IMAGE_EXTENSIONS.contains(&lowered.as_str())
+    match lowered.as_str() {
+        "png" => Some(ImageFormat::Png),
+        "jpg" | "jpeg" => Some(ImageFormat::Jpeg),
+        "gif" => Some(ImageFormat::Gif),
+        "webp" => Some(ImageFormat::Webp),
+        "svg" => Some(ImageFormat::Svg),
+        _ => None,
+    }
+}
+
+// Opened without blocking and checked again on the handle, so a path swapped for a pipe after the check is not read.
+fn read_regular(candidate: &Path, limit: u64) -> Result<Vec<u8>, &'static str> {
+    let opening = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(candidate);
+    let Ok(file) = opening else {
+        return Err(UNREADABLE);
+    };
+    let Ok(held) = file.metadata() else {
+        return Err(UNREADABLE);
+    };
+    if !held.is_file() {
+        return Err(NOT_REGULAR);
+    }
+    let mut bytes = Vec::new();
+    let mut limited = file.take(limit);
+    if limited.read_to_end(&mut bytes).is_err() {
+        return Err(UNREADABLE);
+    }
+    Ok(bytes)
 }
 
 /// What a shared file shows as; only a regular file is read, and no more than it would show.
@@ -95,34 +129,26 @@ pub fn file_content(path: &str) -> Content {
     if !metadata.is_file() {
         return reveal(shown_path, NOT_REGULAR);
     }
-    if is_image(path) {
+    if let Some(format) = image_format(path) {
         if metadata.len() > MAX_IMAGE_BYTES {
             return reveal(shown_path, TOO_LARGE_IMAGE);
         }
-        return Content::Image(shown_path);
+        let read = read_regular(candidate, MAX_IMAGE_BYTES);
+        let bytes = match read {
+            Ok(bytes) => bytes,
+            Err(reason) => return reveal(shown_path, reason),
+        };
+        let image = Image::from_bytes(format, bytes);
+        return Content::Image(Arc::new(image));
     }
     if metadata.len() > MAX_TEXT_BYTES {
         return reveal(shown_path, TOO_LARGE_TEXT);
     }
-    // Opened without blocking and checked again on the handle, so a path swapped for a pipe after the check is not read.
-    let opening = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(candidate);
-    let Ok(file) = opening else {
-        return reveal(shown_path, UNREADABLE);
+    let read = read_regular(candidate, MAX_TEXT_BYTES);
+    let bytes = match read {
+        Ok(bytes) => bytes,
+        Err(reason) => return reveal(shown_path, reason),
     };
-    let Ok(held) = file.metadata() else {
-        return reveal(shown_path, UNREADABLE);
-    };
-    if !held.is_file() {
-        return reveal(shown_path, NOT_REGULAR);
-    }
-    let mut bytes = Vec::new();
-    let mut limited = file.take(MAX_TEXT_BYTES);
-    if limited.read_to_end(&mut bytes).is_err() {
-        return reveal(shown_path, UNREADABLE);
-    }
     let sniffed_length = bytes.len().min(SNIFFED_BYTES);
     let sniffed = &bytes[..sniffed_length];
     if sniffed.contains(&0) {
@@ -266,8 +292,10 @@ fn body(content: &Content, look: &Look, cx: &mut Context<WindowView>) -> AnyElem
             }
             scroll.child(column).into_any_element()
         }
-        Content::Image(path) => {
-            let picture = img(path.clone()).size_full().object_fit(ObjectFit::Contain);
+        Content::Image(image) => {
+            let picture = img(Arc::clone(image))
+                .size_full()
+                .object_fit(ObjectFit::Contain);
             div()
                 .flex_1()
                 .min_h_0()
@@ -408,7 +436,21 @@ mod tests {
             "{too_large_picture:?}"
         );
         picture.set_len(MAX_TEXT_BYTES + 1).unwrap();
-        assert!(matches!(file_content(&at("logo.PNG")), Content::Image(_)));
+        let Content::Image(read) = file_content(&at("logo.PNG")) else {
+            panic!("logo.PNG did not open as an image");
+        };
+        assert_eq!(read.format, ImageFormat::Png);
+        assert_eq!(read.bytes.len() as u64, MAX_TEXT_BYTES + 1);
+
+        fs::write(at("private.png"), "secret").unwrap();
+        fs::set_permissions(at("private.png"), fs::Permissions::from_mode(0o000)).unwrap();
+        let unreadable_picture = file_content(&at("private.png"));
+        let not_drawn = Content::Reveal {
+            path: PathBuf::from(at("private.png")),
+            reason: UNREADABLE.to_string(),
+        };
+        assert_eq!(unreadable_picture, not_drawn);
+        fs::set_permissions(at("private.png"), fs::Permissions::from_mode(0o600)).unwrap();
 
         fs::write(at("private.md"), "secret").unwrap();
         fs::set_permissions(at("private.md"), fs::Permissions::from_mode(0o000)).unwrap();
