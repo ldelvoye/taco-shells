@@ -5,7 +5,7 @@ use taco_ghostty::render::{Dirty, FrameColors, FrameCursor, RenderState, Row};
 use taco_ghostty::{Error, Step, Terminal};
 use taco_protocol::{Rgb, TerminalColors, TerminalEvent};
 
-use crate::draw::{Painting, lay_out};
+use crate::draw::{Drawn, lay_out};
 use crate::links::url_at;
 
 /// What every view's terminal is set to, from the settings and the theme.
@@ -23,12 +23,6 @@ pub enum Applied {
     Changed,
     /// The shell exited and the runtime let the terminal go; there is nothing more to show.
     Ended,
-}
-
-/// One frame of the view: what to draw and the background under it.
-pub struct Drawn {
-    pub painting: Painting,
-    pub background: Rgb,
 }
 
 /// A view that has asked to attach, and follows the runtime once `Attached` comes back with its number.

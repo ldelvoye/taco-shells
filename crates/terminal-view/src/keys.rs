@@ -36,6 +36,7 @@ pub fn key_press(keystroke: &Keystroke, repeat: bool) -> Option<KeyPress<'_>> {
     })
 }
 
+/// The modifiers a program is told of: Shift, Ctrl and Option, never Cmd.
 pub fn mods_of(modifiers: Modifiers) -> Mods {
     Mods {
         shift: modifiers.shift,

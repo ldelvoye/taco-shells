@@ -10,7 +10,6 @@ use taco_protocol::Rgb;
 
 use crate::grid::CellMetrics;
 use crate::shapes::{Shape, cells_bounds, light_line, paint_shape, shape_of_text};
-use crate::view::Drawn;
 
 const FAINT_TEXT_ALPHA: f32 = 0.6;
 /// A block cursor lets the character under it show through.
@@ -78,6 +77,12 @@ pub struct Painting {
     pub shapes: Vec<CellShape>,
     pub runs: Vec<Run>,
     pub cursor: Option<CursorMark>,
+}
+
+/// One frame of the view: what to draw and the background under it.
+pub struct Drawn {
+    pub painting: Painting,
+    pub background: Rgb,
 }
 
 /// What one frame paints, worked out before painting.
