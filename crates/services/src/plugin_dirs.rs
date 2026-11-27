@@ -18,12 +18,25 @@ const PLUGIN_DIRS_VARIABLE: &str = "CLAUDE_CODE_PLUGIN_DIRS";
 const ENV_KEY: &str = "env";
 const RECORD_FILE_NAME: &str = "claude-plugin-dirs.json";
 const SETTINGS_FIELD: &str = "settings";
-const ENTRY_FIELD: &str = "entry";
+const BEFORE_FIELD: &str = "before";
+const AFTER_FIELD: &str = "after";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PluginDirsRecord {
     pub(crate) settings: PathBuf,
-    pub(crate) entry: String,
+    pub(crate) before: String,
+    pub(crate) after: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Appended {
+    Changed {
+        text: String,
+        before: String,
+        after: String,
+    },
+    Unchanged,
+    Refused(String),
 }
 
 enum Located {
@@ -133,32 +146,36 @@ fn string_of(property: &CstObjectProp) -> Option<String> {
     literal.decoded_value().ok()
 }
 
-pub(crate) fn append_folder(text: &str, folder: &Path, home: &Path, label: &str) -> HookEdit {
+pub(crate) fn append_folder(text: &str, folder: &Path, home: &Path, label: &str) -> Appended {
     let parsed = CstRootNode::parse(text, &JSONC_PARSE_OPTIONS);
     let Ok(root) = parsed else {
-        return HookEdit::Refused(unreadable_problem(label));
+        return Appended::Refused(unreadable_problem(label));
     };
     let property = match locate(&root) {
-        Located::Missing => return HookEdit::Unchanged,
-        Located::Ambiguous => return HookEdit::Refused(uneditable_problem(label)),
+        Located::Missing => return Appended::Unchanged,
+        Located::Ambiguous => return Appended::Refused(uneditable_problem(label)),
         Located::Found(property) => property,
     };
-    let Some(old) = string_of(&property) else {
-        return HookEdit::Unchanged;
+    let Some(before) = string_of(&property) else {
+        return Appended::Unchanged;
     };
-    if lists_folder(&old, folder, home) {
-        return HookEdit::Unchanged;
+    if lists_folder(&before, folder, home) {
+        return Appended::Unchanged;
     }
     let folder_text = folder.to_string_lossy();
-    let mut joined = folder_text.to_string();
-    if !old.is_empty() {
-        joined = format!("{old}:{folder_text}");
+    let mut after = folder_text.to_string();
+    if !before.is_empty() {
+        after = format!("{before}:{folder_text}");
     }
-    property.set_value(CstInputValue::from(joined));
-    HookEdit::Changed(root.to_string())
+    property.set_value(CstInputValue::from(after.clone()));
+    Appended::Changed {
+        text: root.to_string(),
+        before,
+        after,
+    }
 }
 
-pub(crate) fn remove_folder(text: &str, entry: &str, label: &str) -> HookEdit {
+pub(crate) fn restore_value(text: &str, before: &str, after: &str, label: &str) -> HookEdit {
     let parsed = CstRootNode::parse(text, &JSONC_PARSE_OPTIONS);
     let Ok(root) = parsed else {
         return HookEdit::Refused(unreadable_problem(label));
@@ -168,17 +185,13 @@ pub(crate) fn remove_folder(text: &str, entry: &str, label: &str) -> HookEdit {
         Located::Ambiguous => return HookEdit::Refused(uneditable_problem(label)),
         Located::Found(property) => property,
     };
-    let Some(old) = string_of(&property) else {
+    let Some(current) = string_of(&property) else {
         return HookEdit::Unchanged;
     };
-    let mut entries: Vec<&str> = old.split(':').collect();
-    let position = entries.iter().rposition(|candidate| *candidate == entry);
-    let Some(position) = position else {
+    if current != after {
         return HookEdit::Unchanged;
-    };
-    entries.remove(position);
-    let joined = entries.join(":");
-    property.set_value(CstInputValue::from(joined));
+    }
+    property.set_value(CstInputValue::from(before.to_string()));
     HookEdit::Changed(root.to_string())
 }
 
@@ -190,7 +203,8 @@ pub(crate) fn write_record(config_directory: &Path, record: &PluginDirsRecord) -
     fs::create_dir_all(config_directory)?;
     let body = json!({
         SETTINGS_FIELD: record.settings.to_string_lossy(),
-        ENTRY_FIELD: record.entry,
+        BEFORE_FIELD: record.before,
+        AFTER_FIELD: record.after,
     });
     let text = body.to_string();
     let path = record_path(config_directory);
@@ -203,11 +217,14 @@ pub(crate) fn read_record(config_directory: &Path) -> Option<PluginDirsRecord> {
     let value: Value = serde_json::from_str(&text).ok()?;
     let settings_value = value.get(SETTINGS_FIELD)?;
     let settings = settings_value.as_str()?;
-    let entry_value = value.get(ENTRY_FIELD)?;
-    let entry = entry_value.as_str()?;
+    let before_value = value.get(BEFORE_FIELD)?;
+    let before = before_value.as_str()?;
+    let after_value = value.get(AFTER_FIELD)?;
+    let after = after_value.as_str()?;
     Some(PluginDirsRecord {
         settings: PathBuf::from(settings),
-        entry: entry.to_string(),
+        before: before.to_string(),
+        after: after.to_string(),
     })
 }
 
@@ -296,29 +313,60 @@ mod tests {
         let edit = append_folder(USER_FILE, &folder, &home, LABEL);
 
         let expected = USER_FILE.replace("face-band\"", &format!("face-band:{FOLDER}\""));
-        assert_eq!(edit, HookEdit::Changed(expected));
+        let before = "~/.claude/mods/face-band".to_string();
+        let after = format!("{before}:{FOLDER}");
+        assert_eq!(
+            edit,
+            Appended::Changed {
+                text: expected,
+                before,
+                after
+            }
+        );
         let absent = "{\"env\": {\"OTHER\": \"1\"}}";
         assert_eq!(
             append_folder(absent, &folder, &home, LABEL),
-            HookEdit::Unchanged
+            Appended::Unchanged
         );
         let listed = with_value("~/.taco-shells/claude-plugin");
         assert_eq!(
             append_folder(&listed, &folder, &home, LABEL),
-            HookEdit::Unchanged
+            Appended::Unchanged
         );
+        let number = format!("{{\"env\": {{\"{PLUGIN_DIRS_VARIABLE}\": 5}}}}");
+        assert_eq!(
+            append_folder(&number, &folder, &home, LABEL),
+            Appended::Unchanged
+        );
+        let key = format!("\"{PLUGIN_DIRS_VARIABLE}\"");
+        let duplicated = format!("{{\"env\": {{{key}: \"/a\", {key}: \"/b\"}}}}");
+        let ambiguous = append_folder(&duplicated, &folder, &home, LABEL);
+        assert!(matches!(ambiguous, Appended::Refused(_)));
+        let restored = restore_value(&duplicated, "/a", "/b", LABEL);
+        assert!(matches!(restored, HookEdit::Refused(_)));
         let broken = append_folder("{ not json", &folder, &home, LABEL);
-        assert!(matches!(broken, HookEdit::Refused(_)));
+        assert!(matches!(broken, Appended::Refused(_)));
     }
 
     #[test]
-    fn removing_takes_out_only_the_exact_entry() {
+    fn restoring_puts_back_the_old_value_only_while_the_line_is_untouched() {
+        let before = "~/.claude/mods/face-band";
+        let after = format!("{before}:{FOLDER}");
         let appended = USER_FILE.replace("face-band\"", &format!("face-band:{FOLDER}\""));
 
-        let edit = remove_folder(&appended, FOLDER, LABEL);
+        let edit = restore_value(&appended, before, &after, LABEL);
 
         assert_eq!(edit, HookEdit::Changed(USER_FILE.to_string()));
-        let edited = appended.replace(FOLDER, &format!("{FOLDER}/"));
-        assert_eq!(remove_folder(&edited, FOLDER, LABEL), HookEdit::Unchanged);
+        let with_slash = appended.replace(FOLDER, &format!("{FOLDER}/"));
+        let retyped = appended.replace(&after, &format!("{FOLDER}:{before}"));
+        let other = appended.replace("face-band", "other");
+        let absent = "{\"env\": {\"OTHER\": \"1\"}}";
+        let number = format!("{{\"env\": {{\"{PLUGIN_DIRS_VARIABLE}\": 5}}}}");
+        for changed in [with_slash.as_str(), &retyped, &other, absent, &number] {
+            let edit = restore_value(changed, before, &after, LABEL);
+            assert_eq!(edit, HookEdit::Unchanged, "{changed}");
+        }
+        let broken = restore_value("{ not json", before, &after, LABEL);
+        assert!(matches!(broken, HookEdit::Refused(_)));
     }
 }

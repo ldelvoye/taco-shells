@@ -608,7 +608,7 @@ impl AgentSetups {
         if on {
             check_version(&self.shared);
         } else {
-            // Only the entry this app appended, and only while it is still there exactly as written.
+            // Only while the line is still exactly what this app wrote; otherwise it is the user's.
             let taken_out = remove_plugin_folder(&self.shared.files.config_directory);
             if let Err(problem) = taken_out {
                 problems.push(problem);
@@ -1069,7 +1069,11 @@ mod tests {
         assert_eq!(after_click, appended_settings(&environment));
         let folder = plugin_directory_path(&environment.config);
         let record = read_record(&environment.config).unwrap();
-        assert_eq!(record.entry, folder.display().to_string());
+        assert_eq!(record.before, "~/.claude/mods/face-band");
+        assert_eq!(
+            record.after,
+            format!("~/.claude/mods/face-band:{}", folder.display())
+        );
         assert_eq!(switch.turned_on.load(Ordering::SeqCst), 1);
         let done = setups.view().notices[0].clone();
         assert_eq!(done.kind, AgentSetupNoticeKind::Done);
