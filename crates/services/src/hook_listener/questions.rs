@@ -6,9 +6,9 @@ use std::time::Instant;
 use taco_protocol::routes::STOP;
 use taco_protocol::{ContextAnswer, HookMessage, StopAnswer};
 
-use super::ListenerEvent;
 use super::http::respond_with_body;
 use super::messages::parse_hook_message;
+use super::{ListenerEvent, Serving};
 
 const NO_ANSWER: &str = "{}";
 
@@ -50,9 +50,10 @@ pub(super) fn ask_question(
     sent_token: Option<&str>,
     body: &[u8],
     answer_by: Instant,
-    token: &str,
-    on_event: &(dyn Fn(ListenerEvent) + Send + Sync),
+    serving: &Serving,
 ) {
+    let token = serving.token.as_str();
+    let on_event = &serving.on_event;
     if sent_token != Some(token) {
         respond_with_body(&mut stream, NO_ANSWER);
         return;
