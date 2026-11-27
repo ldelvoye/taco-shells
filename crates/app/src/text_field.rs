@@ -19,7 +19,6 @@ const FIELD_PADDING: f32 = 6.;
 const FIELD_RADIUS: f32 = 6.;
 const CARET_WIDTH: f32 = 1.;
 const SHELL_RING: f32 = 1.5;
-const SHELL_RING_ANGLE: f32 = 90.;
 
 actions!(
     text_field,
@@ -774,7 +773,7 @@ impl Render for TextField {
         let mut field = div();
         if shell_ring {
             border = transparent_black();
-            let ring = shell_outline(SHELL_RING, FIELD_RADIUS, SHELL_RING_ANGLE);
+            let ring = shell_outline(SHELL_RING, FIELD_RADIUS);
             field = field.relative().child(ring);
         }
         field

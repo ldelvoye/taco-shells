@@ -38,7 +38,6 @@ const SMALL_BUTTON_PADDING: f32 = 8.;
 const CAPTURE_PADDING: f32 = 9.;
 const CAPTURE_RADIUS: f32 = 6.;
 const CAPTURE_OUTLINE: f32 = 2.;
-const CAPTURE_ANGLE: f32 = 90.;
 const CAPTURE_WASH: f32 = 0.12;
 const HINT_GAP: f32 = 4.;
 const CARD_PADDING: f32 = 10.;
@@ -307,7 +306,7 @@ fn capture_cap(capture: &Capture, look: &Look) -> Div {
     if let Some(pending) = &capture.pending {
         text = chip_text(pending);
     }
-    let outline = shell_outline(CAPTURE_OUTLINE, CAPTURE_RADIUS, CAPTURE_ANGLE);
+    let outline = shell_outline(CAPTURE_OUTLINE, CAPTURE_RADIUS);
     let wash = shell_orange().opacity(CAPTURE_WASH);
     div()
         .relative()

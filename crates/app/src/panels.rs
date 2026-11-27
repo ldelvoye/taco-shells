@@ -23,7 +23,6 @@ const BOTTOM_ZONE: f32 = 0.38;
 const LANDING_INSET: f32 = 4.;
 const LANDING_RADIUS: f32 = 9.;
 const LANDING_OUTLINE: f32 = 3.;
-const LANDING_ANGLE: f32 = 135.;
 const LANDING_WASH: f32 = 0.13;
 const LANDING_TITLE_LINE: f32 = 0.45;
 
@@ -275,7 +274,7 @@ pub fn landing_preview(panel: Panel, edge: Edge, size: f32, look: &Look) -> Div 
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(look.text)
         .child(name_of(panel));
-    let outline = shell_outline(LANDING_OUTLINE, LANDING_RADIUS, LANDING_ANGLE);
+    let outline = shell_outline(LANDING_OUTLINE, LANDING_RADIUS);
     let shape = div()
         .absolute()
         .flex()

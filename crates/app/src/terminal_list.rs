@@ -32,7 +32,6 @@ const LIST_END_ID: &str = "terminal-list-end";
 const ROW_ICON_SIZE: f32 = 14.;
 const TRAY_HEADER_HEIGHT: f32 = 26.;
 const SLOT_OUTLINE: f32 = 2.;
-const SLOT_ANGLE: f32 = 90.;
 const SLOT_WASH: f32 = 0.12;
 const DRAG_PREVIEW_WIDTH: f32 = 200.;
 // The marks move as tacoshells.dev's do (public/site.css): ts-spin and ts-ripple.
@@ -473,11 +472,11 @@ fn element_id(kind: &str, name: &str) -> ElementId {
     ElementId::Name(id)
 }
 
-// The "taco shell slot" Lucas chose: a row-sized gap outlined left to right in the shell's yellow and orange.
+// The "taco shell slot" Lucas chose: a row-sized gap outlined in the shell's orange.
 fn slot_element(slot: Slot) -> AnyElement {
     let opened = slot.height / ROW_HEIGHT;
     let wash = shell_orange().opacity(SLOT_WASH);
-    let outline = shell_outline(SLOT_OUTLINE, ROW_RADIUS, SLOT_ANGLE);
+    let outline = shell_outline(SLOT_OUTLINE, ROW_RADIUS);
     div()
         .relative()
         .flex_none()
