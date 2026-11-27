@@ -142,13 +142,15 @@ pub fn question_for(payload: &Value, pids: &[u32]) -> Option<Request> {
     let event = text_field(payload, "hook_event_name")?;
     let route = match event.as_str() {
         "SessionStart" => CONTEXT,
-        "Stop" => STOP,
+        "Stop" => {
+            let already_continued = payload.get("stop_hook_active") == Some(&Value::Bool(true));
+            if already_continued {
+                return None;
+            }
+            STOP
+        }
         _ => return None,
     };
-    let already_continued = payload.get("stop_hook_active") == Some(&Value::Bool(true));
-    if route == STOP && already_continued {
-        return None;
-    }
     let body = hook_body(payload, pids)?;
     Some(Request { route, body })
 }
