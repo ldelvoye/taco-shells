@@ -74,6 +74,7 @@ mod tests {
     use std::io::Write;
     use std::net::TcpListener;
     use std::time::Duration;
+    use taco_protocol::routes::STOP;
 
     fn soon(milliseconds: u64) -> Instant {
         Instant::now() + Duration::from_millis(milliseconds)
@@ -95,7 +96,7 @@ mod tests {
     fn a_200_answer_is_parsed_and_anything_else_is_none() {
         let good =
             answering_with("HTTP/1.1 200 OK\r\nContent-Length: 15\r\n\r\n{\"reason\":\"go\"}");
-        let answer = ask(good, "/agent-session/stop", "{}", Some("t"), soon(1000));
+        let answer = ask(good, STOP, "{}", Some("t"), soon(1000));
         assert_eq!(answer, Some(serde_json::json!({"reason": "go"})));
 
         let refused = answering_with("HTTP/1.1 403 Forbidden\r\n\r\n{}");

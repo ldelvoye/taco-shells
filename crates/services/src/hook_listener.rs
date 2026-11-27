@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fs;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -14,27 +13,24 @@ use serde_json::value::RawValue;
 use serde_json::{Map, Value};
 use taco_agents::{Harness, harness_of};
 use taco_plugin::{SERVER_NAME, TOOL_NAMES};
-use taco_protocol::{HookCall, HookMessage};
+use taco_protocol::routes::{AGENT_HOOK, CONTEXT, SESSION_END, SESSION_START, SESSION_STATE, STOP};
+use taco_protocol::{
+    AgentHookBody, ContextAnswer, HookCall, HookMessage, SessionEndBody, SessionStartBody,
+    SessionStateBody, StopAnswer, TOKEN_HEADER, deadlines,
+};
+
+use taco_protocol::TOKEN_FILE_NAME;
 
 pub const FOCUS_PORTS: std::ops::RangeInclusive<u16> = 23456..=23460;
 
 const UPDATE_CHECK_ROUTE: &str = "/update/check";
-const AGENT_START_ROUTE: &str = "/agent-session/start";
-const AGENT_END_ROUTE: &str = "/agent-session/end";
-const AGENT_STATE_ROUTE: &str = "/agent-session/state";
-const AGENT_HOOK_ROUTE: &str = "/agent-session/hook";
-const CONTEXT_ROUTE: &str = "/agent-session/context";
-const STOP_ROUTE: &str = "/agent-session/stop";
 const NO_ANSWER: &str = "{}";
-const ANSWER_DEADLINE: Duration = Duration::from_secs(1);
 
 const SMALL_BODY_CAP: u64 = 64 * 1024;
 const AGENT_HOOK_BODY_CAP: u64 = 16 * 1024 * 1024;
 const HEAD_CAP: usize = 16 * 1024;
 const READ_CHUNK: usize = 64 * 1024;
 const HEAD_END: &[u8] = b"\r\n\r\n";
-pub(crate) const TOKEN_FILE_NAME: &str = "focus-token";
-const TOKEN_HEADER: &str = "x-taco-shells-token";
 const PLUGIN_TOOL_PREFIX: &str = "mcp__plugin_";
 // The plugin's hook gives up after 250 ms, so a connection still sending after a second is dead.
 const READ_DEADLINE: Duration = Duration::from_secs(1);
@@ -77,8 +73,13 @@ impl PartialEq for Question {
 }
 
 struct Answer {
-    body: Value,
+    body: String,
     on_delivered: Option<OnDelivered>,
+}
+
+struct ParsedHook {
+    message: HookMessage,
+    source: String,
 }
 
 struct Head {
@@ -101,7 +102,8 @@ pub struct HookListener {
 impl HookListener {
     pub fn start(port_file: PathBuf, on_event: OnEvent) -> HookListener {
         let ports: Vec<u16> = FOCUS_PORTS.collect();
-        HookListener::start_on(&ports, port_file, READ_DEADLINE, ANSWER_DEADLINE, on_event)
+        let answer_window = deadlines::ANSWER_WINDOW;
+        HookListener::start_on(&ports, port_file, READ_DEADLINE, answer_window, on_event)
     }
 
     pub(crate) fn start_on(
@@ -308,7 +310,7 @@ fn handle(
     };
 
     let sent_token = head.token.as_deref();
-    let is_question = head.route == CONTEXT_ROUTE || head.route == STOP_ROUTE;
+    let is_question = head.route == CONTEXT || head.route == STOP;
     if is_question {
         ask_question(
             stream,
@@ -486,16 +488,16 @@ fn ask_question(
         respond_with_body(&mut stream, NO_ANSWER);
         return;
     }
-    let Some(message) = parse_hook_message(body, sent_token, token) else {
+    let Some(parsed) = parse_hook_message(body, sent_token, token) else {
         respond_with_body(&mut stream, NO_ANSWER);
         return;
     };
 
-    let kind = question_kind(route, &message);
+    let kind = question_kind(route, parsed.source);
     let (reply, replies) = mpsc::channel();
     let question = Question {
         kind: kind.clone(),
-        message,
+        message: parsed.message,
         reply,
     };
     on_event(ListenerEvent::Question(question));
@@ -511,29 +513,11 @@ fn ask_question(
     }
 }
 
-fn question_kind(route: &str, message: &HookMessage) -> QuestionKind {
-    if route == STOP_ROUTE {
+fn question_kind(route: &str, source: String) -> QuestionKind {
+    if route == STOP {
         return QuestionKind::Stop;
     }
-    let source = payload_source(message);
     QuestionKind::Context { source }
-}
-
-fn payload_source(message: &HookMessage) -> String {
-    let HookCall::AgentHook { payload, .. } = &message.call else {
-        return String::new();
-    };
-    let parsed: Result<Value, _> = serde_json::from_str(payload);
-    let Ok(value) = parsed else {
-        return String::new();
-    };
-    let Some(field) = value.get("source") else {
-        return String::new();
-    };
-    let Some(text) = field.as_str() else {
-        return String::new();
-    };
-    text.to_string()
 }
 
 fn answer_question(
@@ -566,29 +550,43 @@ fn answer_question(
     }
 
     let answer = final_answer(kind, placed, content);
-    let body = answer.body.to_string();
-    let written = respond_with_body(&mut stream, &body);
+    let written = respond_with_body(&mut stream, &answer.body);
     if written && let Some(on_delivered) = answer.on_delivered {
         on_delivered();
     }
 }
 
+fn context_body(context: Option<String>) -> String {
+    let answer = ContextAnswer {
+        yours: true,
+        context,
+    };
+    match serde_json::to_string(&answer) {
+        Ok(text) => text,
+        Err(_) => String::from(NO_ANSWER),
+    }
+}
+
+fn stop_body(reason: Option<String>) -> String {
+    let answer = StopAnswer { reason };
+    match serde_json::to_string(&answer) {
+        Ok(text) => text,
+        Err(_) => String::from(NO_ANSWER),
+    }
+}
+
 fn complete_answer(kind: &QuestionKind, part: AnswerPart) -> Option<Answer> {
     match (kind, part) {
-        (QuestionKind::Context { .. }, AnswerPart::Context(Some(text))) => Some(Answer {
-            body: serde_json::json!({"yours": true, "context": text}),
-            on_delivered: None,
-        }),
-        (QuestionKind::Context { .. }, AnswerPart::Context(None)) => Some(Answer {
-            body: serde_json::json!({"yours": true}),
+        (QuestionKind::Context { .. }, AnswerPart::Context(context)) => Some(Answer {
+            body: context_body(context),
             on_delivered: None,
         }),
         (QuestionKind::Stop, AnswerPart::Nudge(Some(reason), on_delivered)) => Some(Answer {
-            body: serde_json::json!({"reason": reason}),
+            body: stop_body(Some(reason)),
             on_delivered,
         }),
         (QuestionKind::Stop, AnswerPart::Nudge(None, _)) => Some(Answer {
-            body: serde_json::json!({}),
+            body: stop_body(None),
             on_delivered: None,
         }),
         _ => None,
@@ -597,7 +595,7 @@ fn complete_answer(kind: &QuestionKind, part: AnswerPart) -> Option<Answer> {
 
 fn final_answer(kind: &QuestionKind, placed: Option<bool>, content: Option<Answer>) -> Answer {
     let nothing = Answer {
-        body: serde_json::json!({}),
+        body: String::from(NO_ANSWER),
         on_delivered: None,
     };
     if placed != Some(true) {
@@ -608,7 +606,7 @@ fn final_answer(kind: &QuestionKind, placed: Option<bool>, content: Option<Answe
     }
     if matches!(kind, QuestionKind::Context { .. }) {
         return Answer {
-            body: serde_json::json!({"yours": true}),
+            body: context_body(None),
             on_delivered: None,
         };
     }
@@ -617,8 +615,8 @@ fn final_answer(kind: &QuestionKind, placed: Option<bool>, content: Option<Answe
 
 fn body_cap(route: &str) -> Option<u64> {
     match route {
-        AGENT_HOOK_ROUTE | CONTEXT_ROUTE | STOP_ROUTE => Some(AGENT_HOOK_BODY_CAP),
-        AGENT_START_ROUTE | AGENT_END_ROUTE | AGENT_STATE_ROUTE => Some(SMALL_BODY_CAP),
+        AGENT_HOOK | CONTEXT | STOP => Some(AGENT_HOOK_BODY_CAP),
+        SESSION_START | SESSION_END | SESSION_STATE => Some(SMALL_BODY_CAP),
         _ => None,
     }
 }
@@ -629,44 +627,90 @@ fn parse_message(
     sent_token: Option<&str>,
     token: &str,
 ) -> Option<HookMessage> {
-    if route == AGENT_HOOK_ROUTE {
-        return parse_hook_message(body, sent_token, token);
+    match route {
+        AGENT_HOOK => {
+            let parsed = parse_hook_message(body, sent_token, token)?;
+            Some(parsed.message)
+        }
+        SESSION_START => parse_start(body),
+        SESSION_END => parse_end(body),
+        SESSION_STATE => parse_state(body),
+        _ => None,
     }
+}
 
-    let value: Value = serde_json::from_slice(body).ok()?;
-    let object = value.as_object()?;
-    let pids_value = object.get("pids")?;
-    let pids = read_pids(pids_value)?;
-    let call = agent_call(route, object)?;
+fn parse_start(body: &[u8]) -> Option<HookMessage> {
+    let parsed: SessionStartBody = serde_json::from_slice(body).ok()?;
+    let harness = harness_of(&parsed.harness.0)?;
+    let pids = non_empty(parsed.pids)?;
+    let session_id = checked_session_id(harness, parsed.session_id)?;
+    if parsed.cwd.is_empty() {
+        return None;
+    }
+    let call = HookCall::AgentStart {
+        harness: harness.id(),
+        session_id,
+        cwd: parsed.cwd,
+        has_conversation: parsed.has_conversation,
+    };
     Some(HookMessage { pids, call })
 }
 
-fn parse_hook_message(body: &[u8], sent_token: Option<&str>, token: &str) -> Option<HookMessage> {
-    let fields: HashMap<String, Box<RawValue>> = serde_json::from_slice(body).ok()?;
+fn parse_end(body: &[u8]) -> Option<HookMessage> {
+    let parsed: SessionEndBody = serde_json::from_slice(body).ok()?;
+    let harness = harness_of(&parsed.harness.0)?;
+    let pids = non_empty(parsed.pids)?;
+    let session_id = checked_session_id(harness, parsed.session_id)?;
+    let call = HookCall::AgentEnd {
+        harness: harness.id(),
+        session_id,
+    };
+    Some(HookMessage { pids, call })
+}
 
-    let pids_text = fields.get("pids")?;
-    let pids_value: Value = serde_json::from_str(pids_text.get()).ok()?;
-    let pids = read_pids(&pids_value)?;
+fn parse_state(body: &[u8]) -> Option<HookMessage> {
+    let parsed: SessionStateBody = serde_json::from_slice(body).ok()?;
+    let harness = harness_of(&parsed.harness.0)?;
+    let pids = non_empty(parsed.pids)?;
+    let session_id = checked_session_id(harness, parsed.session_id)?;
+    let mut detail = None;
+    if let Some(text) = &parsed.detail
+        && !text.is_empty()
+    {
+        detail = Some(text.as_str());
+    }
+    let signal = harness.signal_for(&parsed.event, detail)?;
+    let call = HookCall::AgentState {
+        harness: harness.id(),
+        session_id,
+        signal,
+    };
+    Some(HookMessage { pids, call })
+}
 
-    let harness_text = fields.get("harness")?;
-    let harness_value: Value = serde_json::from_str(harness_text.get()).ok()?;
-    let harness_name = harness_value.as_str()?;
-    let harness = harness_of(harness_name)?;
+fn parse_hook_message(body: &[u8], sent_token: Option<&str>, token: &str) -> Option<ParsedHook> {
+    let parsed: AgentHookBody<Box<RawValue>> = serde_json::from_slice(body).ok()?;
+    let harness = harness_of(&parsed.harness.0)?;
+    let pids = non_empty(parsed.pids)?;
 
-    let payload_raw = fields.get("payload")?;
-    let payload_text = payload_raw.get();
+    let payload_text = parsed.payload.get();
     let payload_value: Value = serde_json::from_str(payload_text).ok()?;
     let payload = payload_value.as_object()?;
 
-    let tool_name = read_text(payload, "tool_name");
+    let tool_name = text_field(payload, "tool_name");
     let is_activity_call = tool_name.is_some_and(is_any_channels_activity_call);
     // Any local process can post here, so an activity call counts only with the token the app wrote for its own hook.
     if is_activity_call && sent_token != Some(token) {
         return None;
     }
 
-    let session_id = read_session_id(harness, payload, "session_id")?;
-    let event = read_text(payload, "hook_event_name")?;
+    let session_text = text_field(payload, "session_id")?;
+    let session_id = checked_session_id(harness, String::from(session_text))?;
+    let event = text_field(payload, "hook_event_name")?;
+    let mut source = String::new();
+    if let Some(text) = text_field(payload, "source") {
+        source = String::from(text);
+    }
 
     let call = HookCall::AgentHook {
         harness: harness.id(),
@@ -674,96 +718,27 @@ fn parse_hook_message(body: &[u8], sent_token: Option<&str>, token: &str) -> Opt
         event: event.to_string(),
         payload: payload_text.to_string(),
     };
-    Some(HookMessage { pids, call })
+    let message = HookMessage { pids, call };
+    Some(ParsedHook { message, source })
 }
 
-fn read_pids(value: &Value) -> Option<Vec<u32>> {
-    let items = value.as_array()?;
-
-    let mut pids = Vec::new();
-    for item in items {
-        let Some(number) = item.as_u64() else {
-            continue;
-        };
-        let Ok(pid) = u32::try_from(number) else {
-            continue;
-        };
-        pids.push(pid);
-    }
-
+fn non_empty(pids: Vec<u32>) -> Option<Vec<u32>> {
     if pids.is_empty() {
         return None;
     }
     Some(pids)
 }
 
-fn agent_call(route: &str, object: &Map<String, Value>) -> Option<HookCall> {
-    let harness_name = read_text(object, "harness")?;
-    let harness = harness_of(harness_name)?;
-    match route {
-        AGENT_START_ROUTE => start_call(harness, object),
-        AGENT_END_ROUTE => end_call(harness, object),
-        AGENT_STATE_ROUTE => state_call(harness, object),
-        _ => None,
-    }
-}
-
-fn start_call(harness: &Harness, object: &Map<String, Value>) -> Option<HookCall> {
-    let session_id = read_session_id(harness, object, "sessionId")?;
-    let cwd = read_text(object, "cwd")?;
-    if cwd.is_empty() {
+fn checked_session_id(harness: &Harness, session_id: String) -> Option<String> {
+    if !harness.is_session_id(&session_id) {
         return None;
     }
-
-    let conversation = object.get("hasConversation");
-    let has_conversation = conversation == Some(&Value::Bool(true));
-    Some(HookCall::AgentStart {
-        harness: harness.id(),
-        session_id,
-        cwd: cwd.to_string(),
-        has_conversation,
-    })
+    Some(session_id)
 }
 
-fn end_call(harness: &Harness, object: &Map<String, Value>) -> Option<HookCall> {
-    let session_id = read_session_id(harness, object, "sessionId")?;
-    Some(HookCall::AgentEnd {
-        harness: harness.id(),
-        session_id,
-    })
-}
-
-fn state_call(harness: &Harness, object: &Map<String, Value>) -> Option<HookCall> {
-    let session_id = read_session_id(harness, object, "sessionId")?;
-    let event = read_text(object, "event")?;
-    let detail = read_detail(object);
-    let signal = harness.signal_for(event, detail)?;
-    Some(HookCall::AgentState {
-        harness: harness.id(),
-        session_id,
-        signal,
-    })
-}
-
-fn read_session_id(harness: &Harness, object: &Map<String, Value>, key: &str) -> Option<String> {
-    let session_id = read_text(object, key)?;
-    if !harness.is_session_id(session_id) {
-        return None;
-    }
-    Some(session_id.to_string())
-}
-
-fn read_text<'a>(object: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
-    let value = object.get(key)?;
+fn text_field<'a>(payload: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
+    let value = payload.get(key)?;
     value.as_str()
-}
-
-fn read_detail(object: &Map<String, Value>) -> Option<&str> {
-    let detail = read_text(object, "detail")?;
-    if detail.is_empty() {
-        return None;
-    }
-    Some(detail)
 }
 
 #[cfg(test)]
@@ -771,7 +746,7 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::mpsc::{self, Receiver};
 
-    use taco_protocol::{AgentSignal, HarnessId};
+    use taco_protocol::{AgentSignal, HarnessId, PORT_FILE_NAME};
 
     use super::*;
 
@@ -833,20 +808,20 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         let listener = HookListener::start_on(
             &[0],
-            directory.path().join("focus-port"),
+            directory.path().join(PORT_FILE_NAME),
             TEST_DEADLINE,
-            ANSWER_DEADLINE,
+            deadlines::ANSWER_WINDOW,
             Box::new(move |event| {
                 let _ = sender.send(event);
             }),
         );
         let port = listener.port().unwrap();
-        let token = fs::read_to_string(directory.path().join("focus-token")).unwrap();
+        let token = fs::read_to_string(directory.path().join(TOKEN_FILE_NAME)).unwrap();
         Collecting {
             listener,
             port,
             receiver,
-            token_header: format!("X-Taco-Shells-Token: {token}\r\n"),
+            token_header: format!("{TOKEN_HEADER}: {token}\r\n"),
             _directory: directory,
         }
     }
@@ -882,7 +857,7 @@ mod tests {
         assert_eq!(status, 200, "{path} {body}");
 
         let marker = end_body("[9]");
-        let marked = post_with(port, "POST", AGENT_END_ROUTE, headers, marker.as_bytes());
+        let marked = post_with(port, "POST", SESSION_END, headers, marker.as_bytes());
         assert_eq!(marked, 200);
         let next = next_event(&collecting.receiver);
         assert_eq!(next, ended(vec![9]), "{path} {body}");
@@ -903,15 +878,13 @@ mod tests {
         assert_eq!(next_event(receiver), ListenerEvent::UpdateCheck);
 
         let odd_pids = end_body(r#"[4,"x",-1,5.5,99999999999,5]"#);
-        post(port, "POST", AGENT_END_ROUTE, odd_pids.as_bytes());
-        let ended_session = next_event(receiver);
-        assert_eq!(ended_session, ended(vec![4, 5]));
+        expect_dropped(&collecting, SESSION_END, &odd_pids);
         assert_eq!(post(port, "POST", "/focus-tab", br#"{"pids":[4]}"#), 404);
 
         let start = format!(
             r#"{{"pids":[1],"harness":"claude","sessionId":"{SESSION}","cwd":"/tmp/work","hasConversation":true}}"#
         );
-        post(port, "POST", AGENT_START_ROUTE, start.as_bytes());
+        post(port, "POST", SESSION_START, start.as_bytes());
         let expected = HookCall::AgentStart {
             harness: claude(),
             session_id: SESSION.to_string(),
@@ -924,7 +897,7 @@ mod tests {
         let fresh_start = format!(
             r#"{{"pids":[1],"harness":"claude","sessionId":"{SESSION}","cwd":"/tmp/new"}}"#
         );
-        post(port, "POST", AGENT_START_ROUTE, fresh_start.as_bytes());
+        post(port, "POST", SESSION_START, fresh_start.as_bytes());
         let fresh = HookCall::AgentStart {
             harness: claude(),
             session_id: SESSION.to_string(),
@@ -936,21 +909,21 @@ mod tests {
 
         let no_cwd =
             format!(r#"{{"pids":[1],"harness":"claude","sessionId":"{SESSION}","cwd":""}}"#);
-        expect_dropped(&collecting, AGENT_START_ROUTE, &no_cwd);
+        expect_dropped(&collecting, SESSION_START, &no_cwd);
         let bad_session = r#"{"pids":[1],"harness":"claude","sessionId":"nope","cwd":"/tmp"}"#;
-        expect_dropped(&collecting, AGENT_START_ROUTE, bad_session);
+        expect_dropped(&collecting, SESSION_START, bad_session);
         let unknown_harness =
             format!(r#"{{"pids":[1],"harness":"gemini","sessionId":"{SESSION}","cwd":"/tmp"}}"#);
-        expect_dropped(&collecting, AGENT_START_ROUTE, &unknown_harness);
+        expect_dropped(&collecting, SESSION_START, &unknown_harness);
 
         let idle = format!(
             r#"{{"pids":[1],"harness":"claude","sessionId":"{SESSION}","event":"Notification","detail":"idle_prompt"}}"#
         );
-        expect_dropped(&collecting, AGENT_STATE_ROUTE, &idle);
+        expect_dropped(&collecting, SESSION_STATE, &idle);
         let asking = format!(
             r#"{{"pids":[1],"harness":"claude","sessionId":"{SESSION}","event":"PreToolUse","detail":"AskUserQuestion"}}"#
         );
-        post(port, "POST", AGENT_STATE_ROUTE, asking.as_bytes());
+        post(port, "POST", SESSION_STATE, asking.as_bytes());
         let needs = HookCall::AgentState {
             harness: claude(),
             session_id: SESSION.to_string(),
@@ -959,20 +932,20 @@ mod tests {
         let state = next_event(receiver);
         assert_eq!(state, hook(vec![1], needs));
 
-        expect_dropped(&collecting, AGENT_END_ROUTE, &end_body("[]"));
+        expect_dropped(&collecting, SESSION_END, &end_body("[]"));
 
-        assert_eq!(post(port, "GET", AGENT_END_ROUTE, b""), 404);
+        assert_eq!(post(port, "GET", SESSION_END, b""), 404);
         assert_eq!(post(port, "POST", "/nope", b"{}"), 404);
         let at_cap = vec![b' '; 64 * 1024];
-        assert_eq!(post(port, "POST", AGENT_END_ROUTE, &at_cap), 200);
+        assert_eq!(post(port, "POST", SESSION_END, &at_cap), 200);
         let over_cap = vec![b' '; 64 * 1024 + 1];
-        assert_eq!(post(port, "POST", AGENT_END_ROUTE, &over_cap), 413);
+        assert_eq!(post(port, "POST", SESSION_END, &over_cap), 413);
 
         let payload = format!(
             r#"{{ "session_id": "{SESSION}", "hook_event_name": "PreToolUse", "tool_input": {{"a": [1, 2.50]}} }}"#
         );
         let hook_body = format!(r#"{{"pids":[1],"harness":"claude","payload":{payload}}}"#);
-        post(port, "POST", AGENT_HOOK_ROUTE, hook_body.as_bytes());
+        post(port, "POST", AGENT_HOOK, hook_body.as_bytes());
         let received = next_event(receiver);
         let ListenerEvent::Hook(HookMessage {
             call:
@@ -990,22 +963,16 @@ mod tests {
         assert_eq!(text, payload);
 
         let string_payload = r#"{"pids":[1],"harness":"claude","payload":"text"}"#;
-        expect_dropped(&collecting, AGENT_HOOK_ROUTE, string_payload);
+        expect_dropped(&collecting, AGENT_HOOK, string_payload);
 
         let from_a_page = "Origin: https://example.com\r\n";
-        let refused = post_with(
-            port,
-            "POST",
-            AGENT_HOOK_ROUTE,
-            from_a_page,
-            hook_body.as_bytes(),
-        );
+        let refused = post_with(port, "POST", AGENT_HOOK, from_a_page, hook_body.as_bytes());
         assert_eq!(refused, 403);
         let page_end_body = end_body("[6]");
         let page_end = post_with(
             port,
             "POST",
-            AGENT_END_ROUTE,
+            SESSION_END,
             from_a_page,
             page_end_body.as_bytes(),
         );
@@ -1013,16 +980,15 @@ mod tests {
         let page_check = post_with(port, "POST", UPDATE_CHECK_ROUTE, from_a_page, b"");
         assert_eq!(page_check, 403);
         let after_page_body = end_body("[8]");
-        post(port, "POST", AGENT_END_ROUTE, after_page_body.as_bytes());
+        post(port, "POST", SESSION_END, after_page_body.as_bytes());
         let after_page = next_event(receiver);
         assert_eq!(after_page, ended(vec![8]));
 
         let mut stalled = TcpStream::connect(("127.0.0.1", port)).unwrap();
-        let stalled_head =
-            format!("POST {AGENT_HOOK_ROUTE} HTTP/1.1\r\nContent-Length: 5000\r\n\r\n{{");
+        let stalled_head = format!("POST {AGENT_HOOK} HTTP/1.1\r\nContent-Length: 5000\r\n\r\n{{");
         stalled.write_all(stalled_head.as_bytes()).unwrap();
         let after_stall_body = end_body("[7]");
-        post(port, "POST", AGENT_END_ROUTE, after_stall_body.as_bytes());
+        post(port, "POST", SESSION_END, after_stall_body.as_bytes());
         let after_stall = next_event(receiver);
         assert_eq!(after_stall, ended(vec![7]));
         drop(stalled);
@@ -1046,13 +1012,13 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let directory = tempfile::tempdir().unwrap();
-        let token_file = directory.path().join("focus-token");
+        let token_file = directory.path().join(TOKEN_FILE_NAME);
         let (sender, receiver) = mpsc::channel();
         let listener = HookListener::start_on(
             &[0],
-            directory.path().join("focus-port"),
+            directory.path().join(PORT_FILE_NAME),
             TEST_DEADLINE,
-            ANSWER_DEADLINE,
+            deadlines::ANSWER_WINDOW,
             Box::new(move |event| {
                 let _ = sender.send(event);
             }),
@@ -1064,11 +1030,12 @@ mod tests {
         let token = fs::read_to_string(&token_file).unwrap();
 
         let note = activity_post("mcp__plugin_taco-shells-dev_activity__note");
-        let with_token = format!("X-Taco-Shells-Token: {token}\r\n");
-        let lowercase_token = format!("x-taco-shells-token: {token}\r\n");
-        let wrong_token = "X-Taco-Shells-Token: nope\r\n";
+        let with_token = format!("{TOKEN_HEADER}: {token}\r\n");
+        let lowercase_header = TOKEN_HEADER.to_ascii_lowercase();
+        let lowercase_token = format!("{lowercase_header}: {token}\r\n");
+        let wrong_token = format!("{TOKEN_HEADER}: nope\r\n");
 
-        let status = post_with(port, "POST", AGENT_HOOK_ROUTE, &with_token, note.as_bytes());
+        let status = post_with(port, "POST", AGENT_HOOK, &with_token, note.as_bytes());
         assert_eq!(status, 200);
         let delivered = next_event(&receiver);
         assert!(matches!(
@@ -1078,43 +1045,25 @@ mod tests {
                 ..
             })
         ));
-        let status = post_with(
-            port,
-            "POST",
-            AGENT_HOOK_ROUTE,
-            &lowercase_token,
-            note.as_bytes(),
-        );
+        let status = post_with(port, "POST", AGENT_HOOK, &lowercase_token, note.as_bytes());
         assert_eq!(status, 200);
         next_event(&receiver);
 
-        let status = post(port, "POST", AGENT_HOOK_ROUTE, note.as_bytes());
+        let status = post(port, "POST", AGENT_HOOK, note.as_bytes());
         assert_eq!(status, 200);
-        let status = post_with(port, "POST", AGENT_HOOK_ROUTE, wrong_token, note.as_bytes());
+        let status = post_with(port, "POST", AGENT_HOOK, &wrong_token, note.as_bytes());
         assert_eq!(status, 200);
         let share = activity_post("mcp__plugin_other_activity__share");
-        let status = post(port, "POST", AGENT_HOOK_ROUTE, share.as_bytes());
+        let status = post(port, "POST", AGENT_HOOK, share.as_bytes());
         assert_eq!(status, 200);
         let marker = end_body("[9]");
-        let marked = post_with(
-            port,
-            "POST",
-            AGENT_END_ROUTE,
-            &with_token,
-            marker.as_bytes(),
-        );
+        let marked = post_with(port, "POST", SESSION_END, &with_token, marker.as_bytes());
         assert_eq!(marked, 200);
         let next = next_event(&receiver);
         assert_eq!(next, ended(vec![9]));
 
         let ordinary = activity_post("Bash");
-        post_with(
-            port,
-            "POST",
-            AGENT_HOOK_ROUTE,
-            &with_token,
-            ordinary.as_bytes(),
-        );
+        post_with(port, "POST", AGENT_HOOK, &with_token, ordinary.as_bytes());
         let event = next_event(&receiver);
         assert!(matches!(event, ListenerEvent::Hook(_)));
 
@@ -1133,30 +1082,30 @@ mod tests {
         let payload = format!(r#"{{"session_id":"{SESSION}","hook_event_name":"SessionStart"}}"#);
         let hook_body = format!(r#"{{"pids":[1],"harness":"claude","payload":{payload}}}"#);
         vec![
-            (AGENT_START_ROUTE, start),
-            (AGENT_END_ROUTE, end),
-            (AGENT_STATE_ROUTE, state),
-            (AGENT_HOOK_ROUTE, hook_body),
+            (SESSION_START, start),
+            (SESSION_END, end),
+            (SESSION_STATE, state),
+            (AGENT_HOOK, hook_body),
         ]
     }
 
     #[test]
     fn every_hook_post_needs_the_token() {
         let directory = tempfile::tempdir().unwrap();
-        let token_file = directory.path().join("focus-token");
+        let token_file = directory.path().join(TOKEN_FILE_NAME);
         let (sender, receiver) = mpsc::channel();
         let listener = HookListener::start_on(
             &[0],
-            directory.path().join("focus-port"),
+            directory.path().join(PORT_FILE_NAME),
             TEST_DEADLINE,
-            ANSWER_DEADLINE,
+            deadlines::ANSWER_WINDOW,
             Box::new(move |event| {
                 let _ = sender.send(event);
             }),
         );
         let port = listener.port().unwrap();
         let token = fs::read_to_string(&token_file).unwrap();
-        let with_token = format!("X-Taco-Shells-Token: {token}\r\n");
+        let with_token = format!("{TOKEN_HEADER}: {token}\r\n");
         let routes = every_hook_route_body();
 
         for (route, body) in &routes {
@@ -1164,13 +1113,7 @@ mod tests {
             assert_eq!(status, 200, "{route}");
         }
         let marker = end_body("[9]");
-        post_with(
-            port,
-            "POST",
-            AGENT_END_ROUTE,
-            &with_token,
-            marker.as_bytes(),
-        );
+        post_with(port, "POST", SESSION_END, &with_token, marker.as_bytes());
         let first = next_event(&receiver);
         assert_eq!(first, ended(vec![9]));
 
@@ -1195,9 +1138,9 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let blocked = HookListener::start_on(
             &[0],
-            directory.path().join("focus-port"),
+            directory.path().join(PORT_FILE_NAME),
             TEST_DEADLINE,
-            ANSWER_DEADLINE,
+            deadlines::ANSWER_WINDOW,
             Box::new(move |event| {
                 let _ = sender.send(event);
                 let waiting = gate.lock().unwrap();
@@ -1208,10 +1151,10 @@ mod tests {
         let payload = format!(r#"{{"session_id":"{SESSION}","hook_event_name":"SessionStart"}}"#);
         let body = format!(r#"{{"pids":[1],"harness":"claude","payload":{payload}}}"#);
 
-        let token = fs::read_to_string(directory.path().join("focus-token")).unwrap();
-        let with_token = format!("X-Taco-Shells-Token: {token}\r\n");
+        let token = fs::read_to_string(directory.path().join(TOKEN_FILE_NAME)).unwrap();
+        let with_token = format!("{TOKEN_HEADER}: {token}\r\n");
 
-        let status = post_with(port, "POST", AGENT_HOOK_ROUTE, &with_token, body.as_bytes());
+        let status = post_with(port, "POST", AGENT_HOOK, &with_token, body.as_bytes());
 
         assert_eq!(status, 200);
         let heard = events.recv_timeout(WAIT).unwrap();
@@ -1229,12 +1172,12 @@ mod tests {
         let free = spare.local_addr().unwrap().port();
         drop(spare);
 
-        let file = directory.path().join("focus-port");
+        let file = directory.path().join(PORT_FILE_NAME);
         let listener = HookListener::start_on(
             &[taken, free],
             file.clone(),
             TEST_DEADLINE,
-            ANSWER_DEADLINE,
+            deadlines::ANSWER_WINDOW,
             Box::new(|_| {}),
         );
         assert_eq!(listener.port(), Some(free));
@@ -1248,7 +1191,7 @@ mod tests {
             &[taken],
             other_file.clone(),
             TEST_DEADLINE,
-            ANSWER_DEADLINE,
+            deadlines::ANSWER_WINDOW,
             Box::new(|_| {}),
         );
         assert_eq!(unbound.port(), None);
@@ -1350,17 +1293,17 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let listener = HookListener::start_on(
             &[0],
-            directory.path().join("focus-port"),
+            directory.path().join(PORT_FILE_NAME),
             TEST_DEADLINE,
             QUESTION_WINDOW,
             Box::new(on_event),
         );
         let port = listener.port().unwrap();
-        let token = fs::read_to_string(directory.path().join("focus-token")).unwrap();
+        let token = fs::read_to_string(directory.path().join(TOKEN_FILE_NAME)).unwrap();
         Questioned {
             _listener: listener,
             port,
-            token_header: format!("X-Taco-Shells-Token: {token}\r\n"),
+            token_header: format!("{TOKEN_HEADER}: {token}\r\n"),
             _directory: directory,
         }
     }
@@ -1426,7 +1369,7 @@ mod tests {
         let asker = thread::spawn(move || {
             let started = Instant::now();
             let body = question_body();
-            let (_, reply) = post_for_reply(port, "POST", CONTEXT_ROUTE, &headers, body.as_bytes());
+            let (_, reply) = post_for_reply(port, "POST", CONTEXT, &headers, body.as_bytes());
             (reply, started.elapsed())
         });
         thread::sleep(Duration::from_millis(100));
@@ -1436,7 +1379,7 @@ mod tests {
         let status = post_with(
             port,
             "POST",
-            AGENT_END_ROUTE,
+            SESSION_END,
             &questioned.token_header,
             end.as_bytes(),
         );
@@ -1459,17 +1402,17 @@ mod tests {
                 AnswerPart::Context(Some("hello".to_string())),
             ]
         }));
-        let (reply, waited) = ask(&with_context, CONTEXT_ROUTE);
+        let (reply, waited) = ask(&with_context, CONTEXT);
         assert_eq!(reply, r#"{"yours":true,"context":"hello"}"#);
         assert!(waited < Duration::from_millis(200), "{waited:?}");
 
         let placed_only = start_questioned(answering(|| vec![AnswerPart::Placed(true)]));
-        let (reply, waited) = ask(&placed_only, CONTEXT_ROUTE);
+        let (reply, waited) = ask(&placed_only, CONTEXT);
         assert_eq!(reply, r#"{"yours":true}"#);
         assert!(waited > Duration::from_millis(250), "{waited:?}");
 
         let elsewhere = start_questioned(answering(|| vec![AnswerPart::Placed(false)]));
-        let (reply, waited) = ask(&elsewhere, CONTEXT_ROUTE);
+        let (reply, waited) = ask(&elsewhere, CONTEXT);
         assert_eq!(reply, "{}");
         assert!(waited < Duration::from_millis(200), "{waited:?}");
     }
@@ -1482,14 +1425,14 @@ mod tests {
                 AnswerPart::Placed(true),
             ]
         }));
-        let (reply, waited) = ask(&context_first, CONTEXT_ROUTE);
+        let (reply, waited) = ask(&context_first, CONTEXT);
         assert_eq!(reply, r#"{"yours":true,"context":"hello"}"#);
         assert!(waited < Duration::from_millis(200), "{waited:?}");
 
         let nothing_to_say = start_questioned(answering(|| {
             vec![AnswerPart::Placed(true), AnswerPart::Nudge(None, None)]
         }));
-        let (reply, waited) = ask(&nothing_to_say, STOP_ROUTE);
+        let (reply, waited) = ask(&nothing_to_say, STOP);
         assert_eq!(reply, "{}");
         assert!(waited < Duration::from_millis(200), "{waited:?}");
     }
@@ -1508,7 +1451,7 @@ mod tests {
             let nudge = AnswerPart::Nudge(Some("write a note".to_string()), Some(on_delivered));
             let _ = question.reply.send(nudge);
         });
-        let (reply, _) = ask(&in_time, STOP_ROUTE);
+        let (reply, _) = ask(&in_time, STOP);
         assert_eq!(reply, r#"{"reason":"write a note"}"#);
         assert!(wait_until(&delivered));
 
@@ -1531,7 +1474,7 @@ mod tests {
             });
             *late_slot.lock().unwrap() = Some(sender);
         });
-        let (reply, _) = ask(&late, STOP_ROUTE);
+        let (reply, _) = ask(&late, STOP);
         assert_eq!(reply, "{}");
         let sender = late_sender.lock().unwrap().take().unwrap();
         sender.join().unwrap();
@@ -1547,21 +1490,21 @@ mod tests {
         let port = questioned.port;
         let body = question_body();
 
-        for route in [CONTEXT_ROUTE, STOP_ROUTE] {
+        for route in [CONTEXT, STOP] {
             let started = Instant::now();
             let (status, reply) = post_for_reply(port, "POST", route, "", body.as_bytes());
             assert_eq!(status, 200, "{route}");
             assert_eq!(reply, "{}", "{route}");
             assert!(started.elapsed() < Duration::from_millis(500), "{route}");
 
-            let wrong = "X-Taco-Shells-Token: nope\r\n";
-            let (_, reply) = post_for_reply(port, "POST", route, wrong, body.as_bytes());
+            let wrong = format!("{TOKEN_HEADER}: nope\r\n");
+            let (_, reply) = post_for_reply(port, "POST", route, &wrong, body.as_bytes());
             assert_eq!(reply, "{}", "{route}");
         }
 
         let marker = end_body("[9]");
         let headers = &questioned.token_header;
-        post_with(port, "POST", AGENT_END_ROUTE, headers, marker.as_bytes());
+        post_with(port, "POST", SESSION_END, headers, marker.as_bytes());
         assert_eq!(next_event(&receiver), ended(vec![9]));
     }
 }

@@ -2,13 +2,12 @@ use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
-use taco_protocol::ConfigFile;
+use taco_protocol::{ConfigFile, PORT_FILE_NAME};
 use taco_settings::{
     ConfigTexts, DEFAULT_KEYBINDINGS_TEXT, DEFAULT_SETTINGS_TEXT, KEYBINDINGS_FILE_NAME,
     SETTINGS_FILE_NAME,
 };
 
-const FOCUS_PORT_FILE: &str = "focus-port";
 const PLUGIN_DIRECTORY: &str = "claude-plugin";
 
 pub struct ConfigRead {
@@ -25,7 +24,7 @@ pub fn config_file_path(directory: &Path, which: ConfigFile) -> PathBuf {
 }
 
 pub fn focus_port_path(directory: &Path) -> PathBuf {
-    directory.join(FOCUS_PORT_FILE)
+    directory.join(PORT_FILE_NAME)
 }
 
 /// The app's agent plugin, which its shells load while Agent Activity is on.

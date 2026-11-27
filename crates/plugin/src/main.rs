@@ -1,17 +1,15 @@
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use taco_plugin::{
-    ANCESTOR_LIMIT, CONTEXT_ROUTE, Post, Question, Surroundings, ancestor_pids, ask,
-    permission_answer, post, posts_for, question_for, read_port, read_token, send_posts, serve,
-    serves, session_start_output, stop_output,
+    ANCESTOR_LIMIT, Post, Question, Surroundings, ancestor_pids, ask, permission_answer, post,
+    posts_for, question_for, read_port, read_token, send_posts, serve, serves,
+    session_start_output, stop_output,
 };
-use taco_protocol::PORT_FILE_VARIABLE;
-
-const HOOK_DEADLINE: Duration = Duration::from_millis(250);
-const QUESTION_DEADLINE: Duration = Duration::from_millis(1500);
+use taco_protocol::routes::CONTEXT;
+use taco_protocol::{ContextAnswer, PORT_FILE_VARIABLE, StopAnswer, deadlines};
 
 fn run_mcp() -> std::io::Result<()> {
     let surroundings = Surroundings::from_environment();
@@ -35,13 +33,35 @@ fn run_allow() -> std::io::Result<()> {
 }
 
 fn send_all(posts: &[Post], port: u16, token: Option<&str>) {
-    let deadline = Instant::now() + HOOK_DEADLINE;
+    let deadline = Instant::now() + deadlines::POSTS;
     send_posts(posts, |request| post(port, request, token, deadline));
 }
 
 fn ask_question(port: u16, question: &Question, token: Option<&str>) -> Option<serde_json::Value> {
-    let deadline = Instant::now() + QUESTION_DEADLINE;
+    let deadline = Instant::now() + deadlines::QUESTION;
     ask(port, question.route, &question.body, token, deadline)
+}
+
+fn context_answer(reply: Option<serde_json::Value>) -> ContextAnswer {
+    let Some(reply) = reply else {
+        return ContextAnswer::default();
+    };
+    let parsed = serde_json::from_value::<ContextAnswer>(reply);
+    let Ok(answer) = parsed else {
+        return ContextAnswer::default();
+    };
+    answer
+}
+
+fn stop_answer(reply: Option<serde_json::Value>) -> StopAnswer {
+    let Some(reply) = reply else {
+        return StopAnswer::default();
+    };
+    let parsed = serde_json::from_value::<StopAnswer>(reply);
+    let Ok(answer) = parsed else {
+        return StopAnswer::default();
+    };
+    answer
 }
 
 fn print_output(output: &str) -> std::io::Result<()> {
@@ -81,21 +101,19 @@ fn run_hook() -> std::io::Result<()> {
         send_all(&posts, port, token_text);
         return Ok(());
     };
-    if question.route == CONTEXT_ROUTE {
+    if question.route == CONTEXT {
         send_all(&posts, port, token_text);
-        let answer = ask_question(port, &question, token_text);
-        if let Some(answer) = answer
-            && let Some(output) = session_start_output(&answer)
-        {
+        let reply = ask_question(port, &question, token_text);
+        let answer = context_answer(reply);
+        if let Some(output) = session_start_output(&answer) {
             print_output(&output)?;
         }
         return Ok(());
     }
 
-    let answer = ask_question(port, &question, token_text);
-    if let Some(answer) = answer
-        && let Some(output) = stop_output(&answer)
-    {
+    let reply = ask_question(port, &question, token_text);
+    let answer = stop_answer(reply);
+    if let Some(output) = stop_output(&answer) {
         // A nudged stop did not happen, so none of its posts are sent and the row stays working.
         print_output(&output)?;
         return Ok(());

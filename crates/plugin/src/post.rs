@@ -2,6 +2,8 @@ use std::io::{ErrorKind, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 
+use taco_protocol::TOKEN_HEADER;
+
 use crate::hook::Post;
 
 const WRITE_CHUNK: usize = 64 * 1024;
@@ -40,7 +42,7 @@ pub(crate) fn send_request(
 ) -> Result<(), PostError> {
     let mut token_header = String::new();
     if let Some(token) = token {
-        token_header = format!("X-Taco-Shells-Token: {token}\r\n");
+        token_header = format!("{TOKEN_HEADER}: {token}\r\n");
     }
     let text = format!(
         "POST {route} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n{token_header}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -74,6 +76,7 @@ mod tests {
     use super::*;
     use std::io::Read;
     use std::net::TcpListener;
+    use taco_protocol::routes::SESSION_STATE;
 
     fn soon(milliseconds: u64) -> Instant {
         Instant::now() + Duration::from_millis(milliseconds)
@@ -98,15 +101,15 @@ mod tests {
         });
 
         let sent = Post {
-            route: "/agent-session/state",
+            route: SESSION_STATE,
             body: String::from("{\"a\":1}"),
         };
         post(port, &sent, Some("abc123"), soon(1000)).unwrap();
 
         let received = server.join().unwrap();
         let first_line = received.lines().next().unwrap();
-        assert_eq!(first_line, "POST /agent-session/state HTTP/1.1");
-        assert!(received.contains("\r\nX-Taco-Shells-Token: abc123\r\n"));
+        assert_eq!(first_line, format!("POST {SESSION_STATE} HTTP/1.1"));
+        assert!(received.contains(&format!("\r\n{TOKEN_HEADER}: abc123\r\n")));
         assert!(received.ends_with("\r\n\r\n{\"a\":1}"));
     }
 
@@ -122,7 +125,7 @@ mod tests {
         });
 
         let sent = Post {
-            route: "/agent-session/state",
+            route: SESSION_STATE,
             body: String::from("{}"),
         };
         post(port, &sent, None, soon(1000)).unwrap();
@@ -142,7 +145,7 @@ mod tests {
         drop(listener);
 
         let sent = Post {
-            route: "/agent-session/state",
+            route: SESSION_STATE,
             body: String::from("{}"),
         };
         assert_eq!(post(port, &sent, None, soon(1000)), Err(PostError::Refused));
@@ -154,7 +157,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
 
         let sent = Post {
-            route: "/agent-session/state",
+            route: SESSION_STATE,
             body: String::from("{}"),
         };
         let started = Instant::now();
@@ -176,7 +179,7 @@ mod tests {
         });
 
         let sent = Post {
-            route: "/agent-session/state",
+            route: SESSION_STATE,
             body: "x".repeat(2 * 1024 * 1024),
         };
         let started = Instant::now();
