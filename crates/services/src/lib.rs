@@ -37,6 +37,7 @@ pub use config_store::ConfigStore;
 pub use config_writer::{ConfigChange, ConfigWriter, Refusal};
 pub use hook_listener::{FOCUS_PORTS, HookListener, ListenerEvent};
 pub use identity::{
-    APPLICATION_NAME, CONFIG_DIRECTORY_NAME, CONFIG_DIRECTORY_VARIABLE, IS_STABLE, config_directory,
+    AGENT_APP_NAME, APPLICATION_NAME, CONFIG_DIRECTORY_NAME, CONFIG_DIRECTORY_VARIABLE, IS_STABLE,
+    config_directory,
 };
 pub use updater::{UpdateEvent, Updater, UpdaterHost};
