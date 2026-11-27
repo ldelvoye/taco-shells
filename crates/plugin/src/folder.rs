@@ -3,19 +3,30 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 
 use taco_agents::{ACTIVITY_SERVER, activity_tool_prefix};
+use taco_identity::PLUGIN_PROGRAM;
 
 use crate::identity::PLUGIN_NAME;
 
 const DESCRIPTION: &str = "Agent Activity for Taco Shells";
+
+pub fn program_path() -> String {
+    format!("libexec/{}", PLUGIN_PROGRAM)
+}
+
+fn program_in_plugin_root() -> String {
+    format!("${{CLAUDE_PLUGIN_ROOT}}/{}", program_path())
+}
 
 fn file(path: String, content: Value) -> (PathBuf, String) {
     (PathBuf::from(path), format!("{content:#}\n"))
 }
 
 fn hook_command_group(is_async: bool) -> Value {
+    let program = program_in_plugin_root();
+    let command = format!("\"{program}\" hook");
     let mut hook = json!({
         "type": "command",
-        "command": "\"${CLAUDE_PLUGIN_ROOT}/libexec/taco-shells-plugin\" hook",
+        "command": command,
     });
     if is_async {
         hook["async"] = Value::Bool(true);
@@ -29,10 +40,11 @@ pub fn plugin_files(version: &str) -> Vec<(PathBuf, String)> {
         "version": version,
         "description": DESCRIPTION,
     });
+    let program = program_in_plugin_root();
     let mcp = json!({
         "mcpServers": {
             ACTIVITY_SERVER: {
-                "command": "${CLAUDE_PLUGIN_ROOT}/libexec/taco-shells-plugin",
+                "command": program,
                 "args": ["mcp"],
                 // Without it the tools wait behind tool search and an agent rarely loads them.
                 "alwaysLoad": true,
@@ -40,11 +52,12 @@ pub fn plugin_files(version: &str) -> Vec<(PathBuf, String)> {
         }
     });
     let matcher = format!("{}.*", activity_tool_prefix());
+    let allow_command = format!("\"{program}\" allow");
     let allow_group = json!({
         "matcher": matcher,
         "hooks": [{
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/libexec/taco-shells-plugin\" allow",
+            "command": allow_command,
         }],
     });
     // Sync where the app must hear the event before the agent goes on; async elsewhere so a hook never slows it.

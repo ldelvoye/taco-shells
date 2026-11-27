@@ -5,8 +5,6 @@ use std::path::Path;
 
 use crate::file_write::write_beside_then_rename;
 
-pub const PROGRAM_PATH: &str = "libexec/taco-shells-plugin";
-
 const PROGRAM_MODE: u32 = 0o755;
 
 fn problem(path: &Path, action: &str, error: io::Error) -> String {
@@ -79,7 +77,8 @@ pub fn refresh_plugin_folder(folder: &Path, program: &Path, version: &str) -> Re
             changed = true;
         }
     }
-    let program_target = folder.join(PROGRAM_PATH);
+    let program_path = taco_plugin::program_path();
+    let program_target = folder.join(program_path);
     let copied = refresh_program(&program_target, program)?;
     if copied {
         changed = true;
@@ -116,7 +115,8 @@ mod tests {
         assert!(folder.join(MANIFEST).is_file());
         assert!(folder.join(".mcp.json").is_file());
         assert!(folder.join("hooks/hooks.json").is_file());
-        let installed = folder.join(PROGRAM_PATH);
+        let program_path = taco_plugin::program_path();
+        let installed = folder.join(program_path);
         assert_eq!(fs::read(&installed).unwrap(), b"program one");
         let mode = fs::metadata(&installed).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o755);
@@ -140,7 +140,8 @@ mod tests {
         let program = fake_program(directory.path(), b"program one");
         let folder = directory.path().join("plugin");
         refresh_plugin_folder(&folder, &program, VERSION).unwrap();
-        let installed = folder.join(PROGRAM_PATH);
+        let program_path = taco_plugin::program_path();
+        let installed = folder.join(program_path);
         fs::set_permissions(&installed, fs::Permissions::from_mode(0o644)).unwrap();
 
         let changed = refresh_plugin_folder(&folder, &program, VERSION).unwrap();
@@ -156,7 +157,8 @@ mod tests {
         let program = fake_program(directory.path(), b"old program");
         let folder = directory.path().join("plugin");
         refresh_plugin_folder(&folder, &program, VERSION).unwrap();
-        let installed = folder.join(PROGRAM_PATH);
+        let program_path = taco_plugin::program_path();
+        let installed = folder.join(program_path);
         let mut running = File::open(&installed).unwrap();
 
         let newer = fake_program(directory.path(), b"new program, longer");

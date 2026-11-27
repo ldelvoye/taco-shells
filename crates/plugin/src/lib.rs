@@ -15,7 +15,7 @@ pub use allow::permission_answer;
 pub use ancestors::ancestor_pids;
 pub use ask::ask;
 pub use endpoint::{read_port, read_token};
-pub use folder::plugin_files;
+pub use folder::{plugin_files, program_path};
 pub use hook::{Request, posts_for, question_for, send_posts, session_start_output, stop_output};
 pub use identity::{PLUGIN_NAME, Surroundings, serves};
 pub use panel_text::PANEL_TEXT;

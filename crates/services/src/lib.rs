@@ -38,6 +38,6 @@ pub use hook_listener::{
     AnswerPart, FOCUS_PORTS, HookListener, ListenerEvent, OnDelivered, Question, QuestionKind,
 };
 pub use mac::app_version;
-pub use plugin_folder::{PROGRAM_PATH, refresh_plugin_folder};
+pub use plugin_folder::refresh_plugin_folder;
 pub use settings_edit::HookEdit;
 pub use updater::{UpdateEvent, Updater, UpdaterHost};
