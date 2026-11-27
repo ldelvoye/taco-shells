@@ -1,6 +1,6 @@
 //! The tests that drive the real app: one launch of a development bundle, the checks in order, stopping at the first
-//! failure. Run through `cargo xtask smoke`, which builds the bundle and the config directory it starts from. With
-//! `--stable`, only the checks a stable bundle can take, which is never launched here: `cargo xtask promote` runs them.
+//! failure. Run through `cargo xtask smoke`, which builds the bundle and the config directory it starts from.
+//! `--stable` runs only the bundle checks on a stable bundle, without launching it, for `cargo xtask promote`.
 
 mod bundle;
 mod plugin;
@@ -88,7 +88,6 @@ pub struct Smoke {
     pub config: PathBuf,
 }
 
-/// A check that reads the bundle and never launches the app.
 struct Check {
     name: &'static str,
     run: fn(&Path) -> Result<(), String>,
@@ -102,7 +101,7 @@ struct LaunchedCheck {
 fn main() -> ExitCode {
     let arguments: Vec<PathBuf> = env::args_os().skip(1).map(PathBuf::from).collect();
     let (app, config) = match arguments.as_slice() {
-        [flag, app] if flag == Path::new(STABLE_FLAG) => return checked_stable_bundle(app),
+        [flag, app] if flag == Path::new(STABLE_FLAG) => return check_stable_bundle(app),
         [app, config] => (app, config),
         _ => {
             eprintln!("{USAGE}");
@@ -151,7 +150,7 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn checked_stable_bundle(app: &Path) -> ExitCode {
+fn check_stable_bundle(app: &Path) -> ExitCode {
     for check in STABLE_BUNDLE {
         let outcome = (check.run)(app);
         if !reported(check.name, outcome) {

@@ -41,8 +41,8 @@ pub fn holds_only_dev_names(app: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// A stable app carrying a dev name would touch the Dev app's folder, and one without the release key, or with the
-/// dev builds' extra-key variable, would take an update it should refuse or refuse every one.
+/// A stable app carrying a dev name would touch the Dev app's folder; one without the release key refuses every
+/// update, and one holding the dev builds' extra-key variable could take an update it should refuse.
 pub fn holds_only_stable_names_and_the_release_key(app: &Path) -> Result<(), String> {
     let plist = app.join(INFO_PLIST_PATH);
     let identifier = plist_value(&plist, "CFBundleIdentifier")?;
@@ -66,8 +66,9 @@ pub fn holds_only_stable_names_and_the_release_key(app: &Path) -> Result<(), Str
 
     let app_bytes = read(&programs.join(APP_PROGRAM))?;
     for key in RELEASE_KEYS {
-        let fields: Vec<&str> = key.split(' ').collect();
-        let Some(body) = fields.get(1) else {
+        // A key reads "ssh-ed25519 <body> <comment>", and the body is what the binary must hold.
+        let mut fields = key.split_whitespace();
+        let Some(body) = fields.nth(1) else {
             return Err(format!("the release key \"{key}\" has no key body"));
         };
         if find(&app_bytes, body.as_bytes()).is_none() {
@@ -121,6 +122,7 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn only_the_stable_id_without_the_dev_ending_counts() {
@@ -135,6 +137,57 @@ mod tests {
         for (bytes, expected) in cases {
             let found = holds_the_stable_id(bytes);
             assert_eq!(found, expected, "for {:?}", String::from_utf8_lossy(bytes));
+        }
+    }
+
+    // A bundle whose Info.plist names `bundle_id` and whose app program holds `app_text`; the other two hold nothing.
+    fn fake_bundle(folder: &Path, bundle_id: &str, app_text: &str) -> PathBuf {
+        let app = folder.join("Fake.app");
+        let programs = app.join(PROGRAMS_PATH);
+        fs::create_dir_all(&programs).unwrap();
+        let plist = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>{bundle_id}</string></dict></plist>\n"
+        );
+        fs::write(app.join(INFO_PLIST_PATH), plist).unwrap();
+        fs::write(programs.join(APP_PROGRAM), app_text).unwrap();
+        fs::write(programs.join(RUNTIME_PROGRAM), "").unwrap();
+        fs::write(programs.join(PLUGIN_PROGRAM), "").unwrap();
+        app
+    }
+
+    #[test]
+    fn a_stable_bundle_needs_the_stable_id_every_release_key_and_no_dev_name() {
+        let all_keys = RELEASE_KEYS.join("\n");
+        let update_key = UPDATE_KEY_VARIABLE.unwrap();
+        let cases = [
+            (
+                "a good stable bundle",
+                STABLE_BUNDLE_ID,
+                all_keys.clone(),
+                true,
+            ),
+            ("the dev bundle id", DEV_BUNDLE_ID, all_keys.clone(), false),
+            ("no release key", STABLE_BUNDLE_ID, String::new(), false),
+            (
+                "the dev app's name",
+                STABLE_BUNDLE_ID,
+                format!("{all_keys}\n{DEV_APPLICATION_NAME}"),
+                false,
+            ),
+            (
+                "the extra-key variable",
+                STABLE_BUNDLE_ID,
+                format!("{all_keys}\n{update_key}"),
+                false,
+            ),
+        ];
+        for (index, (name, bundle_id, app_text, expected)) in cases.into_iter().enumerate() {
+            let folder = std::env::temp_dir()
+                .join(format!("taco-bundle-test-{}-{index}", std::process::id()));
+            let app = fake_bundle(&folder, bundle_id, &app_text);
+            let checked = holds_only_stable_names_and_the_release_key(&app);
+            let _ = fs::remove_dir_all(&folder);
+            assert_eq!(checked.is_ok(), expected, "{name}: {checked:?}");
         }
     }
 }

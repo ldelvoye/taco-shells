@@ -119,8 +119,6 @@ fn last_tag(repo_root: &Path) -> Result<Option<String>, String> {
     last_tag_at(repo_root, "HEAD")
 }
 
-// `git describe` fails both when there is no tag and when git itself fails, so a failure counts as "no tag yet"
-// only when git lists no version tag at all.
 /// The newest version tag at or behind `commit`.
 pub(crate) fn last_tag_at(repo_root: &Path, commit: &str) -> Result<Option<String>, String> {
     let mut describe = Command::new("git");
@@ -129,6 +127,8 @@ pub(crate) fn last_tag_at(repo_root: &Path, commit: &str) -> Result<Option<Strin
     if let Some(tag) = repo::capture(&mut describe) {
         return Ok(Some(tag));
     }
+    // git describe fails both when there is no tag and when git itself fails, so a failure means "no tag yet" only
+    // when git lists no version tag at all.
     let listed = version_tags_named(repo_root, "v*")?;
     if listed.is_empty() {
         return Ok(None);
