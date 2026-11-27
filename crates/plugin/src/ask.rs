@@ -14,8 +14,14 @@ fn read_response(stream: &mut TcpStream, deadline: Instant) -> Option<String> {
     let mut received: Vec<u8> = Vec::new();
     let mut buffer = [0u8; READ_CHUNK];
     loop {
-        let left = time_left(deadline).ok()?;
-        stream.set_read_timeout(Some(left)).ok()?;
+        let remaining = time_left(deadline);
+        let Ok(left) = remaining else {
+            return None;
+        };
+        let timeout_set = stream.set_read_timeout(Some(left));
+        if timeout_set.is_err() {
+            return None;
+        }
         let read = stream.read(&mut buffer);
         match read {
             Ok(0) => break,
@@ -24,7 +30,11 @@ fn read_response(stream: &mut TcpStream, deadline: Instant) -> Option<String> {
             Err(_) => return None,
         }
     }
-    String::from_utf8(received).ok()
+    let text = String::from_utf8(received);
+    let Ok(text) = text else {
+        return None;
+    };
+    Some(text)
 }
 
 fn json_body(response: &str) -> Option<Value> {
@@ -32,7 +42,11 @@ fn json_body(response: &str) -> Option<Value> {
         return None;
     }
     let (_, body) = response.split_once(HEAD_END)?;
-    serde_json::from_str(body).ok()
+    let parsed = serde_json::from_str(body);
+    let Ok(value) = parsed else {
+        return None;
+    };
+    Some(value)
 }
 
 pub fn ask(
@@ -42,8 +56,14 @@ pub fn ask(
     token: Option<&str>,
     deadline: Instant,
 ) -> Option<Value> {
-    let mut stream = connect(port, deadline).ok()?;
-    send_request(&mut stream, route, body, token, deadline).ok()?;
+    let connected = connect(port, deadline);
+    let Ok(mut stream) = connected else {
+        return None;
+    };
+    let sent = send_request(&mut stream, route, body, token, deadline);
+    if sent.is_err() {
+        return None;
+    }
     let response = read_response(&mut stream, deadline)?;
     json_body(&response)
 }
