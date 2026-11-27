@@ -301,6 +301,33 @@ mod tests {
         ActivityKind::Asked { text: text.into() }
     }
 
+    // A log as this build writes it, with every kind of entry and every author. Renaming a variant or a field of
+    // what a line holds would drop a user's history without a word, so the file must read back whole and unchanged.
+    const STORED_LOG: &[&str] = &[
+        r#"{"seq":0,"at_ms":1,"author":"App","kind":{"SessionStarted":{"source":"New"}}}"#,
+        r#"{"seq":1,"at_ms":2,"author":"User","kind":{"Asked":{"text":"Fix the logo"}}}"#,
+        r##"{"seq":2,"at_ms":3,"author":{"OtherAgent":{"name":"code-83","address":"uds:/tmp/a.sock"}},"kind":{"MessageIn":{"text":"Look at #12"}}}"##,
+        r#"{"seq":3,"at_ms":4,"author":"App","kind":{"Step":{"stretch":3,"step":{"Did":{"tool":"Bash","summary":"cargo test","failed":"Exit code 1"}}}}}"#,
+        r#"{"seq":4,"at_ms":5,"author":"App","kind":{"Step":{"stretch":3,"step":{"Did":{"tool":"Read","summary":"/w/a.rs","failed":null}}}}}"#,
+        r#"{"seq":5,"at_ms":6,"author":"App","kind":{"Step":{"stretch":3,"step":{"Changed":{"tool":"Edit","path":"/w/src/logo.rs"}}}}}"#,
+        r#"{"seq":6,"at_ms":7,"author":"Agent","kind":{"MessageOut":{"to":{"name":null,"address":"uds:/tmp/a.sock"},"text":"On it","stretch":3}}}"#,
+        r#"{"seq":7,"at_ms":8,"author":"Agent","kind":{"Shared":{"thing":0,"title":"Plan"}}}"#,
+        r#"{"seq":8,"at_ms":9,"author":"App","kind":"AskedForNote"}"#,
+        r#"{"seq":9,"at_ms":10,"author":"Agent","kind":{"Note":{"text":"Found it","stretch":3}}}"#,
+        r#"{"seq":10,"at_ms":11,"author":"Agent","kind":{"Note":{"text":"Nothing more","stretch":null}}}"#,
+        r#"{"seq":11,"at_ms":12,"author":"App","kind":{"SessionStarted":{"source":"Resumed"}}}"#,
+        r#"{"seq":12,"at_ms":13,"author":"App","kind":{"SessionStarted":{"source":"Compacted"}}}"#,
+        r#"{"seq":13,"at_ms":14,"author":"App","kind":{"SessionStarted":{"source":"Cleared"}}}"#,
+    ];
+
+    #[test]
+    fn a_log_this_build_wrote_reads_back_whole_and_writes_the_same_lines() {
+        let lines: Vec<String> = STORED_LOG.iter().map(|line| line.to_string()).collect();
+        let log = Log::from_lines(&lines);
+        assert!(!log.needs_rewrite(), "every line is read as an entry");
+        assert_eq!(log.lines(), lines);
+    }
+
     #[test]
     fn a_log_keeps_its_newest_entries_pages_back_from_them_and_reads_back_from_its_file() {
         let appended = REWRITE_AT_LINES + 5;
