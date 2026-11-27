@@ -46,7 +46,7 @@ Two processes live as long as the app: the app itself (`taco-shells`) and the ru
 **The only wall is each crate's `Cargo.toml`.** Nothing checks imports beyond it, so a dependency added there is a decision about which layer owns something. The directions that matter:
 - `protocol` and `identity` are at the bottom and depend on nothing of ours. `wire` depends on nothing either.
 - `agents` sits below `workspace` and `services`. `services` depends on `plugin`, whose folder it writes.
-- `host` depends on neither `agents`, `runtime` nor `ghostty`: it starts the runtime as a program and speaks to it through `wire`.
+- `host` depends on `agents` only for the harness table's plugin variables, and on neither `runtime` nor `ghostty`: it starts the runtime as a program and speaks to it through `wire`.
 - `app` never depends on `runtime`, `wire` or `ghostty`; it reaches the runtime through `host`, and a terminal's drawing through `terminal-view`.
 - `xtask` depends only on `identity`, and `smoke` only on `identity`, `drive` and `protocol`.
 
