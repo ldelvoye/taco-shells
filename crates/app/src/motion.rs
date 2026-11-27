@@ -16,11 +16,18 @@ pub const PAGE_TIME: Duration = Duration::from_millis(150);
 /// Where each segment and segment track was last drawn, by name, so a chosen card can slide between two of them.
 pub type DrawnBounds = Rc<RefCell<HashMap<SharedString, Bounds<Pixels>>>>;
 
+/// The move that takes longest, so no frame is wanted once it has run.
+pub const LONGEST_SETTING_MOVE: Duration = SEGMENT_TIME;
+
 /// A setting the last config changed, with the value it moved from.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Moved {
     pub from: SettingChange,
     pub since: Instant,
+    /// Where a switch was drawn when this move began part way through another; it starts there, not at the far end.
+    pub start_amount: Option<f32>,
+    /// Where a segment's card was drawn when this move began part way through another.
+    pub start_bounds: Option<Bounds<Pixels>>,
 }
 
 /// What one drawing of the page needs to place things that are moving.
@@ -32,18 +39,46 @@ pub struct Motion<'a> {
 }
 
 impl Motion<'_> {
-    /// The value a setting is moving from and how far it has come, while it is still moving.
-    pub fn moving(&self, key: &str, length: Duration) -> Option<(&SettingChange, f32)> {
+    /// A setting's move and how far it has come, while it is still moving.
+    pub fn moving(&self, key: &str, length: Duration) -> Option<(&Moved, f32)> {
         let moved = self.moved.get(key)?;
         let done = progress(moved.since, self.now, length, self.reduce_motion);
         if done >= 1. {
             return None;
         }
-        Some((&moved.from, done))
+        Some((moved, done))
     }
 }
 
-/// Records where its parent is drawn under `name`, for the next frame's slide.
+/// How far on a switch is drawn, 0 off to 1 on, eased from where it started toward its value.
+pub fn switch_amount(on: bool, start: Option<f32>, done: f32) -> f32 {
+    let mut target = 0.;
+    if on {
+        target = 1.;
+    }
+    let mut from = 1. - target;
+    if let Some(started) = start {
+        from = started;
+    }
+    lerp(from, target, done)
+}
+
+/// A switch setting's value; none for a setting that is not a switch.
+pub fn switch_value(setting: &SettingChange) -> Option<bool> {
+    match setting {
+        SettingChange::CursorBlink(on)
+        | SettingChange::RestoreOnLaunch(on)
+        | SettingChange::ManageAgentHooks(on) => Some(*on),
+        _ => None,
+    }
+}
+
+/// The name a segmented control's card is recorded under, by its setting's name.
+pub fn card_name(key: &str) -> SharedString {
+    SharedString::from(format!("card:{key}"))
+}
+
+/// A canvas that records its parent's bounds under `name`.
 pub fn recorder(bounds: &DrawnBounds, name: SharedString) -> Canvas<()> {
     let table = Rc::clone(bounds);
     let record = move |drawn: Bounds<Pixels>, _: &mut gpui::Window, _: &mut gpui::App| {
@@ -111,7 +146,7 @@ pub fn moved_settings(before: &Settings, after: &Settings) -> Vec<SettingChange>
 
 #[cfg(test)]
 mod tests {
-    use taco_settings::{CursorStyle, ThemeChoice};
+    use taco_settings::{CursorStyle, ShellRowName, ThemeChoice};
 
     use super::*;
 
@@ -129,20 +164,39 @@ mod tests {
     }
 
     #[test]
-    fn only_the_switches_and_segments_that_changed_move_and_from_their_old_value() {
+    fn every_switch_and_segment_that_changed_moves_from_its_old_value_and_nothing_else_does() {
         let before = Settings::default();
         let mut after = before.clone();
         after.theme = ThemeChoice::Dark;
+        after.cursor_style = CursorStyle::Bar;
+        after.shell_row_name = ShellRowName::Path;
         after.cursor_blink = !before.cursor_blink;
+        after.restore_on_launch = !before.restore_on_launch;
+        after.manage_agent_hooks = !before.manage_agent_hooks;
         after.font_size = before.font_size + 1.;
         let moved = moved_settings(&before, &after);
         let expected = vec![
             SettingChange::Theme(before.theme),
+            SettingChange::CursorStyle(before.cursor_style),
+            SettingChange::ShellRowName(before.shell_row_name),
             SettingChange::CursorBlink(before.cursor_blink),
+            SettingChange::RestoreOnLaunch(before.restore_on_launch),
+            SettingChange::ManageAgentHooks(before.manage_agent_hooks),
         ];
         assert_eq!(moved, expected);
         let unchanged = moved_settings(&before, &before);
         assert!(unchanged.is_empty());
-        let _ = CursorStyle::Block;
+    }
+
+    #[test]
+    fn a_switch_turned_back_mid_move_carries_on_from_where_it_was_drawn() {
+        let turning_on = switch_amount(true, None, 0.3);
+        assert_eq!(switch_amount(true, None, 0.), 0.);
+        assert_eq!(switch_amount(true, None, 1.), 1.);
+        assert_eq!(switch_amount(false, None, 0.), 1.);
+        // Turned off again at that point, it starts where it was rather than at fully on.
+        let turned_back = switch_amount(false, Some(turning_on), 0.);
+        assert_eq!(turned_back, turning_on);
+        assert_eq!(switch_amount(false, Some(turning_on), 1.), 0.);
     }
 }

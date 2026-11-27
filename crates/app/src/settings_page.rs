@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use gpui::{
-    Context, Div, ElementId, Entity, FontWeight, InteractiveElement, ParentElement, SharedString,
-    Stateful, StatefulInteractiveElement, Styled, div, px, transparent_black, white,
+    Bounds, Context, Div, ElementId, Entity, FontWeight, InteractiveElement, ParentElement, Pixels,
+    SharedString, Stateful, StatefulInteractiveElement, Styled, div, px, transparent_black, white,
 };
 use taco_settings::{
     Binding, CommandId, CursorStyle, FONT_SIZE_MAX, FONT_SIZE_MIN, SettingChange, Settings,
@@ -11,7 +11,9 @@ use taco_settings::{
 
 use crate::drive::mark;
 use crate::look::{Look, SMALL_TEXT_SIZE};
-use crate::motion::{Motion, SEGMENT_TIME, SWITCH_TIME, lerp, recorder};
+use crate::motion::{
+    Motion, Moved, SEGMENT_TIME, SWITCH_TIME, card_name, lerp, recorder, switch_amount,
+};
 use crate::page::{
     CHIP_GAP, PageMove, ROW_GAP, ROW_PADDING, chip, form_column, group, page_foot, page_frame,
     page_header, text_button,
@@ -445,6 +447,11 @@ fn segmented(segments: Vec<Segment>, input: &SettingsInput, cx: &mut Context<Win
     let bounds = input.motion.bounds;
     let track_name = track_name(&segments);
     let slide = card_slide(&segments, &track_name, input);
+    let mut card_recorded_as = None;
+    if let Some(chosen) = chosen_segment(&segments) {
+        let key = chosen.change.key();
+        card_recorded_as = Some(card_name(key));
+    }
     let mut track = div()
         .relative()
         .flex()
@@ -453,14 +460,17 @@ fn segmented(segments: Vec<Segment>, input: &SettingsInput, cx: &mut Context<Win
         .rounded(px(TRACK_RADIUS))
         .bg(look.strong_veil)
         .child(recorder(bounds, track_name));
-    // Sliding, the raised card is drawn once behind the labels rather than on the chosen one.
+    // While sliding, the raised card is drawn once behind the labels, not on the chosen segment.
     if let Some(card) = slide {
-        let shown_card = raised_card(look)
+        let mut shown_card = raised_card(look)
             .absolute()
             .left(px(card.left))
             .top(px(card.top))
             .w(px(card.width))
             .h(px(card.height));
+        if let Some(name) = card_recorded_as.clone() {
+            shown_card = shown_card.child(recorder(bounds, name));
+        }
         track = track.child(shown_card);
     }
     for segment in segments {
@@ -485,6 +495,9 @@ fn segmented(segments: Vec<Segment>, input: &SettingsInput, cx: &mut Context<Win
                 .text_color(look.text)
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(outline);
+            if let Some(name) = card_recorded_as.clone() {
+                shown = shown.child(recorder(bounds, name));
+            }
         } else if segment.chosen {
             shown = shown
                 .text_color(look.text)
@@ -523,43 +536,57 @@ fn raised_card(look: &Look) -> Div {
         .child(outline)
 }
 
-/// Where the chosen card is drawn while it slides from the old choice, within the track; none once it has arrived,
-/// or while either end has not been drawn yet, when it simply sits on the chosen segment.
+fn chosen_segment(segments: &[Segment]) -> Option<&Segment> {
+    let mut all = segments.iter();
+    all.find(|segment| segment.chosen)
+}
+
+/// Where the chosen card is drawn mid-slide, within its track; none once it has arrived or before both ends are drawn.
 fn card_slide(
     segments: &[Segment],
     track_name: &SharedString,
     input: &SettingsInput,
 ) -> Option<CardPlace> {
-    let mut chosen = None;
-    for segment in segments {
-        if segment.chosen {
-            chosen = Some(segment);
-        }
-    }
-    let chosen = chosen?;
+    let chosen = chosen_segment(segments)?;
     let key = chosen.change.key();
-    let (from, done) = input.motion.moving(key, SEGMENT_TIME)?;
-    let mut from_label = None;
-    for segment in segments {
-        if &segment.change == from {
-            from_label = Some(segment.label);
-        }
-    }
+    let (moved, done) = input.motion.moving(key, SEGMENT_TIME)?;
     let table = input.motion.bounds.borrow();
     let track = table.get(track_name)?;
-    let start = table.get(&segment_name(from_label?))?;
-    let end = table.get(&segment_name(chosen.label))?;
-    let start_left = f32::from(start.left() - track.left());
-    let end_left = f32::from(end.left() - track.left());
+    let start = slide_start(segments, moved, &table)?;
+    let end_name = segment_name(chosen.label);
+    let end = table.get(&end_name)?;
+    let start_offset = start.left() - track.left();
+    let end_offset = end.left() - track.left();
+    let top_offset = end.top() - track.top();
+    let start_left = f32::from(start_offset);
+    let end_left = f32::from(end_offset);
     let start_width = f32::from(start.size.width);
     let end_width = f32::from(end.size.width);
     let place = CardPlace {
         left: lerp(start_left, end_left, done),
-        top: f32::from(end.top() - track.top()),
+        top: f32::from(top_offset),
         width: lerp(start_width, end_width, done),
         height: f32::from(end.size.height),
     };
     Some(place)
+}
+
+// A move that began part way through another starts where the card was drawn, so it never jumps back.
+fn slide_start(
+    segments: &[Segment],
+    moved: &Moved,
+    table: &HashMap<SharedString, Bounds<Pixels>>,
+) -> Option<Bounds<Pixels>> {
+    if let Some(drawn) = moved.start_bounds {
+        return Some(drawn);
+    }
+    for segment in segments {
+        if segment.change == moved.from {
+            let name = segment_name(segment.label);
+            return table.get(&name).copied();
+        }
+    }
+    None
 }
 
 fn switch(
@@ -571,15 +598,13 @@ fn switch(
 ) -> Div {
     let look = input.look;
     let shown = make(on);
-    let mut on_amount = 0.;
-    if on {
-        on_amount = 1.;
-    }
-    // Moving from the other value, the switch is drawn part of the way between off and on.
-    if let Some((_, done)) = input.motion.moving(shown.key(), SWITCH_TIME) {
-        on_amount = lerp(1. - on_amount, on_amount, done);
+    let mut on_amount = switch_amount(on, None, 1.);
+    if let Some((moved, done)) = input.motion.moving(shown.key(), SWITCH_TIME) {
+        on_amount = switch_amount(on, moved.start_amount, done);
     }
     let knob_left = lerp(KNOB_LEFT_OFF, KNOB_LEFT_ON, on_amount);
+    let off_amount = 1. - on_amount;
+    let border = look.hairline.opacity(off_amount);
     let orange = div()
         .absolute()
         .top_0()
@@ -610,7 +635,7 @@ fn switch(
         .h(px(SWITCH_HEIGHT))
         .rounded_full()
         .border_1()
-        .border_color(look.hairline)
+        .border_color(border)
         .bg(look.strong_veil)
         .cursor_pointer()
         .child(orange)
