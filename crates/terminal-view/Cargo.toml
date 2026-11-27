@@ -11,7 +11,7 @@ required-features = ["capture"]
 
 [features]
 # Drawing a terminal to an image needs gpui's test support, which a shipped build never carries.
-capture = ["gpui/test-support", "dep:gpui_platform", "gpui_platform/test-support", "dep:image"]
+capture = ["gpui/test-support", "gpui_platform/test-support", "dep:image"]
 
 [dependencies]
 taco-protocol.workspace = true
@@ -20,5 +20,8 @@ taco-ghostty.workspace = true
 taco-wire.workspace = true
 futures.workspace = true
 gpui.workspace = true
-gpui_platform = { workspace = true, optional = true }
 image = { workspace = true, optional = true }
+
+[dev-dependencies]
+# Only the `look` example opens a platform.
+gpui_platform.workspace = true
