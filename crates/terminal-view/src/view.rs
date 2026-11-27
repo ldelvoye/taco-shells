@@ -466,7 +466,6 @@ mod tests {
     #[test]
     fn a_view_fed_the_runtimes_events_ends_up_byte_for_byte_the_runtimes_terminal() {
         let mut source = Terminal::new(SIZE).unwrap();
-        configure_terminal(&mut source, &config()).unwrap();
         for line in 0..2_000 {
             let styled = format!("\x1b[3{}mline {line}\x1b[0m\r\n", line % 8);
             source.write(styled.as_bytes());
@@ -474,6 +473,8 @@ mod tests {
         source.write(b"\x1b[?1h\x1b]0;a title\x07prompt $ ");
         let mut view = View::new(1, config()).unwrap();
         let (event, parts) = attached(1, &source);
+        // The window's settings and colors reach the view's terminal from the view, not from the snapshot.
+        configure_terminal(&mut source, &config()).unwrap();
         view.apply(event).unwrap();
         for part in history(1, parts) {
             view.apply(part).unwrap();
