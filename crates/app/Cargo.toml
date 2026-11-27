@@ -15,7 +15,12 @@ required-features = ["render"]
 
 [features]
 # Drawing the window to an image needs gpui's test support, which a shipped build never carries.
-render = ["gpui/test-support", "gpui_platform/test-support", "dep:image"]
+render = [
+    "gpui/test-support",
+    "gpui_platform/test-support",
+    "dep:image",
+    "dep:serde_json",
+]
 # The smoke tests' way into the running window. xtask never builds it into the stable app.
 drive = [
     "gpui/test-support",

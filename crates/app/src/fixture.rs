@@ -124,6 +124,8 @@ pub enum Fixture {
     Switches,
     /// The quiet one with a keybindings.json that could not be read.
     BrokenKeys,
+    /// The switches one, whose settings writes are applied, so a click moves its control.
+    Writable,
 }
 
 struct FixtureRow {
@@ -150,6 +152,7 @@ impl Fixture {
             "paths" => Some(Self::Paths),
             "switches" => Some(Self::Switches),
             "brokenkeys" => Some(Self::BrokenKeys),
+            "writable" => Some(Self::Writable),
             _ => None,
         }
     }
@@ -163,10 +166,15 @@ impl Fixture {
             Self::Paths => paths(),
             Self::Switches => switches(),
             Self::BrokenKeys => broken_keys(),
+            Self::Writable => switches(),
         }
     }
 
     /// The agent logs the stand-in answers from, by terminal.
+    pub(crate) fn applies_writes(self) -> bool {
+        self == Self::Writable
+    }
+
     pub(crate) fn logs(self) -> BTreeMap<TerminalId, Vec<ActivityEntry>> {
         if self == Self::Empty {
             return BTreeMap::new();

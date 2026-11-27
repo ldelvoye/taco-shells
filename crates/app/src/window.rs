@@ -35,6 +35,9 @@ use crate::menu::{
     AgentMenuClicked, Minimize, Quit, RestartToUpdate, ShowHookScripts, Zoom, set_menus,
 };
 use crate::middle::{Attachable, attachable, line_editing_bytes, opens_link};
+use crate::motion::{
+    DrawnBounds, Motion, Moved, PAGE_TIME, SEGMENT_TIME, moved_settings, progress,
+};
 use crate::page::{OverPage, Page, PageMove, over_page, pages_after};
 use crate::panels::{
     PanelDrag, ResizeDrag, bounded_size, docked, edge_near, landing_preview, open_on, place_of,
@@ -139,6 +142,13 @@ pub struct WindowView {
     capture: Option<Capture>,
     /// Why each command's last shortcut change was not written, until it is changed again.
     keymap_refused: HashMap<CommandId, String>,
+    /// The switches and segments a config changed, each with the value it is moving from.
+    moved: HashMap<&'static str, Moved>,
+    drawn_bounds: DrawnBounds,
+    /// When the page on top came up, so it fades in.
+    page_since: Option<Instant>,
+    /// The last page to close, fading out over the terminal.
+    leaving: Option<(Page, Instant)>,
     /// The last page has just closed and the terminal on screen takes the keyboard back.
     terminal_wants_keyboard: bool,
     /// Why each setting's last write was refused, by its name in settings.json, until it is written again.
@@ -246,6 +256,10 @@ impl WindowView {
             shortcut_query: String::new(),
             capture: None,
             keymap_refused: HashMap::new(),
+            moved: HashMap::new(),
+            drawn_bounds: DrawnBounds::default(),
+            page_since: None,
+            leaving: None,
             terminal_wants_keyboard: false,
             refused: HashMap::new(),
         }
@@ -296,6 +310,12 @@ impl WindowView {
                 self.shown.bindings = config.bindings;
                 self.shown.default_bindings = config.default_bindings;
                 self.shown.unread_keybindings = config.unread_keybindings;
+                let now = Instant::now();
+                let moved = moved_settings(&self.shown.settings, &config.settings);
+                for from in moved {
+                    let key = from.key();
+                    self.moved.insert(key, Moved { from, since: now });
+                }
                 self.shown.settings = config.settings;
                 self.shown.unread = config.unread_settings;
                 notices.config_problems = config.problems;
@@ -585,6 +605,19 @@ impl WindowView {
         }
         let opened = after.len() > self.pages.len();
         let shortcuts_left = !after.contains(&Page::Shortcuts);
+        let was_on_top = self.pages.last().copied();
+        let now = Instant::now();
+        // The page now on top fades in; the last one to close fades out over the terminal.
+        match (after.is_empty(), was_on_top) {
+            (true, Some(closed)) => {
+                self.leaving = Some((closed, now));
+                self.page_since = None;
+            }
+            _ => {
+                self.leaving = None;
+                self.page_since = Some(now);
+            }
+        }
         self.pages = after;
         if shortcuts_left {
             self.forget_search(cx);
@@ -1166,6 +1199,23 @@ impl WindowView {
             let preview = landing_preview(panel, edge, size, look);
             body = body.child(preview);
         }
+        // A closed page fades out over the whole area beside the strip, uncovering the window as it was.
+        let now = Instant::now();
+        let reduce_motion = cx.reduce_motion();
+        if let Some((left, since)) = self.leaving {
+            let gone = progress(since, now, PAGE_TIME, reduce_motion);
+            if gone < 1. {
+                let fading = self
+                    .page_element(left, now, reduce_motion, cx)
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px(STRIP_WIDTH))
+                    .right_0()
+                    .opacity(1. - gone);
+                body = body.child(fading);
+            }
+        }
         body
     }
 
@@ -1247,8 +1297,41 @@ impl WindowView {
             .min_h_0()
             .overflow_hidden()
             .bg(look.terminal_background);
+        let now = Instant::now();
+        let reduce_motion = cx.reduce_motion();
         match page {
-            Some(Page::Settings) => {
+            Some(shown) => {
+                let appeared = self.page_appeared(now, reduce_motion);
+                let drawn_page = self.page_element(shown, now, reduce_motion, cx);
+                let fading_in = drawn_page.opacity(appeared).track_focus(&self.page_focus);
+                terminal = terminal.child(fading_in);
+            }
+            None => terminal = terminal.child(self.terminal_or_placeholder()),
+        }
+        if !banners.is_empty() {
+            let cards = banner_cards(&banners, banners_below, look, cx);
+            terminal = terminal.child(cards);
+        }
+        terminal = mark(terminal, MIDDLE_MARK);
+        div().flex().flex_col().flex_1().min_h_0().child(terminal)
+    }
+
+    fn page_element(
+        &self,
+        page: Page,
+        now: Instant,
+        reduce_motion: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let look = &self.look;
+        match page {
+            Page::Settings => {
+                let motion = Motion {
+                    moved: &self.moved,
+                    now,
+                    reduce_motion,
+                    bounds: &self.drawn_bounds,
+                };
                 let input = SettingsInput {
                     settings: &self.shown.settings,
                     problems: &self.shown.notices.config_problems,
@@ -1256,12 +1339,12 @@ impl WindowView {
                     refused: &self.refused,
                     fields: &self.fields,
                     bindings: &self.shown.bindings,
+                    motion: &motion,
                     look,
                 };
-                let shown_page = settings_page(&input, cx).track_focus(&self.page_focus);
-                terminal = terminal.child(shown_page);
+                settings_page(&input, cx)
             }
-            Some(Page::Shortcuts) => {
+            Page::Shortcuts => {
                 let input = ShortcutsInput {
                     bindings: &self.shown.bindings,
                     defaults: &self.shown.default_bindings,
@@ -1273,17 +1356,36 @@ impl WindowView {
                     problems: &self.shown.notices.config_problems,
                     look,
                 };
-                let shown_page = shortcuts_page(&input, cx).track_focus(&self.page_focus);
-                terminal = terminal.child(shown_page);
+                shortcuts_page(&input, cx)
             }
-            None => terminal = terminal.child(self.terminal_or_placeholder()),
         }
-        if !banners.is_empty() {
-            let cards = banner_cards(&banners, banners_below, look, cx);
-            terminal = terminal.child(cards);
+    }
+
+    /// How far the page on top has faded in since it came up.
+    fn page_appeared(&self, now: Instant, reduce_motion: bool) -> f32 {
+        let Some(since) = self.page_since else {
+            return 1.;
+        };
+        progress(since, now, PAGE_TIME, reduce_motion)
+    }
+
+    /// Whether anything on a page is still moving, so another frame is wanted.
+    fn pages_moving(&self, now: Instant, reduce_motion: bool) -> bool {
+        if reduce_motion {
+            return false;
         }
-        terminal = mark(terminal, MIDDLE_MARK);
-        div().flex().flex_col().flex_1().min_h_0().child(terminal)
+        let page_fading = self.page_appeared(now, reduce_motion) < 1.;
+        let mut leaving = false;
+        if let Some((_, since)) = self.leaving {
+            leaving = progress(since, now, PAGE_TIME, reduce_motion) < 1.;
+        }
+        let mut setting_moving = false;
+        for moved in self.moved.values() {
+            if progress(moved.since, now, SEGMENT_TIME, reduce_motion) < 1. {
+                setting_moving = true;
+            }
+        }
+        page_fading || leaving || setting_moving
     }
 
     fn terminal_or_placeholder(&self) -> AnyElement {
@@ -1369,6 +1471,10 @@ impl WindowView {
 impl Render for WindowView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.watch_field_focus(window, cx);
+        let now = Instant::now();
+        if self.pages_moving(now, cx.reduce_motion()) {
+            window.request_animation_frame();
+        }
         self.viewport = window.viewport_size();
         let (drawn, kept) = drawn_with(&self.shown.drawn, self.ahead.as_ref());
         self.ahead = kept;

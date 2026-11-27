@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use gpui::{
-    Background, Context, Div, ElementId, Entity, FontWeight, InteractiveElement, ParentElement,
-    SharedString, Stateful, StatefulInteractiveElement, Styled, div, px, transparent_black, white,
+    Context, Div, ElementId, Entity, FontWeight, InteractiveElement, ParentElement, SharedString,
+    Stateful, StatefulInteractiveElement, Styled, div, px, transparent_black, white,
 };
 use taco_settings::{
     Binding, CommandId, CursorStyle, FONT_SIZE_MAX, FONT_SIZE_MIN, SettingChange, Settings,
@@ -11,6 +11,7 @@ use taco_settings::{
 
 use crate::drive::mark;
 use crate::look::{Look, SMALL_TEXT_SIZE};
+use crate::motion::{Motion, SEGMENT_TIME, SWITCH_TIME, lerp, recorder};
 use crate::page::{
     CHIP_GAP, PageMove, ROW_GAP, ROW_PADDING, chip, form_column, group, page_foot, page_frame,
     page_header, text_button,
@@ -83,6 +84,7 @@ pub struct SettingsInput<'a> {
     pub fields: &'a SettingsFields,
     /// What the keyboard shortcuts row shows as its own shortcut.
     pub bindings: &'a [Binding],
+    pub motion: &'a Motion<'a>,
     pub look: &'a Look,
 }
 
@@ -111,6 +113,15 @@ struct Segment {
     label: &'static str,
     chosen: bool,
     change: SettingChange,
+}
+
+/// Where a sliding card is drawn, in points from its track's corner.
+#[derive(Clone, Copy)]
+struct CardPlace {
+    left: f32,
+    top: f32,
+    width: f32,
+    height: f32,
 }
 
 pub fn settings_page(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
@@ -212,7 +223,7 @@ fn look_group(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
     let settings = input.settings;
     let look = input.look;
     let theme_options = segments_of(&THEME_OPTIONS, settings.theme, SettingChange::Theme);
-    let theme = segmented(theme_options, look, cx);
+    let theme = segmented(theme_options, input, cx);
     let font = typed_field(&input.fields.font)
         .min_w_0()
         .w(px(FONT_FIELD_WIDTH));
@@ -248,12 +259,12 @@ fn terminal_group(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
         settings.cursor_style,
         SettingChange::CursorStyle,
     );
-    let cursor = segmented(cursor_options, look, cx);
+    let cursor = segmented(cursor_options, input, cx);
     let blink = switch(
         "cursor-blink",
         settings.cursor_blink,
         SettingChange::CursorBlink,
-        look,
+        input,
         cx,
     );
     let scrollback_field = typed_field(&input.fields.scrollback).w(px(SCROLLBACK_FIELD_WIDTH));
@@ -295,7 +306,7 @@ fn list_group(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
     let look = input.look;
     let chosen = input.settings.shell_row_name;
     let segments = segments_of(&ROW_NAME_OPTIONS, chosen, SettingChange::ShellRowName);
-    let names = segmented(segments, look, cx);
+    let names = segmented(segments, input, cx);
     let hint = Some("Rows with an agent keep the agent’s title.");
     let names_shown = SettingChange::ShellRowName(chosen);
     let names_row = setting_row(
@@ -315,7 +326,7 @@ fn start_group(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
         "restore-on-launch",
         settings.restore_on_launch,
         SettingChange::RestoreOnLaunch,
-        look,
+        input,
         cx,
     );
     let hint = Some("Each in its folder, when the app starts.");
@@ -331,7 +342,7 @@ fn agents_group(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
         "manage-agent-hooks",
         settings.manage_agent_hooks,
         SettingChange::ManageAgentHooks,
-        look,
+        input,
         cx,
     );
     let hint = Some(
@@ -429,33 +440,55 @@ fn segments_of<T: Copy + PartialEq>(
     segments
 }
 
-fn segmented(segments: Vec<Segment>, look: &Look, cx: &mut Context<WindowView>) -> Div {
+fn segmented(segments: Vec<Segment>, input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
+    let look = input.look;
+    let bounds = input.motion.bounds;
+    let track_name = track_name(&segments);
+    let slide = card_slide(&segments, &track_name, input);
     let mut track = div()
+        .relative()
         .flex()
         .flex_none()
         .p(px(TRACK_PADDING))
         .rounded(px(TRACK_RADIUS))
-        .bg(look.strong_veil);
+        .bg(look.strong_veil)
+        .child(recorder(bounds, track_name));
+    // Sliding, the raised card is drawn once behind the labels rather than on the chosen one.
+    if let Some(card) = slide {
+        let shown_card = raised_card(look)
+            .absolute()
+            .left(px(card.left))
+            .top(px(card.top))
+            .w(px(card.width))
+            .h(px(card.height));
+        track = track.child(shown_card);
+    }
     for segment in segments {
-        let id = SharedString::from(format!("segment:{}", segment.label));
+        let name = segment_name(segment.label);
+        let id = name.clone();
         let mut shown = div()
             .id(ElementId::Name(id))
+            .relative()
             .px(px(SEGMENT_PADDING_X))
             .py(px(SEGMENT_PADDING_Y))
             .rounded(px(SEGMENT_RADIUS))
             .border_1()
             .border_color(transparent_black())
             .text_color(look.secondary_text)
-            .child(segment.label);
-        if segment.chosen {
+            .child(segment.label)
+            .child(recorder(bounds, name));
+        if segment.chosen && slide.is_none() {
             let outline = shell_outline(SHELL_OUTLINE, SEGMENT_RADIUS);
             shown = shown
-                .relative()
                 .bg(look.selected_card)
                 .shadow(look.card_shadow())
                 .text_color(look.text)
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(outline);
+        } else if segment.chosen {
+            shown = shown
+                .text_color(look.text)
+                .font_weight(FontWeight::SEMIBOLD);
         } else {
             let change = segment.change;
             shown = shown
@@ -469,30 +502,105 @@ fn segmented(segments: Vec<Segment>, look: &Look, cx: &mut Context<WindowView>) 
     track
 }
 
+fn track_name(segments: &[Segment]) -> SharedString {
+    let mut first = "";
+    if let Some(segment) = segments.first() {
+        first = segment.label;
+    }
+    SharedString::from(format!("track:{first}"))
+}
+
+fn segment_name(label: &str) -> SharedString {
+    SharedString::from(format!("segment:{label}"))
+}
+
+fn raised_card(look: &Look) -> Div {
+    let outline = shell_outline(SHELL_OUTLINE, SEGMENT_RADIUS);
+    div()
+        .rounded(px(SEGMENT_RADIUS))
+        .bg(look.selected_card)
+        .shadow(look.card_shadow())
+        .child(outline)
+}
+
+/// Where the chosen card is drawn while it slides from the old choice, within the track; none once it has arrived,
+/// or while either end has not been drawn yet, when it simply sits on the chosen segment.
+fn card_slide(
+    segments: &[Segment],
+    track_name: &SharedString,
+    input: &SettingsInput,
+) -> Option<CardPlace> {
+    let mut chosen = None;
+    for segment in segments {
+        if segment.chosen {
+            chosen = Some(segment);
+        }
+    }
+    let chosen = chosen?;
+    let key = chosen.change.key();
+    let (from, done) = input.motion.moving(key, SEGMENT_TIME)?;
+    let mut from_label = None;
+    for segment in segments {
+        if &segment.change == from {
+            from_label = Some(segment.label);
+        }
+    }
+    let table = input.motion.bounds.borrow();
+    let track = table.get(track_name)?;
+    let start = table.get(&segment_name(from_label?))?;
+    let end = table.get(&segment_name(chosen.label))?;
+    let start_left = f32::from(start.left() - track.left());
+    let end_left = f32::from(end.left() - track.left());
+    let start_width = f32::from(start.size.width);
+    let end_width = f32::from(end.size.width);
+    let place = CardPlace {
+        left: lerp(start_left, end_left, done),
+        top: f32::from(end.top() - track.top()),
+        width: lerp(start_width, end_width, done),
+        height: f32::from(end.size.height),
+    };
+    Some(place)
+}
+
 fn switch(
     id: &'static str,
     on: bool,
     make: fn(bool) -> SettingChange,
-    look: &Look,
+    input: &SettingsInput,
     cx: &mut Context<WindowView>,
 ) -> Div {
-    let mut track_color: Background = look.strong_veil.into();
-    let mut border_color = look.hairline;
-    let mut knob_color = look.secondary_text;
-    let mut knob_left = KNOB_LEFT_OFF;
+    let look = input.look;
+    let shown = make(on);
+    let mut on_amount = 0.;
     if on {
-        track_color = shell_orange().into();
-        border_color = transparent_black();
-        knob_color = white();
-        knob_left = KNOB_LEFT_ON;
+        on_amount = 1.;
     }
+    // Moving from the other value, the switch is drawn part of the way between off and on.
+    if let Some((_, done)) = input.motion.moving(shown.key(), SWITCH_TIME) {
+        on_amount = lerp(1. - on_amount, on_amount, done);
+    }
+    let knob_left = lerp(KNOB_LEFT_OFF, KNOB_LEFT_ON, on_amount);
+    let orange = div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .rounded_full()
+        .bg(shell_orange())
+        .opacity(on_amount);
+    let white_knob = div()
+        .size_full()
+        .rounded_full()
+        .bg(white())
+        .opacity(on_amount);
     let knob = div()
         .absolute()
         .top(px(KNOB_TOP))
         .left(px(knob_left))
         .size(px(KNOB_SIZE))
         .rounded_full()
-        .bg(knob_color);
+        .bg(look.secondary_text)
+        .child(white_knob);
     let opposite = !on;
     let track = div()
         .id(id)
@@ -502,9 +610,10 @@ fn switch(
         .h(px(SWITCH_HEIGHT))
         .rounded_full()
         .border_1()
-        .border_color(border_color)
-        .bg(track_color)
+        .border_color(look.hairline)
+        .bg(look.strong_veil)
         .cursor_pointer()
+        .child(orange)
         .child(knob)
         .on_click(cx.listener(move |view, _, _, _| view.change_setting(make(opposite))));
     div().flex_none().child(track)
