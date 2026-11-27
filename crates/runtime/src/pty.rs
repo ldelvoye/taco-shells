@@ -1,7 +1,7 @@
 mod environment;
 mod reader;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::ffi::CStr;
 use std::fs::File;
 use std::io::{self, Write};
@@ -64,7 +64,7 @@ pub struct PtyShells {
     inputs: Sender<Input>,
     budgets: Arc<Budgets>,
     shells: HashMap<TerminalId, Shell>,
-    agent_plugin: bool,
+    list_entries_on: BTreeSet<String>,
 }
 
 impl ShellProgram {
@@ -113,7 +113,7 @@ impl PtyShells {
             inputs,
             budgets,
             shells: HashMap::new(),
-            agent_plugin: false,
+            list_entries_on: BTreeSet::new(),
         }
     }
 
@@ -135,7 +135,7 @@ impl PtyShells {
         let mut command = Command::new(&self.program.path);
         command.args(&self.program.arguments);
         command.current_dir(directory);
-        environment::apply(&mut command, &self.program.context, self.agent_plugin);
+        environment::apply(&mut command, &self.program.context, &self.list_entries_on);
         let shell_side = slave.try_clone()?;
         command.stdin(Stdio::from(slave.try_clone()?));
         command.stdout(Stdio::from(slave.try_clone()?));
@@ -345,8 +345,20 @@ impl Shells for PtyShells {
         Some(shell.pid)
     }
 
-    fn set_agent_plugin(&mut self, on: bool) {
-        self.agent_plugin = on;
+    fn set_list_entry(&mut self, variable: &str, on: bool) {
+        let mut launched = self.program.context.list_entries.iter();
+        let known = launched.any(|list_entry| list_entry.variable == variable);
+        if !known {
+            eprintln!(
+                "no list entry for {variable} was given at launch, so turning it on or off is ignored"
+            );
+            return;
+        }
+        if on {
+            self.list_entries_on.insert(variable.to_string());
+        } else {
+            self.list_entries_on.remove(variable);
+        }
     }
 }
 
@@ -467,7 +479,7 @@ mod tests {
         ShellContext {
             app: "taco-shells-test".into(),
             port_file: "/nonexistent/focus-port".into(),
-            plugin_directory: "/nonexistent/claude-plugin".into(),
+            list_entries: Vec::new(),
         }
     }
 

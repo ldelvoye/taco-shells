@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+taco-agents.workspace = true
 taco-protocol.workspace = true
 taco-rules.workspace = true
 taco-workspace.workspace = true

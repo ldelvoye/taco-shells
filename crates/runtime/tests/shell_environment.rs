@@ -9,7 +9,7 @@ use taco_runtime::budget::Budgets;
 use taco_runtime::core::Input;
 use taco_runtime::pty::{PtyShells, ShellProgram};
 use taco_runtime::shells::Shells;
-use taco_wire::launch::ShellContext;
+use taco_wire::launch::{ListEntry, ShellContext};
 
 const SIZE: TerminalSize = TerminalSize { cols: 80, rows: 24 };
 const PATIENCE: Duration = Duration::from_secs(5);
@@ -17,7 +17,7 @@ const OWN: &str = "/dev-config/claude-plugin";
 const REPORT: &str = r#"print "$ENV{TACO_SHELLS_APP} $ENV{TACO_SHELLS_PORT_FILE} ", (exists $ENV{CLAUDE_CODE_PLUGIN_DIRS} ? $ENV{CLAUDE_CODE_PLUGIN_DIRS} : "unset"), "\n";"#;
 
 #[test]
-fn a_shell_gets_the_runtimes_own_app_over_the_inherited_one_and_the_plugin_only_while_on() {
+fn a_shell_gets_the_runtimes_own_app_over_the_inherited_one_and_the_list_entry_only_while_on() {
     // As when a Dev app is opened from one of its own terminals inside a stable app's.
     unsafe {
         std::env::set_var("TACO_SHELLS_APP", "taco-shells");
@@ -32,7 +32,10 @@ fn a_shell_gets_the_runtimes_own_app_over_the_inherited_one_and_the_plugin_only_
         context: ShellContext {
             app: "taco-shells-dev".into(),
             port_file: "/dev-config/focus-port".into(),
-            plugin_directory: OWN.into(),
+            list_entries: vec![ListEntry {
+                variable: "CLAUDE_CODE_PLUGIN_DIRS".into(),
+                entry: OWN.into(),
+            }],
         },
     };
     let (inputs, received) = mpsc::channel();
@@ -41,7 +44,7 @@ fn a_shell_gets_the_runtimes_own_app_over_the_inherited_one_and_the_plugin_only_
     let off = reported(&mut shells, &received, "off");
     assert_eq!(off, "taco-shells-dev /dev-config/focus-port unset");
 
-    shells.set_agent_plugin(true);
+    shells.set_list_entry("CLAUDE_CODE_PLUGIN_DIRS", true);
     let on = reported(&mut shells, &received, "on");
     assert_eq!(on, format!("taco-shells-dev /dev-config/focus-port {OWN}"));
 }

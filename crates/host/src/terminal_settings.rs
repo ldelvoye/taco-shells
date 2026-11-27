@@ -1,5 +1,6 @@
 //! What every new terminal starts with, from the config, and its sending to the runtime.
 
+use taco_agents::HARNESSES;
 use taco_protocol::{CursorShape, RuntimeCommand};
 use taco_settings::{Config, CursorStyle, palette_for};
 
@@ -13,8 +14,8 @@ pub fn send_terminal_settings(runtime: &RuntimeClient, config: &Config) {
     }
 }
 
-/// The scrollback, the colors, the cursor and whether Agent Activity is on, which every new terminal starts with, from the config.
-fn terminal_settings_of(config: &Config) -> [RuntimeCommand; 4] {
+/// The scrollback, the colors, the cursor, then whether Agent Activity is on for each harness with a plugin variable, which every new terminal starts with, from the config.
+fn terminal_settings_of(config: &Config) -> Vec<RuntimeCommand> {
     let settings = &config.settings;
     let palette = palette_for(config.appearance);
     let shape = match settings.cursor_style {
@@ -30,14 +31,22 @@ fn terminal_settings_of(config: &Config) -> [RuntimeCommand; 4] {
         shape,
         blink: settings.cursor_blink,
     };
-    let agent_plugin = RuntimeCommand::AgentPlugin {
-        on: settings.agent_activity,
-    };
-    [scrollback, colors, cursor, agent_plugin]
+    let mut commands = vec![scrollback, colors, cursor];
+    for harness in HARNESSES {
+        let Some(variable) = harness.plugin_variable() else {
+            continue;
+        };
+        commands.push(RuntimeCommand::ListEntry {
+            variable: variable.to_string(),
+            on: settings.agent_activity,
+        });
+    }
+    commands
 }
 
 #[cfg(test)]
 mod tests {
+    use taco_agents::CLAUDE;
     use taco_protocol::{CursorShape, RuntimeCommand};
     use taco_settings::{Appearance, ConfigTexts, CursorStyle, palette_for, resolve_config};
 
@@ -62,14 +71,18 @@ mod tests {
             config.settings.cursor_blink = false;
             config.settings.agent_activity = true;
             let commands = terminal_settings_of(&config);
-            let expected = [
+            let claude_variable = CLAUDE.plugin_variable().unwrap();
+            let expected = vec![
                 RuntimeCommand::Scrollback { lines: 4321 },
                 RuntimeCommand::Colors(palette_for(Appearance::Dark).terminal),
                 RuntimeCommand::CursorDefaults {
                     shape,
                     blink: false,
                 },
-                RuntimeCommand::AgentPlugin { on: true },
+                RuntimeCommand::ListEntry {
+                    variable: claude_variable.to_string(),
+                    on: true,
+                },
             ];
             assert_eq!(commands, expected, "{style:?}");
         }

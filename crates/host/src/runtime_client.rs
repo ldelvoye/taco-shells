@@ -492,7 +492,7 @@ exit {code};
         ShellContext {
             app: "taco-shells-test".into(),
             port_file: PathBuf::from("/nonexistent/focus-port"),
-            plugin_directory: PathBuf::from("/nonexistent/claude-plugin"),
+            list_entries: Vec::new(),
         }
     }
 
