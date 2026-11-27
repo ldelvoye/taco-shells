@@ -238,7 +238,14 @@ mod tests {
             true
         }
         fn delete_log(&mut self, _terminal: &TerminalId) {}
-        fn logs(&self) -> Vec<TerminalId> {
+        fn read_state(&self, _terminal: &TerminalId) -> Option<String> {
+            None
+        }
+        fn write_state(&mut self, _terminal: &TerminalId, _text: &str) -> bool {
+            true
+        }
+        fn delete_state(&mut self, _terminal: &TerminalId) {}
+        fn activity_terminals(&self) -> Vec<TerminalId> {
             Vec::new()
         }
     }

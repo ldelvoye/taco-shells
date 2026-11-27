@@ -14,6 +14,7 @@ use taco_rules::{
     ungroup_tab_group,
 };
 
+use crate::board::{NowLine, TerminalBoard};
 use crate::log::{Log, line_of};
 use crate::rows::{
     AgentRows, Signalled, apply_idle_title, apply_on_screen, apply_question, apply_signal,
@@ -79,6 +80,7 @@ pub struct Workspace {
     unsaved_since: Option<u64>,
     frozen: bool,
     logs: BTreeMap<TerminalId, Log>,
+    boards: BTreeMap<TerminalId, TerminalBoard>,
     /// The terminal Agent Activity shows; it is sent each entry as it is logged.
     watched: Option<TerminalId>,
 }
@@ -92,6 +94,19 @@ fn agent_labels() -> BTreeMap<HarnessId, AgentLabel> {
         (harness.id(), label)
     });
     labels.collect()
+}
+
+// A terminal's board is read from its state file the first time it is needed.
+fn loaded_board<'a>(
+    boards: &'a mut BTreeMap<TerminalId, TerminalBoard>,
+    storage: &dyn Storage,
+    terminal: &TerminalId,
+) -> &'a mut TerminalBoard {
+    let entry = boards.entry(terminal.clone());
+    entry.or_insert_with(|| {
+        let text = storage.read_state(terminal);
+        TerminalBoard::from_text(text)
+    })
 }
 
 // A terminal's log is read from storage the first time it is needed.
@@ -165,6 +180,7 @@ impl Workspace {
             unsaved_since: None,
             frozen: false,
             logs: BTreeMap::new(),
+            boards: BTreeMap::new(),
             watched: None,
         }
     }
@@ -308,13 +324,14 @@ impl Workspace {
                 if !self.holds(&terminal) {
                     return Vec::new();
                 }
+                let board = self.shown_board(&terminal);
                 let log = loaded_log(&mut self.logs, self.options.storage.as_ref(), &terminal);
                 let page = log.newest();
                 ActivityEvent::Loaded {
                     terminal,
                     entries: page.entries,
                     complete: page.complete,
-                    board: Board::default(),
+                    board,
                 }
             }
             ActivityRequest::Older { terminal, before } => {
@@ -584,7 +601,9 @@ impl Workspace {
         // a frozen shutdown, a quit or the runtime dying, keeps the logs: the next launch reopens these terminals
         if !self.frozen {
             self.logs.remove(terminal);
+            self.boards.remove(terminal);
             self.options.storage.delete_log(terminal);
+            self.options.storage.delete_state(terminal);
         }
         if self.watched.as_ref() == Some(terminal) {
             self.watched = None;
@@ -678,7 +697,10 @@ impl Workspace {
                     session_id: session_id.clone(),
                     cwd,
                 };
+                let shown_before = self.watched_board(terminal);
                 self.sessions.record_start(terminal, session);
+                // a new session hides the last one's now line
+                self.board_changed(terminal, shown_before, out);
                 let log = loaded_log(&mut self.logs, self.options.storage.as_ref(), terminal);
                 log.session_started(&session_id);
                 let mut signal = AgentSignal::Start;
@@ -713,27 +735,98 @@ impl Workspace {
                 if let Some(question) = agent.question_of(&event, &payload) {
                     apply_question(&mut self.rows, terminal, &session_id, question);
                 }
-                if let Some(read) = agent.entry_of(&event, &payload) {
-                    self.log_entry(terminal, read, now_ms, out);
+                let Some(read) = agent.entry_of(&event, &payload) else {
+                    return;
+                };
+                match read {
+                    EntryRead::Asked { text, turn } => {
+                        self.log_entry(terminal, out, |log| log.append_prompt(text, turn, now_ms));
+                    }
+                    EntryRead::Step(step) => {
+                        self.log_entry(terminal, out, |log| log.append_step(step, now_ms));
+                    }
+                    EntryRead::Note { text } => {
+                        self.log_entry(terminal, out, |log| log.append_note(text, now_ms));
+                    }
+                    EntryRead::Now { text } => self.set_now(terminal, &session_id, text, out),
                 }
             }
         }
+    }
+
+    /// The board Agent Activity shows for a terminal: its now line only while the session that wrote it is the terminal's.
+    fn shown_board(&mut self, terminal: &TerminalId) -> Board {
+        let mut session = None;
+        if let Some(agent) = self.sessions.session_of(terminal) {
+            session = Some(agent.session_id.clone());
+        }
+        let board = loaded_board(&mut self.boards, self.options.storage.as_ref(), terminal);
+        board.shown(session.as_deref())
+    }
+
+    // Taken before a change, so `board_changed` can tell whether what the watched terminal shows changed.
+    fn watched_board(&mut self, terminal: &TerminalId) -> Option<Board> {
+        if self.watched.as_ref() != Some(terminal) {
+            return None;
+        }
+        Some(self.shown_board(terminal))
+    }
+
+    // The watched terminal's board goes out whole whenever what it shows changes.
+    fn board_changed(
+        &mut self,
+        terminal: &TerminalId,
+        shown_before: Option<Board>,
+        out: &mut Vec<Outbound>,
+    ) {
+        let Some(shown_before) = shown_before else {
+            return;
+        };
+        let board = self.shown_board(terminal);
+        if board == shown_before {
+            return;
+        }
+        let changed = ActivityEvent::BoardChanged {
+            terminal: terminal.clone(),
+            board,
+        };
+        out.push(Outbound::Activity(changed));
+    }
+
+    fn set_now(
+        &mut self,
+        terminal: &TerminalId,
+        session_id: &str,
+        text: String,
+        out: &mut Vec<Outbound>,
+    ) {
+        let shown_before = self.watched_board(terminal);
+        let board = loaded_board(&mut self.boards, self.options.storage.as_ref(), terminal);
+        let line = NowLine {
+            session_id: session_id.to_string(),
+            text,
+        };
+        // the same line again changes nothing, so it costs no write
+        if board.now.as_ref() == Some(&line) {
+            return;
+        }
+        board.now = Some(line);
+        // a failed write leaves the file behind until the next change, which writes it whole
+        if let Some(text) = board.text() {
+            self.options.storage.write_state(terminal, &text);
+        }
+        self.board_changed(terminal, shown_before, out);
     }
 
     // The log belongs to the terminal, not to one session of its agent, so every session in it appends to the same one.
     fn log_entry(
         &mut self,
         terminal: &TerminalId,
-        read: EntryRead,
-        now_ms: u64,
         out: &mut Vec<Outbound>,
+        append: impl FnOnce(&mut Log) -> ActivityEntry,
     ) {
         let log = loaded_log(&mut self.logs, self.options.storage.as_ref(), terminal);
-        let entry = match read {
-            EntryRead::Asked { text, turn } => log.append_prompt(text, turn, now_ms),
-            EntryRead::Step(step) => log.append_step(step, now_ms),
-            EntryRead::Note { text } => log.append_note(text, now_ms),
-        };
+        let entry = append(log);
         let rewrite = log.needs_rewrite();
         let storage = self.options.storage.as_mut();
         let succeeded = write_log(storage, terminal, log, &entry, rewrite);
@@ -748,10 +841,11 @@ impl Workspace {
     }
 
     fn drop_orphan_logs(&mut self) {
-        let stored = self.options.storage.logs();
+        let stored = self.options.storage.activity_terminals();
         for terminal in stored {
             if !self.holds(&terminal) {
                 self.options.storage.delete_log(&terminal);
+                self.options.storage.delete_state(&terminal);
             }
         }
     }

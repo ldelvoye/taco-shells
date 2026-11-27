@@ -1,6 +1,6 @@
 use taco_protocol::{AgentSignal, HarnessId, Step};
 
-/// What a hook's payload adds to Agent Activity: the user's prompt, a step the agent took, or a note it wrote.
+/// What a hook's payload adds to Agent Activity: the user's prompt, a step the agent took, a note it wrote, or its now line.
 #[derive(Clone, Debug, PartialEq)]
 pub enum EntryRead {
     Asked {
@@ -10,6 +10,10 @@ pub enum EntryRead {
     },
     Step(Step),
     Note {
+        text: String,
+    },
+    /// The agent's line on what it is doing now; it replaces the last one and is not logged.
+    Now {
         text: String,
     },
 }
