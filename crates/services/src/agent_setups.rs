@@ -864,7 +864,7 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use crate::agent_hooks::{HookEdit, add_entries};
+    use crate::agent_hooks::electron_fixture::{electron_hooks, electron_settings};
     use crate::plugin_dirs::read_record;
 
     use super::*;
@@ -873,7 +873,7 @@ mod tests {
     const UNEDITABLE: &str =
         "{\"env\": {\"A\": \"1\"}, \"env\": {\"CLAUDE_CODE_PLUGIN_DIRS\": \"/a\"}}";
     const WAIT: Duration = Duration::from_secs(2);
-    const MINE: &str = "{\n  // mine\n  \"model\": \"opus\"\n}\n";
+    const MINE_KEYS: &str = "{\n  // mine\n  \"model\": \"opus\",\n";
     const STUB: &str = "#!/bin/sh\nexit 0\n";
 
     struct Environment {
@@ -1118,19 +1118,27 @@ mod tests {
         view.notices[0].clone()
     }
 
-    fn with_entries(text: &str, hooks_directory: &Path) -> String {
-        let entries = taco_agents::CLAUDE.setup().unwrap().entries;
-        let edit = add_entries(Some(text), entries, hooks_directory, "settings.json");
-        let HookEdit::Changed(changed) = edit else {
-            panic!("expected the entries to be added, got {edit:?}");
-        };
-        changed
+    fn mine_with(settings: &str) -> String {
+        settings.replacen("{\n", MINE_KEYS, 1)
+    }
+
+    fn other_hooks(environment: &Environment) -> PathBuf {
+        let other_config = environment.temp.path().join("other-config");
+        hooks_directory(&other_config)
     }
 
     fn other_channel(environment: &Environment) -> String {
-        let other_config = environment.temp.path().join("other-config");
-        let other_hooks = hooks_directory(&other_config);
-        with_entries(MINE, &other_hooks)
+        let other_hooks = other_hooks(environment);
+        let settings = electron_settings(&other_hooks, "{}");
+        mine_with(&settings)
+    }
+
+    fn both_channels(environment: &Environment) -> String {
+        let other_hooks = other_hooks(environment);
+        let theirs = electron_hooks(&other_hooks, "{}");
+        let ours_hooks = &environment.agent.paths.hooks_directory;
+        let settings = electron_settings(ours_hooks, &theirs);
+        mine_with(&settings)
     }
 
     fn assert_stubbed(directory: &Path) {
@@ -1146,7 +1154,7 @@ mod tests {
     fn the_click_on_an_old_setup_moves_off_only_this_builds_entries() {
         let environment = environment();
         let theirs = other_channel(&environment);
-        let ours_too = with_entries(&theirs, &environment.agent.paths.hooks_directory);
+        let ours_too = both_channels(&environment);
         let settings_path = environment.agent.paths.settings_path.clone();
         fs::write(&settings_path, &ours_too).unwrap();
         let fixture = fixture_with(environment, false);
@@ -1581,8 +1589,7 @@ mod tests {
     #[test]
     fn a_click_that_cannot_prepare_the_hooks_leaves_the_agents_settings_alone() {
         let environment = environment();
-        let theirs = other_channel(&environment);
-        let ours_too = with_entries(&theirs, &environment.agent.paths.hooks_directory);
+        let ours_too = both_channels(&environment);
         let settings_path = environment.agent.paths.settings_path.clone();
         fs::write(&settings_path, &ours_too).unwrap();
         let before = fs::read(&settings_path).unwrap();

@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use taco_agents::{HARNESSES, HarnessSetup};
 use taco_protocol::HarnessId;
 
-use crate::agent_hooks::{HookEdit, hook_wiring_of, remove_managed_entries};
+use crate::agent_hooks::{HookEdit, has_managed_entries, remove_managed_entries};
 use crate::agent_setup_state::{
     AgentSetupFacts, AgentSetupState, PluginDirs, agent_setup_state_of,
 };
@@ -202,12 +202,12 @@ pub(crate) fn read_state(
     let read = read_settings(&agent.paths.settings_path);
     let readable = read.ok();
     let text = readable.flatten();
-    let wiring = hook_wiring_of(text.as_deref(), agent.setup, &agent.paths.hooks_directory);
+    let has_old_entries = has_managed_entries(text.as_deref(), &agent.paths.hooks_directory);
     let plugin_dirs = plugin_dirs_reading(agent, text.as_deref());
     let facts = AgentSetupFacts {
         installed,
         activity_on,
-        wiring,
+        has_old_entries,
         plugin_dirs,
         home: agent.paths.home.clone(),
         version,
@@ -307,7 +307,7 @@ mod tests {
     use serde_json::Value;
     use tempfile::TempDir;
 
-    use crate::agent_hooks::{HookWiring, add_entries};
+    use crate::agent_hooks::electron_fixture::electron_settings;
 
     use super::*;
 
@@ -397,12 +397,8 @@ mod tests {
         let dotfiles = fixture.temp.path().join("dotfiles");
         fs::create_dir_all(&dotfiles).unwrap();
         let target = dotfiles.join("settings.json");
-        let entries = agent.setup.entries;
         let hooks_directory = &agent.paths.hooks_directory;
-        let edit = add_entries(None, entries, hooks_directory, "settings.json");
-        let HookEdit::Changed(managed) = edit else {
-            panic!("expected the entries to be added, got {edit:?}");
-        };
+        let managed = electron_settings(hooks_directory, "{}");
         fs::write(&target, managed).unwrap();
         let middle = dotfiles.join("middle.json");
         symlink("settings.json", &middle).unwrap();
@@ -415,8 +411,7 @@ mod tests {
         let middle_metadata = fs::symlink_metadata(&middle).unwrap();
         assert!(middle_metadata.file_type().is_symlink());
         let text = fs::read_to_string(&target).unwrap();
-        let wiring = hook_wiring_of(Some(&text), agent.setup, hooks_directory);
-        assert_eq!(wiring, HookWiring::None);
+        assert!(!has_managed_entries(Some(&text), hooks_directory));
         let parsed: Value = serde_json::from_str(&text).unwrap();
         assert!(parsed.get("hooks").is_none());
         let beside_target = file_names_in(&dotfiles);

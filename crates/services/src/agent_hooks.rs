@@ -1,20 +1,12 @@
 use std::path::Path;
 
-use jsonc_parser::cst::{CstInputValue, CstNode, CstObject, CstRootNode};
+use jsonc_parser::cst::{CstNode, CstObject, CstRootNode};
 use jsonc_parser::parse_to_serde_value;
 use serde_json::{Map, Value};
-use taco_agents::{HarnessSetup, HookEntry};
 use taco_settings::JSONC_PARSE_OPTIONS;
 
-const EMPTY_FILE: &str = "{}";
 const HOOKS_KEY: &str = "hooks";
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HookWiring {
-    None,
-    Managed,
-    ByHand,
-}
+const SETTINGS_LABEL: &str = "settings.json";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HookEdit {
@@ -94,15 +86,6 @@ fn hook_refs_of(hooks: &Map<String, Value>) -> Vec<HookRef> {
     refs
 }
 
-fn command_for(entry: &HookEntry, hooks_directory: &Path) -> String {
-    let path = hooks_directory.join(entry.script);
-    let text = path.to_string_lossy().into_owned();
-    if text.contains(' ') {
-        return format!("\"{text}\"");
-    }
-    text
-}
-
 fn is_managed_command(command: &str, hooks_directory: &Path) -> bool {
     let directory = hooks_directory.to_string_lossy();
     let prefix = format!("{directory}/");
@@ -110,90 +93,6 @@ fn is_managed_command(command: &str, hooks_directory: &Path) -> bool {
     command.starts_with(&prefix) || command.starts_with(&quoted_prefix)
 }
 
-fn is_script_path(word: &str, scripts: &[&str]) -> bool {
-    for script in scripts {
-        let suffix = format!("/{script}");
-        if word == *script || word.ends_with(&suffix) {
-            return true;
-        }
-    }
-    false
-}
-
-// Managed runs a file in the app's hooks directory; by hand runs one of the setup's scripts from anywhere else. These decide what removal deletes.
-fn is_hand_command(command: &str, scripts: &[&str], hooks_directory: &Path) -> bool {
-    if is_managed_command(command, hooks_directory) {
-        return false;
-    }
-    let words = command.split(|c: char| c == '"' || c == '\'' || c.is_whitespace());
-    for word in words {
-        if is_script_path(word, scripts) {
-            return true;
-        }
-    }
-    false
-}
-
-fn scripts_of(setup: &HarnessSetup) -> Vec<&'static str> {
-    let mut scripts = Vec::new();
-    for entry in setup.entries {
-        scripts.push(entry.script);
-    }
-    scripts
-}
-
-fn group_for(command: String, is_async: bool) -> CstInputValue {
-    let mut hook = vec![
-        ("type".to_string(), CstInputValue::from("command")),
-        ("command".to_string(), CstInputValue::from(command)),
-    ];
-    if is_async {
-        hook.push(("async".to_string(), CstInputValue::from(true)));
-    }
-    let hooks = CstInputValue::Array(vec![CstInputValue::Object(hook)]);
-    CstInputValue::Object(vec![(HOOKS_KEY.to_string(), hooks)])
-}
-
-fn malformed_event_problem(
-    hooks: Option<&Map<String, Value>>,
-    entries: &[HookEntry],
-    label: &str,
-) -> Option<String> {
-    let hooks = hooks?;
-    for entry in entries {
-        let groups = hooks.get(entry.event);
-        if let Some(groups) = groups
-            && !groups.is_array()
-        {
-            return Some(format!(
-                "{label}: \"hooks.{}\" must be a list, so nothing was changed.",
-                entry.event
-            ));
-        }
-    }
-    None
-}
-
-fn insert_groups(source: &str, missing: &[(&HookEntry, String)]) -> Option<String> {
-    let root = CstRootNode::parse(source, &JSONC_PARSE_OPTIONS).ok()?;
-    let object = root.object_value_or_set();
-    let hooks = object.object_value_or_set(HOOKS_KEY);
-    for (entry, command) in missing {
-        let group = group_for(command.clone(), entry.is_async);
-        let list = hooks.array_value(entry.event);
-        match list {
-            Some(list) => {
-                list.append(group);
-            }
-            None => {
-                hooks.append(entry.event, CstInputValue::Array(vec![group]));
-            }
-        }
-    }
-    Some(root.to_string())
-}
-
-// The narrowest removal that leaves no empty group, event list or "hooks" object behind.
 pub(crate) fn properties_named(object: &CstObject, name: &str) -> usize {
     let properties = object.properties();
     let mut count = 0;
@@ -214,6 +113,7 @@ fn command_of(hook_node: &CstNode) -> Option<String> {
     command_text.decoded_value().ok()
 }
 
+// The narrowest removal that leaves no empty group, event list or "hooks" object behind.
 // The indexes come from serde's reading and are applied to the CST's, which can differ (a duplicate key), so the hook is checked before anything goes.
 fn remove_hook(text: &str, hook_ref: &HookRef, event_count: usize) -> Option<String> {
     let root = CstRootNode::parse(text, &JSONC_PARSE_OPTIONS).ok()?;
@@ -306,87 +206,17 @@ fn remove_matching(text: &str, label: &str, test: &dyn Fn(&str) -> bool) -> Hook
     HookEdit::Changed(edited)
 }
 
-pub(crate) fn hook_wiring_of(
-    text: Option<&str>,
-    setup: &HarnessSetup,
-    hooks_directory: &Path,
-) -> HookWiring {
+pub(crate) fn has_managed_entries(text: Option<&str>, hooks_directory: &Path) -> bool {
     let Some(text) = text else {
-        return HookWiring::None;
+        return false;
     };
-    let read = read_hooks(text, setup.settings_file);
+    let read = read_hooks(text, SETTINGS_LABEL);
     let Ok(Some(hooks)) = read else {
-        return HookWiring::None;
+        return false;
     };
-
     let refs = hook_refs_of(&hooks);
-    let scripts = scripts_of(setup);
-    let has_managed = refs
-        .iter()
-        .any(|r| is_managed_command(&r.command, hooks_directory));
-    if has_managed {
-        return HookWiring::Managed;
-    }
-    let has_hand = refs
-        .iter()
-        .any(|r| is_hand_command(&r.command, &scripts, hooks_directory));
-    if has_hand {
-        return HookWiring::ByHand;
-    }
-    HookWiring::None
-}
-
-pub fn add_entries(
-    text: Option<&str>,
-    entries: &[HookEntry],
-    hooks_directory: &Path,
-    label: &str,
-) -> HookEdit {
-    let mut source = EMPTY_FILE;
-    let mut is_new_file = true;
-    if let Some(text) = text
-        && !text.trim().is_empty()
-    {
-        source = text;
-        is_new_file = false;
-    }
-
-    let read = read_hooks(source, label);
-    let hooks = match read {
-        Ok(hooks) => hooks,
-        Err(problem) => return HookEdit::Refused(problem),
-    };
-    let event_problem = malformed_event_problem(hooks.as_ref(), entries, label);
-    if let Some(problem) = event_problem {
-        return HookEdit::Refused(problem);
-    }
-
-    let mut refs = Vec::new();
-    if let Some(hooks) = &hooks {
-        refs = hook_refs_of(hooks);
-    }
-    let mut missing = Vec::new();
-    for entry in entries {
-        let command = command_for(entry, hooks_directory);
-        let is_present = refs
-            .iter()
-            .any(|r| r.event == entry.event && r.command == command);
-        if !is_present {
-            missing.push((entry, command));
-        }
-    }
-    if missing.is_empty() {
-        return HookEdit::Unchanged;
-    }
-
-    let inserted = insert_groups(source, &missing);
-    let Some(mut edited) = inserted else {
-        return HookEdit::Refused(uneditable_problem(label));
-    };
-    if is_new_file {
-        edited.push('\n');
-    }
-    HookEdit::Changed(edited)
+    refs.iter()
+        .any(|r| is_managed_command(&r.command, hooks_directory))
 }
 
 pub fn remove_managed_entries(text: &str, hooks_directory: &Path, label: &str) -> HookEdit {
@@ -395,34 +225,89 @@ pub fn remove_managed_entries(text: &str, hooks_directory: &Path, label: &str) -
 }
 
 #[cfg(test)]
+pub(crate) mod electron_fixture {
+    use std::path::Path;
+
+    use serde_json::{Map, Value, json};
+
+    const ATTENTION_SCRIPT: &str = "taco-shells-attention.sh";
+    const SESSION_SCRIPT: &str = "taco-shells-claude-session.sh";
+    const ELECTRON_HOOKS: [(&str, &str, bool); 10] = [
+        ("Notification", ATTENTION_SCRIPT, false),
+        ("Notification", SESSION_SCRIPT, true),
+        ("Stop", ATTENTION_SCRIPT, false),
+        ("Stop", SESSION_SCRIPT, true),
+        ("SessionStart", SESSION_SCRIPT, false),
+        ("SessionEnd", SESSION_SCRIPT, false),
+        ("UserPromptSubmit", SESSION_SCRIPT, true),
+        ("PreToolUse", SESSION_SCRIPT, true),
+        ("PostToolUse", SESSION_SCRIPT, true),
+        ("StopFailure", SESSION_SCRIPT, true),
+    ];
+
+    fn command_line(hooks_directory: &Path, script: &str) -> String {
+        let path = hooks_directory.join(script);
+        let text = path.to_string_lossy().into_owned();
+        if text.contains(' ') {
+            return format!("\"{text}\"");
+        }
+        text
+    }
+
+    fn group_of(command: String, is_async: bool) -> Value {
+        let mut hook = Map::new();
+        hook.insert("type".to_string(), json!("command"));
+        hook.insert("command".to_string(), json!(command));
+        if is_async {
+            hook.insert("async".to_string(), json!(true));
+        }
+        json!({ "hooks": [hook] })
+    }
+
+    pub(crate) fn electron_hooks(hooks_directory: &Path, user_hooks: &str) -> String {
+        let parsed: Value = serde_json::from_str(user_hooks).unwrap();
+        let Value::Object(mut hooks) = parsed else {
+            panic!("the user's hooks must be an object");
+        };
+        for (event, script, is_async) in ELECTRON_HOOKS {
+            let command = command_line(hooks_directory, script);
+            let group = group_of(command, is_async);
+            match hooks.get_mut(event) {
+                Some(Value::Array(groups)) => groups.push(group),
+                Some(_) => panic!("the user's {event} must be a list"),
+                None => {
+                    hooks.insert(event.to_string(), Value::Array(vec![group]));
+                }
+            }
+        }
+        serde_json::to_string(&hooks).unwrap()
+    }
+
+    pub(crate) fn electron_settings(hooks_directory: &Path, user_hooks: &str) -> String {
+        let hooks_text = electron_hooks(hooks_directory, user_hooks);
+        let hooks: Value = serde_json::from_str(&hooks_text).unwrap();
+        let settings = json!({ "hooks": hooks });
+        let mut text = serde_json::to_string_pretty(&settings).unwrap();
+        text.push('\n');
+        text
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
+    use serde_json::json;
+
+    use super::electron_fixture::electron_settings;
     use super::*;
 
     const LABEL: &str = "settings.json";
-    const USER_FILE: &str = r#"{
-  // my comment
-  "model": "opus",
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": "/some/user/script.sh" }]
-      }
-    ]
-  }
-}
-"#;
-    const USER_GROUP: &str = r#"      {
-        "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": "/some/user/script.sh" }]
-      }"#;
-
-    fn setup() -> &'static HarnessSetup {
-        let harness = taco_agents::harness_of("claude").unwrap();
-        harness.setup().unwrap()
-    }
+    const USER_KEYS: &str = "{\n  // my comment\n  \"model\": \"opus\",\n";
+    const USER_HOOKS: &str = r#"{
+  "Stop": [{"hooks": [{"type": "command", "command": "/some/user/script.sh"}]}],
+  "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "/some/user/check.sh"}]}]
+}"#;
 
     fn hooks_directory() -> PathBuf {
         PathBuf::from("/Users/someone/.taco-shells/hooks")
@@ -439,111 +324,48 @@ mod tests {
         }
     }
 
-    fn added(text: Option<&str>) -> String {
-        let directory = hooks_directory();
-        let edit = add_entries(text, setup().entries, &directory, LABEL);
-        changed_text(edit)
-    }
-
     fn attention_command() -> String {
         let directory = hooks_directory();
         let path = directory.join("taco-shells-attention.sh");
         path.to_string_lossy().into_owned()
     }
 
-    fn commands_under(value: &Value, event: &str) -> Vec<String> {
-        let mut commands = Vec::new();
-        let event_value = &value["hooks"][event];
-        let groups = event_value.as_array();
-        for group in groups.into_iter().flatten() {
-            let group_hooks = &group["hooks"];
-            let hooks = group_hooks.as_array();
-            for hook in hooks.into_iter().flatten() {
-                let command = hook["command"].as_str().unwrap();
-                commands.push(command.to_string());
-            }
-        }
-        commands
+    fn with_user_keys(settings: &str) -> String {
+        settings.replacen("{\n", USER_KEYS, 1)
     }
 
     #[test]
-    fn adding_keeps_the_users_file() {
-        let result = added(Some(USER_FILE));
-        assert!(result.contains("  // my comment\n  \"model\": \"opus\",\n"));
-        assert!(result.contains(USER_GROUP));
-
-        let value = value_of(&result);
-        let pre_tool_use = commands_under(&value, "PreToolUse");
-        assert_eq!(pre_tool_use[0], "/some/user/script.sh");
-        let directory = hooks_directory();
-        for entry in setup().entries {
-            let path = directory.join(entry.script);
-            let command = path.to_string_lossy().into_owned();
-            let event_commands = commands_under(&value, entry.event);
-            assert!(event_commands.contains(&command));
-        }
-
-        let stop_value = &value["hooks"]["Stop"];
-        let stop_groups = stop_value.as_array().unwrap();
-        let async_flags: Vec<bool> = stop_groups
-            .iter()
-            .map(|group| group["hooks"][0].get("async").is_some())
-            .collect();
-        assert_eq!(async_flags, vec![false, true]);
-        let second_hook = &stop_groups[1]["hooks"][0];
-        assert_eq!(second_hook["async"], true);
-
-        let again = add_entries(Some(&result), setup().entries, &directory, LABEL);
-        assert_eq!(again, HookEdit::Unchanged);
-
-        let attention = attention_command();
-        let notification_only = format!(
-            r#"{{"hooks": {{"Notification": [
-                {{"hooks": [{{"type": "command", "command": "{attention}"}}]}}
-            ]}}}}"#
-        );
-        let filled_in = added(Some(&notification_only));
-        let filled_value = value_of(&filled_in);
-        let notification = commands_under(&filled_value, "Notification");
-        let stop = commands_under(&filled_value, "Stop");
-        let notification_count = notification.iter().filter(|c| **c == attention).count();
-        assert_eq!(notification_count, 1);
-        assert!(stop.contains(&attention));
-    }
-
-    #[test]
-    fn adding_matches_tabs_a_missing_file_and_a_space_in_the_path() {
-        let tabbed = added(Some("{\n\t\"model\": \"opus\"\n}\n"));
-        assert!(tabbed.contains("\n\t\t\"Notification\": ["));
-        assert!(tabbed.lines().all(|line| !line.starts_with(' ')));
-
-        let fresh = added(None);
-        assert!(fresh.ends_with("}\n"));
-        assert!(!fresh.ends_with("\n\n"));
-
+    fn an_electron_written_file_is_detected_and_taken_out_leaving_the_users_own() {
+        let missing_file = has_managed_entries(None, &hooks_directory());
+        assert!(!missing_file);
+        let plain = hooks_directory();
         let spaced = PathBuf::from("/Users/some one/.taco-shells/hooks");
-        let edit = add_entries(None, setup().entries, &spaced, LABEL);
-        let spaced_text = changed_text(edit);
-        let value = value_of(&spaced_text);
-        let commands = commands_under(&value, "SessionStart");
-        let expected = "\"/Users/some one/.taco-shells/hooks/taco-shells-claude-session.sh\"";
-        assert_eq!(commands, vec![expected]);
+        let user_hooks: Value = serde_json::from_str(USER_HOOKS).unwrap();
+        let own_settings = json!({ "hooks": user_hooks });
+        let own_pretty = serde_json::to_string_pretty(&own_settings).unwrap();
+        let own_text = format!("{own_pretty}\n");
+        let users_own = with_user_keys(&own_text);
+
+        for directory in [plain, spaced] {
+            let written = electron_settings(&directory, USER_HOOKS);
+            let electron = with_user_keys(&written);
+            assert!(
+                has_managed_entries(Some(&electron), &directory),
+                "{directory:?}"
+            );
+
+            let removal = remove_managed_entries(&electron, &directory, LABEL);
+
+            let removed = changed_text(removal);
+            assert_eq!(removed, users_own, "{directory:?}");
+            assert!(!has_managed_entries(Some(&removed), &directory));
+        }
     }
 
     #[test]
     fn removal_takes_only_what_it_owns_and_leaves_nothing_empty() {
-        let result = added(Some(USER_FILE));
         let directory = hooks_directory();
-        let removed = remove_managed_entries(&result, &directory, LABEL);
-        let removed_text = changed_text(removed);
-        let value = value_of(&removed_text);
-        let expected_text = r#"{"model": "opus", "hooks": {"PreToolUse": [
-                {"matcher": "Bash", "hooks": [{"type": "command", "command": "/some/user/script.sh"}]}
-            ]}}"#;
-        let expected: Value = serde_json::from_str(expected_text).unwrap();
-        assert_eq!(value, expected);
-
-        let only_ours = added(None);
+        let only_ours = electron_settings(&directory, "{}");
         let emptied = remove_managed_entries(&only_ours, &directory, LABEL);
         let emptied_text = changed_text(emptied);
         let emptied_value = value_of(&emptied_text);
@@ -568,51 +390,13 @@ mod tests {
         assert_eq!(group_hooks, &vec![expected_group]);
         assert!(unshared_text.contains(user_hook));
 
-        let spaced = PathBuf::from("/Users/some one/.taco-shells/hooks");
-        let spaced_added = add_entries(None, setup().entries, &spaced, LABEL);
-        let spaced_text = changed_text(spaced_added);
-        let wiring = hook_wiring_of(Some(&spaced_text), setup(), &spaced);
-        assert_eq!(wiring, HookWiring::Managed);
-        let spaced_removed = remove_managed_entries(&spaced_text, &spaced, LABEL);
-        let spaced_result = changed_text(spaced_removed);
-        let after = hook_wiring_of(Some(&spaced_result), setup(), &spaced);
-        assert_eq!(after, HookWiring::None);
-        assert!(!spaced_result.contains("taco-shells-"));
-    }
-
-    #[test]
-    fn a_file_that_cannot_be_edited_safely_is_refused() {
-        let entries = setup().entries;
-        let directory = hooks_directory();
-        let cases = ["not json", r#"{"hooks": []}"#, r#"{"hooks": {"Stop": {}}}"#];
-        for text in cases {
-            let edit = add_entries(Some(text), entries, &directory, LABEL);
+        for text in ["not json", r#"{"hooks": []}"#] {
+            let edit = remove_managed_entries(text, &directory, LABEL);
             let HookEdit::Refused(problem) = edit else {
                 panic!("expected a refusal for {text}, got {edit:?}");
             };
             assert!(problem.contains(LABEL), "{problem}");
         }
-    }
-
-    #[test]
-    fn wiring_says_who_set_the_hooks_up() {
-        let directory = hooks_directory();
-        let missing_wiring = hook_wiring_of(None, setup(), &directory);
-        assert_eq!(missing_wiring, HookWiring::None);
-
-        let managed = added(None);
-        let managed_wiring = hook_wiring_of(Some(&managed), setup(), &directory);
-        assert_eq!(managed_wiring, HookWiring::Managed);
-
-        let by_hand = r#"{"hooks": {"Stop": [
-            {"hooks": [{"type": "command", "command": "~/bin/taco-shells-attention.sh"}]}
-        ]}}"#;
-        let both_edit = add_entries(Some(by_hand), setup().entries, &directory, LABEL);
-        let both = changed_text(both_edit);
-        let both_wiring = hook_wiring_of(Some(&both), setup(), &directory);
-        assert_eq!(both_wiring, HookWiring::Managed);
-        let by_hand_wiring = hook_wiring_of(Some(by_hand), setup(), &directory);
-        assert_eq!(by_hand_wiring, HookWiring::ByHand);
     }
 
     #[test]

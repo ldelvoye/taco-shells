@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use crate::agent_hooks::HookWiring;
 use crate::claude_version::is_too_old;
 
 const STATUS_NOT_INSTALLED: &str = "Not installed";
@@ -34,7 +33,7 @@ pub enum AgentSetupState {
 pub struct AgentSetupFacts {
     pub installed: bool,
     pub activity_on: bool,
-    pub wiring: HookWiring,
+    pub has_old_entries: bool,
     pub plugin_dirs: PluginDirs,
     pub home: PathBuf,
     pub version: Option<(u32, u32, u32)>,
@@ -73,7 +72,7 @@ pub fn agent_setup_state_of(facts: &AgentSetupFacts) -> AgentSetupState {
     if facts.plugin_dirs == PluginDirs::ManagedHides {
         return AgentSetupState::PluginDirsManaged;
     }
-    if facts.wiring == HookWiring::Managed {
+    if facts.has_old_entries {
         return AgentSetupState::OldSetup;
     }
     if facts.activity_on
@@ -158,14 +157,14 @@ mod tests {
 
     fn facts(
         installed: bool,
-        wiring: HookWiring,
+        has_old_entries: bool,
         activity_on: bool,
         version: Option<(u32, u32, u32)>,
     ) -> AgentSetupFacts {
         AgentSetupFacts {
             installed,
             activity_on,
-            wiring,
+            has_old_entries,
             plugin_dirs: PluginDirs::Unset,
             home: PathBuf::from("/h"),
             version,
@@ -190,18 +189,12 @@ mod tests {
         let hidden = AgentSetupState::PluginDirsHidden {
             file: "~/.claude/settings.json".to_string(),
         };
-        let managed_over_old = with_plugin_dirs(
-            facts(true, HookWiring::Managed, true, OLD),
-            PluginDirs::ManagedHides,
-        );
-        let old_over_hidden =
-            with_plugin_dirs(facts(true, HookWiring::Managed, true, OLD), hides.clone());
-        let hidden_while_off =
-            with_plugin_dirs(facts(true, HookWiring::ByHand, false, OLD), hides.clone());
-        let hidden_while_on =
-            with_plugin_dirs(facts(true, HookWiring::ByHand, true, NEW), hides.clone());
-        let too_old_over_hidden =
-            with_plugin_dirs(facts(true, HookWiring::ByHand, true, OLD), hides);
+        let managed_over_old =
+            with_plugin_dirs(facts(true, true, true, OLD), PluginDirs::ManagedHides);
+        let old_over_hidden = with_plugin_dirs(facts(true, true, true, OLD), hides.clone());
+        let hidden_while_off = with_plugin_dirs(facts(true, false, false, OLD), hides.clone());
+        let hidden_while_on = with_plugin_dirs(facts(true, false, true, NEW), hides.clone());
+        let too_old_over_hidden = with_plugin_dirs(facts(true, false, true, OLD), hides);
         let cases = [
             (too_old_over_hidden, too_old.clone()),
             (managed_over_old, AgentSetupState::PluginDirsManaged),
@@ -209,26 +202,14 @@ mod tests {
             (hidden_while_off, hidden.clone()),
             (hidden_while_on, hidden),
             (
-                facts(false, HookWiring::Managed, false, OLD),
+                facts(false, true, false, OLD),
                 AgentSetupState::NotInstalled,
             ),
-            (
-                facts(true, HookWiring::Managed, true, OLD),
-                AgentSetupState::OldSetup,
-            ),
-            (
-                facts(true, HookWiring::ByHand, false, OLD),
-                AgentSetupState::Off,
-            ),
-            (facts(true, HookWiring::ByHand, true, OLD), too_old),
-            (
-                facts(true, HookWiring::ByHand, true, NEW),
-                AgentSetupState::On,
-            ),
-            (
-                facts(true, HookWiring::None, true, None),
-                AgentSetupState::On,
-            ),
+            (facts(true, true, true, OLD), AgentSetupState::OldSetup),
+            (facts(true, false, false, OLD), AgentSetupState::Off),
+            (facts(true, false, true, OLD), too_old),
+            (facts(true, false, true, NEW), AgentSetupState::On),
+            (facts(true, false, true, None), AgentSetupState::On),
         ];
         for (case, expected) in cases {
             let state = agent_setup_state_of(&case);
