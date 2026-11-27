@@ -44,6 +44,51 @@ struct Answer {
     on_delivered: Option<OnDelivered>,
 }
 
+struct Pending {
+    placed: Option<bool>,
+    content: Option<Answer>,
+}
+
+impl Pending {
+    fn is_complete(&self) -> bool {
+        if self.placed == Some(false) {
+            return true;
+        }
+        self.placed == Some(true) && self.content.is_some()
+    }
+
+    fn take(&mut self, kind: &QuestionKind, part: AnswerPart) {
+        if let AnswerPart::Placed(is_placed) = part {
+            self.placed = Some(is_placed);
+            return;
+        }
+        let held = complete_answer(kind, part);
+        if held.is_some() {
+            self.content = held;
+        }
+    }
+
+    fn into_answer(self, kind: &QuestionKind) -> Answer {
+        let nothing = Answer {
+            body: String::from(NO_ANSWER),
+            on_delivered: None,
+        };
+        if self.placed != Some(true) {
+            return nothing;
+        }
+        if let Some(answer) = self.content {
+            return answer;
+        }
+        if matches!(kind, QuestionKind::Context { .. }) {
+            return Answer {
+                body: context_body(None),
+                on_delivered: None,
+            };
+        }
+        nothing
+    }
+}
+
 pub(super) fn ask_question(
     mut stream: TcpStream,
     route: &str,
@@ -96,30 +141,22 @@ fn answer_question(
     replies: &Receiver<AnswerPart>,
     answer_by: Instant,
 ) {
-    let mut placed: Option<bool> = None;
-    let mut content: Option<Answer> = None;
+    let mut pending = Pending {
+        placed: None,
+        content: None,
+    };
     loop {
-        if placed == Some(false) {
-            break;
-        }
-        if placed == Some(true) && content.is_some() {
+        if pending.is_complete() {
             break;
         }
         let left = answer_by.saturating_duration_since(Instant::now());
         let Ok(part) = replies.recv_timeout(left) else {
             break;
         };
-        if let AnswerPart::Placed(is_placed) = part {
-            placed = Some(is_placed);
-            continue;
-        }
-        let held = complete_answer(kind, part);
-        if held.is_some() {
-            content = held;
-        }
+        pending.take(kind, part);
     }
 
-    let answer = final_answer(kind, placed, content);
+    let answer = pending.into_answer(kind);
     let written = write_response(&mut stream, 200, Some(&answer.body));
     if written && let Some(on_delivered) = answer.on_delivered {
         on_delivered();
@@ -161,24 +198,4 @@ fn complete_answer(kind: &QuestionKind, part: AnswerPart) -> Option<Answer> {
         }),
         _ => None,
     }
-}
-
-fn final_answer(kind: &QuestionKind, placed: Option<bool>, content: Option<Answer>) -> Answer {
-    let nothing = Answer {
-        body: String::from(NO_ANSWER),
-        on_delivered: None,
-    };
-    if placed != Some(true) {
-        return nothing;
-    }
-    if let Some(answer) = content {
-        return answer;
-    }
-    if matches!(kind, QuestionKind::Context { .. }) {
-        return Answer {
-            body: context_body(None),
-            on_delivered: None,
-        };
-    }
-    nothing
 }
