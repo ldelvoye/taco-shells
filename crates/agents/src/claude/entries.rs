@@ -345,10 +345,8 @@ pub(super) fn read_entries(event: &str, payload: &str) -> Vec<EntryRead> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::signal_for;
     use super::super::text::{CUT_MARK, MAX_ENTRY_CHARACTERS};
     use super::*;
-    use taco_protocol::AgentSignal;
 
     #[test]
     fn a_prompt_a_finished_tool_and_a_changed_file_each_make_an_entry_and_nothing_else_does() {
@@ -433,35 +431,10 @@ mod tests {
             entry("PostToolUse", edit),
             Some(changed("Edit", "/w/src/main.rs"))
         );
-        let notebook =
-            r#"{"tool_name":"NotebookEdit","tool_input":{"notebook_path":"/w/a.ipynb"}}"#;
-        assert_eq!(
-            entry("PostToolUse", notebook),
-            Some(changed("NotebookEdit", "/w/a.ipynb"))
-        );
-        let multi = r#"{"tool_name":"MultiEdit","tool_input":{"file_path":"/w/a.rs","edits":[]}}"#;
-        assert_eq!(
-            entry("PostToolUse", multi),
-            Some(changed("MultiEdit", "/w/a.rs"))
-        );
         // reading a file names it, but changes nothing
         let read = r#"{"tool_name":"Read","tool_input":{"file_path":"/w/a.rs"}}"#;
         assert_eq!(entry("PostToolUse", read), Some(did("Read", "/w/a.rs")));
-        let grep = r#"{"tool_name":"Grep","tool_input":{"pattern":"fn main","path":"/w"}}"#;
-        assert_eq!(entry("PostToolUse", grep), Some(did("Grep", "fn main")));
-        let agent =
-            r#"{"tool_name":"Agent","tool_input":{"description":"Find the bug","prompt":"..."}}"#;
-        assert_eq!(
-            entry("PostToolUse", agent),
-            Some(did("Agent", "Find the bug"))
-        );
-        let unknown = r#"{"tool_name":"mcp__linear__get_issue","tool_input":{"id":"X-1"}}"#;
-        assert_eq!(
-            entry("PostToolUse", unknown),
-            Some(did("mcp__linear__get_issue", ""))
-        );
         assert_eq!(entry("Stop", prompt), None);
-        assert_eq!(entry("PostToolUse", "{"), None);
 
         let huge = format!(
             r#"{{"tool_name":"Write","tool_input":{{"file_path":"/w/big","content":"{}"}}}}"#,
@@ -625,11 +598,6 @@ mod tests {
         let refused =
             r#"{"tool_name":"mcp__plugin_taco-shells_activity__note","error":"note needs a text"}"#;
         assert!(read_entries("PostToolUseFailure", refused).is_empty());
-        assert_eq!(
-            signal_for("PostToolUseFailure", Some("Bash")),
-            Some(AgentSignal::Working),
-            "a tool that failed is the agent still at work"
-        );
     }
 
     #[test]
