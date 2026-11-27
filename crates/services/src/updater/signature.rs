@@ -10,7 +10,7 @@ use taco_identity::{
     RELEASE_KEYS, RELEASE_SIGNING_NAMESPACE, UPDATE_KEY_VARIABLE, release_signature_name,
 };
 
-use super::{Feed, ReleaseInfo};
+use super::{Feed, ReleaseInfo, UpdateError};
 
 // By absolute path: an app opened from Finder has no Homebrew on its PATH.
 const SSH_KEYGEN: &str = "/usr/bin/ssh-keygen";
@@ -25,8 +25,9 @@ pub(crate) struct SignatureRefusal {
     pub(crate) reason: String,
 }
 
-fn refuse(reason: String) -> SignatureRefusal {
-    SignatureRefusal { reason }
+fn refuse(reason: String) -> UpdateError {
+    let refusal = SignatureRefusal { reason };
+    UpdateError::Refused(refusal)
 }
 
 fn dev_key() -> Option<String> {
@@ -153,17 +154,17 @@ fn check(
     allowed: &Path,
     feed: &dyn Feed,
     keys: &[String],
-) -> Result<(), SignatureRefusal> {
+) -> Result<(), UpdateError> {
     let Some(url) = &release.signature_url else {
         return Err(refuse("the release has no signature asset".to_string()));
     };
     let downloaded = feed.download(url, signature);
+    // Nothing is installed either way: a failed fetch is only logged and retried at the next check, while a refusal is also shown.
     let download = match downloaded {
         Ok(download) => download,
         Err(error) => {
-            return Err(refuse(format!(
-                "the signature could not be downloaded ({error})"
-            )));
+            let message = format!("the signature could not be downloaded ({error})");
+            return Err(UpdateError::Failed(message));
         }
     };
     if download.bytes > MAX_SIGNATURE_BYTES {
@@ -191,7 +192,7 @@ pub(crate) fn verify_release(
     staging: &Path,
     feed: &dyn Feed,
     keys: &[String],
-) -> Result<(), SignatureRefusal> {
+) -> Result<(), UpdateError> {
     let signature_name = release_signature_name(&release.version);
     let signature = staging.join(signature_name);
     let allowed = staging.join(ALLOWED_SIGNERS_NAME);
