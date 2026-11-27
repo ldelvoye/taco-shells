@@ -4,7 +4,7 @@ mod claude;
 mod harness;
 
 pub use claude::CLAUDE;
-pub use harness::{AgentTitle, EntryRead, Harness, HarnessSetup, HookEntry};
+pub use harness::{AgentTitle, EntryRead, Harness, HarnessSetup, HookEntry, StepContext};
 
 pub static HARNESSES: &[&Harness] = &[&CLAUDE];
 

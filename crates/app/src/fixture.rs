@@ -265,6 +265,7 @@ fn log_of(lines: &[FixtureEntry]) -> Vec<ActivityEntry> {
             tool => Step::Did {
                 tool: tool.to_string(),
                 summary: text,
+                failed: None,
             },
         };
         entries.push(ActivityEntry {
@@ -372,6 +373,7 @@ fn did(tool: &str, summary: &str) -> Step {
     Step::Did {
         tool: tool.to_string(),
         summary: summary.to_string(),
+        failed: None,
     }
 }
 

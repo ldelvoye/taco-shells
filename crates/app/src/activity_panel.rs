@@ -204,7 +204,7 @@ fn session_words(source: StartSource) -> &'static str {
 
 fn step_text(step: &StretchStep) -> String {
     match step {
-        StretchStep::Step(Step::Did { tool, summary }) => match tool.as_str() {
+        StretchStep::Step(Step::Did { tool, summary, .. }) => match tool.as_str() {
             "Bash" => format!("Ran {summary}"),
             "Read" => format!("Read {summary}"),
             "Grep" | "Glob" => format!("Searched for {summary}"),
@@ -727,7 +727,11 @@ mod tests {
     fn did(tool: &str, summary: &str) -> StretchStep {
         let tool = tool.to_string();
         let summary = summary.to_string();
-        StretchStep::Step(Step::Did { tool, summary })
+        StretchStep::Step(Step::Did {
+            tool,
+            summary,
+            failed: None,
+        })
     }
 
     fn changed(tool: &str, path: &str) -> StretchStep {
