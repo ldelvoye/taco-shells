@@ -210,12 +210,11 @@ impl Fixture {
     /// The agent logs and boards the stand-in answers from.
     pub(crate) fn activity(self) -> StandInActivity {
         let full = matches!(self, Self::Activity | Self::ActivityNarrow | Self::Paged);
-        let mut page = SHORT_LOG_PAGE;
-        if self == Self::Paged {
-            page = CUT_LOG_PAGE;
-        } else if full {
-            page = FULL_LOG_PAGE;
-        }
+        let page = match self {
+            Self::Paged => CUT_LOG_PAGE,
+            Self::Activity | Self::ActivityNarrow => FULL_LOG_PAGE,
+            _ => SHORT_LOG_PAGE,
+        };
         let mut boards = BTreeMap::new();
         if full {
             boards.insert(TerminalId("t0".to_string()), full_board());
