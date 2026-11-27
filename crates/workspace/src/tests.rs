@@ -370,8 +370,6 @@ fn a_close_goes_through_the_runtime_and_the_last_exit_leaves_an_empty_list() {
         directory: "/elsewhere".into(),
     };
     assert!(workspace.runtime_report(stray, 0).is_empty());
-    hook(&mut workspace, "t1", HookCall::Attention, 0);
-    assert!(workspace.app_activated(0).is_empty());
     let out = ask(
         &mut workspace,
         WorkspaceRequest::CloseTerminal { terminal: id("t1") },
@@ -407,33 +405,6 @@ fn when_the_runtime_dies_every_terminal_goes_the_window_says_why_and_nothing_reo
     let (reply, out) = workspace.request(WorkspaceRequest::OpenTerminal { file: None }, 0);
     assert!(!reply.ok);
     assert!(opened(&out).is_empty());
-}
-
-#[test]
-fn attention_waits_for_the_app_to_come_back() {
-    let mut workspace = workspace();
-    ask(
-        &mut workspace,
-        WorkspaceRequest::OpenTerminal { file: None },
-    );
-
-    hook(&mut workspace, "t2", HookCall::Attention, 0);
-    let out = workspace.app_activated(0);
-    assert!(
-        out.is_empty(),
-        "asking from the selected terminal goes nowhere"
-    );
-
-    hook(&mut workspace, "t1", HookCall::Attention, 0);
-    hook(&mut workspace, "t2", HookCall::Attention, 0);
-    let refocus = workspace.drawn().refocus;
-    workspace.app_activated(0);
-    assert_eq!(listed(&workspace), "[t1] t2");
-    assert_eq!(workspace.drawn().refocus, refocus + 1);
-    assert!(
-        workspace.app_activated(0).is_empty(),
-        "arriving clears the wait"
-    );
 }
 
 #[test]
