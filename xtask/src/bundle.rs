@@ -2,12 +2,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::build::{self, APP_EXECUTABLE, Build, Channel, Profile, RUNTIME_EXECUTABLE};
+use crate::build::{
+    self, APP_EXECUTABLE, Build, Channel, PLUGIN_EXECUTABLE, Profile, RUNTIME_EXECUTABLE,
+};
 use crate::identity::{DEVELOPMENT, Identity, STABLE};
 use crate::repo;
 use crate::version::{self, BundleVersion};
 
-const EXECUTABLES: [&str; 2] = [APP_EXECUTABLE, RUNTIME_EXECUTABLE];
+const EXECUTABLES: [&str; 3] = [APP_EXECUTABLE, RUNTIME_EXECUTABLE, PLUGIN_EXECUTABLE];
+const NESTED_EXECUTABLES: [&str; 2] = [RUNTIME_EXECUTABLE, PLUGIN_EXECUTABLE];
 
 pub struct Options {
     pub profile: Profile,
@@ -78,8 +81,10 @@ pub fn create(options: &Options) -> Result<Bundled, String> {
     let plist = info_plist(identity, &version);
     write_file(&contents.join("Info.plist"), &plist)?;
 
-    // The runtime is signed before the bundle, whose signature seals everything inside it.
-    sign(&macos.join(RUNTIME_EXECUTABLE))?;
+    // The runtime and the plugin program are signed before the bundle, whose signature seals everything inside it.
+    for executable in NESTED_EXECUTABLES {
+        sign(&macos.join(executable))?;
+    }
     sign(&app)?;
 
     let mut zip = None;
