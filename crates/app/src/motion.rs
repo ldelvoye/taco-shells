@@ -110,39 +110,21 @@ pub fn lerp(from: f32, to: f32, amount: f32) -> f32 {
 
 /// The switches and segments whose value differs between two configs, each with its old value.
 pub fn moved_settings(before: &Settings, after: &Settings) -> Vec<SettingChange> {
-    let pairs = [
-        (
-            SettingChange::Theme(before.theme),
-            SettingChange::Theme(after.theme),
-        ),
-        (
-            SettingChange::CursorStyle(before.cursor_style),
-            SettingChange::CursorStyle(after.cursor_style),
-        ),
-        (
-            SettingChange::ShellRowName(before.shell_row_name),
-            SettingChange::ShellRowName(after.shell_row_name),
-        ),
-        (
-            SettingChange::CursorBlink(before.cursor_blink),
-            SettingChange::CursorBlink(after.cursor_blink),
-        ),
-        (
-            SettingChange::RestoreOnLaunch(before.restore_on_launch),
-            SettingChange::RestoreOnLaunch(after.restore_on_launch),
-        ),
-        (
-            SettingChange::AgentActivity(before.agent_activity),
-            SettingChange::AgentActivity(after.agent_activity),
-        ),
-        (
-            SettingChange::AskForActivityNotes(before.ask_for_activity_notes),
-            SettingChange::AskForActivityNotes(after.ask_for_activity_notes),
-        ),
-    ];
+    let olds = SettingChange::all(before);
+    let news = SettingChange::all(after);
     let mut moved = Vec::new();
-    for (old, new) in pairs {
-        if old != new {
+    for (old, new) in olds.into_iter().zip(news) {
+        if old == new {
+            continue;
+        }
+        let is_switch = switch_value(&old).is_some();
+        let is_segment = matches!(
+            old,
+            SettingChange::Theme(_)
+                | SettingChange::CursorStyle(_)
+                | SettingChange::ShellRowName(_)
+        );
+        if is_switch || is_segment {
             moved.push(old);
         }
     }
@@ -179,12 +161,12 @@ mod tests {
         let moved = moved_settings(&before, &after);
         let expected = vec![
             SettingChange::Theme(before.theme),
-            SettingChange::CursorStyle(before.cursor_style),
-            SettingChange::ShellRowName(before.shell_row_name),
             SettingChange::CursorBlink(before.cursor_blink),
+            SettingChange::CursorStyle(before.cursor_style),
             SettingChange::RestoreOnLaunch(before.restore_on_launch),
             SettingChange::AgentActivity(before.agent_activity),
             SettingChange::AskForActivityNotes(before.ask_for_activity_notes),
+            SettingChange::ShellRowName(before.shell_row_name),
         ];
         assert_eq!(moved, expected);
         let unchanged = moved_settings(&before, &before);

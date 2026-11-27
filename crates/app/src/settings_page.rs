@@ -7,7 +7,7 @@ use gpui::{
 use taco_identity::CURRENT;
 use taco_settings::{
     Binding, CommandId, CursorStyle, FONT_SIZE_MAX, FONT_SIZE_MIN, SettingChange, Settings,
-    ShellRowName, ThemeChoice, UnreadSettings,
+    ShellRowName, ThemeChoice, UnreadSettings, chords_for,
 };
 
 use crate::drive::mark;
@@ -19,7 +19,6 @@ use crate::page_parts::{
     page_frame, page_header, text_button,
 };
 use crate::parts;
-use crate::shortcuts_page::chords_for;
 use crate::text_field::TextField;
 use crate::window::WindowView;
 
@@ -340,7 +339,7 @@ fn setting_row(
         text = text.child(hint);
     }
     let mut control = control;
-    if is_unread(input.unread, key) {
+    if input.unread.contains(key) {
         let blocker_id = SharedString::from(format!("unread:{key}"));
         let blocker = div()
             .id(ElementId::Name(blocker_id))
@@ -365,15 +364,6 @@ fn setting_row(
         .border_color(look.hairline)
         .child(text)
         .child(control)
-}
-
-/// Whether the file could not give this setting, so the page cannot change it.
-pub fn is_unread(unread: &UnreadSettings, key: &str) -> bool {
-    match unread {
-        UnreadSettings::None => false,
-        UnreadSettings::Keys(keys) => keys.contains(&key),
-        UnreadSettings::Whole => true,
-    }
 }
 
 fn typed_field(field: &Entity<TextField>) -> Div {
