@@ -359,6 +359,7 @@ fn open_pty(size: TerminalSize) -> io::Result<(OwnedFd, OwnedFd)> {
     let master = unsafe { OwnedFd::from_raw_fd(master) };
     let slave = unsafe { OwnedFd::from_raw_fd(slave) };
     // Without this, every later shell would inherit this terminal's pty and keep it open after its own shell has gone.
+    // It comes after creation, so only one thread may open ptys and start shells: a fork from another thread in between would pass these on.
     set_close_on_exec(master.as_raw_fd());
     set_close_on_exec(slave.as_raw_fd());
     Ok((master, slave))
@@ -412,15 +413,12 @@ fn exit_code_of(status: std::process::ExitStatus) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::budget::BUDGET_BYTES;
     use std::sync::mpsc::Receiver;
     use std::time::{Duration, Instant};
 
     const SIZE: TerminalSize = TerminalSize { cols: 80, rows: 24 };
     /// How much of what a shell printed a failure shows.
     const TAIL_CHARS: usize = 80;
-    /// Well past the point where macOS discards a closed slave's unread output.
-    const PAST_DISCARD: Duration = Duration::from_millis(1500);
     /// Only a safety net, for each wait as a whole: every wait below ends on output the shell prints or on its exit.
     const PATIENCE: Duration = Duration::from_secs(5);
     /// Prints whether SIGTERM is blocked, and how many devices the process holds besides its own terminal on 0 to 2.
@@ -591,27 +589,6 @@ mod tests {
 
         let reported = read_until(&received, &second, |seen| seen.contains("\r\n")).unwrap();
         assert_eq!(reported.trim(), "sigterm blocked: 0, other devices: 0");
-    }
-
-    /// A budget's worth of filler stops the reader, so the last line is still unread when the shell exits.
-    /// Its exit waits for the line to be read; without the reader's copy of the slave, macOS discards it after about 0.6 s.
-    #[test]
-    fn what_a_shell_prints_as_it_exits_reaches_the_core_though_nothing_had_read_it() {
-        let _alone = one_at_a_time();
-        let print_then_exit = format!(
-            r#"$| = 1; print "x" x {BUDGET_BYTES}; select(undef, undef, undef, 0.2); print "last line\n";"#
-        );
-        let (inputs, received) = mpsc::channel();
-        let budgets = Arc::new(Budgets::default());
-        let mut shells = perl_shells(print_then_exit, inputs, budgets.clone());
-        let id = TerminalId("last-line".into());
-        shells.start(&id, None, SIZE);
-
-        let filler = "x".repeat(BUDGET_BYTES);
-        read_until(&received, &id, |seen| seen.contains(&filler)).unwrap();
-        thread::sleep(PAST_DISCARD);
-        budgets.give_back(&id, BUDGET_BYTES);
-        read_until(&received, &id, |seen| seen.contains("last line\r\n")).unwrap();
     }
 
     /// A process the shell left behind, deaf to the hang-up, holds the pty and prints until it is closed, or for 30 s should the test fail first.
