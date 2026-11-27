@@ -20,7 +20,7 @@ use taco_protocol::{HookMessage, deadlines};
 
 use taco_protocol::TOKEN_FILE_NAME;
 
-use http::{body_cap, drain_body, parse_head, read_body, read_head, respond};
+use http::{body_cap, drain_body, parse_head, read_body, read_head, write_response};
 use messages::parse_message;
 use questions::ask_question;
 pub use questions::{AnswerPart, OnDelivered, Question, QuestionKind};
@@ -211,12 +211,12 @@ fn handle(mut stream: TcpStream, deadline: Instant, serving: &Serving) {
     };
     let answer_by = Instant::now() + serving.answer_window;
     let Some(head) = parse_head(&head_bytes) else {
-        respond(&mut stream, 400);
+        write_response(&mut stream, 400, None);
         return;
     };
 
     if head.method != "POST" {
-        respond(&mut stream, 404);
+        write_response(&mut stream, 404, None);
         return;
     }
 
@@ -224,30 +224,30 @@ fn handle(mut stream: TcpStream, deadline: Instant, serving: &Serving) {
     if head.has_origin {
         let drained = drain_body(&mut stream, leftover.len(), head.content_length, deadline);
         if drained {
-            respond(&mut stream, 403);
+            write_response(&mut stream, 403, None);
         }
         return;
     }
 
     if head.route == UPDATE_CHECK_ROUTE {
-        respond(&mut stream, 200);
+        write_response(&mut stream, 200, None);
         on_event(ListenerEvent::UpdateCheck);
         return;
     }
 
     let Some(cap) = body_cap(&head.route) else {
-        respond(&mut stream, 404);
+        write_response(&mut stream, 404, None);
         return;
     };
     if head.chunked {
-        respond(&mut stream, 400);
+        write_response(&mut stream, 400, None);
         return;
     }
 
     if head.content_length > cap {
         let drained = drain_body(&mut stream, leftover.len(), head.content_length, deadline);
         if drained {
-            respond(&mut stream, 413);
+            write_response(&mut stream, 413, None);
         }
         return;
     }
@@ -264,7 +264,7 @@ fn handle(mut stream: TcpStream, deadline: Instant, serving: &Serving) {
     }
 
     // Answered before any work on the body, so a hook that blocks the agent never waits on the app.
-    respond(&mut stream, 200);
+    write_response(&mut stream, 200, None);
 
     // Every post comes from the plugin and carries the token; one without it is another process.
     if sent_token != Some(token) {
