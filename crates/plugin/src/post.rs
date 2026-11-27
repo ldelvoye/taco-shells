@@ -1,10 +1,8 @@
-use std::io::{ErrorKind, Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, TcpStream};
-use std::time::Duration;
+use std::io::{ErrorKind, Write};
+use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpStream};
+use std::time::{Duration, Instant};
 
 use crate::hook::Post;
-
-const TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Debug, PartialEq)]
 pub enum PostError {
@@ -12,9 +10,23 @@ pub enum PostError {
     Other,
 }
 
-pub fn post(port: u16, post: &Post) -> Result<(), PostError> {
+fn time_left(deadline: Instant) -> Result<Duration, PostError> {
+    let left = deadline.checked_duration_since(Instant::now());
+    match left {
+        Some(left) if !left.is_zero() => Ok(left),
+        _ => Err(PostError::Other),
+    }
+}
+
+pub fn post(
+    port: u16,
+    request: &Post,
+    token: Option<&str>,
+    deadline: Instant,
+) -> Result<(), PostError> {
     let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-    let connected = TcpStream::connect_timeout(&address, TIMEOUT);
+    let connect_budget = time_left(deadline)?;
+    let connected = TcpStream::connect_timeout(&address, connect_budget);
     let mut stream = match connected {
         Ok(stream) => stream,
         Err(problem) if problem.kind() == ErrorKind::ConnectionRefused => {
@@ -23,32 +35,38 @@ pub fn post(port: u16, post: &Post) -> Result<(), PostError> {
         Err(_) => return Err(PostError::Other),
     };
 
+    let write_budget = time_left(deadline)?;
     stream
-        .set_read_timeout(Some(TIMEOUT))
-        .map_err(|_| PostError::Other)?;
-    stream
-        .set_write_timeout(Some(TIMEOUT))
+        .set_write_timeout(Some(write_budget))
         .map_err(|_| PostError::Other)?;
 
-    let request = format!(
-        "POST {} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        post.route,
-        post.body.len(),
-        post.body,
+    let mut token_header = String::new();
+    if let Some(token) = token {
+        token_header = format!("X-Taco-Shells-Token: {token}\r\n");
+    }
+    let text = format!(
+        "POST {} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n{token_header}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+        request.route,
+        request.body.len(),
+        request.body,
     );
+    // The listener reads the whole body before it answers, so waiting for the answer only adds time.
     stream
-        .write_all(request.as_bytes())
+        .write_all(text.as_bytes())
         .map_err(|_| PostError::Other)?;
-
-    let mut ignored = Vec::new();
-    let _ = stream.read_to_end(&mut ignored);
+    let _ = stream.shutdown(Shutdown::Write);
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
     use std::net::TcpListener;
+
+    fn soon(milliseconds: u64) -> Instant {
+        Instant::now() + Duration::from_millis(milliseconds)
+    }
 
     #[test]
     fn sends_the_route_and_body_as_one_http_request() {
@@ -56,6 +74,9 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
             let mut received = String::new();
             let mut buffer = [0u8; 1024];
             while !received.ends_with("{\"a\":1}") {
@@ -69,13 +90,38 @@ mod tests {
             route: "/attention",
             body: String::from("{\"a\":1}"),
         };
-        post(port, &sent).unwrap();
+        post(port, &sent, Some("abc123"), soon(1000)).unwrap();
 
         let received = server.join().unwrap();
         let first_line = received.lines().next().unwrap();
         assert_eq!(first_line, "POST /attention HTTP/1.1");
-        assert!(received.contains("Content-Length: 7\r\n"));
+        assert!(received.contains("\r\nX-Taco-Shells-Token: abc123\r\n"));
         assert!(received.ends_with("\r\n\r\n{\"a\":1}"));
+    }
+
+    #[test]
+    fn no_token_means_no_header() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut received = String::new();
+            stream.read_to_string(&mut received).unwrap();
+            received
+        });
+
+        let sent = Post {
+            route: "/attention",
+            body: String::from("{}"),
+        };
+        post(port, &sent, None, soon(1000)).unwrap();
+
+        let received = server.join().unwrap();
+        assert!(
+            !received
+                .to_ascii_lowercase()
+                .contains("x-taco-shells-token")
+        );
     }
 
     #[test]
@@ -88,6 +134,23 @@ mod tests {
             route: "/attention",
             body: String::from("{}"),
         };
-        assert_eq!(post(port, &sent), Err(PostError::Refused));
+        assert_eq!(post(port, &sent, None, soon(1000)), Err(PostError::Refused));
+    }
+
+    #[test]
+    fn a_listener_that_never_reads_costs_no_wait() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let sent = Post {
+            route: "/attention",
+            body: String::from("{}"),
+        };
+        let started = Instant::now();
+        let outcome = post(port, &sent, None, soon(250));
+
+        assert_eq!(outcome, Ok(()));
+        assert!(started.elapsed() < Duration::from_millis(250));
+        drop(listener);
     }
 }

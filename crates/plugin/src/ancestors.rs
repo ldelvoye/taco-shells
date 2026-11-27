@@ -1,3 +1,6 @@
+// Too few ancestors and the pane is never placed.
+pub const ANCESTOR_LIMIT: usize = 6;
+
 #[cfg(target_os = "macos")]
 fn parent_of(pid: u32) -> Option<u32> {
     let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
@@ -11,6 +14,7 @@ fn parent_of(pid: u32) -> Option<u32> {
     Some(info.pbi_ppid)
 }
 
+// Only macOS walks to the parent here; elsewhere the chain stops at the start pid.
 #[cfg(not(target_os = "macos"))]
 fn parent_of(_pid: u32) -> Option<u32> {
     None
@@ -40,9 +44,19 @@ mod tests {
         let one = ancestor_pids(own, 1);
         assert_eq!(one, [own]);
 
-        let several = ancestor_pids(own, 6);
+        let several = ancestor_pids(own, ANCESTOR_LIMIT);
         assert_eq!(several[0], own);
-        assert!(several.len() <= 6);
         assert!(!several.contains(&0));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn walks_up_to_the_parent_process() {
+        let own = std::process::id();
+        let parent = std::os::unix::process::parent_id();
+
+        let chain = ancestor_pids(own, ANCESTOR_LIMIT);
+        assert!(chain.len() > 1);
+        assert_eq!(chain[1], parent);
     }
 }
