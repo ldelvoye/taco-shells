@@ -62,15 +62,20 @@ pub struct HookListener {
 }
 
 impl HookListener {
-    pub fn start(port_file: PathBuf, on_event: OnEvent) -> HookListener {
+    pub fn start(
+        port_file: PathBuf,
+        require_token: Arc<AtomicBool>,
+        on_event: OnEvent,
+    ) -> HookListener {
         let ports: Vec<u16> = FOCUS_PORTS.collect();
-        HookListener::start_on(&ports, port_file, READ_DEADLINE, on_event)
+        HookListener::start_on(&ports, port_file, READ_DEADLINE, require_token, on_event)
     }
 
     pub(crate) fn start_on(
         ports: &[u16],
         port_file: PathBuf,
         read_deadline: Duration,
+        require_token: Arc<AtomicBool>,
         on_event: OnEvent,
     ) -> HookListener {
         let stopping = Arc::new(AtomicBool::new(false));
@@ -98,7 +103,14 @@ impl HookListener {
 
         let serving = Arc::clone(&stopping);
         let thread = thread::spawn(move || {
-            serve(&listener, &serving, read_deadline, &token, &*on_event);
+            serve(
+                &listener,
+                &serving,
+                read_deadline,
+                &token,
+                &require_token,
+                &*on_event,
+            );
         });
         let mut bound = unbound;
         bound.port = Some(port);
@@ -189,6 +201,7 @@ fn serve(
     stopping: &AtomicBool,
     read_deadline: Duration,
     token: &str,
+    require_token: &AtomicBool,
     on_event: &(dyn Fn(ListenerEvent) + Send + Sync),
 ) {
     // One request at a time, so the app hears a session's start before its first state.
@@ -200,7 +213,7 @@ fn serve(
             continue;
         };
         let deadline = Instant::now() + read_deadline;
-        handle(stream, deadline, token, on_event);
+        handle(stream, deadline, token, require_token, on_event);
     }
 }
 
@@ -208,6 +221,7 @@ fn handle(
     mut stream: TcpStream,
     deadline: Instant,
     token: &str,
+    require_token: &AtomicBool,
     on_event: &(dyn Fn(ListenerEvent) + Send + Sync),
 ) {
     let Some((head_bytes, leftover)) = read_head(&mut stream, deadline) else {
@@ -263,6 +277,11 @@ fn handle(
     respond(&mut stream, 200);
 
     let sent_token = head.token.as_deref();
+    // While Agent Activity is on, every hook post comes from the plugin and carries the token; one without it is an old script or another process.
+    let is_required = require_token.load(Ordering::SeqCst);
+    if is_required && sent_token != Some(token) {
+        return;
+    }
     let message = parse_message(&head.route, &body, sent_token, token);
     if let Some(message) = message {
         on_event(ListenerEvent::Hook(message));
@@ -592,12 +611,17 @@ mod tests {
         status.parse().unwrap()
     }
 
+    fn token_not_required() -> Arc<AtomicBool> {
+        Arc::new(AtomicBool::new(false))
+    }
+
     fn start_collecting() -> (HookListener, u16, Receiver<ListenerEvent>) {
         let (sender, receiver) = mpsc::channel();
         let listener = HookListener::start_on(
             &[0],
             PathBuf::from("/nonexistent/focus-port"),
             TEST_DEADLINE,
+            token_not_required(),
             Box::new(move |event| {
                 let _ = sender.send(event);
             }),
@@ -787,6 +811,7 @@ mod tests {
             &[0],
             directory.path().join("focus-port"),
             TEST_DEADLINE,
+            token_not_required(),
             Box::new(move |event| {
                 let _ = sender.send(event);
             }),
@@ -843,6 +868,75 @@ mod tests {
         assert!(!token_file.exists());
     }
 
+    fn every_hook_route_body() -> Vec<(&'static str, String)> {
+        let start = format!(
+            r#"{{"pids":[1],"harness":"claude","sessionId":"{SESSION}","cwd":"/tmp/work"}}"#
+        );
+        let end = format!(r#"{{"pids":[1],"harness":"claude","sessionId":"{SESSION}"}}"#);
+        let state = format!(
+            r#"{{"pids":[1],"harness":"claude","sessionId":"{SESSION}","event":"UserPromptSubmit"}}"#
+        );
+        let payload = format!(r#"{{"session_id":"{SESSION}","hook_event_name":"SessionStart"}}"#);
+        let hook_body = format!(r#"{{"pids":[1],"harness":"claude","payload":{payload}}}"#);
+        vec![
+            (AGENT_START_ROUTE, start),
+            (AGENT_END_ROUTE, end),
+            (AGENT_STATE_ROUTE, state),
+            (AGENT_HOOK_ROUTE, hook_body),
+            (ATTENTION_ROUTE, r#"{"pids":[1]}"#.to_string()),
+        ]
+    }
+
+    #[test]
+    fn every_hook_post_needs_the_token_while_it_is_required() {
+        let directory = tempfile::tempdir().unwrap();
+        let token_file = directory.path().join("focus-token");
+        let require_token = Arc::new(AtomicBool::new(true));
+        let (sender, receiver) = mpsc::channel();
+        let listener = HookListener::start_on(
+            &[0],
+            directory.path().join("focus-port"),
+            TEST_DEADLINE,
+            Arc::clone(&require_token),
+            Box::new(move |event| {
+                let _ = sender.send(event);
+            }),
+        );
+        let port = listener.port().unwrap();
+        let token = fs::read_to_string(&token_file).unwrap();
+        let with_token = format!("X-Taco-Shells-Token: {token}\r\n");
+        let routes = every_hook_route_body();
+
+        for (route, body) in &routes {
+            let status = post(port, "POST", route, body.as_bytes());
+            assert_eq!(status, 200, "{route}");
+        }
+        let marker = br#"{"pids":[9]}"#;
+        post_with(port, "POST", ATTENTION_ROUTE, &with_token, marker);
+        let first = next_event(&receiver);
+        assert_eq!(first, hook(vec![9], HookCall::Attention));
+
+        for (route, body) in &routes {
+            let status = post_with(port, "POST", route, &with_token, body.as_bytes());
+            assert_eq!(status, 200, "{route}");
+            let delivered = next_event(&receiver);
+            assert!(matches!(delivered, ListenerEvent::Hook(_)), "{route}");
+        }
+
+        let check = post(port, "POST", UPDATE_CHECK_ROUTE, b"");
+        assert_eq!(check, 200);
+        assert_eq!(next_event(&receiver), ListenerEvent::UpdateCheck);
+
+        require_token.store(false, Ordering::SeqCst);
+        for (route, body) in &routes {
+            let status = post(port, "POST", route, body.as_bytes());
+            assert_eq!(status, 200, "{route}");
+            let delivered = next_event(&receiver);
+            assert!(matches!(delivered, ListenerEvent::Hook(_)), "{route}");
+        }
+        listener.stop();
+    }
+
     #[test]
     fn the_answer_comes_before_the_app_hears_of_it() {
         let (sender, events) = mpsc::channel();
@@ -852,6 +946,7 @@ mod tests {
             &[0],
             PathBuf::from("/nonexistent/focus-port"),
             TEST_DEADLINE,
+            token_not_required(),
             Box::new(move |event| {
                 let _ = sender.send(event);
                 let waiting = gate.lock().unwrap();
@@ -885,6 +980,7 @@ mod tests {
             &[taken, free],
             file.clone(),
             TEST_DEADLINE,
+            token_not_required(),
             Box::new(|_| {}),
         );
         assert_eq!(listener.port(), Some(free));
@@ -898,6 +994,7 @@ mod tests {
             &[taken],
             other_file.clone(),
             TEST_DEADLINE,
+            token_not_required(),
             Box::new(|_| {}),
         );
         assert_eq!(unbound.port(), None);
@@ -931,6 +1028,7 @@ mod tests {
             &[0],
             directory.path().join("focus-port"),
             READ_DEADLINE,
+            token_not_required(),
             Box::new(move |event| {
                 let _ = sender.send(event);
             }),

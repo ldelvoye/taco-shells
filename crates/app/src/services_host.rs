@@ -244,11 +244,15 @@ impl ServicesHost {
         let managing = Arc::new(AtomicBool::new(true));
         let setups: Arc<Slot<AgentSetups>> = Arc::new(Mutex::new(None));
 
+        let require_token = Arc::new(AtomicBool::new(false));
+
         let changed_managing = Arc::clone(&managing);
+        let changed_require_token = Arc::clone(&require_token);
         let changed_setups = Arc::clone(&setups);
         let changed_window = window.clone();
         let on_change = move |config: Config| {
             changed_managing.store(config.settings.manage_agent_hooks, Ordering::SeqCst);
+            changed_require_token.store(config.settings.agent_activity, Ordering::SeqCst);
             send_to_window(&changed_window, ServicesOutput::Config(config));
             let setups = locked(&changed_setups);
             if let Some(setups) = setups.as_ref() {
@@ -259,6 +263,7 @@ impl ServicesHost {
         let first = store.current();
         let seeded = first.settings.manage_agent_hooks;
         managing.store(seeded, Ordering::SeqCst);
+        require_token.store(first.settings.agent_activity, Ordering::SeqCst);
 
         let store: Arc<Slot<ConfigStore>> = Arc::new(Mutex::new(Some(store)));
         let writer = start_writer(&directory, &store, &window);
@@ -289,7 +294,7 @@ impl ServicesHost {
             }
         };
         let port_file = focus_port_path(&directory);
-        let listener = HookListener::start(port_file, Box::new(on_event));
+        let listener = HookListener::start(port_file, require_token, Box::new(on_event));
         if listener.port().is_none() {
             send_to_window(&window, ServicesOutput::Problem(PORTS_TAKEN.to_string()));
         }
