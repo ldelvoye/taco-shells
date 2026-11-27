@@ -26,7 +26,8 @@ const CHECKOUT_HOOKS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../hooks")
 const REFUSED_WRITE: &str = "settings.json is read-only, so nothing was changed.";
 const STAND_IN_LABEL: &str = "stand-in";
 const REFUSED_KEYMAP_WRITE: &str = "keybindings.json is read-only, so nothing was changed.";
-const SET_UP_TEXT: &str = "Claude Code is set up. Its activity shows here from its next session.";
+const SET_UP_TEXT: &str =
+    "Agents already running stop reporting until you start them in a new terminal.";
 
 /// The agent logs and boards the stand-in answers from, by terminal.
 pub struct StandInActivity {

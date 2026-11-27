@@ -74,7 +74,7 @@ const CLOSE_SIZE: f32 = 14.;
 pub const MS_PER_MINUTE: u64 = 60_000;
 const MINUTES_PER_HOUR: u64 = 60;
 
-/// What the panel shows when its terminal has no agent row.
+/// The agent setup line for a terminal: alone when no agent shows there, and as a card above the log when one does.
 #[derive(Clone, Debug, PartialEq)]
 pub enum NoAgentLine {
     Shell,
@@ -189,6 +189,11 @@ pub fn activity_panel(input: &ActivityInput, cx: &mut Context<WindowView>) -> Di
         .gap(px(PANEL_PADDING))
         .p(px(PANEL_PADDING));
     if let Some(row) = input.agent_row {
+        // An agent that reported before Set up still shows here, so its terminal hears why it may go quiet.
+        let setup = no_agent_for(input);
+        if setup != NoAgentLine::Shell {
+            content = content.child(setup_card(&setup, look, cx));
+        }
         if row.state == RowState::Needs
             && let Some(question) = &row.question
         {
@@ -461,12 +466,12 @@ fn no_agent_element(line: &NoAgentLine, look: &Look, cx: &mut Context<WindowView
             row.child(shown).child(button)
         }
         NoAgentLine::Unavailable { text, reason } => {
-            let shown = text_cell(text);
+            let shown = div().min_w_0().child(text.clone());
             let why = div()
-                .flex_none()
+                .min_w_0()
                 .text_color(look.secondary_text)
                 .child(reason.clone());
-            row.child(shown).child(why)
+            div().flex().flex_col().gap(px(4.)).child(shown).child(why)
         }
         NoAgentLine::Outcome { harness, text } => {
             let shown = text_cell(text);
@@ -474,6 +479,17 @@ fn no_agent_element(line: &NoAgentLine, look: &Look, cx: &mut Context<WindowView
             row.child(shown).child(dismiss)
         }
     }
+}
+
+fn setup_card(line: &NoAgentLine, look: &Look, cx: &mut Context<WindowView>) -> Div {
+    let said = no_agent_element(line, look, cx);
+    div()
+        .p(px(CARD_PADDING))
+        .bg(look.selected_card)
+        .border_1()
+        .border_color(look.hairline)
+        .rounded(px(CARD_RADIUS))
+        .child(said)
 }
 
 fn text_cell(text: &str) -> Div {
