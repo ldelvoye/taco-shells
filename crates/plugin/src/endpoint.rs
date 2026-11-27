@@ -2,23 +2,25 @@ use std::path::Path;
 
 use taco_protocol::TOKEN_FILE_NAME;
 
-pub fn read_token(port_path: &Path) -> Option<String> {
-    let token_path = port_path.with_file_name(TOKEN_FILE_NAME);
-    let content = std::fs::read_to_string(token_path).ok()?;
+fn first_line_of(path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
     let first_line = content.lines().next()?;
     let trimmed = first_line.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
     Some(String::from(trimmed))
 }
 
+pub fn read_token(port_path: &Path) -> Option<String> {
+    let token_path = port_path.with_file_name(TOKEN_FILE_NAME);
+    let token = first_line_of(&token_path)?;
+    if token.is_empty() {
+        return None;
+    }
+    Some(token)
+}
+
 pub fn read_port(path: &Path) -> Option<u16> {
-    let content = std::fs::read_to_string(path).ok()?;
-    let mut lines = content.lines();
-    let first_line = lines.next()?;
-    let trimmed = first_line.trim();
-    trimmed.parse::<u16>().ok()
+    let line = first_line_of(path)?;
+    line.parse::<u16>().ok()
 }
 
 #[cfg(test)]
