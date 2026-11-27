@@ -20,11 +20,7 @@ use crate::plugin_dirs::{
 
 const HOOKS_DIRECTORY_NAME: &str = "hooks";
 const SCRIPT_MODE: u32 = 0o755;
-const HOOK_SCRIPT_NAMES: [&str; 3] = [
-    "ancestors.sh",
-    "taco-shells-attention.sh",
-    "taco-shells-claude-session.sh",
-];
+const HOOK_SCRIPT_NAMES: [&str; 2] = ["taco-shells-attention.sh", "taco-shells-claude-session.sh"];
 const STUB_SCRIPT: &str = "#!/bin/sh\nexit 0\n";
 
 static STUB_WRITES: AtomicU64 = AtomicU64::new(0);
@@ -50,38 +46,6 @@ pub fn hooks_directory(config_directory: &Path) -> PathBuf {
     config_directory.join(HOOKS_DIRECTORY_NAME)
 }
 
-fn copy_scripts(source: &Path, destination: &Path) -> io::Result<()> {
-    fs::create_dir_all(destination)?;
-    let entries = fs::read_dir(source)?;
-    for entry in entries {
-        let entry = entry?;
-        let kind = entry.file_type()?;
-        if !kind.is_file() {
-            continue;
-        }
-        let from = entry.path();
-        let name = entry.file_name();
-        let to = destination.join(name);
-        fs::copy(&from, &to)?;
-        let mode = fs::Permissions::from_mode(SCRIPT_MODE);
-        fs::set_permissions(&to, mode)?;
-    }
-    Ok(())
-}
-
-pub fn copy_hook_scripts(source: &Path, destination: &Path) -> Vec<String> {
-    let copied = copy_scripts(source, destination);
-    match copied {
-        Ok(()) => Vec::new(),
-        Err(error) => {
-            let shown = destination.display();
-            vec![format!(
-                "The hook scripts could not be copied to {shown}: {error}"
-            )]
-        }
-    }
-}
-
 fn write_stub(target: &Path, name: &str) -> io::Result<()> {
     let process = std::process::id();
     let counter = STUB_WRITES.fetch_add(1, Ordering::Relaxed);
@@ -97,13 +61,7 @@ fn write_stub(target: &Path, name: &str) -> io::Result<()> {
     renamed
 }
 
-// The old settings.json entries may still call these from sessions started before Set up, so a stub answers them with nothing.
 pub fn stub_hook_scripts(destination: &Path) -> Vec<String> {
-    let created = fs::create_dir_all(destination);
-    if let Err(error) = created {
-        let shown = destination.display();
-        return vec![format!("{shown} could not be created: {error}")];
-    }
     let mut problems = Vec::new();
     for name in HOOK_SCRIPT_NAMES {
         let target = destination.join(name);
@@ -424,38 +382,5 @@ mod tests {
         for name in beside_target.iter().chain(beside_link.iter()) {
             assert!(!name.ends_with("taco-tmp"), "{name}");
         }
-    }
-
-    #[test]
-    fn copying_scripts_makes_files_executable_skips_folders_and_overwrites() {
-        let temp = TempDir::new().unwrap();
-        let source = temp.path().join("source");
-        let destination = temp.path().join("destination");
-        fs::create_dir_all(source.join("nested")).unwrap();
-        fs::create_dir_all(&destination).unwrap();
-        fs::write(source.join("first.sh"), "first").unwrap();
-        fs::write(source.join("second.sh"), "second").unwrap();
-        fs::write(source.join("nested").join("third.sh"), "third").unwrap();
-        let stale = destination.join("first.sh");
-        fs::write(&stale, "stale").unwrap();
-        let readable = fs::Permissions::from_mode(0o644);
-        fs::set_permissions(&stale, readable).unwrap();
-
-        let problems = copy_hook_scripts(&source, &destination);
-
-        assert!(problems.is_empty(), "{problems:?}");
-        for name in ["first.sh", "second.sh"] {
-            let copied = destination.join(name);
-            let metadata = fs::metadata(&copied).unwrap();
-            let mode = metadata.permissions().mode() & 0o777;
-            assert_eq!(mode, 0o755, "{name}");
-        }
-        let first = fs::read_to_string(destination.join("first.sh")).unwrap();
-        assert_eq!(first, "first");
-        assert!(!destination.join("nested").exists());
-
-        let absent = temp.path().join("absent");
-        let missing_source = copy_hook_scripts(&absent, &destination);
-        assert_eq!(missing_source.len(), 1);
     }
 }

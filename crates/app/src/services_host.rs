@@ -64,51 +64,6 @@ fn send_to_window(window: &WindowSender, output: ServicesOutput) {
     let _ = window.unbounded_send(WindowOutput::Services(output));
 }
 
-fn is_named(path: Option<&Path>, name: &str) -> bool {
-    let Some(path) = path else {
-        return false;
-    };
-    let file_name = path.file_name();
-    let Some(file_name) = file_name else {
-        return false;
-    };
-    file_name == name
-}
-
-fn is_bundle(path: Option<&Path>) -> bool {
-    let Some(path) = path else {
-        return false;
-    };
-    let extension = path.extension();
-    extension.is_some_and(|found| found == "app")
-}
-
-// A packaged app carries its own copy in Resources; a build run from target/ uses the checkout's.
-fn hook_scripts_source_for(executable: Option<&Path>, checkout: &Path) -> PathBuf {
-    let Some(executable) = executable else {
-        return checkout.to_path_buf();
-    };
-    let macos = executable.parent();
-    let contents = macos.and_then(Path::parent);
-    let bundle = contents.and_then(Path::parent);
-    let in_macos = is_named(macos, "MacOS");
-    let in_contents = is_named(contents, "Contents");
-    let in_bundle = is_bundle(bundle);
-    match contents {
-        Some(contents) if in_macos && in_contents && in_bundle => {
-            contents.join("Resources").join("hooks")
-        }
-        _ => checkout.to_path_buf(),
-    }
-}
-
-fn hook_scripts_source() -> PathBuf {
-    let checkout = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../hooks"));
-    let executable = std::env::current_exe();
-    let found = executable.ok();
-    hook_scripts_source_for(found.as_deref(), &checkout)
-}
-
 fn plugin_program_beside(executable: &Path) -> Option<PathBuf> {
     let directory = executable.parent()?;
     Some(directory.join(PLUGIN_PROGRAM_NAME))
@@ -151,7 +106,6 @@ fn start_setups(
         foreground_commands: Box::new(foreground_commands),
         on_change: Box::new(on_change),
     };
-    let source = hook_scripts_source();
     let found = std::env::current_exe();
     let mut executable = PathBuf::new();
     let mut plugin_program = None;
@@ -160,13 +114,8 @@ fn start_setups(
         executable = path;
     }
     let version = app_version(&executable);
-    let (setups, problems) = AgentSetups::start(
-        directory.to_path_buf(),
-        source,
-        plugin_program,
-        version,
-        host,
-    );
+    let (setups, problems) =
+        AgentSetups::start(directory.to_path_buf(), plugin_program, version, host);
     for problem in problems {
         send_to_window(window, ServicesOutput::Problem(problem));
     }
@@ -476,7 +425,7 @@ impl ServicesHost {
             }
         };
         let port_file = focus_port_path(&directory);
-        let listener = HookListener::start(port_file, activity_on, Box::new(on_event));
+        let listener = HookListener::start(port_file, Box::new(on_event));
         if listener.port().is_none() {
             send_to_window(&window, ServicesOutput::Problem(PORTS_TAKEN.to_string()));
         }
@@ -602,7 +551,6 @@ impl ServicesHost {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
     use std::sync::mpsc;
     use std::sync::{Arc, Mutex};
     use std::thread;
@@ -612,7 +560,7 @@ mod tests {
     use taco_protocol::{HarnessId, HookCall, HookEvent, HookMessage, RuntimeAnswer, TerminalId};
     use taco_services::{AnswerPart, Question, QuestionKind};
 
-    use super::{Routed, hook_scripts_source_for, route_hooks, stop_work};
+    use super::{Routed, route_hooks, stop_work};
 
     const WAIT: Duration = Duration::from_secs(2);
     const SHORT_ANSWER_WAIT: Duration = Duration::from_millis(50);
@@ -849,24 +797,5 @@ mod tests {
         assert!(!*recorded.lock().unwrap());
         on_delivered();
         assert!(*recorded.lock().unwrap());
-    }
-
-    #[test]
-    fn a_packaged_app_takes_its_own_hook_scripts_and_any_other_build_the_checkout() {
-        let checkout = Path::new("/checkout/hooks");
-        let packaged = Path::new("/Applications/Taco Shells.app/Contents/MacOS/taco-shells");
-        let from_target = Path::new("/checkout/target/debug/taco-shells");
-        let not_a_bundle = Path::new("/tmp/Taco Shells/Contents/MacOS/taco-shells");
-
-        let bundled = hook_scripts_source_for(Some(packaged), checkout);
-        let built = hook_scripts_source_for(Some(from_target), checkout);
-        let plain = hook_scripts_source_for(Some(not_a_bundle), checkout);
-        let unknown = hook_scripts_source_for(None, checkout);
-
-        let resources = PathBuf::from("/Applications/Taco Shells.app/Contents/Resources/hooks");
-        assert_eq!(bundled, resources);
-        assert_eq!(built, checkout);
-        assert_eq!(plain, checkout);
-        assert_eq!(unknown, checkout);
     }
 }
