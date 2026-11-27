@@ -22,7 +22,8 @@ use taco_settings::{
 };
 use taco_terminal_view::{Terminals, TerminalsEvent};
 
-use crate::activity::{ActivityInput, ActivityLog, activity_panel, now_ms};
+use crate::activity_log::ActivityLog;
+use crate::activity_panel::{ActivityInput, activity_panel, now_ms};
 use crate::banners::{Dismissal, Notices, banner_cards, banners_of};
 use crate::done_checks::DoneChecks;
 use crate::drive::mark;
@@ -100,8 +101,10 @@ pub struct WindowView {
     services: Rc<dyn ServicesPort>,
     config_changed: Box<dyn Fn(&Config)>,
     activity: ActivityLog,
-    /// The log lines whose files are shown, by `seq`.
-    expanded: HashSet<u64>,
+    /// The stretch numbers whose steps are shown.
+    folds_open: HashSet<u64>,
+    /// The `seq` of each long text in the log shown whole.
+    texts_open: HashSet<u64>,
     ahead: Option<Ahead>,
     /// The number of this window's last focus move.
     last_move: u64,
@@ -229,7 +232,8 @@ impl WindowView {
             services,
             config_changed,
             activity: ActivityLog::default(),
-            expanded: HashSet::new(),
+            folds_open: HashSet::new(),
+            texts_open: HashSet::new(),
             ahead: None,
             last_move,
             drop_place: None,
@@ -392,7 +396,8 @@ impl WindowView {
             terminal: wanted.clone(),
             ..ActivityLog::default()
         };
-        self.expanded.clear();
+        self.folds_open.clear();
+        self.texts_open.clear();
         let request = ActivityRequest::Watch { terminal: wanted };
         self.port.activity(request);
     }
@@ -405,11 +410,13 @@ impl WindowView {
         self.services.dismiss_notice(harness);
     }
 
-    pub(crate) fn toggle_files(&mut self, seq: u64, cx: &mut Context<Self>) {
-        let was_open = self.expanded.remove(&seq);
-        if !was_open {
-            self.expanded.insert(seq);
-        }
+    pub(crate) fn toggle_fold(&mut self, stretch: u64, cx: &mut Context<Self>) {
+        toggle(&mut self.folds_open, stretch);
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_text(&mut self, seq: u64, cx: &mut Context<Self>) {
+        toggle(&mut self.texts_open, seq);
         cx.notify();
     }
 
@@ -1276,7 +1283,8 @@ impl WindowView {
                     agent_row,
                     notices: &self.shown.setups.notices,
                     log: &self.activity,
-                    expanded: &self.expanded,
+                    folds_open: &self.folds_open,
+                    texts_open: &self.texts_open,
                     now_ms: now_ms(),
                     look,
                 };
@@ -1626,6 +1634,13 @@ impl Render for WindowView {
 
 fn is_bare_escape(keystroke: &Keystroke) -> bool {
     keystroke.key == ESCAPE && !keystroke.modifiers.modified()
+}
+
+fn toggle(shown: &mut HashSet<u64>, key: u64) {
+    let was_shown = shown.remove(&key);
+    if !was_shown {
+        shown.insert(key);
+    }
 }
 
 // The shortcuts page opens on its search, so typing finds a command at once.

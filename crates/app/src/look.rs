@@ -1,4 +1,4 @@
-use gpui::{BoxShadow, Hsla, Rgba, black, px};
+use gpui::{BoxShadow, Hsla, Rgba, black, px, rgb};
 use taco_protocol::Rgb;
 use taco_settings::{Appearance, palette_for};
 
@@ -14,6 +14,10 @@ pub const ROW_HEIGHT: f32 = 30.;
 pub const ROW_RADIUS: f32 = 8.;
 pub const TRAY_RADIUS: f32 = 11.;
 pub const MARK_SIZE: f32 = 9.;
+// Each author's label colour in the agent log, light then dark, all at least 4.5:1 on the panel ground.
+const AGENT_INK: [u32; 2] = [0xA8570A, 0xF0A04A];
+const USER_INK: [u32; 2] = [0x4F7A1F, 0x7FB239];
+const OTHER_AGENT_INK: [u32; 2] = [0x8E4A9E, 0xC08AD6];
 
 const VEIL_ALPHA: f32 = 0.05;
 const STRONG_VEIL_ALPHA: f32 = 0.09;
@@ -35,12 +39,20 @@ pub struct Look {
     pub veil: Hsla,
     /// A stronger wash: a pressed or open strip button.
     pub strong_veil: Hsla,
+    /// The agent log's label colours for the agent, the user and another agent; the app's is `secondary_text`.
+    pub agent_ink: Hsla,
+    pub user_ink: Hsla,
+    pub other_agent_ink: Hsla,
 }
 
 impl Look {
     pub fn new(appearance: Appearance) -> Self {
         let colors = palette_for(appearance).window;
         let text = hsla(colors.text);
+        let ink_index = match appearance {
+            Appearance::Light => 0,
+            Appearance::Dark => 1,
+        };
         Self {
             appearance,
             panels: hsla(colors.panels),
@@ -54,6 +66,9 @@ impl Look {
             needs: hsla(colors.needs),
             veil: text.opacity(VEIL_ALPHA),
             strong_veil: text.opacity(STRONG_VEIL_ALPHA),
+            agent_ink: rgb(AGENT_INK[ink_index]).into(),
+            user_ink: rgb(USER_INK[ink_index]).into(),
+            other_agent_ink: rgb(OTHER_AGENT_INK[ink_index]).into(),
         }
     }
 

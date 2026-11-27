@@ -1,6 +1,7 @@
 //! The window, and the wiring that starts everything.
 
-mod activity;
+mod activity_log;
+mod activity_panel;
 mod assets;
 mod banners;
 mod done_checks;
