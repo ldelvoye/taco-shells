@@ -83,7 +83,7 @@ pub fn run(dry_run: bool) -> Result<(), String> {
 }
 
 // Capped so a long gap between tags stays well under GitHub's 125,000-character release body.
-fn change_list(messages: &[String]) -> String {
+pub(crate) fn change_list(messages: &[String]) -> String {
     let subjects = messages.iter().filter_map(|message| message.lines().next());
     let listed = subjects.take(LISTED_CHANGES);
     let mut bullets: Vec<String> = listed.map(|subject| format!("- {subject}")).collect();
@@ -115,11 +115,16 @@ fn resolved_head(repo_root: &Path) -> Result<String, String> {
     }
 }
 
+fn last_tag(repo_root: &Path) -> Result<Option<String>, String> {
+    last_tag_at(repo_root, "HEAD")
+}
+
 // `git describe` fails both when there is no tag and when git itself fails, so a failure counts as "no tag yet"
 // only when git lists no version tag at all.
-fn last_tag(repo_root: &Path) -> Result<Option<String>, String> {
+/// The newest version tag at or behind `commit`.
+pub(crate) fn last_tag_at(repo_root: &Path, commit: &str) -> Result<Option<String>, String> {
     let mut describe = Command::new("git");
-    describe.args(["describe", "--tags", "--abbrev=0", "--match", "v*", "HEAD"]);
+    describe.args(["describe", "--tags", "--abbrev=0", "--match", "v*", commit]);
     describe.current_dir(repo_root);
     if let Some(tag) = repo::capture(&mut describe) {
         return Ok(Some(tag));
@@ -128,7 +133,9 @@ fn last_tag(repo_root: &Path) -> Result<Option<String>, String> {
     if listed.is_empty() {
         return Ok(None);
     }
-    Err("git describe found no version tag behind HEAD, though the repo has some".to_string())
+    Err(format!(
+        "git describe found no version tag behind {commit}, though the repo has some"
+    ))
 }
 
 fn tag_exists(repo_root: &Path, tag: &str) -> Result<bool, String> {
@@ -147,7 +154,7 @@ fn version_tags_named(repo_root: &Path, pattern: &str) -> Result<String, String>
 }
 
 // Whole messages, not subjects: a conventional commit can declare a break in its body.
-fn messages_since(repo_root: &Path, tag: Option<&str>) -> Result<Vec<String>, String> {
+pub(crate) fn messages_since(repo_root: &Path, tag: Option<&str>) -> Result<Vec<String>, String> {
     let range = match tag {
         Some(tag) => format!("{tag}..HEAD"),
         None => "HEAD".to_string(),

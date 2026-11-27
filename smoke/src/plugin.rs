@@ -1,25 +1,32 @@
 use std::io::{Read, Write};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
-use taco_identity::{DEVELOPMENT, PLUGIN_PROGRAM, PROGRAMS_PATH, STABLE};
+use taco_identity::{DEVELOPMENT, Identity, PLUGIN_PROGRAM, PROGRAMS_PATH, STABLE};
 use taco_protocol::APP_VARIABLE;
 
-use crate::Smoke;
-
-const DEV_NAME: &str = DEVELOPMENT.agent_app_name;
-const STABLE_NAME: &str = STABLE.agent_app_name;
 const ACTIVITY_TOOLS: [&str; 3] = ["note", "now", "share"];
 const INITIALIZE_ID: u64 = 1;
 const TOOLS_LIST_ID: u64 = 2;
 const ANSWER_DEADLINE: Duration = Duration::from_secs(5);
 const EXIT_POLL: Duration = Duration::from_millis(5);
 
-pub fn is_built_for_the_dev_channel(smoke: &Smoke) -> Result<(), String> {
-    let replies = mcp_replies(smoke, Some(DEV_NAME))?;
+pub fn is_built_for_the_dev_channel(bundle: &Path) -> Result<(), String> {
+    is_built_for(bundle, &DEVELOPMENT, &STABLE)
+}
+
+pub fn is_built_for_the_stable_channel(bundle: &Path) -> Result<(), String> {
+    is_built_for(bundle, &STABLE, &DEVELOPMENT)
+}
+
+// Lists the three tools for its own app's name and none for the other's, and approves its own tool.
+fn is_built_for(bundle: &Path, own: &Identity, other: &Identity) -> Result<(), String> {
+    let own_name = own.agent_app_name;
+    let replies = mcp_replies(bundle, Some(own_name))?;
     let initialize = reply_with_id(&replies, INITIALIZE_ID)?;
     let version = initialize["result"]["protocolVersion"].as_str();
     if version.is_none() {
@@ -30,21 +37,22 @@ pub fn is_built_for_the_dev_channel(smoke: &Smoke) -> Result<(), String> {
     expected.sort();
     if names != expected {
         return Err(format!(
-            "with {APP_VARIABLE} as {DEV_NAME} it lists {names:?}"
+            "with {APP_VARIABLE} as {own_name} it lists {names:?}"
         ));
     }
 
-    let stable_replies = mcp_replies(smoke, Some(STABLE_NAME))?;
-    let stable_names = tool_names(&stable_replies)?;
-    if !stable_names.is_empty() {
+    let other_name = other.agent_app_name;
+    let other_replies = mcp_replies(bundle, Some(other_name))?;
+    let other_names = tool_names(&other_replies)?;
+    if !other_names.is_empty() {
         return Err(format!(
-            "with {APP_VARIABLE} as {STABLE_NAME} it lists {stable_names:?}"
+            "with {APP_VARIABLE} as {other_name} it lists {other_names:?}"
         ));
     }
 
-    let own_tool = format!("mcp__plugin_{DEV_NAME}_activity__note");
+    let own_tool = format!("mcp__plugin_{own_name}_activity__note");
     let request = json!({"tool_name": own_tool});
-    let answer = hook_answer(smoke, &request)?;
+    let answer = hook_answer(bundle, &request)?;
     let decision = decision_in(&answer)?;
     if decision != "allow" {
         return Err(format!("its answer for {own_tool} is {answer}"));
@@ -52,7 +60,7 @@ pub fn is_built_for_the_dev_channel(smoke: &Smoke) -> Result<(), String> {
     Ok(())
 }
 
-fn mcp_replies(smoke: &Smoke, app: Option<&str>) -> Result<Vec<Value>, String> {
+fn mcp_replies(bundle: &Path, app: Option<&str>) -> Result<Vec<Value>, String> {
     let initialize = json!({
         "jsonrpc": "2.0",
         "id": INITIALIZE_ID,
@@ -67,7 +75,7 @@ fn mcp_replies(smoke: &Smoke, app: Option<&str>) -> Result<Vec<Value>, String> {
     let tools_list = json!({"jsonrpc": "2.0", "id": TOOLS_LIST_ID, "method": "tools/list"});
     let input = format!("{initialize}\n{initialized}\n{tools_list}\n");
 
-    let output = run(smoke, "mcp", app, &input)?;
+    let output = run(bundle, "mcp", app, &input)?;
     let mut replies = Vec::new();
     for line in output.lines() {
         let reply = serde_json::from_str::<Value>(line)
@@ -102,8 +110,8 @@ fn tool_names(replies: &[Value]) -> Result<Vec<String>, String> {
     Ok(names)
 }
 
-fn hook_answer(smoke: &Smoke, input: &Value) -> Result<String, String> {
-    run(smoke, "allow", None, &input.to_string())
+fn hook_answer(bundle: &Path, input: &Value) -> Result<String, String> {
+    run(bundle, "allow", None, &input.to_string())
 }
 
 fn decision_in(answer: &str) -> Result<String, String> {
@@ -116,8 +124,8 @@ fn decision_in(answer: &str) -> Result<String, String> {
     }
 }
 
-fn run(smoke: &Smoke, mode: &str, app: Option<&str>, input: &str) -> Result<String, String> {
-    let programs = smoke.app.join(PROGRAMS_PATH);
+fn run(bundle: &Path, mode: &str, app: Option<&str>, input: &str) -> Result<String, String> {
+    let programs = bundle.join(PROGRAMS_PATH);
     let program = programs.join(PLUGIN_PROGRAM);
     let mut command = Command::new(&program);
     command.arg(mode);

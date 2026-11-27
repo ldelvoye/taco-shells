@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use taco_identity::{DEVELOPMENT, PROGRAMS_PATH};
+use taco_identity::{DEVELOPMENT, Identity, PROGRAMS_PATH};
 
 use crate::build::{Channel, Profile};
 use crate::bundle::{self, Options};
@@ -13,13 +13,7 @@ const INSTALL_DIR_VARIABLE: &str = "TACO_SHELLS_INSTALL_DIR";
 const DEFAULT_INSTALL_DIR: &str = "/Applications";
 
 pub fn run() -> Result<(), String> {
-    let configured = env::var_os(INSTALL_DIR_VARIABLE);
-    let install_dir = match configured {
-        Some(dir) => PathBuf::from(dir),
-        None => PathBuf::from(DEFAULT_INSTALL_DIR),
-    };
-    let installed = install_dir.join(format!("{}.app", DEVELOPMENT.application_name));
-
+    let installed = installed_path(&DEVELOPMENT);
     if is_running(&installed)? {
         return Err(format!(
             "{} is running. Quit it and run this again.",
@@ -36,11 +30,28 @@ pub fn run() -> Result<(), String> {
         config_dir: None,
     };
     let bundled = bundle::create(&options)?;
+    put_in_place(&bundled.app, &installed, &DEVELOPMENT)
+}
 
+/// Where a channel's app is installed: `/Applications`, or `TACO_SHELLS_INSTALL_DIR`.
+pub fn installed_path(identity: &Identity) -> PathBuf {
+    let configured = env::var_os(INSTALL_DIR_VARIABLE);
+    let install_dir = match configured {
+        Some(dir) => PathBuf::from(dir),
+        None => PathBuf::from(DEFAULT_INSTALL_DIR),
+    };
+    install_dir.join(format!("{}.app", identity.application_name))
+}
+
+/// Copies `app` over `installed`, moving the copy it replaces to the Trash; refused by the caller while it runs.
+pub fn put_in_place(app: &Path, installed: &Path, identity: &Identity) -> Result<(), String> {
+    let Some(install_dir) = installed.parent() else {
+        return Err(format!("{} has no folder", installed.display()));
+    };
     // Staged in the install folder so the final rename stays on one volume and cannot leave half an app.
     let staged = install_dir.join(format!(".taco-shells-install.{}", std::process::id()));
     let mut ditto = Command::new("ditto");
-    ditto.arg(&bundled.app);
+    ditto.arg(app);
     ditto.arg(&staged);
     if let Err(error) = repo::run(&mut ditto) {
         discard(&staged);
@@ -49,8 +60,8 @@ pub fn run() -> Result<(), String> {
 
     let mut trashed = None;
     if installed.exists() {
-        let trash_path = trash_path()?;
-        if let Err(error) = fs::rename(&installed, &trash_path) {
+        let trash_path = trash_path(identity)?;
+        if let Err(error) = fs::rename(installed, &trash_path) {
             discard(&staged);
             return Err(format!(
                 "could not move {} to {}: {error}",
@@ -61,9 +72,9 @@ pub fn run() -> Result<(), String> {
         trashed = Some(trash_path);
     }
 
-    if let Err(error) = fs::rename(&staged, &installed) {
+    if let Err(error) = fs::rename(&staged, installed) {
         if let Some(trash_path) = trashed {
-            let _ = fs::rename(&trash_path, &installed);
+            let _ = fs::rename(&trash_path, installed);
         }
         discard(&staged);
         return Err(format!(
@@ -94,7 +105,7 @@ pub(crate) fn is_running(installed: &Path) -> Result<bool, String> {
     }
 }
 
-fn trash_path() -> Result<PathBuf, String> {
+fn trash_path(identity: &Identity) -> Result<PathBuf, String> {
     let home = match env::var_os("HOME") {
         Some(home) => home,
         None => return Err("HOME is not set".to_string()),
@@ -104,7 +115,7 @@ fn trash_path() -> Result<PathBuf, String> {
     let Some(timestamp) = repo::capture(&mut date) else {
         return Err("date failed".to_string());
     };
-    let name = format!("{} {timestamp}.app", DEVELOPMENT.application_name);
+    let name = format!("{} {timestamp}.app", identity.application_name);
     Ok(PathBuf::from(home).join(".Trash").join(name))
 }
 
