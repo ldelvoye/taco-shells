@@ -10,10 +10,11 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 // The locks are taken past a poisoning: a panic another host thread survived must not make every later send, ask or stop panic too.
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, TryLockError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use crossbeam_channel::{Receiver, SendTimeoutError, Sender, bounded};
 use taco_identity::RUNTIME_PROGRAM;
 use taco_protocol::{RuntimeAnswer, RuntimeCommand, RuntimeQuery, RuntimeReport};
 use taco_wire::launch::{self, Launch, ShellContext};
@@ -23,24 +24,30 @@ const CONTROL_FD: RawFd = 3;
 const TERMINALS_FD: RawFd = 4;
 /// Above both, so moving one connection into place cannot overwrite the other.
 const ABOVE_BOTH: RawFd = 10;
-/// Four seconds in all, which the app's quit allows for after its save. A runtime that is not wedged goes within milliseconds of `Stop`.
-const STOP_PATIENCE: StopPatience = StopPatience {
+/// The stop's steps come to four seconds in all, which the app's quit allows for after its save. A runtime that is not wedged goes within milliseconds of `Stop`.
+/// `stalled` is well past any pause of a reading runtime, whose control reader never waits on its core.
+const PATIENCE: Patience = Patience {
     send: Duration::from_millis(500),
     exit: Duration::from_millis(1500),
     after_sigterm: Duration::from_millis(1500),
     after_sigkill: Duration::from_millis(500),
+    stalled: Duration::from_secs(5),
 };
-const LOCK_RETRY: Duration = Duration::from_millis(10);
+/// Commands sent and not yet written: the workspace sends a few per action, so this many waiting means a runtime that has stopped reading, not a busy one.
+const QUEUED_COMMANDS: usize = 4096;
+const STALLED: &str = "The terminals stopped responding and were closed.";
 
-/// How long each step of a stop may take. A stop takes at most their sum.
+/// How long each step of a stop may take, and a send for room in the queue.
 #[derive(Clone, Copy)]
-struct StopPatience {
-    /// To take the connection and write `Stop`, both within this one deadline.
+struct Patience {
+    /// To queue `Stop`.
     send: Duration,
     /// For the runtime to go by itself once it has `Stop`.
     exit: Duration,
     after_sigterm: Duration,
     after_sigkill: Duration,
+    /// For room in a full queue, after which the runtime counts as dead: it is killed and reported like one that died.
+    stalled: Duration,
 }
 
 pub enum RuntimeEvent {
@@ -63,13 +70,16 @@ pub struct RuntimeStart {
 }
 
 struct Shared {
-    control: Mutex<UnixStream>,
+    /// To the thread that writes them on the control connection, in order.
+    commands: Sender<RuntimeCommand>,
+    /// Set once a send found the queue full for `Patience::stalled`, and the runtime was killed for it.
+    stalled: AtomicBool,
     pid: u32,
     next_ask: AtomicU64,
     /// Asks waiting for their answer. Taken whole, and answered with none, once the runtime is gone.
     asks: Mutex<Option<HashMap<u64, mpsc::Sender<Option<RuntimeAnswer>>>>>,
     stopping: AtomicBool,
-    patience: StopPatience,
+    patience: Patience,
     exit: Mutex<Option<ExitStatus>>,
     exited: Condvar,
 }
@@ -91,14 +101,14 @@ impl RuntimeClient {
         context: &ShellContext,
         on_event: impl FnMut(RuntimeEvent) + Send + 'static,
     ) -> io::Result<RuntimeStart> {
-        RuntimeClient::start_with(program, context, on_event, STOP_PATIENCE)
+        RuntimeClient::start_with(program, context, on_event, PATIENCE)
     }
 
     fn start_with(
         program: &Path,
         context: &ShellContext,
         on_event: impl FnMut(RuntimeEvent) + Send + 'static,
-        patience: StopPatience,
+        patience: Patience,
     ) -> io::Result<RuntimeStart> {
         let (control, control_end) = UnixStream::pair()?;
         let (terminals, terminals_end) = UnixStream::pair()?;
@@ -141,8 +151,10 @@ impl RuntimeClient {
         drop(terminals_end);
 
         let reader = control.try_clone()?;
+        let (commands, queued) = bounded(QUEUED_COMMANDS);
         let shared = Arc::new(Shared {
-            control: Mutex::new(control),
+            commands,
+            stalled: AtomicBool::new(false),
             pid: child.id(),
             next_ask: AtomicU64::new(0),
             asks: Mutex::new(Some(HashMap::new())),
@@ -172,18 +184,33 @@ impl RuntimeClient {
                 read_reports(reader, reader_shared, on_event);
             })?;
 
+        thread::Builder::new()
+            .name("write to the runtime".into())
+            .spawn(move || write_commands(control, queued))?;
+
         let client = RuntimeClient { shared };
         Ok(RuntimeStart { client, terminals })
     }
 
-    /// Dropped silently once the runtime is gone.
+    /// Queued for the writer; it waits only on a full queue, for up to `Patience::stalled`, after which the runtime is ended as stalled and later sends are dropped at once.
     pub fn send(&self, command: RuntimeCommand) {
-        let mut control = self
+        if self.shared.stalled.load(Ordering::SeqCst) {
+            return;
+        }
+        let queued = self
             .shared
-            .control
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        let _ = taco_wire::write_frame(&mut *control, &command);
+            .commands
+            .send_timeout(command, self.shared.patience.stalled);
+        if let Err(SendTimeoutError::Timeout(_)) = queued {
+            self.end_stalled();
+        }
+    }
+
+    fn end_stalled(&self) {
+        let already = self.shared.stalled.swap(true, Ordering::SeqCst);
+        if !already {
+            self.signal(libc::SIGKILL);
+        }
     }
 
     /// Receives exactly one value: the answer, or `None` once the runtime is gone, including for asks still in flight when it died.
@@ -223,34 +250,13 @@ impl RuntimeClient {
         self.wait_for_exit(patience.after_sigkill);
     }
 
-    /// Whether `Stop` went out in time. A send stuck on a full connection holds it, so a stop does not wait its turn.
+    /// Whether `Stop` was queued in time. A runtime that does not read it is signalled once the exit step runs out.
     fn send_stop(&self, patience: Duration) -> bool {
-        let deadline = Instant::now() + patience;
-        let Some(mut control) = self.control_by(deadline) else {
-            return false;
-        };
-        let left = deadline.saturating_duration_since(Instant::now());
-        if left.is_zero() {
-            return false;
-        }
-        if control.set_write_timeout(Some(left)).is_err() {
-            return false;
-        }
-        taco_wire::write_frame(&mut *control, &RuntimeCommand::Stop).is_ok()
-    }
-
-    fn control_by(&self, deadline: Instant) -> Option<MutexGuard<'_, UnixStream>> {
-        loop {
-            match self.shared.control.try_lock() {
-                Ok(control) => return Some(control),
-                Err(TryLockError::Poisoned(poisoned)) => return Some(poisoned.into_inner()),
-                Err(TryLockError::WouldBlock) => {}
-            }
-            if Instant::now() >= deadline {
-                return None;
-            }
-            thread::sleep(LOCK_RETRY);
-        }
+        let queued = self
+            .shared
+            .commands
+            .send_timeout(RuntimeCommand::Stop, patience);
+        queued.is_ok()
     }
 
     fn signal(&self, signal: libc::c_int) {
@@ -308,8 +314,27 @@ fn read_reports(
     if shared.stopping.load(Ordering::SeqCst) {
         return;
     }
+    if shared.stalled.load(Ordering::SeqCst) {
+        let reason = STALLED.to_string();
+        on_event(RuntimeEvent::Died { reason });
+        return;
+    }
     let reason = format!("The terminal runtime stopped ({}).", how_it_ended(status));
     on_event(RuntimeEvent::Died { reason });
+}
+
+/// Writes each command queued by `send`, in order, until the runtime's connection fails. A command too large for a frame is left out, since nothing of it was written.
+fn write_commands(mut control: UnixStream, queued: Receiver<RuntimeCommand>) {
+    for command in queued {
+        let written = taco_wire::write_frame(&mut control, &command);
+        let Err(error) = written else {
+            continue;
+        };
+        if error.kind() != io::ErrorKind::InvalidInput {
+            return;
+        }
+        eprintln!("a command for the runtime was not sent: {error}");
+    }
 }
 
 fn answer(shared: &Shared, ask: u64, value: Option<RuntimeAnswer>) {
@@ -339,6 +364,7 @@ fn how_it_ended(status: Option<ExitStatus>) -> String {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+    use std::time::Instant;
 
     /// A stand-in runtime. It writes whether SIGTERM is blocked in it to `<itself>.mask`, takes one byte of what it is sent, and exits with `code`.
     fn stand_in(name: &str, code: i32) -> PathBuf {
@@ -370,11 +396,13 @@ exit {code};
     }
 
     /// Short enough to keep the tests quick, long enough for a killed stand-in to be reaped.
-    const QUICK: StopPatience = StopPatience {
+    const QUICK: Patience = Patience {
         send: Duration::from_millis(300),
         exit: Duration::from_millis(300),
         after_sigterm: Duration::from_millis(300),
         after_sigkill: Duration::from_millis(1000),
+        // Past what the stop tests take, so the stall never ends a runtime they mean to stop.
+        stalled: Duration::from_secs(30),
     };
     /// What a busy machine may add to the steps' own waits.
     const SCHEDULING: Duration = Duration::from_millis(300);
@@ -410,7 +438,7 @@ exit {code};
     }
 
     #[test]
-    fn a_stop_ends_a_runtime_that_reads_nothing_while_a_send_is_stuck() {
+    fn a_stop_ends_a_runtime_that_reads_nothing_while_a_send_waits_for_room() {
         let program = program("reads-nothing", "#!/bin/sh\nexec sleep 999\n");
         let started = started_quick(&program);
         let sender = started.client.clone();
@@ -419,25 +447,47 @@ exit {code};
                 sender.send(RuntimeCommand::Scrollback { lines });
             }
         });
-        // Long enough for the connection to fill and the sender to stick, holding it.
+        // Long enough for the connection and the queue to fill, so the sender waits for room.
         thread::sleep(Duration::from_millis(200));
         let exit = stopped_in_time(&started.client);
         assert!(exit.is_some(), "the runtime is gone");
     }
 
     #[test]
-    fn a_stop_ends_a_runtime_that_reads_nothing_once_its_connection_is_full() {
-        let program = program("reads-nothing-full", "#!/bin/sh\nexec sleep 999\n");
-        let started = started_quick(&program);
-        {
-            let mut control = started.client.shared.control.lock().unwrap();
-            control.set_nonblocking(true).unwrap();
-            let filler = [0u8; 4096];
-            while io::Write::write(&mut *control, &filler).is_ok() {}
-            control.set_nonblocking(false).unwrap();
+    fn a_runtime_that_stops_reading_is_ended_and_reported_once_one_send_has_waited() {
+        let program = program("stops-reading", "#!/bin/sh\nexec sleep 999\n");
+        let (events, received) = mpsc::channel();
+        let patience = Patience {
+            stalled: Duration::from_millis(300),
+            ..QUICK
+        };
+        let report = move |event| {
+            let _ = events.send(event);
+        };
+        let started =
+            RuntimeClient::start_with(&program, &test_context(), report, patience).unwrap();
+
+        // Far more than the queue and the connection hold together.
+        let began = Instant::now();
+        for lines in 0..100_000 {
+            started.client.send(RuntimeCommand::Scrollback { lines });
         }
-        let exit = stopped_in_time(&started.client);
-        assert!(exit.is_some(), "the runtime is gone");
+        let took = began.elapsed();
+        assert!(
+            took >= patience.stalled,
+            "a full queue is waited on first: {took:?}"
+        );
+        let bound = patience.stalled + SCHEDULING;
+        assert!(took <= bound, "one send waits, and none after it: {took:?}");
+
+        let event = received.recv_timeout(Duration::from_secs(10)).unwrap();
+        let RuntimeEvent::Died { reason } = event else {
+            panic!("the runtime is reported as dead");
+        };
+        assert_eq!(reason, STALLED);
+        let exit = *started.client.shared.exit.lock().unwrap();
+        let killed_by = exit.and_then(|status| status.signal());
+        assert_eq!(killed_by, Some(libc::SIGKILL));
     }
 
     #[test]
