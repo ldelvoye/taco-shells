@@ -7,7 +7,8 @@ use gpui::{
     StatefulInteractiveElement, Styled, div, px, svg,
 };
 use taco_protocol::{
-    ActivityEntry, ActivityEvent, ActivityKind, AgentRow, HarnessId, RowState, TerminalId,
+    ActivityEntry, ActivityEvent, ActivityKind, AgentRow, Board, HarnessId, Peer, RowState, Step,
+    TerminalId,
 };
 use taco_services::{AgentSetupNotice, AgentSetupNoticeKind};
 
@@ -68,6 +69,7 @@ pub struct ActivityLog {
     pub entries: Vec<ActivityEntry>,
     /// Whether nothing older than the entries held is left to ask for.
     pub complete: bool,
+    pub board: Board,
 }
 
 /// Everything one drawing of the panel reads.
@@ -90,13 +92,22 @@ impl ActivityLog {
                 terminal,
                 entries,
                 complete,
+                board,
             } => {
                 if !self.watches(&terminal) {
                     return;
                 }
                 self.entries = entries;
                 self.complete = complete;
+                self.board = board;
             }
+            ActivityEvent::BoardChanged { terminal, board } => {
+                if !self.watches(&terminal) {
+                    return;
+                }
+                self.board = board;
+            }
+            ActivityEvent::Body { .. } => {}
             ActivityEvent::Older {
                 terminal,
                 entries,
@@ -225,19 +236,26 @@ fn no_agent_for(input: &ActivityInput) -> NoAgentLine {
     }
 }
 
-fn fold_of(kind: &ActivityKind) -> Option<Fold> {
+fn step_of(kind: &ActivityKind) -> Option<&Step> {
     match kind {
-        ActivityKind::Did { tool, .. } if tool == "Read" => Some(Fold::Read),
-        ActivityKind::Changed { .. } => Some(Fold::Changed),
+        ActivityKind::Step { step, .. } => Some(step),
         _ => None,
     }
 }
 
-fn item_of(kind: &ActivityKind) -> &str {
-    match kind {
-        ActivityKind::Asked { text } => text,
-        ActivityKind::Did { summary, .. } => summary,
-        ActivityKind::Changed { path, .. } => path,
+fn fold_of(kind: &ActivityKind) -> Option<Fold> {
+    let step = step_of(kind)?;
+    match step {
+        Step::Did { tool, .. } if tool == "Read" => Some(Fold::Read),
+        Step::Changed { .. } => Some(Fold::Changed),
+        Step::Did { .. } => None,
+    }
+}
+
+fn item_of(step: &Step) -> &str {
+    match step {
+        Step::Did { summary, .. } => summary,
+        Step::Changed { path, .. } => path,
     }
 }
 
@@ -272,7 +290,8 @@ fn line_of(run: &[ActivityEntry]) -> LogLine {
             Fold::Changed => "Changed",
         };
         text = format!("{verb} {} files", run.len());
-        let items = run.iter().map(|entry| item_of(&entry.kind).to_string());
+        let steps = run.iter().filter_map(|entry| step_of(&entry.kind));
+        let items = steps.map(|step| item_of(step).to_string());
         detail = items.collect();
     }
     LogLine {
@@ -286,14 +305,36 @@ fn line_of(run: &[ActivityEntry]) -> LogLine {
 fn single_text(kind: &ActivityKind) -> String {
     match kind {
         ActivityKind::Asked { text } => format!("You asked: {text}"),
-        ActivityKind::Did { tool, summary } => match tool.as_str() {
+        ActivityKind::MessageIn { text } => format!("A message: {text}"),
+        ActivityKind::MessageOut { to, text, .. } => format!("To {}: {text}", peer_name(to)),
+        ActivityKind::Note { text, .. } => text.clone(),
+        ActivityKind::Shared { title, .. } => format!("Shared {title}"),
+        ActivityKind::Step { step, .. } => step_text(step),
+        ActivityKind::AskedForNote => "The app asked for a note".to_string(),
+        ActivityKind::SessionStarted { .. } => "A new session".to_string(),
+    }
+}
+
+fn step_text(step: &Step) -> String {
+    match step {
+        Step::Did { tool, summary } => match tool.as_str() {
             "Bash" => format!("Ran {summary}"),
             "Read" => format!("Read {summary}"),
             "Grep" | "Glob" => format!("Searched for {summary}"),
             _ => format!("{tool}: {summary}"),
         },
-        ActivityKind::Changed { path, .. } => format!("Changed {path}"),
+        Step::Changed { path, .. } => format!("Changed {path}"),
     }
+}
+
+fn peer_name(peer: &Peer) -> String {
+    if let Some(name) = &peer.name {
+        return name.clone();
+    }
+    if let Some(address) = &peer.address {
+        return address.clone();
+    }
+    "another agent".to_string()
 }
 
 fn local_time(ms: u64) -> Option<DateTime<Local>> {
@@ -545,30 +586,33 @@ fn with_files(
 
 #[cfg(test)]
 mod tests {
+    use taco_protocol::Author;
+
     use super::*;
 
-    fn did(seq: u64, tool: &str, summary: &str) -> ActivityEntry {
-        let kind = ActivityKind::Did {
-            tool: tool.to_string(),
-            summary: summary.to_string(),
-        };
+    fn step(seq: u64, step: Step) -> ActivityEntry {
         ActivityEntry {
             seq,
             at_ms: seq * 1000,
-            kind,
+            author: Author::App,
+            kind: ActivityKind::Step { stretch: seq, step },
         }
     }
 
+    fn did(seq: u64, tool: &str, summary: &str) -> ActivityEntry {
+        let did = Step::Did {
+            tool: tool.to_string(),
+            summary: summary.to_string(),
+        };
+        step(seq, did)
+    }
+
     fn changed(seq: u64, path: &str) -> ActivityEntry {
-        let kind = ActivityKind::Changed {
+        let changed = Step::Changed {
             tool: "Edit".to_string(),
             path: path.to_string(),
         };
-        ActivityEntry {
-            seq,
-            at_ms: seq * 1000,
-            kind,
-        }
+        step(seq, changed)
     }
 
     fn asked(seq: u64, text: &str) -> ActivityEntry {
@@ -578,6 +622,7 @@ mod tests {
         ActivityEntry {
             seq,
             at_ms: seq * 1000,
+            author: Author::User,
             kind,
         }
     }
@@ -651,6 +696,7 @@ mod tests {
             terminal: watched.clone(),
             entries: page([5, 6]),
             complete: false,
+            board: Board::default(),
         });
         let older = ActivityEvent::Older {
             terminal: watched.clone(),
@@ -667,15 +713,29 @@ mod tests {
             terminal: other.clone(),
             entry: did(7, "Bash", "ls"),
         });
+        let board = |now: &str| Board {
+            now: Some(now.to_string()),
+            shared: Vec::new(),
+        };
         log.apply(ActivityEvent::Loaded {
-            terminal: other,
+            terminal: other.clone(),
             entries: page([1, 2]),
             complete: true,
+            board: board("Elsewhere"),
+        });
+        log.apply(ActivityEvent::BoardChanged {
+            terminal: watched,
+            board: board("Fixing the logo"),
+        });
+        log.apply(ActivityEvent::BoardChanged {
+            terminal: other,
+            board: board("Elsewhere"),
         });
 
         let held: Vec<u64> = log.entries.iter().map(|entry| entry.seq).collect();
         assert_eq!(held, [3, 4, 5, 6]);
         assert!(log.complete);
+        assert_eq!(log.board, board("Fixing the logo"));
     }
 
     #[test]

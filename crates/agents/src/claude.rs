@@ -1,7 +1,7 @@
 use serde_json::Value;
-use taco_protocol::{ActivityKind, AgentSignal};
+use taco_protocol::{AgentSignal, Step};
 
-use crate::harness::{AgentTitle, Harness, HarnessSetup, HookEntry};
+use crate::harness::{AgentTitle, EntryRead, Harness, HarnessSetup, HookEntry};
 
 const ASKING_TOOL: &str = "AskUserQuestion";
 // ExitPlanMode needs you too, but asks no question in words: the window says a plan waits.
@@ -222,12 +222,12 @@ fn summary_of(tool: &str, parsed: &Value) -> String {
     }
 }
 
-fn entry_of(event: &str, payload: &str) -> Option<ActivityKind> {
+fn entry_of(event: &str, payload: &str) -> Option<EntryRead> {
     let parsed: Value = serde_json::from_str(payload).ok()?;
     match event {
         "UserPromptSubmit" => {
             let text = text_at(&parsed, "/prompt")?;
-            Some(ActivityKind::Asked { text })
+            Some(EntryRead::Asked { text })
         }
         // logged once a tool has run, so one the user refused never shows as done
         "PostToolUse" => {
@@ -236,10 +236,10 @@ fn entry_of(event: &str, payload: &str) -> Option<ActivityKind> {
             let path = paths.find_map(|pointer| text_at(&parsed, pointer));
             let changes_files = CHANGING_TOOLS.contains(&tool.as_str());
             if changes_files && let Some(path) = path {
-                return Some(ActivityKind::Changed { tool, path });
+                return Some(EntryRead::Step(Step::Changed { tool, path }));
             }
             let summary = summary_of(&tool, &parsed);
-            Some(ActivityKind::Did { tool, summary })
+            Some(EntryRead::Step(Step::Did { tool, summary }))
         }
         _ => None,
     }
@@ -401,18 +401,22 @@ mod tests {
     #[test]
     fn a_prompt_a_finished_tool_and_a_changed_file_each_make_an_entry_and_nothing_else_does() {
         let entry = |event: &str, payload: &str| entry_of(event, payload);
-        let did = |tool: &str, summary: &str| ActivityKind::Did {
-            tool: tool.into(),
-            summary: summary.into(),
+        let did = |tool: &str, summary: &str| {
+            EntryRead::Step(Step::Did {
+                tool: tool.into(),
+                summary: summary.into(),
+            })
         };
-        let changed = |tool: &str, path: &str| ActivityKind::Changed {
-            tool: tool.into(),
-            path: path.into(),
+        let changed = |tool: &str, path: &str| {
+            EntryRead::Step(Step::Changed {
+                tool: tool.into(),
+                path: path.into(),
+            })
         };
 
         let prompt =
             r#"{"hook_event_name":"UserPromptSubmit","prompt":"  Fix the tacos\nplease  "}"#;
-        let asked = ActivityKind::Asked {
+        let asked = EntryRead::Asked {
             text: "Fix the tacos\nplease".into(),
         };
         assert_eq!(entry("UserPromptSubmit", prompt), Some(asked));
@@ -469,7 +473,8 @@ mod tests {
             r#"{{"tool_name":"Bash","tool_input":{{"command":"{}"}}}}"#,
             "y".repeat(5_000)
         );
-        let Some(ActivityKind::Did { summary, .. }) = entry("PostToolUse", &long_command) else {
+        let Some(EntryRead::Step(Step::Did { summary, .. })) = entry("PostToolUse", &long_command)
+        else {
             panic!("a command makes an entry");
         };
         assert_eq!(summary.chars().count(), MAX_ENTRY_CHARACTERS);

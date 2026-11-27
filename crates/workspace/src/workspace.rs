@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use taco_agents::{HARNESSES, default_harness, harness_of};
+use taco_agents::{EntryRead, HARNESSES, default_harness, harness_of};
 use taco_protocol::{
     ActivityEntry, ActivityEvent, ActivityKind, ActivityRequest, AgentLabel, AgentSignal,
-    Arrangement, ConfigFile, DrawnState, HarnessId, HookCall, HookEvent, Panels, RequestReply, Row,
-    RowState, RuntimeCommand, RuntimeReport, TabGroup, TabGroupId, TerminalId, TerminalSize,
-    TerminalStart, WorkspaceRequest,
+    Arrangement, Author, Board, ConfigFile, DrawnState, HarnessId, HookCall, HookEvent, Panels,
+    RequestReply, Row, RowState, RuntimeCommand, RuntimeReport, TabGroup, TabGroupId, TerminalId,
+    TerminalSize, TerminalStart, WorkspaceRequest,
 };
 use taco_rules::{
     add_row, add_row_to, apply_drop, can_fork, close_panel, close_row, create_tab_group,
@@ -314,6 +314,7 @@ impl Workspace {
                     terminal,
                     entries: page.entries,
                     complete: page.complete,
+                    board: Board::default(),
                 }
             }
             ActivityRequest::Older { terminal, before } => {
@@ -326,6 +327,17 @@ impl Workspace {
                     terminal,
                     entries: page.entries,
                     complete: page.complete,
+                }
+            }
+            // no shared text is kept, so no body is sent
+            ActivityRequest::Body { terminal, thing } => {
+                if !self.holds(&terminal) {
+                    return Vec::new();
+                }
+                ActivityEvent::Body {
+                    terminal,
+                    thing,
+                    body: None,
                 }
             }
         };
@@ -699,8 +711,8 @@ impl Workspace {
                 if let Some(question) = agent.question_of(&event, &payload) {
                     apply_question(&mut self.rows, terminal, &session_id, question);
                 }
-                if let Some(kind) = agent.entry_of(&event, &payload) {
-                    self.log_entry(terminal, kind, now_ms, out);
+                if let Some(read) = agent.entry_of(&event, &payload) {
+                    self.log_entry(terminal, read, now_ms, out);
                 }
             }
         }
@@ -710,12 +722,18 @@ impl Workspace {
     fn log_entry(
         &mut self,
         terminal: &TerminalId,
-        kind: ActivityKind,
+        read: EntryRead,
         now_ms: u64,
         out: &mut Vec<Outbound>,
     ) {
         let log = loaded_log(&mut self.logs, self.options.storage.as_ref(), terminal);
-        let entry = log.append(kind, now_ms);
+        let entry = match read {
+            EntryRead::Asked { text } => {
+                let asked = ActivityKind::Asked { text };
+                log.append(Author::User, asked, now_ms)
+            }
+            EntryRead::Step(step) => log.append_step(step, now_ms),
+        };
         let rewrite = log.needs_rewrite();
         let storage = self.options.storage.as_mut();
         let succeeded = write_log(storage, terminal, log, &entry, rewrite);

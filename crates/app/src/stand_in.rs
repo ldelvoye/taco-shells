@@ -8,8 +8,8 @@ use std::rc::Rc;
 use futures::channel::mpsc::unbounded;
 use serde_json::Map;
 use taco_protocol::{
-    ActivityEntry, ActivityEvent, ActivityRequest, Arrangement, DrawnState, HarnessId, Panels,
-    RequestReply, TabGroupId, TerminalId, WorkspaceRequest,
+    ActivityEntry, ActivityEvent, ActivityRequest, Arrangement, Board, DrawnState, HarnessId,
+    Panels, RequestReply, TabGroupId, TerminalId, WorkspaceRequest,
 };
 use taco_rules::{
     add_row_to, apply_drop, close_panel, close_row, create_tab_group, fork_row, move_panel,
@@ -227,6 +227,7 @@ impl WorkspacePort for StandIn {
                     terminal,
                     entries,
                     complete,
+                    board: Board::default(),
                 }
             }
             ActivityRequest::Older { terminal, before } => {
@@ -237,6 +238,11 @@ impl WorkspacePort for StandIn {
                     complete,
                 }
             }
+            ActivityRequest::Body { terminal, thing } => ActivityEvent::Body {
+                terminal,
+                thing,
+                body: None,
+            },
         };
         self.publish(WindowOutput::Activity(event));
     }
