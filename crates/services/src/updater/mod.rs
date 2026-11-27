@@ -393,10 +393,7 @@ fn fetch_and_unpack(
         }
     }
 
-    let verified = verify_release(release, &zip, staging, feed, keys);
-    if let Err(refusal) = verified {
-        return Err(UpdateError::Refused(refusal));
-    }
+    verify_release(release, &zip, staging, feed, keys)?;
 
     let extracted = extract_zip(&zip, staging);
     if let Err(error) = extracted {
@@ -1502,8 +1499,8 @@ mod tests {
         assert!(matches!(no_asset, Err(UpdateError::Refused(_))));
 
         let no_download = zip_feed(json!(null), &zip, silent.clone());
-        let missing = download_and_extract(&release, &updates, &no_download, &key.keys);
-        assert!(matches!(missing, Err(UpdateError::Refused(_))));
+        let not_fetched = download_and_extract(&release, &updates, &no_download, &key.keys);
+        assert!(matches!(not_fetched, Err(UpdateError::Failed(_))));
 
         let no_keys = download_and_extract(&release, &updates, &signed(&signature), &[]);
         assert!(matches!(no_keys, Err(UpdateError::Refused(_))));
@@ -1533,7 +1530,7 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_signature_is_shown_once_per_version() {
+    fn a_refused_signature_is_shown_once_per_version_and_a_failed_fetch_never() {
         let temp = tempfile::TempDir::new().unwrap();
         let updates = temp.path().join("updates");
         let zip_directory = temp.path().join("zip");
@@ -1541,12 +1538,20 @@ mod tests {
         let size = file_size(&zip);
         let (silent, _calls) = mpsc::channel();
         let first = release_payload("v1.0.1", "taco-shells-1.0.1-arm64.zip", json!(size));
-        let feed = zip_feed(first, &zip, silent);
-        let release = Arc::clone(&feed.release);
         let key = shared_key(temp.path());
         let (host, received, _quit_called) = recording_host(temp.path().join("taco"));
         let shared = Shared::new(None, host, key.keys.clone());
 
+        let unreachable = zip_feed(first.clone(), &zip, silent.clone());
+        run_check(&shared, &updates, "1.0.0", &unreachable);
+        let events: Vec<UpdateEvent> = received.try_iter().collect();
+        assert_eq!(events, Vec::<UpdateEvent>::new());
+        assert_eq!(child_names(&updates), Vec::<String>::new());
+
+        let bad_signature = temp.path().join("bad.sig");
+        fs::write(&bad_signature, "not a signature").unwrap();
+        let feed = zip_feed(first, &zip, silent).with_signature(&bad_signature);
+        let release = Arc::clone(&feed.release);
         run_check(&shared, &updates, "1.0.0", &feed);
         run_check(&shared, &updates, "1.0.0", &feed);
 
