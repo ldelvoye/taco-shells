@@ -1,16 +1,3 @@
-// Every keybindings.json seeded before these were retired holds them, so they bind nothing and report nothing.
-pub const RETIRED_COMMAND_IDS: [&str; 9] = [
-    "terminal.split",
-    "terminal.focusNextPane",
-    "terminal.focusPreviousPane",
-    "terminal.colorRed",
-    "terminal.colorOrange",
-    "terminal.colorYellow",
-    "terminal.colorGreen",
-    "terminal.colorBlue",
-    "terminal.colorPurple",
-];
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CommandId {
     TerminalNew,
@@ -83,8 +70,4 @@ impl CommandId {
             CommandId::TerminalWordLeft | CommandId::TerminalWordRight
         )
     }
-}
-
-pub fn is_retired(id: &str) -> bool {
-    RETIRED_COMMAND_IDS.contains(&id)
 }

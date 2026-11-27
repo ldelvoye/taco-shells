@@ -7,8 +7,6 @@ const FONT_SIZE_REQUIREMENT: &str = "must be a number between 1 and 72";
 const SCROLLBACK_REQUIREMENT: &str = "must be a whole number of lines, 0 or more";
 const SCROLL_SENSITIVITY_REQUIREMENT: &str = "must be a number greater than 0";
 const BOOLEAN_REQUIREMENT: &str = "must be true or false";
-// Keys an older version wrote: read without a problem line and ignored.
-const RETIRED_SETTING_KEYS: [&str; 1] = ["manageAgentHooks"];
 
 pub const FONT_SIZE_MIN: f64 = 1.0;
 pub const FONT_SIZE_MAX: f64 = 72.0;
@@ -399,10 +397,6 @@ pub fn apply_settings_layer(
     let templates = SettingChange::all(&defaults);
 
     for (key, value) in layer {
-        let is_retired = RETIRED_SETTING_KEYS.contains(&key.as_str());
-        if is_retired {
-            continue;
-        }
         let Some(template) = template_for(&templates, key) else {
             problems.push(format!("{label}: \"{key}\" is not a setting"));
             continue;
@@ -498,12 +492,6 @@ mod tests {
             "settings.json: \"shellRowName\" must be \"folder\" or \"path\""
         );
         assert_eq!(result.rejected, ["shellRowName", "fontSize"]);
-
-        let retired = layer_from(json!({ "manageAgentHooks": false }));
-        let result = apply_settings_layer(&base, &retired, "settings.json");
-        assert!(result.problems.is_empty(), "{:?}", result.problems);
-        assert!(result.rejected.is_empty());
-        assert_eq!(result.settings, base);
 
         for (key, bad) in [
             ("fontSize", json!(73)),

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
-use crate::commands::{CommandId, is_retired};
+use crate::commands::CommandId;
 
 const NAMED_KEYS: [&str; 26] = [
     "space",
@@ -200,15 +200,6 @@ fn apply_keymap_layer(
             continue;
         }
 
-        let is_retired_id = match value.as_str() {
-            Some(id) => is_retired(id),
-            None => false,
-        };
-        if is_retired_id {
-            bindings.remove(&canonical);
-            continue;
-        }
-
         let shown = command_text(value);
         problems.push(format!(
             "{label}: \"{chord_text}\": \"{shown}\" is not a known command id"
@@ -309,19 +300,16 @@ mod tests {
     }
 
     #[test]
-    fn user_layer_overrides_unbinds_and_retires_without_losing_other_bindings() {
+    fn user_layer_overrides_and_unbinds_without_losing_other_bindings() {
         let defaults = map_from(json!({
             "cmd+k": "terminal.clear",
             "cmd+b": "sidebar.toggle",
-            "cmd+\\": "terminal.split",
             "cmd+w": "terminal.close",
             "cmd+n": "terminal.new"
         }));
         let user = map_from(json!({
             "Command+K": "terminal.copy",
             "cmd+b": null,
-            "cmd+w": "terminal.focusNextPane",
-            "cmd+opt+1": "terminal.colorRed",
             "cmd+t": "terminal.teleport",
             "cmd+shift+7": 7,
             "cmd+cmd+x": "terminal.new"
@@ -334,9 +322,10 @@ mod tests {
             Some(CommandId::TerminalCopy)
         );
         assert_eq!(command_at(&resolution, "cmd+b"), None);
-        assert_eq!(command_at(&resolution, "cmd+\\"), None);
-        assert_eq!(command_at(&resolution, "cmd+w"), None);
-        assert_eq!(command_at(&resolution, "cmd+opt+1"), None);
+        assert_eq!(
+            command_at(&resolution, "cmd+w"),
+            Some(CommandId::TerminalClose)
+        );
         assert_eq!(
             command_at(&resolution, "cmd+n"),
             Some(CommandId::TerminalNew)

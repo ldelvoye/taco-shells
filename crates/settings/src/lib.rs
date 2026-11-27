@@ -8,7 +8,7 @@ mod keys;
 mod settings;
 mod theme;
 
-pub use commands::{CommandId, RETIRED_COMMAND_IDS, is_retired};
+pub use commands::CommandId;
 pub use config::{
     Config, ConfigTexts, DEFAULT_KEYBINDINGS_TEXT, DEFAULT_SETTINGS_TEXT, KEYBINDINGS_FILE_NAME,
     SETTINGS_FILE_NAME, UnreadSettings, resolve_config,
