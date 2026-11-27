@@ -1,6 +1,7 @@
 use taco_protocol::{AgentSignal, HarnessId, Peer, PrState, SharedTarget, StartSource, Step};
 
-type Version = (u32, u32, u32);
+/// A version as major, minor and patch: (2, 1, 280).
+pub type Version = (u32, u32, u32);
 
 /// Where a step was taken: the agent's turn, by its id, and whether one of the agent's subagents took it.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -93,9 +94,10 @@ pub struct HarnessSetup {
     pub settings_file: &'static str,
     pub plugin_variable: &'static str,
     pub version_flag: &'static str,
-    pub minimum_version: (u32, u32, u32),
+    pub minimum_version: Version,
 }
 
+/// What the listener reads from every hook payload.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HookFields {
     pub session_id: String,
@@ -183,21 +185,25 @@ impl Harness {
         reader(event, payload)
     }
 
+    /// The environment variable the agent reads its plugin folders from: `CLAUDE_CODE_PLUGIN_DIRS`.
     pub fn plugin_variable(&self) -> Option<&'static str> {
         let setup = self.setup?;
         Some(setup.plugin_variable)
     }
 
-    pub fn version_of(&self, output: &str) -> Option<(u32, u32, u32)> {
+    /// The version the agent's version output states, or none when it states none.
+    pub fn version_of(&self, output: &str) -> Option<Version> {
         let reader = self.version_reader?;
         reader(output)
     }
 
+    /// The fields of a hook's payload the listener routes by, or none when it names no session.
     pub fn hook_fields(&self, payload: &str) -> Option<HookFields> {
         let reader = self.hook_reader?;
         reader(payload)
     }
 
+    /// How a session started, from the agent's own word for it; a word it does not know counts as a new session.
     pub fn start_source(&self, source: &str) -> StartSource {
         let Some(reader) = self.start_source_reader else {
             return StartSource::New;

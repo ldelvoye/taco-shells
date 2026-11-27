@@ -256,7 +256,7 @@ impl Workspace {
         if !self.holds_known_agent(terminal, harness) {
             return (None, out);
         }
-        let Some(known) = taco_agents::harness_of(&harness.0) else {
+        let Some(known) = harness_of(&harness.0) else {
             return (None, out);
         };
         let started = known.start_source(source);

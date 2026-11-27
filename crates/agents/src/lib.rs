@@ -10,6 +10,7 @@ pub use claude::{
 };
 pub use harness::{
     AgentTitle, EntryRead, Found, Harness, HarnessSetup, HookFields, PullRequestSeen, StepContext,
+    Version,
 };
 
 /// What ends a text the app cut to fit, in the log and in what it hands an agent.

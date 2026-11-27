@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use taco_agents::{HARNESSES, Harness};
+use taco_agents::{HARNESSES, Harness, Version};
 use taco_protocol::{HarnessId, TerminalId};
 
 use crate::agent_flow::{
@@ -32,7 +32,6 @@ const VERSION_THREAD_NAME: &str = "agent-version";
 const NO_PROGRAM_PROBLEM: &str = "The app's own plugin program could not be found.";
 
 type ForegroundCommands = Box<dyn Fn(&TerminalId) -> Vec<String> + Send + Sync>;
-type Version = (u32, u32, u32);
 type VersionFinder = Box<dyn Fn() -> Option<Version> + Send + Sync>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
