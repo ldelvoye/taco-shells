@@ -124,6 +124,14 @@ pub fn parse_chord(input: &str) -> Option<Chord> {
 }
 
 pub fn format_chord(chord: &Chord) -> String {
+    chord_text(chord, "alt")
+}
+
+pub(crate) fn file_chord_text(chord: &Chord) -> String {
+    chord_text(chord, "opt")
+}
+
+fn chord_text(chord: &Chord, option_word: &str) -> String {
     let mut parts: Vec<&str> = Vec::new();
     if chord.cmd {
         parts.push("cmd");
@@ -132,7 +140,7 @@ pub fn format_chord(chord: &Chord) -> String {
         parts.push("ctrl");
     }
     if chord.alt {
-        parts.push("alt");
+        parts.push(option_word);
     }
     if chord.shift {
         parts.push("shift");
