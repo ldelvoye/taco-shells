@@ -1,8 +1,9 @@
 use std::fs;
 use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -17,10 +18,19 @@ pub fn parse_version(output: &str) -> Option<(u32, u32, u32)> {
     let first_line = output.lines().next()?;
     let first_word = first_line.split_whitespace().next()?;
     let mut numbers = first_word.split('.');
-    let major = numbers.next()?.parse().ok()?;
-    let minor = numbers.next()?.parse().ok()?;
-    let patch = numbers.next()?.parse().ok()?;
+    let major_text = numbers.next()?;
+    let minor_text = numbers.next()?;
+    let patch_text = numbers.next()?;
+    let major = major_text.parse().ok()?;
+    let minor = minor_text.parse().ok()?;
+    let patch_digits = leading_digits(patch_text);
+    let patch = patch_digits.parse().ok()?;
     Some((major, minor, patch))
+}
+
+fn leading_digits(text: &str) -> &str {
+    let digit_count = text.chars().take_while(char::is_ascii_digit).count();
+    &text[..digit_count]
 }
 
 pub fn is_too_old(version: (u32, u32, u32)) -> bool {
@@ -31,7 +41,9 @@ fn is_executable_file(path: &Path) -> bool {
     let Ok(metadata) = fs::metadata(path) else {
         return false;
     };
-    metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+    let mode = metadata.permissions().mode();
+    let runnable = mode & 0o111 != 0;
+    metadata.is_file() && runnable
 }
 
 fn node_directory_version(name: &str) -> Option<(u32, u32, u32)> {
@@ -75,7 +87,8 @@ fn run_for_output(program: &Path, arguments: &[&str]) -> Option<String> {
     command
         .stdout(Stdio::piped())
         .stdin(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(Stdio::null())
+        .process_group(0);
     let mut child = command.spawn().ok()?;
     let mut stdout = child.stdout.take()?;
     let (sender, received) = mpsc::channel();
@@ -95,14 +108,12 @@ fn run_for_output(program: &Path, arguments: &[&str]) -> Option<String> {
             Ok(Some(_)) => break,
             Ok(None) => {}
             Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                end_group(&mut child);
                 return None;
             }
         }
         if started.elapsed() >= RUN_LIMIT {
-            let _ = child.kill();
-            let _ = child.wait();
+            end_group(&mut child);
             return None;
         }
         thread::sleep(POLL_INTERVAL);
@@ -113,16 +124,34 @@ fn run_for_output(program: &Path, arguments: &[&str]) -> Option<String> {
     received.recv_timeout(left).ok()
 }
 
-fn login_shell_claude() -> Option<PathBuf> {
-    let shell = std::env::var_os("SHELL")?;
-    let shell = PathBuf::from(shell);
-    let output = run_for_output(&shell, &["-l", "-c", "command -v claude"])?;
-    let first_line = output.lines().next()?;
-    let found = PathBuf::from(first_line.trim());
-    if found.is_file() {
+fn end_group(child: &mut Child) {
+    let group = child.id() as libc::pid_t;
+    // The child was started as the leader of its own group, so this reaches only what it started.
+    unsafe {
+        libc::killpg(group, libc::SIGKILL);
+    }
+    let _ = child.wait();
+}
+
+fn last_executable_line(output: &str) -> Option<PathBuf> {
+    let mut lines = output.lines();
+    let last = lines.rfind(|line| !line.trim().is_empty())?;
+    let found = PathBuf::from(last.trim());
+    if is_executable_file(&found) {
         return Some(found);
     }
     None
+}
+
+fn login_shell() -> Option<PathBuf> {
+    let shell = std::env::var_os("SHELL")?;
+    Some(PathBuf::from(shell))
+}
+
+fn login_shell_claude() -> Option<PathBuf> {
+    let shell = login_shell()?;
+    let output = run_for_output(&shell, &["-l", "-c", "command -v claude"])?;
+    last_executable_line(&output)
 }
 
 pub fn find_claude(home: &Path) -> Option<PathBuf> {
@@ -148,8 +177,20 @@ pub fn find_claude(home: &Path) -> Option<PathBuf> {
 }
 
 pub fn claude_version(claude: &Path) -> Option<(u32, u32, u32)> {
-    let output = run_for_output(claude, &["--version"])?;
-    parse_version(&output)
+    let direct = run_for_output(claude, &["--version"]);
+    if let Some(output) = direct {
+        let version = parse_version(&output);
+        if version.is_some() {
+            return version;
+        }
+    }
+
+    // A claude installed through npm or nvm is a node script, and the app's own PATH may not reach node.
+    let shell = login_shell()?;
+    let claude_text = claude.to_str()?;
+    let arguments = ["-l", "-c", "\"$1\" --version", "taco-shells", claude_text];
+    let through_shell = run_for_output(&shell, &arguments)?;
+    parse_version(&through_shell)
 }
 
 #[cfg(test)]
@@ -168,6 +209,21 @@ mod tests {
         assert_eq!(parse_version("10.0.1\n"), Some((10, 0, 1)));
         assert_eq!(parse_version("Claude Code"), None);
         assert_eq!(parse_version(""), None);
+        assert_eq!(parse_version("2.1.332-beta.1"), Some((2, 1, 332)));
+    }
+
+    #[test]
+    fn the_login_shells_answer_is_its_last_line() {
+        let directory = tempfile::tempdir().unwrap();
+        let claude = directory.path().join("claude");
+        executable_file(&claude, "");
+        let shown = claude.display();
+        let with_banner = format!("Now using node v18\nWelcome back\n{shown}\n\n");
+
+        let found = last_executable_line(&with_banner);
+
+        assert_eq!(found, Some(claude));
+        assert_eq!(last_executable_line("Welcome back\n"), None);
     }
 
     #[test]
@@ -194,7 +250,7 @@ mod tests {
     fn a_process_that_outlives_the_limit_is_killed_and_yields_nothing() {
         let directory = tempfile::tempdir().unwrap();
         let script = directory.path().join("slow");
-        executable_file(&script, "#!/bin/sh\nexec sleep 10\n");
+        executable_file(&script, "#!/bin/sh\nsleep 10 &\nwait\n");
 
         let started = Instant::now();
         let output = run_for_output(&script, &[]);

@@ -5140,6 +5140,7 @@ name = "taco-services"
 version = "0.0.0"
 dependencies = [
  "jsonc-parser",
+ "libc",
  "notify",
  "plist",
  "serde_json",

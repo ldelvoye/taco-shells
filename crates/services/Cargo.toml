@@ -16,6 +16,7 @@ ureq.workspace = true
 plist.workspace = true
 uuid.workspace = true
 taco-plugin.workspace = true
+libc.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
