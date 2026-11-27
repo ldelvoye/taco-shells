@@ -7,8 +7,9 @@ use std::time::Duration;
 use taco_protocol::{TerminalId, TerminalSize};
 use taco_runtime::budget::Budgets;
 use taco_runtime::core::Input;
-use taco_runtime::pty::{PtyShells, ShellContext, ShellProgram};
+use taco_runtime::pty::{PtyShells, ShellProgram};
 use taco_runtime::shells::Shells;
+use taco_wire::launch::ShellContext;
 
 const SIZE: TerminalSize = TerminalSize { cols: 80, rows: 24 };
 const PATIENCE: Duration = Duration::from_secs(5);
