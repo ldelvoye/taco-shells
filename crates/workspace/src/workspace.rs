@@ -4,8 +4,8 @@ use taco_agents::{EntryRead, Found, HARNESSES, PullRequestSeen, default_harness,
 use taco_protocol::{
     ActivityEntry, ActivityEvent, ActivityKind, ActivityRequest, AgentLabel, AgentSignal,
     Arrangement, Author, Board, ConfigFile, DrawnState, HarnessId, HookCall, HookEvent, Panels,
-    RequestReply, Row, RowState, RuntimeCommand, RuntimeReport, SharedThing, TabGroup, TabGroupId,
-    TerminalId, TerminalSize, TerminalStart, WorkspaceRequest,
+    RequestReply, Row, RowState, RuntimeCommand, RuntimeReport, SharedThing, StartSource, TabGroup,
+    TabGroupId, TerminalId, TerminalSize, TerminalStart, WorkspaceRequest,
 };
 use taco_rules::{
     add_row, add_row_to, apply_drop, can_fork, close_panel, close_row, create_tab_group,
@@ -14,6 +14,7 @@ use taco_rules::{
     ungroup_tab_group,
 };
 
+use crate::asking::{context_text, nudge_text, start_source};
 use crate::board::{NowLine, Seen, Sharing, TerminalBoard};
 use crate::log::{Log, line_of};
 use crate::rows::{
@@ -311,6 +312,93 @@ impl Workspace {
         }
         self.finish(before, now_ms, &mut out);
         out
+    }
+
+    /// A session of a known agent starting in a terminal the workspace holds: the log marks how it began, and a session
+    /// that was just compacted is handed back its now line and its newest notes. None for any other start.
+    pub fn session_context(
+        &mut self,
+        terminal: &TerminalId,
+        harness: &HarnessId,
+        session_id: &str,
+        source: &str,
+        now_ms: u64,
+    ) -> (Option<String>, Vec<Outbound>) {
+        let mut out = Vec::new();
+        if !self.holds_known_agent(terminal, harness) {
+            return (None, out);
+        }
+        let source = start_source(source);
+        let started = ActivityKind::SessionStarted { source };
+        self.log_entry(terminal, &mut out, |log| {
+            log.append(Author::App, started, now_ms)
+        });
+        if source != StartSource::Compacted {
+            return (None, out);
+        }
+        let board = loaded_board(&mut self.boards, self.options.storage.as_ref(), terminal);
+        let shown = board.shown(Some(session_id));
+        let log = loaded_log(&mut self.logs, self.options.storage.as_ref(), terminal);
+        let notes = log.session_notes_newest_first();
+        let context = context_text(shown.now.as_deref(), &notes);
+        (context, out)
+    }
+
+    /// The ask for a note an agent is about to stop without, when its steps since the last one hold real work.
+    /// Asking records nothing: `asked_for_note` does, once the ask has reached the agent.
+    pub fn stop_nudge(
+        &mut self,
+        terminal: &TerminalId,
+        harness: &HarnessId,
+        session_id: &str,
+    ) -> Option<String> {
+        if !self.may_ask(terminal, harness, session_id) {
+            return None;
+        }
+        let directory = self.session_directory(terminal);
+        let log = loaded_log(&mut self.logs, self.options.storage.as_ref(), terminal);
+        let steps = log.open_steps();
+        nudge_text(&steps, directory.as_deref())
+    }
+
+    /// The log's record that the app asked the agent for a note, which leaves the stretch for that note.
+    pub fn asked_for_note(
+        &mut self,
+        terminal: &TerminalId,
+        harness: &HarnessId,
+        session_id: &str,
+        now_ms: u64,
+    ) -> Vec<Outbound> {
+        let mut out = Vec::new();
+        if !self.may_ask(terminal, harness, session_id) {
+            return out;
+        }
+        self.log_entry(terminal, &mut out, |log| {
+            log.append(Author::App, ActivityKind::AskedForNote, now_ms)
+        });
+        out
+    }
+
+    fn holds_known_agent(&self, terminal: &TerminalId, harness: &HarnessId) -> bool {
+        let known = harness_of(&harness.0).is_some();
+        known && self.holds(terminal)
+    }
+
+    // A known agent in a held terminal, and the terminal's own session; one the workspace never heard start is let
+    // through, and an older one that has since been replaced is not.
+    fn may_ask(&self, terminal: &TerminalId, harness: &HarnessId, session_id: &str) -> bool {
+        if !self.holds_known_agent(terminal, harness) {
+            return false;
+        }
+        let Some(current) = self.sessions.session_of(terminal) else {
+            return true;
+        };
+        current.session_id == session_id
+    }
+
+    fn session_directory(&self, terminal: &TerminalId) -> Option<String> {
+        let session = self.sessions.session_of(terminal)?;
+        Some(session.cwd.clone())
     }
 
     /// What the window asks of Agent Activity: the terminal it shows, and older entries of it.

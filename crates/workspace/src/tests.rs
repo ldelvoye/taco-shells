@@ -1308,6 +1308,89 @@ fn the_app_adds_what_the_agent_opened_or_wrote_and_shows_a_pull_requests_state_o
 }
 
 #[test]
+fn a_compacted_session_gets_its_notes_back_and_a_stop_without_one_is_asked_for_a_note() {
+    let mut workspace = workspace();
+    let edit = |workspace: &mut Workspace, path: &str| {
+        let payload =
+            serde_json::json!({ "tool_name": "Edit", "tool_input": { "file_path": path } });
+        tool_used(workspace, "t1", payload);
+    };
+    noted(&mut workspace, "t1", "From the session before");
+    session_starts(&mut workspace, "t1", SESSION);
+    let (context, _) = workspace.session_context(&id("t1"), &claude(), SESSION, "startup", 0);
+    assert_eq!(context, None, "a new session is handed nothing");
+    now_set(&mut workspace, "t1", "Fixing the logo");
+    edit(&mut workspace, "/work/tacos/src/draw.rs");
+    noted(&mut workspace, "t1", "Found the cause");
+    noted(&mut workspace, "t1", "Planned the fix");
+    let (resumed, _) = workspace.session_context(&id("t1"), &claude(), SESSION, "resume", 0);
+    assert_eq!(
+        resumed, None,
+        "a resume keeps its own conversation, so it is handed nothing"
+    );
+    let (context, _) = workspace.session_context(&id("t1"), &claude(), SESSION, "compact", 0);
+    let context = context.unwrap();
+    assert!(context.contains("Fixing the logo"), "{context}");
+    let newest = context.find("Planned the fix").unwrap();
+    let older = context.find("Found the cause").unwrap();
+    assert!(newest < older, "newest first");
+    assert!(
+        !context.contains("From the session before"),
+        "only this session's own notes come back"
+    );
+    let unknown = HarnessId("other".into());
+    let (refused, _) = workspace.session_context(&id("t1"), &unknown, SESSION, "compact", 0);
+    assert_eq!(
+        refused, None,
+        "an agent the app does not know is handed nothing"
+    );
+
+    assert_eq!(
+        workspace.stop_nudge(&id("t1"), &claude(), SESSION),
+        None,
+        "the change before the note is the note's"
+    );
+    edit(&mut workspace, "/work/tacos/src/logo.rs");
+    let nudge = workspace.stop_nudge(&id("t1"), &claude(), SESSION).unwrap();
+    assert!(
+        nudge.contains("changed src/logo.rs,"),
+        "only the open stretch counts: {nudge}"
+    );
+    let replaced = "223e4567-e89b-12d3-a456-426614174000";
+    assert_eq!(
+        workspace.stop_nudge(&id("t1"), &claude(), replaced),
+        None,
+        "a session that is not the terminal's is not asked"
+    );
+    let before_the_ask = stretches(&mut workspace, "t1").len();
+
+    workspace.asked_for_note(&id("t1"), &claude(), SESSION, 0);
+    noted(&mut workspace, "t1", "Drew the logo as shapes");
+    let lines = stretches(&mut workspace, "t1");
+    assert_eq!(
+        lines.len(),
+        before_the_ask + 2,
+        "asking records nothing by itself"
+    );
+    let tail = &lines[lines.len() - 3..];
+    assert_eq!(
+        tail,
+        ["step 7 in 7", "AskedForNote", "note in 7"],
+        "the ask leaves the stretch for the note"
+    );
+}
+
+#[test]
+fn an_agent_whose_start_the_workspace_never_heard_is_still_asked_for_a_note() {
+    let mut workspace = workspace();
+    for _ in 0..3 {
+        ran(&mut workspace, "t1", "cargo test");
+    }
+    let nudge = workspace.stop_nudge(&id("t1"), &claude(), SESSION);
+    assert!(nudge.is_some_and(|nudge| nudge.contains("took 3 steps")));
+}
+
+#[test]
 fn a_log_whose_terminal_is_gone_at_launch_is_removed_once_the_restore_has_succeeded() {
     let disk = Disk::default();
     let mut workspace = Workspace::new(options_on(&disk, 0));
