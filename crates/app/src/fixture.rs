@@ -20,14 +20,13 @@ use taco_settings::{
 
 use crate::activity_panel::{MS_PER_MINUTE, now_ms};
 use crate::banners::Notices;
-use crate::stand_in::StandInActivity;
+use crate::stand_in::{PRODUCT_NAME, StandInActivity};
 use crate::window::Shown;
 
 const CLAUDE: &str = "claude";
 const STATE_MINUTES_AGO: u64 = 52;
 const FONT_SIZE_PROBLEM: &str = "settings.json: \"fontSize\" must be a number between 1 and 72";
 const KEYBINDINGS_PROBLEM: &str = "keybindings.json: expected a comma at line 7";
-pub(crate) const PRODUCT_NAME: &str = "Claude Code";
 const OLD_VERSION: &str = "2.1.212";
 const SETTINGS_FILE: &str = "~/.claude/settings.json";
 const PLAIN_SHELL_ROW: usize = 4;
@@ -178,7 +177,7 @@ pub enum Fixture {
     SetupTooOld,
     /// The activity one just after Set up, with the hint above the running agent's log.
     SetupDone,
-    /// The same after a Set up that changed the agent's settings file.
+    /// The activity just after a Set up that changed the agent's settings file.
     SetupDoneChanged,
     /// Agent Activity off, and an agent known only by its title, with nothing in its log: the offer shows beside it.
     SetupOffAgent,
