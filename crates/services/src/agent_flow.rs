@@ -14,8 +14,8 @@ use crate::agent_setup_state::{
 use crate::config_files::plugin_directory_path;
 use crate::file_write::{read_text, write_if_unchanged};
 use crate::plugin_dirs::{
-    MANAGED_SETTINGS_PATH, PluginDirsRecord, append_folder, plugin_dirs_of, read_record,
-    remove_folder, remove_record, write_record,
+    Appended, MANAGED_SETTINGS_PATH, PluginDirsRecord, append_folder, plugin_dirs_of, read_record,
+    remove_record, restore_value, write_record,
 };
 
 const HOOKS_DIRECTORY_NAME: &str = "hooks";
@@ -241,14 +241,19 @@ pub(crate) fn add_plugin_folder(agent: &Agent, config_directory: &Path) -> Resul
     let folder = &agent.paths.plugin_folder;
     let home = &agent.paths.home;
     let edit = append_folder(&text, folder, home, &file);
-    let changed = match edit {
-        HookEdit::Changed(changed) => changed,
-        HookEdit::Unchanged => return Ok(false),
-        HookEdit::Refused(reason) => return Err(not_added_problem(&file, &reason)),
+    let (changed, before, after) = match edit {
+        Appended::Changed {
+            text,
+            before,
+            after,
+        } => (text, before, after),
+        Appended::Unchanged => return Ok(false),
+        Appended::Refused(reason) => return Err(not_added_problem(&file, &reason)),
     };
     let record = PluginDirsRecord {
         settings: agent.paths.settings_path.clone(),
-        entry: folder.to_string_lossy().into_owned(),
+        before,
+        after,
     };
     let recorded = write_record(config_directory, &record);
     recorded.map_err(|error| not_added_problem(&file, &error.to_string()))?;
@@ -270,7 +275,7 @@ pub(crate) fn remove_plugin_folder(config_directory: &Path) -> Result<(), String
     let found = read.map_err(|reason| not_taken_out_problem(&file, &reason))?;
     let mut written = Ok(());
     if let Some(text) = found {
-        let edit = remove_folder(&text, &record.entry, &file);
+        let edit = restore_value(&text, &record.before, &record.after, &file);
         match edit {
             HookEdit::Changed(changed) => {
                 written = write_settings(&record.settings, Some(text.as_str()), &changed);

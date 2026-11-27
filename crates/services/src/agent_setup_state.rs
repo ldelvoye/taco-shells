@@ -76,18 +76,19 @@ pub fn agent_setup_state_of(facts: &AgentSetupFacts) -> AgentSetupState {
     if facts.wiring == HookWiring::Managed {
         return AgentSetupState::OldSetup;
     }
+    if facts.activity_on
+        && let Some(version) = facts.version
+        && is_too_old(version)
+    {
+        let shown = version_text(version);
+        return AgentSetupState::TooOld { version: shown };
+    }
     if let PluginDirs::Hides { file } = &facts.plugin_dirs {
         let shown = shown_with_tilde(file, &facts.home);
         return AgentSetupState::PluginDirsHidden { file: shown };
     }
     if !facts.activity_on {
         return AgentSetupState::Off;
-    }
-    if let Some(version) = facts.version
-        && is_too_old(version)
-    {
-        let shown = version_text(version);
-        return AgentSetupState::TooOld { version: shown };
     }
     AgentSetupState::On
 }
@@ -197,8 +198,12 @@ mod tests {
             with_plugin_dirs(facts(true, HookWiring::Managed, true, OLD), hides.clone());
         let hidden_while_off =
             with_plugin_dirs(facts(true, HookWiring::ByHand, false, OLD), hides.clone());
-        let hidden_while_on = with_plugin_dirs(facts(true, HookWiring::ByHand, true, NEW), hides);
+        let hidden_while_on =
+            with_plugin_dirs(facts(true, HookWiring::ByHand, true, NEW), hides.clone());
+        let too_old_over_hidden =
+            with_plugin_dirs(facts(true, HookWiring::ByHand, true, OLD), hides);
         let cases = [
+            (too_old_over_hidden, too_old.clone()),
             (managed_over_old, AgentSetupState::PluginDirsManaged),
             (old_over_hidden, AgentSetupState::OldSetup),
             (hidden_while_off, hidden.clone()),
