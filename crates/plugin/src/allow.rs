@@ -1,14 +1,15 @@
 use serde_json::{Value, json};
 
-use crate::identity::PLUGIN_NAME;
+use crate::identity::tool_name_prefix;
 use crate::tools::TOOL_NAMES;
 
 pub fn allow_answer(hook_input: &str) -> Option<String> {
     let parsed = serde_json::from_str::<Value>(hook_input).ok()?;
     let tool_name = parsed.get("tool_name")?.as_str()?;
 
+    let prefix = tool_name_prefix();
     let is_approved = TOOL_NAMES.iter().any(|name| {
-        let approved = format!("mcp__plugin_{PLUGIN_NAME}_activity__{name}");
+        let approved = format!("{prefix}{name}");
         approved == tool_name
     });
     if !is_approved {
@@ -28,6 +29,7 @@ pub fn allow_answer(hook_input: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::identity::PLUGIN_NAME;
 
     fn input_for(tool_name: &str) -> String {
         json!({"tool_name": tool_name}).to_string()

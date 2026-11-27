@@ -3,6 +3,7 @@ pub const PLUGIN_NAME: &str = "taco-shells";
 #[cfg(not(taco_stable))]
 pub const PLUGIN_NAME: &str = "taco-shells-dev";
 
+pub const SERVER_NAME: &str = "activity";
 pub const APP_VARIABLE: &str = "TACO_SHELLS_APP";
 pub const ENTRYPOINT_VARIABLE: &str = "CLAUDE_CODE_ENTRYPOINT";
 
@@ -17,6 +18,10 @@ impl Surroundings {
         let entrypoint = std::env::var(ENTRYPOINT_VARIABLE).ok();
         Surroundings { app, entrypoint }
     }
+}
+
+pub fn tool_name_prefix() -> String {
+    format!("mcp__plugin_{PLUGIN_NAME}_{SERVER_NAME}__")
 }
 
 pub fn serves(surroundings: &Surroundings) -> bool {

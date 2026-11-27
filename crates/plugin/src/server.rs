@@ -2,10 +2,12 @@ use std::io::{BufRead, Write};
 
 use serde_json::{Value, json};
 
-use crate::tools::{TOOL_NAMES, tools};
+use crate::tools::{NOTE, NOW, SHARE, SHARE_KINDS, TOOL_NAMES, tools};
 
 const DEFAULT_PROTOCOL_VERSION: &str = "2025-06-18";
+const SUPPORTED_PROTOCOL_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 const PARSE_ERROR: i64 = -32700;
+const INVALID_REQUEST: i64 = -32600;
 const UNKNOWN_METHOD: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
 
@@ -14,14 +16,20 @@ struct Failure {
     message: String,
 }
 
-pub fn serve(input: impl BufRead, mut output: impl Write, serving: bool) -> std::io::Result<()> {
-    for line in input.lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
+pub fn serve(
+    mut input: impl BufRead,
+    mut output: impl Write,
+    serving: bool,
+) -> std::io::Result<()> {
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        let bytes_read = input.read_until(b'\n', &mut line)?;
+        if bytes_read == 0 {
+            break;
         }
 
-        let reply = reply_to(&line, serving);
+        let reply = reply_to_bytes(&line, serving);
         if let Some(reply) = reply {
             writeln!(output, "{reply}")?;
             output.flush()?;
@@ -30,22 +38,42 @@ pub fn serve(input: impl BufRead, mut output: impl Write, serving: bool) -> std:
     Ok(())
 }
 
+fn parse_error_reply() -> Value {
+    let failure = Failure {
+        code: PARSE_ERROR,
+        message: String::from("parse error"),
+    };
+    error_reply(Value::Null, failure)
+}
+
+fn reply_to_bytes(line: &[u8], serving: bool) -> Option<Value> {
+    let decoded = std::str::from_utf8(line);
+    let text = match decoded {
+        Ok(text) => text,
+        Err(_) => return Some(parse_error_reply()),
+    };
+    if text.trim().is_empty() {
+        return None;
+    }
+    reply_to(text, serving)
+}
+
 fn reply_to(line: &str, serving: bool) -> Option<Value> {
     let parsed = serde_json::from_str::<Value>(line);
     let message = match parsed {
         Ok(message) => message,
-        Err(_) => {
-            let failure = Failure {
-                code: PARSE_ERROR,
-                message: String::from("parse error"),
-            };
-            return Some(error_reply(Value::Null, failure));
-        }
+        Err(_) => return Some(parse_error_reply()),
     };
 
     let id = message.get("id")?.clone();
-    let requested_method = message.get("method").and_then(Value::as_str);
-    let method = requested_method.unwrap_or_default();
+    let method_value = message.get("method")?;
+    let Some(method) = method_value.as_str() else {
+        let failure = Failure {
+            code: INVALID_REQUEST,
+            message: String::from("invalid request"),
+        };
+        return Some(error_reply(id, failure));
+    };
     let params = match message.get("params") {
         Some(params) => params.clone(),
         None => Value::Null,
@@ -79,8 +107,8 @@ fn answer(method: &str, params: &Value, serving: bool) -> Result<Value, Failure>
 fn initialize_result(params: &Value) -> Value {
     let requested = params.get("protocolVersion").and_then(Value::as_str);
     let version = match requested {
-        Some(version) => version,
-        None => DEFAULT_PROTOCOL_VERSION,
+        Some(version) if SUPPORTED_PROTOCOL_VERSIONS.contains(&version) => version,
+        _ => DEFAULT_PROTOCOL_VERSION,
     };
     let server_info = json!({
         "name": "taco-shells-activity",
@@ -94,32 +122,99 @@ fn initialize_result(params: &Value) -> Value {
 }
 
 fn tools_list_result(serving: bool) -> Value {
+    // Every session loads the plugin, so outside its own app's terminals it lists nothing.
     if serving {
-        json!({"tools": tools()})
+        let listed = tools();
+        json!({"tools": listed})
     } else {
         json!({"tools": []})
     }
 }
 
+fn is_non_empty_string(value: Option<&Value>) -> bool {
+    match value.and_then(Value::as_str) {
+        Some(text) => !text.is_empty(),
+        None => false,
+    }
+}
+
+fn share_problem(arguments: Option<&Value>) -> Option<String> {
+    let kind = arguments.and_then(|arguments| arguments.get("kind"));
+    let kind_text = kind.and_then(Value::as_str);
+    let is_kind_valid = match kind_text {
+        Some(kind_text) => SHARE_KINDS.contains(&kind_text),
+        None => false,
+    };
+    if !is_kind_valid {
+        let kinds = SHARE_KINDS.join(", ");
+        return Some(format!("share needs a kind: {kinds}"));
+    }
+
+    let title = arguments.and_then(|arguments| arguments.get("title"));
+    if !is_non_empty_string(title) {
+        return Some(String::from("share needs a title"));
+    }
+
+    for field in ["target", "body"] {
+        let value = arguments.and_then(|arguments| arguments.get(field));
+        if let Some(value) = value
+            && !value.is_string()
+        {
+            return Some(format!("share {field} must be a string"));
+        }
+    }
+    None
+}
+
+fn argument_problem(name: &str, arguments: Option<&Value>) -> Option<String> {
+    match name {
+        NOTE | NOW => {
+            let text = arguments.and_then(|arguments| arguments.get("text"));
+            if is_non_empty_string(text) {
+                None
+            } else {
+                Some(format!("{name} needs a text"))
+            }
+        }
+        SHARE => share_problem(arguments),
+        _ => None,
+    }
+}
+
 fn call_result(params: &Value, serving: bool) -> Result<Value, Failure> {
     let requested = params.get("name").and_then(Value::as_str);
-    let name = requested.unwrap_or_default();
+    let Some(name) = requested else {
+        return Err(Failure {
+            code: INVALID_PARAMS,
+            message: String::from("missing tool name"),
+        });
+    };
 
     let is_known = TOOL_NAMES.contains(&name);
-    if serving && is_known {
-        return Ok(json!({"content": [{"type": "text", "text": "Noted."}]}));
+    if !(serving && is_known) {
+        return Err(Failure {
+            code: INVALID_PARAMS,
+            message: format!("unknown tool {name}"),
+        });
     }
-    Err(Failure {
-        code: INVALID_PARAMS,
-        message: format!("unknown tool {name}"),
-    })
+
+    let problem = argument_problem(name, params.get("arguments"));
+    if let Some(problem) = problem {
+        return Ok(json!({
+            "content": [{"type": "text", "text": problem}],
+            "isError": true,
+        }));
+    }
+
+    // The call reaches the app through the PostToolUse hook, so the server only answers.
+    Ok(json!({"content": [{"type": "text", "text": "Noted."}]}))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const INPUT: &str = concat!(
+    const INPUT: &[u8] = concat!(
         r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}"#,
         "\n",
         r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
@@ -129,15 +224,20 @@ mod tests {
         "\n",
         r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"note","arguments":{"text":"x"}}}"#,
         "\n",
-        r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"delete"}}"#,
+        r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"remember"}}"#,
         "\n",
-        r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"remember"}}"#,
+        r#"{"jsonrpc":"2.0","id":5,"method":"initialize","params":{"protocolVersion":"9999-01-01"}}"#,
         "\n",
-    );
+        r#"{"jsonrpc":"2.0","id":6,"result":{}}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"note","arguments":{}}}"#,
+        "\n",
+    )
+    .as_bytes();
 
-    fn run(serving: bool) -> Vec<Value> {
+    fn run(input: &[u8], serving: bool) -> Vec<Value> {
         let mut output = Vec::new();
-        serve(INPUT.as_bytes(), &mut output, serving).unwrap();
+        serve(input, &mut output, serving).unwrap();
         let text = String::from_utf8(output).unwrap();
         text.lines()
             .map(|line| serde_json::from_str(line).unwrap())
@@ -146,9 +246,9 @@ mod tests {
 
     #[test]
     fn answers_a_session_when_serving() {
-        let replies = run(true);
+        let replies = run(INPUT, true);
 
-        assert_eq!(replies.len(), 6);
+        assert_eq!(replies.len(), 7);
         assert_eq!(replies[0]["id"], 1);
         assert_eq!(replies[0]["result"]["protocolVersion"], "2025-03-26");
         assert_eq!(replies[1]["error"]["code"], -32700);
@@ -161,14 +261,26 @@ mod tests {
         assert_eq!(names, TOOL_NAMES);
         assert_eq!(replies[3]["result"]["content"][0]["text"], "Noted.");
         assert_eq!(replies[4]["error"]["code"], -32602);
-        assert_eq!(replies[5]["error"]["code"], -32602);
+        assert_eq!(replies[5]["result"]["protocolVersion"], "2025-06-18");
+        assert_eq!(replies[6]["id"], 7);
+        assert_eq!(replies[6]["result"]["isError"], true);
+    }
+
+    #[test]
+    fn survives_a_line_that_is_not_utf8() {
+        let input = [b"\xff\xfe\n".as_slice(), INPUT].concat();
+        let replies = run(&input, true);
+
+        assert_eq!(replies[0]["error"]["code"], -32700);
+        assert_eq!(replies[0]["id"], Value::Null);
+        assert_eq!(replies[1]["id"], 1);
     }
 
     #[test]
     fn lists_nothing_and_refuses_calls_when_not_serving() {
-        let replies = run(false);
+        let replies = run(INPUT, false);
 
-        assert_eq!(replies.len(), 6);
+        assert_eq!(replies.len(), 7);
         assert_eq!(replies[2]["result"], json!({"tools": []}));
         assert_eq!(replies[3]["error"]["code"], -32602);
     }
