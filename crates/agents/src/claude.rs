@@ -251,11 +251,8 @@ fn activity_tool(tool: &str) -> Option<&str> {
     servers.find_map(|server| tool.strip_prefix(server))
 }
 
+// A call the server refused never gets here: Claude Code sends it as PostToolUseFailure.
 fn activity_entry(name: &str, parsed: &Value) -> Option<EntryRead> {
-    let is_error = parsed.pointer("/tool_response/isError");
-    if is_error == Some(&Value::Bool(true)) {
-        return None;
-    }
     match name {
         "note" => {
             let text = written_at(parsed, "/tool_input/text")?;
@@ -496,8 +493,6 @@ mod tests {
             text: "Found it".into(),
         };
         assert_eq!(entry("PostToolUse", note), Some(written));
-        let refused = r#"{"tool_name":"mcp__plugin_taco-shells-dev_activity__note","tool_input":{"text":"Found it"},"tool_response":{"isError":true}}"#;
-        assert_eq!(entry("PostToolUse", refused), None);
         let now = r#"{"tool_name":"mcp__plugin_taco-shells-dev_activity__now","tool_input":{"text":"Reading"}}"#;
         assert_eq!(entry("PostToolUse", now), None);
         let someone_elses =
