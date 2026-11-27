@@ -6,13 +6,14 @@ use gpui::{
     transparent_black, white,
 };
 use taco_settings::{
-    CommandId, CursorStyle, FONT_SIZE_MAX, FONT_SIZE_MIN, SettingChange, Settings, ShellRowName,
-    ThemeChoice, UnreadSettings,
+    Binding, CommandId, CursorStyle, FONT_SIZE_MAX, FONT_SIZE_MIN, SettingChange, Settings,
+    ShellRowName, ThemeChoice, UnreadSettings,
 };
 
 use crate::drive::mark;
 use crate::look::{FONT_FAMILY, Look, SMALL_TEXT_SIZE, TEXT_SIZE, TITLE_BAR_HEIGHT};
 use crate::shell::{shell_gradient, shell_outline};
+use crate::shortcuts_page::{CHIP_GAP, chip, chords_for};
 use crate::text_field::TextField;
 use crate::window::WindowView;
 
@@ -23,6 +24,11 @@ const SHELL_OUTLINE: f32 = 1.5;
 const TITLE: &str = "Settings";
 const OPEN_FILE_LABEL: &str = "Open settings.json";
 const FOOT_TEXT: &str = "Changes are written to settings.json and apply at once.";
+const KEYBOARD_GROUP: &str = "Keyboard";
+const KEYBOARD_ROW: &str = "Keyboard shortcuts";
+const KEYBOARD_HINT: &str = "See and change what each key combination does.";
+const MORE: &str = "›";
+const BACK_GAP: f32 = 4.;
 const FIELD_FONT: &str = "Menlo";
 const UNREAD_OPACITY: f32 = 0.45;
 const THEME_OPTIONS: [(&str, ThemeChoice); 3] = [
@@ -76,7 +82,7 @@ const STEPPER_RADIUS: f32 = 6.;
 const STEPPER_GAP: f32 = 6.;
 const STEPPER_VALUE_MIN_WIDTH: f32 = 22.;
 const STEPPER_DISABLED_OPACITY: f32 = 0.5;
-const FIELD_MAX_WIDTH: f32 = 280.;
+const FONT_FIELD_WIDTH: f32 = 270.;
 const SCROLLBACK_FIELD_WIDTH: f32 = 96.;
 const BUTTON_RADIUS: f32 = 6.;
 const BUTTON_PADDING_Y: f32 = 3.;
@@ -87,8 +93,9 @@ const FOOT_PADDING_TOP: f32 = 10.;
 /// What a command does while a page covers the terminal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OverPage {
-    ClosePage,
+    ClosePages,
     ToggleSettings,
+    ToggleShortcuts,
     /// It shows a terminal, so the pages close first.
     ShowTerminal,
     Run,
@@ -100,6 +107,7 @@ pub enum OverPage {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
     Settings,
+    Shortcuts,
 }
 
 /// Everything one drawing of the settings page reads.
@@ -112,6 +120,8 @@ pub struct SettingsInput<'a> {
     /// Why a setting's last write was refused, by its name in settings.json.
     pub refused: &'a HashMap<&'static str, String>,
     pub fields: &'a SettingsFields,
+    /// What the keyboard shortcuts row shows as its own shortcut.
+    pub bindings: &'a [Binding],
     pub look: &'a Look,
 }
 
@@ -145,12 +155,12 @@ struct Segment {
 /// Nothing closes a terminal nobody can see, and anything that shows one closes the pages first.
 pub fn over_page(command: CommandId) -> OverPage {
     match command {
-        CommandId::TerminalClose => OverPage::ClosePage,
+        CommandId::TerminalClose => OverPage::ClosePages,
         CommandId::ConfigOpenSettings => OverPage::ToggleSettings,
+        CommandId::ConfigOpenKeybindings => OverPage::ToggleShortcuts,
         CommandId::TerminalNew
         | CommandId::TerminalFocusNextGroup
-        | CommandId::TerminalFocusPreviousGroup
-        | CommandId::ConfigOpenKeybindings => OverPage::ShowTerminal,
+        | CommandId::TerminalFocusPreviousGroup => OverPage::ShowTerminal,
         CommandId::SidebarToggle => OverPage::Run,
         _ => OverPage::PassOn,
     }
@@ -158,8 +168,13 @@ pub fn over_page(command: CommandId) -> OverPage {
 
 pub fn settings_page(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
     let look = input.look;
-    let header = header(look, cx);
+    let header = page_header(TITLE, None, look, cx);
     let form = form(input, cx);
+    page_frame(header, form, look)
+}
+
+/// A page's header above its scrolling form.
+pub(crate) fn page_frame(header: Div, form: Div, look: &Look) -> Div {
     let body = div()
         .id(SCROLL_ID)
         .flex_1()
@@ -178,8 +193,14 @@ pub fn settings_page(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div
         .child(body)
 }
 
-fn header(look: &Look, cx: &mut Context<WindowView>) -> Div {
-    let header = div()
+/// The title, with "‹ back" before it on a page under another, and × to close every page.
+pub(crate) fn page_header(
+    title: &'static str,
+    back: Option<&'static str>,
+    look: &Look,
+    cx: &mut Context<WindowView>,
+) -> Div {
+    let mut header = div()
         .flex()
         .flex_none()
         .items_center()
@@ -188,13 +209,31 @@ fn header(look: &Look, cx: &mut Context<WindowView>) -> Div {
         .pr(px(HEADER_PADDING_RIGHT))
         .border_b_1()
         .border_color(look.hairline);
+    if let Some(back) = back {
+        let label = format!("‹ {back}");
+        let hover_background = look.strong_veil;
+        let hover_text = look.text;
+        let back = div()
+            .id("page-back")
+            .flex_none()
+            .px(px(BUTTON_PADDING_X))
+            .py(px(BUTTON_PADDING_Y))
+            .mr(px(BACK_GAP))
+            .rounded(px(BUTTON_RADIUS))
+            .cursor_pointer()
+            .text_color(look.secondary_text)
+            .hover(move |style| style.bg(hover_background).text_color(hover_text))
+            .child(label)
+            .on_click(cx.listener(|view, _, _, cx| view.close_page(cx)));
+        header = header.child(back);
+    }
     let title = div()
         .text_size(px(TITLE_SIZE))
         .font_weight(FontWeight::SEMIBOLD)
-        .child(TITLE);
+        .child(title);
     let gap = div().flex_1();
     let close = header_button("settings-close", "×", look.strong_veil, look.text, look);
-    let close = close.on_click(cx.listener(|view, _, _, cx| view.close_page(cx)));
+    let close = close.on_click(cx.listener(|view, _, _, cx| view.close_pages(cx)));
     header.child(title).child(gap).child(close)
 }
 
@@ -220,9 +259,9 @@ fn header_button(
         .child(glyph)
 }
 
-fn form(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
-    let look = input.look;
-    let mut form = div()
+/// The centred column a page's groups stack in.
+pub(crate) fn form_column() -> Div {
+    div()
         .flex()
         .flex_col()
         .gap(px(FORM_GAP))
@@ -231,7 +270,12 @@ fn form(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
         .mx_auto()
         .pt(px(FORM_PADDING_TOP))
         .px(px(FORM_PADDING_SIDES))
-        .pb(px(FORM_PADDING_BOTTOM));
+        .pb(px(FORM_PADDING_BOTTOM))
+}
+
+fn form(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
+    let look = input.look;
+    let mut form = form_column();
     if !input.problems.is_empty() {
         let card = problem_card(input.problems, look, cx);
         form = form.child(card);
@@ -241,13 +285,48 @@ fn form(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
     let list_group = list_group(input, cx);
     let start_group = start_group(input, cx);
     let agents_group = agents_group(input, cx);
+    let keyboard_group = keyboard_group(input, cx);
     let foot = foot(look, cx);
     form.child(look_group)
         .child(terminal_group)
         .child(list_group)
         .child(start_group)
         .child(agents_group)
+        .child(keyboard_group)
         .child(foot)
+}
+
+fn keyboard_group(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
+    let look = input.look;
+    let shortcut = chords_for(input.bindings, CommandId::ConfigOpenKeybindings);
+    let mut shown = div().flex().flex_none().items_center().gap(px(CHIP_GAP));
+    for chord in &shortcut {
+        shown = shown.child(chip(chord, look));
+    }
+    let more = div().text_color(look.secondary_text).child(MORE);
+    shown = shown.child(more);
+    let name = div().font_weight(FontWeight::MEDIUM).child(KEYBOARD_ROW);
+    let hint = div()
+        .text_size(px(SMALL_TEXT_SIZE))
+        .text_color(look.secondary_text)
+        .child(KEYBOARD_HINT);
+    let text = div().flex().flex_col().child(name).child(hint);
+    let veil = look.veil;
+    let row = div()
+        .id("keyboard-shortcuts")
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap(px(ROW_GAP))
+        .py(px(ROW_PADDING))
+        .border_t_1()
+        .border_color(look.hairline)
+        .cursor_pointer()
+        .hover(move |style| style.bg(veil))
+        .child(text)
+        .child(shown)
+        .on_click(cx.listener(|view, _, _, cx| view.open_shortcuts(cx)));
+    group(KEYBOARD_GROUP, look).child(row)
 }
 
 fn problem_card(problems: &[String], look: &Look, cx: &mut Context<WindowView>) -> Div {
@@ -276,9 +355,8 @@ fn look_group(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
     let theme_options = segments_of(&THEME_OPTIONS, settings.theme, SettingChange::Theme);
     let theme = segmented(theme_options, look, cx);
     let font = typed_field(&input.fields.font)
-        .flex_1()
-        .min_w_0()
-        .max_w(px(FIELD_MAX_WIDTH));
+        .flex_none()
+        .w(px(FONT_FIELD_WIDTH));
     let size = stepper(
         "font-size",
         settings.font_size,
@@ -420,7 +498,7 @@ fn foot(look: &Look, cx: &mut Context<WindowView>) -> Div {
         .child(open)
 }
 
-fn group(heading: &str, look: &Look) -> Div {
+pub(crate) fn group(heading: &str, look: &Look) -> Div {
     let shout = heading.to_uppercase();
     let title = div()
         .pb(px(HEADING_GAP))
@@ -444,7 +522,8 @@ fn setting_row(
     let name = div()
         .font_weight(FontWeight::MEDIUM)
         .child(label.to_string());
-    let mut text = div().flex().flex_col().child(name);
+    // The text wraps rather than pushing its control out of the row.
+    let mut text = div().flex().flex_col().flex_1().min_w_0().child(name);
     let refusal = input.refused.get(key);
     if let Some(reason) = refusal {
         let said = div()
@@ -779,11 +858,11 @@ mod tests {
     #[test]
     fn no_command_closes_a_terminal_behind_the_page_or_types_into_it() {
         let cases = [
-            (CommandId::TerminalClose, OverPage::ClosePage),
+            (CommandId::TerminalClose, OverPage::ClosePages),
             (CommandId::ConfigOpenSettings, OverPage::ToggleSettings),
+            (CommandId::ConfigOpenKeybindings, OverPage::ToggleShortcuts),
             (CommandId::TerminalNew, OverPage::ShowTerminal),
             (CommandId::TerminalFocusNextGroup, OverPage::ShowTerminal),
-            (CommandId::ConfigOpenKeybindings, OverPage::ShowTerminal),
             (CommandId::SidebarToggle, OverPage::Run),
             (CommandId::TerminalPaste, OverPage::PassOn),
             (CommandId::TerminalKillLine, OverPage::PassOn),

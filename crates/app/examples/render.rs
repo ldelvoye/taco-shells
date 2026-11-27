@@ -12,7 +12,7 @@ use taco_app::Fixture;
 use taco_app::render::{Gesture, render_png};
 use taco_settings::Appearance;
 
-const USAGE: &str = "usage: render <mixed|quiet|empty> <light|dark> <out.png> [click:X,Y|rightclick:X,Y|drag:X,Y:X,Y|hold:X,Y:X,Y|type:TEXT|key:NAME]...";
+const USAGE: &str = "usage: render <mixed|quiet|empty|broken|paths|switches> <light|dark> <out.png> [click:X,Y|rightclick:X,Y|drag:X,Y:X,Y|hold:X,Y:X,Y|scroll:X,Y:DOWN|type:TEXT|key:NAME|wait:MS]...";
 
 struct Request {
     fixture: Fixture,
@@ -83,6 +83,10 @@ fn gesture_from(text: &str) -> Option<Gesture> {
         ("rightclick", [at]) => Some(Gesture::RightClick(point_from(at)?)),
         ("drag", [from, to]) => Some(Gesture::Drag(point_from(from)?, point_from(to)?)),
         ("hold", [from, to]) => Some(Gesture::Hold(point_from(from)?, point_from(to)?)),
+        ("scroll", [at, by]) => {
+            let distance: f32 = by.parse().ok()?;
+            Some(Gesture::Scroll(point_from(at)?, px(distance)))
+        }
         _ => None,
     }
 }
