@@ -141,11 +141,8 @@ fn rows(driver: &mut Driver) -> Result<Rows, String> {
             selected: 0,
         });
     };
-    let terminals: Vec<TerminalId> = arrangement
-        .rows
-        .iter()
-        .map(|row| row.terminal.clone())
-        .collect();
+    let listed = arrangement.rows.iter();
+    let terminals: Vec<TerminalId> = listed.map(|row| row.terminal.clone()).collect();
     Ok(Rows {
         terminals,
         selected: arrangement.selected,
@@ -161,13 +158,14 @@ fn wait_until_ready(driver: &mut Driver) -> Result<(), String> {
 
 fn resident_megabytes(pid: u32) -> Result<f64, String> {
     let pid_text = pid.to_string();
-    let output = Command::new("ps")
-        .args(["-o", "rss=", "-p", &pid_text])
+    let mut ps = Command::new("ps");
+    ps.args(["-o", "rss=", "-p", &pid_text]);
+    let output = ps
         .output()
         .map_err(|error| format!("could not run ps for {pid}: {error}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let kilobytes: f64 = stdout
-        .trim()
+    let trimmed = stdout.trim();
+    let kilobytes: f64 = trimmed
         .parse()
         .map_err(|_| format!("ps gave no memory size for {pid}: {stdout:?}"))?;
     Ok(kilobytes / KILOBYTES_PER_MEGABYTE)
@@ -212,11 +210,7 @@ fn select(driver: &mut Driver, target: usize) -> Result<(), String> {
                 Ok(screen.is_some())
             });
         }
-        let key = if target > current.selected {
-            NEXT_ROW
-        } else {
-            PREVIOUS_ROW
-        };
+        let key = key_toward(target, current.selected);
         let from = current.selected;
         driver.keys(&[key])?;
         wait_for("the selection to move", STEP_DEADLINE, NO_PAUSE, || {
@@ -226,9 +220,17 @@ fn select(driver: &mut Driver, target: usize) -> Result<(), String> {
     }
 }
 
+fn key_toward(target: usize, selected: usize) -> &'static str {
+    if target > selected {
+        return NEXT_ROW;
+    }
+    PREVIOUS_ROW
+}
+
 fn processes_running(command_line: &str) -> Result<usize, String> {
-    let output = Command::new("pgrep")
-        .args(["-f", command_line])
+    let mut pgrep = Command::new("pgrep");
+    pgrep.args(["-f", command_line]);
+    let output = pgrep
         .output()
         .map_err(|error| format!("could not run pgrep: {error}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
