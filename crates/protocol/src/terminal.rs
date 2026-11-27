@@ -11,8 +11,7 @@ pub enum TerminalRequest {
         id: TerminalId,
         attachment: u64,
         size: Option<TerminalSize>,
-        /// None until the window's font is measured; the runtime keeps the last one it was given.
-        cell: Option<CellSize>,
+        cell: CellSize,
     },
     Detach {
         id: TerminalId,

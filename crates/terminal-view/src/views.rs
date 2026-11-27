@@ -289,7 +289,7 @@ impl Views {
             id: id.clone(),
             attachment: self.attachments,
             size,
-            cell: Some(cell),
+            cell,
         });
         self.awaiting.insert(id.clone());
         self.views.insert(id, view);

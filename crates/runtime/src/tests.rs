@@ -204,7 +204,7 @@ fn a_view_gets_the_output_before_its_attach_in_the_snapshot_and_follows_in_order
         id: id("a"),
         attachment: 7,
         size: Some(wider),
-        cell: None,
+        cell: NO_CELL,
     };
     let mut effects = request(&mut core, attach, now);
     effects.extend(output(&mut core, "a", b"1mred\x1b[0m after", now));
@@ -277,7 +277,7 @@ fn only_the_newest_attach_of_a_terminal_is_sent_anything() {
             id: id("a"),
             attachment: 1,
             size: None,
-            cell: None,
+            cell: NO_CELL,
         },
         now,
     );
@@ -290,7 +290,7 @@ fn only_the_newest_attach_of_a_terminal_is_sent_anything() {
         id: id("a"),
         attachment: 2,
         size: Some(wider),
-        cell: None,
+        cell: NO_CELL,
     };
     let again = request(&mut core, reattach, now);
     for event in events(&again) {
@@ -316,7 +316,7 @@ fn output_goes_back_to_the_shell_budget_now_only_when_no_view_will_write_it() {
             id: id("watched"),
             attachment: 1,
             size: None,
-            cell: None,
+            cell: NO_CELL,
         },
         now,
     );
@@ -349,7 +349,7 @@ fn an_exit_ends_the_view_after_the_last_output_and_the_terminal_is_gone() {
             id: id("a"),
             attachment: 1,
             size: None,
-            cell: None,
+            cell: NO_CELL,
         },
         now,
     );
@@ -375,7 +375,7 @@ fn an_exit_ends_the_view_after_the_last_output_and_the_terminal_is_gone() {
             id: id("a"),
             attachment: 2,
             size: None,
-            cell: None,
+            cell: NO_CELL,
         },
         now,
     );
@@ -609,25 +609,11 @@ fn a_size_report_in_pixels_is_answered_from_the_last_cell_size_a_view_gave() {
         id: id("a"),
         attachment: 1,
         size: None,
-        cell: Some(wide_font),
+        cell: wide_font,
     };
     let attached = request(&mut core, attach, now);
     output(&mut core, "a", size_reports, now);
     assert_eq!(answer(&mut core), b"\x1b[6;20;10t\x1b[4;480;800t".to_vec());
-
-    let reattach = TerminalRequest::Attach {
-        id: id("a"),
-        attachment: 2,
-        size: None,
-        cell: None,
-    };
-    request(&mut core, reattach, now);
-    output(&mut core, "a", size_reports, now);
-    assert_eq!(
-        answer(&mut core),
-        b"\x1b[6;20;10t\x1b[4;480;800t".to_vec(),
-        "an attach without a cell keeps the last one"
-    );
 
     let resized: Vec<&TerminalEvent> = events(&attached)
         .into_iter()
@@ -677,7 +663,7 @@ fn attached_with_defaults(shape: CursorShape) -> (Core<FakeShells>, Instant, Opt
         id: id("a"),
         attachment: 1,
         size: None,
-        cell: None,
+        cell: NO_CELL,
     };
     let effects = request(&mut core, attach, now);
     let mut view = None;
@@ -711,7 +697,7 @@ fn a_shape_a_program_chose_survives_a_restore_a_switch_back_and_a_settings_chang
         id: id("a"),
         attachment: 2,
         size: None,
-        cell: None,
+        cell: NO_CELL,
     };
     let reattached = request(&mut core, again, now);
     let mut fresh = None;
@@ -755,7 +741,7 @@ fn a_terminal_whose_program_chose_no_shape_shows_the_defaults_and_follows_them()
         id: id("a"),
         attachment: 2,
         size: None,
-        cell: None,
+        cell: NO_CELL,
     };
     let reattached = request(&mut core, again, now);
     let mut fresh = None;
