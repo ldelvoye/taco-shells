@@ -361,7 +361,9 @@ impl<S: Shells> Core<S> {
         size: Option<TerminalSize>,
         cell: CellSize,
     ) {
+        // A terminal that has exited, or a stale id: the view is ended now, so it never waits on an answer.
         let Some(screen) = self.screens.get_mut(&id) else {
+            self.effects.push(Effect::Event(TerminalEvent::End { id }));
             return;
         };
         // With no view while it resizes, nobody is told: the snapshot that follows has the new size already.
