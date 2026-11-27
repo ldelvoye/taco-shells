@@ -68,20 +68,15 @@ pub fn render_png(
     }
     let image_size = size(px(window_width), px(WINDOW_HEIGHT));
     let window = cx.open_window(image_size, |_, cx| {
-        let mut shown = fixture.shown();
-        if let Some(panel_size) = panel {
-            let place = shown
-                .drawn
-                .panels
-                .place_mut(taco_protocol::Panel::AgentActivity);
-            place.size = panel_size;
-        }
+        let workspace = fixture.workspace(panel);
+        let drawn = workspace.drawn();
+        let shown = fixture.shown(drawn);
         let look = Look::new(appearance);
         let mut writes = None;
         if fixture.applies_writes() {
             writes = Some(appearance);
         }
-        let ports = StandIn::start(&shown, fixture.activity(), writes);
+        let ports = StandIn::start(&shown, workspace, fixture.activity(), writes);
         let lights = TrafficLights::StandIns;
         cx.new(|cx| WindowView::new(shown, look, lights, ports, cx))
     })?;

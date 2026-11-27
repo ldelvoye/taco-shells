@@ -1,23 +1,22 @@
-//! What the window runs on until the workspace and the services are wired to it: requests applied with `rules`, fixture logs and setup notices, published as they would be.
+//! What the window runs on until the services are wired to it: the real workspace kept in memory, fixture logs and setup notices, published as they would be.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use futures::channel::mpsc::unbounded;
 use serde_json::Map;
 use taco_host::{ServicesOutput, ServicesPort, WindowOutput, WindowSender, WorkspacePort};
 use taco_protocol::{
-    ActivityEntry, ActivityEvent, ActivityRequest, Arrangement, Board, DrawnState, HarnessId,
-    Panels, RequestReply, TabGroupId, TerminalId, WorkspaceRequest,
-};
-use taco_rules::{
-    add_row_to, apply_drop, close_panel, close_row, create_tab_group, fork_row, move_panel,
-    open_panel, rename_tab_group, resize_panel, select_row, toggle_tab_group, ungroup_tab_group,
+    ActivityEntry, ActivityEvent, ActivityRequest, Board, DrawnState, HarnessId, RuntimeCommand,
+    RuntimeReport, TerminalId, TerminalStart, WorkspaceRequest,
 };
 use taco_services::{AgentMenuAction, AgentSetupNoticeKind, AgentSetupView, done_text};
 use taco_settings::{Appearance, Config, KeymapChange, SettingChange, apply_settings_layer};
+use taco_workspace::{Options, Outbound, Storage, Workspace};
 
+use crate::activity_panel::now_ms;
 use crate::link::Ports;
 use crate::window::Shown;
 
@@ -27,6 +26,13 @@ const STAND_IN_LABEL: &str = "stand-in";
 /// The agent the stand-in and its fixtures speak of.
 pub(crate) const PRODUCT_NAME: &str = "Claude Code";
 const REFUSED_KEYMAP_WRITE: &str = "keybindings.json is read-only, so nothing was changed.";
+
+#[derive(Default)]
+struct Memory {
+    save: Option<String>,
+    logs: BTreeMap<TerminalId, Vec<String>>,
+    states: BTreeMap<TerminalId, String>,
+}
 
 /// The agent logs and boards the stand-in answers from, by terminal.
 pub struct StandInActivity {
@@ -39,18 +45,78 @@ pub struct StandInActivity {
 }
 
 pub struct StandIn {
-    state: RefCell<DrawnState>,
+    workspace: RefCell<Workspace>,
     setups: RefCell<AgentSetupView>,
     activity: StandInActivity,
     window: WindowSender,
-    opened: Cell<u64>,
     /// The config a setting is written into and published from; none when every write is refused.
     config: Option<RefCell<Config>>,
 }
 
+impl Storage for Memory {
+    fn read_save(&self) -> Option<String> {
+        self.save.clone()
+    }
+
+    fn write_save(&mut self, text: &str) -> bool {
+        self.save = Some(text.to_string());
+        true
+    }
+
+    fn read_log(&self, terminal: &TerminalId) -> Vec<String> {
+        match self.logs.get(terminal) {
+            Some(lines) => lines.clone(),
+            None => Vec::new(),
+        }
+    }
+
+    fn append_log(&mut self, terminal: &TerminalId, line: &str) -> bool {
+        let lines = self.logs.entry(terminal.clone()).or_default();
+        lines.push(line.to_string());
+        true
+    }
+
+    fn rewrite_log(&mut self, terminal: &TerminalId, lines: &[String]) -> bool {
+        self.logs.insert(terminal.clone(), lines.to_vec());
+        true
+    }
+
+    fn delete_log(&mut self, terminal: &TerminalId) {
+        self.logs.remove(terminal);
+    }
+
+    fn read_state(&self, terminal: &TerminalId) -> Option<String> {
+        self.states.get(terminal).cloned()
+    }
+
+    fn write_state(&mut self, terminal: &TerminalId, text: &str) -> bool {
+        self.states.insert(terminal.clone(), text.to_string());
+        true
+    }
+
+    fn delete_state(&mut self, terminal: &TerminalId) {
+        self.states.remove(terminal);
+    }
+
+    fn activity_terminals(&self) -> Vec<TerminalId> {
+        let mut terminals: Vec<TerminalId> = self.logs.keys().cloned().collect();
+        for terminal in self.states.keys() {
+            if !terminals.contains(terminal) {
+                terminals.push(terminal.clone());
+            }
+        }
+        terminals
+    }
+}
+
 impl StandIn {
     /// With `writes` set to the appearance drawn in, a setting written is applied and published as a new config.
-    pub fn start(shown: &Shown, activity: StandInActivity, writes: Option<Appearance>) -> Ports {
+    pub fn start(
+        shown: &Shown,
+        workspace: Workspace,
+        activity: StandInActivity,
+        writes: Option<Appearance>,
+    ) -> Ports {
         let (window, outputs) = unbounded();
         let mut config = None;
         if let Some(appearance) = writes {
@@ -66,11 +132,10 @@ impl StandIn {
             config = Some(RefCell::new(written));
         }
         let stand_in = Rc::new(Self {
-            state: RefCell::new(shown.drawn.clone()),
+            workspace: RefCell::new(workspace),
             setups: RefCell::new(shown.setups.clone()),
             activity,
             window,
-            opened: Cell::new(0),
             config,
         });
         let workspace: Rc<dyn WorkspacePort> = stand_in.clone();
@@ -111,95 +176,6 @@ impl StandIn {
         self.publish(WindowOutput::Services(output));
     }
 
-    fn new_terminal(&self) -> TerminalId {
-        let number = self.opened.get() + 1;
-        self.opened.set(number);
-        TerminalId(format!("opened-{number}"))
-    }
-
-    fn new_tab_group(&self) -> TabGroupId {
-        let number = self.opened.get() + 1;
-        self.opened.set(number);
-        TabGroupId(format!("group-{number}"))
-    }
-
-    /// Whether the request changed anything, and the tab group it made, if it made one.
-    fn apply(&self, request: WorkspaceRequest) -> (bool, Option<TabGroupId>) {
-        let mut state = self.state.borrow_mut();
-        let mut made = None;
-        let changed = match request {
-            WorkspaceRequest::FocusReported { terminal, count } => {
-                if count > state.focus_count {
-                    state.focus_count = count;
-                }
-                rearrange(&mut state, |before| select_row(before, &terminal));
-                // Published even when the selection stood still: the window waits on the focus count.
-                true
-            }
-            WorkspaceRequest::CloseTerminal { terminal } => {
-                let closed = rearrange(&mut state, |before| close_row(before, &terminal));
-                if closed {
-                    state.agent_rows.remove(&terminal);
-                    state.directories.remove(&terminal);
-                    state.started.remove(&terminal);
-                }
-                closed
-            }
-            WorkspaceRequest::TabGroupToggled { id } => {
-                rearrange(&mut state, |before| toggle_tab_group(before, &id))
-            }
-            WorkspaceRequest::OpenTerminalIn { tab_group } => {
-                let terminal = self.new_terminal();
-                state.started.insert(terminal.clone());
-                rearrange(&mut state, |before| add_row_to(before, terminal, tab_group))
-            }
-            WorkspaceRequest::Dropped { dragged, place } => {
-                rearrange(&mut state, |before| apply_drop(before, &dragged, &place))
-            }
-            WorkspaceRequest::ForkTerminal { terminal } => {
-                let fork = self.new_terminal();
-                state.started.insert(fork.clone());
-                rearrange(&mut state, |before| fork_row(before, &terminal, fork))
-            }
-            WorkspaceRequest::TabGroupCreated { terminal } => {
-                let id = self.new_tab_group();
-                let created = rearrange(&mut state, |before| {
-                    create_tab_group(before, &terminal, id.clone())
-                });
-                if created {
-                    made = Some(id);
-                }
-                created
-            }
-            WorkspaceRequest::TabGroupRenamed { id, name } => {
-                rearrange(&mut state, |before| rename_tab_group(before, &id, &name))
-            }
-            WorkspaceRequest::TabGroupUngrouped { id } => {
-                rearrange(&mut state, |before| ungroup_tab_group(before, &id))
-            }
-            WorkspaceRequest::PanelOpened { panel } => {
-                repanel(&mut state, |before| open_panel(before, panel))
-            }
-            WorkspaceRequest::PanelClosed { panel } => {
-                repanel(&mut state, |before| close_panel(before, panel))
-            }
-            WorkspaceRequest::PanelMoved { panel, edge } => {
-                repanel(&mut state, |before| move_panel(before, panel, edge))
-            }
-            WorkspaceRequest::PanelResized { panel, size } => {
-                repanel(&mut state, |before| resize_panel(before, panel, size))
-            }
-            // The stand-in answers only what the window sends.
-            _ => false,
-        };
-        if changed {
-            state.revision += 1;
-            let snapshot = state.clone();
-            self.publish(WindowOutput::State(snapshot));
-        }
-        (changed, made)
-    }
-
     // A send fails only once the window is gone, when there is nothing left to draw.
     fn publish(&self, output: WindowOutput) {
         let _ = self.window.unbounded_send(output);
@@ -208,15 +184,16 @@ impl StandIn {
 
 impl WorkspacePort for StandIn {
     fn send(&self, request: WorkspaceRequest, token: Option<u64>) {
-        let (ok, tab_group) = self.apply(request);
+        let now = now_ms();
+        let mut workspace = self.workspace.borrow_mut();
+        let (reply, out) = workspace.request(request, now);
+        let states = delivered(&mut workspace, out, now);
+        drop(workspace);
+        for state in states {
+            self.publish(WindowOutput::State(state));
+        }
         let Some(token) = token else {
             return;
-        };
-        let revision = self.state.borrow().revision;
-        let reply = RequestReply {
-            ok,
-            tab_group,
-            revision,
         };
         self.publish(WindowOutput::Replied { token, reply });
     }
@@ -315,24 +292,69 @@ impl ServicesPort for StandIn {
     }
 }
 
-fn rearrange(
-    state: &mut DrawnState,
-    change: impl FnOnce(&Arrangement) -> Option<Arrangement>,
-) -> bool {
-    let Some(before) = &state.arrangement else {
-        return false;
+/// The workspace the stand-in drives, held in memory; its terminals are numbered from t0, as the fixtures name them.
+pub(crate) fn stand_in_workspace() -> Workspace {
+    let mut next: u64 = 0;
+    let new_terminal_id = move || {
+        let id = TerminalId(format!("t{next}"));
+        next += 1;
+        id
     };
-    let Some(after) = change(before) else {
-        return false;
+    let options = Options {
+        settings_path: String::new(),
+        keybindings_path: String::new(),
+        new_terminal_id: Box::new(new_terminal_id),
+        storage: Box::new(Memory::default()),
+        restore_on_launch: true,
     };
-    state.arrangement = Some(after);
-    true
+    Workspace::new(options)
 }
 
-fn repanel(state: &mut DrawnState, change: impl FnOnce(&Panels) -> Option<Panels>) -> bool {
-    let Some(after) = change(&state.panels) else {
-        return false;
+/// The states published after an input, each terminal it opened or closed reported started or exited as the runtime would.
+pub(crate) fn delivered(
+    workspace: &mut Workspace,
+    out: Vec<Outbound>,
+    now_ms: u64,
+) -> Vec<DrawnState> {
+    let mut states = Vec::new();
+    let mut reports = Vec::new();
+    for output in out {
+        match output {
+            Outbound::State(state) => states.push(state),
+            Outbound::Runtime(RuntimeCommand::Open(start)) => {
+                let started = started_where_asked(start);
+                reports.push(started);
+            }
+            Outbound::Runtime(RuntimeCommand::Close { id }) => {
+                let exited = RuntimeReport::Exited { id, code: 0 };
+                reports.push(exited);
+            }
+            _ => {}
+        }
+    }
+    for report in reports {
+        let reported = workspace.runtime_report(report, now_ms);
+        let more = delivered(workspace, reported, now_ms);
+        states.extend(more);
+    }
+    states
+}
+
+fn started_where_asked(start: TerminalStart) -> RuntimeReport {
+    let home = home();
+    let mut directory = home.to_string_lossy().into_owned();
+    if let Some(asked) = start.directory {
+        directory = asked;
+    }
+    RuntimeReport::Started {
+        id: start.id,
+        directory,
+    }
+}
+
+pub(crate) fn home() -> PathBuf {
+    let Some(home) = std::env::home_dir() else {
+        return PathBuf::from("/");
     };
-    state.panels = after;
-    true
+    home
 }

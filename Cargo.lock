@@ -5078,6 +5078,7 @@ dependencies = [
  "taco-services",
  "taco-settings",
  "taco-terminal-view",
+ "taco-workspace",
  "unicode-segmentation",
 ]
 
