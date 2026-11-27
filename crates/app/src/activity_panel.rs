@@ -68,6 +68,7 @@ const SHARED_RADIUS: f32 = 9.;
 const SHOW_FEWER: &str = "Show fewer";
 const PILL_RADIUS: f32 = 8.;
 const NO_LONGER_SHARED: &str = "no longer in Shared";
+const FAILED_MARK: &str = "×";
 const CLOSE_SIZE: f32 = 14.;
 pub const MS_PER_MINUTE: u64 = 60_000;
 const MINUTES_PER_HOUR: u64 = 60;
@@ -95,6 +96,13 @@ pub struct ActivityInput<'a> {
     pub shared_all_shown: bool,
     pub now_ms: u64,
     pub look: &'a Look,
+}
+
+/// A step as the fold draws it: its words, and the first line of its error when it failed.
+#[derive(Clone, Debug, PartialEq)]
+struct StepLine {
+    text: String,
+    failed: Option<String>,
 }
 
 /// Who wrote a line, which picks its colour.
@@ -243,15 +251,43 @@ fn step_text(step: &StretchStep) -> String {
     }
 }
 
+fn failure_of(step: &StretchStep) -> Option<&str> {
+    let StretchStep::Step(Step::Did {
+        failed: Some(error),
+        ..
+    }) = step
+    else {
+        return None;
+    };
+    Some(error)
+}
+
+fn failure_count(steps: &[StretchStep]) -> usize {
+    let failures = steps.iter().filter(|step| failure_of(step).is_some());
+    failures.count()
+}
+
+// A failed search keeps a line of its own, so its error is not folded into "Searched 3 times".
 fn is_search(step: &StretchStep) -> bool {
-    let StretchStep::Step(Step::Did { tool, .. }) = step else {
+    let StretchStep::Step(Step::Did {
+        tool, failed: None, ..
+    }) = step
+    else {
         return false;
     };
     tool == "Grep" || tool == "Glob"
 }
 
+fn step_line(step: &StretchStep) -> StepLine {
+    let failed = failure_of(step).map(str::to_string);
+    StepLine {
+        text: step_text(step),
+        failed,
+    }
+}
+
 /// One line per step, with a run of searches told as one.
-fn step_lines(steps: &[StretchStep]) -> Vec<String> {
+fn step_lines(steps: &[StretchStep]) -> Vec<StepLine> {
     let mut lines = Vec::new();
     let mut searches = Vec::new();
     for step in steps {
@@ -260,17 +296,20 @@ fn step_lines(steps: &[StretchStep]) -> Vec<String> {
             continue;
         }
         tell_searches(&mut searches, &mut lines);
-        lines.push(step_text(step));
+        lines.push(step_line(step));
     }
     tell_searches(&mut searches, &mut lines);
     lines
 }
 
-fn tell_searches(searches: &mut Vec<&StretchStep>, lines: &mut Vec<String>) {
+fn tell_searches(searches: &mut Vec<&StretchStep>, lines: &mut Vec<StepLine>) {
     match searches.as_slice() {
         [] => {}
-        [only] => lines.push(step_text(only)),
-        several => lines.push(format!("Searched {} times", several.len())),
+        [only] => lines.push(step_line(only)),
+        several => {
+            let text = format!("Searched {} times", several.len());
+            lines.push(StepLine { text, failed: None });
+        }
     }
     searches.clear();
 }
@@ -286,13 +325,17 @@ fn fold_label(steps: &Stretch, is_open: bool) -> String {
     if count == 0 {
         return "Show the earlier steps".to_string();
     }
+    let mut label = format!("Show the {count} steps");
     if steps.earlier_not_loaded {
-        return format!("Show the {count}+ steps");
+        label = format!("Show the {count}+ steps");
+    } else if count == 1 {
+        label = "Show the step".to_string();
     }
-    if count == 1 {
-        return "Show the step".to_string();
+    let failures = failure_count(&steps.steps);
+    if failures > 0 {
+        label = format!("{label}, {failures} failed");
     }
-    format!("Show the {count} steps")
+    label
 }
 
 fn local_time(ms: u64) -> Option<DateTime<Local>> {
@@ -788,6 +831,10 @@ fn item_element(item: &LogItem, input: &ActivityInput, cx: &mut Context<WindowVi
             if let Some(newest) = steps.steps.last() {
                 let newest_text = step_text(newest);
                 body.push(peek(&newest_text, input.look));
+                if let Some(error) = failure_of(newest) {
+                    let failure = failure_line(error, input.look);
+                    body.push(failure.into_any_element());
+                }
             }
             if let Some(fold) = fold(steps, input, cx) {
                 body.push(fold);
@@ -897,6 +944,20 @@ fn entry(
     line.into_any_element()
 }
 
+// In the normal ink with a mark, never the needs colour, which means "this terminal needs you".
+fn failure_line(error: &str, look: &Look) -> Div {
+    let mark = div().flex_none().child(FAILED_MARK);
+    let words = div().min_w_0().child(error.to_string());
+    div()
+        .flex()
+        .items_start()
+        .gap(px(4.))
+        .min_w_0()
+        .text_color(look.text)
+        .child(mark)
+        .child(words)
+}
+
 fn peek(text: &str, look: &Look) -> AnyElement {
     div()
         .w_full()
@@ -980,7 +1041,10 @@ fn fold(
         .text_size(px(STEP_TEXT_SIZE))
         .text_color(look.secondary_text);
     for line in step_lines(&steps.steps) {
-        let step = div().min_w_0().child(line);
+        let mut step = div().flex().flex_col().min_w_0().child(line.text);
+        if let Some(error) = &line.failed {
+            step = step.child(failure_line(error, look));
+        }
         list = list.child(step);
     }
     column = column.child(list);
@@ -1043,6 +1107,17 @@ mod tests {
         StretchStep::Step(Step::Changed { tool, path })
     }
 
+    fn failed(tool: &str, summary: &str, error: &str) -> StretchStep {
+        let tool = tool.to_string();
+        let summary = summary.to_string();
+        let failed = Some(error.to_string());
+        StretchStep::Step(Step::Did {
+            tool,
+            summary,
+            failed,
+        })
+    }
+
     #[test]
     fn steps_tell_a_run_of_searches_as_one_and_folds_count_what_is_held() {
         let code_83 = Peer {
@@ -1053,20 +1128,31 @@ mod tests {
             did("Grep", "SIGHUP"),
             did("Glob", "*.rs"),
             did("Read", "pty.rs"),
+            failed("Bash", "cargo test", "Exit code 101: 2 tests failed"),
             changed("Write", "PLAN.md"),
             changed("Edit", "pty.rs"),
             StretchStep::SentMessage(code_83),
             did("Glob", "tests/*.rs"),
+            failed("Grep", "kill(", "regex parse error"),
+            did("Grep", "fn shutdown"),
         ];
         let expected = [
-            "Searched 2 times",
-            "Read pty.rs",
-            "Wrote PLAN.md",
-            "Edited pty.rs",
-            "Sent a message to code-83",
-            "Searched for tests/*.rs",
+            ("Searched 2 times", None),
+            ("Read pty.rs", None),
+            ("Ran cargo test", Some("Exit code 101: 2 tests failed")),
+            ("Wrote PLAN.md", None),
+            ("Edited pty.rs", None),
+            ("Sent a message to code-83", None),
+            ("Searched for tests/*.rs", None),
+            ("Searched for kill(", Some("regex parse error")),
+            ("Searched for fn shutdown", None),
         ];
-        assert_eq!(step_lines(&steps), expected);
+        let lines = step_lines(&steps);
+        let told: Vec<(&str, Option<&str>)> = lines
+            .iter()
+            .map(|line| (line.text.as_str(), line.failed.as_deref()))
+            .collect();
+        assert_eq!(told, expected);
 
         let stretch = |count: usize, earlier_not_loaded: bool| Stretch {
             number: 1,
@@ -1075,7 +1161,14 @@ mod tests {
         };
         assert_eq!(fold_label(&stretch(1, false), false), "Show the step");
         assert_eq!(fold_label(&stretch(1, false), true), "Hide the step");
-        assert_eq!(fold_label(&stretch(7, true), false), "Show the 7+ steps");
+        assert_eq!(
+            fold_label(&stretch(4, false), false),
+            "Show the 4 steps, 1 failed"
+        );
+        assert_eq!(
+            fold_label(&stretch(7, true), false),
+            "Show the 7+ steps, 1 failed"
+        );
         assert_eq!(
             fold_label(&stretch(0, true), false),
             "Show the earlier steps"
