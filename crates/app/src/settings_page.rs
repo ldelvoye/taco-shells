@@ -15,14 +15,13 @@ use crate::page::{
     CHIP_GAP, PageMove, ROW_GAP, ROW_PADDING, chip, form_column, group, page_foot, page_frame,
     page_header, text_button,
 };
-use crate::shell::{shell_gradient, shell_outline};
+use crate::shell::{shell_orange, shell_outline};
 use crate::shortcuts_page::chords_for;
 use crate::text_field::TextField;
 use crate::window::WindowView;
 
 const SCROLL_ID: &str = "settings-scroll";
 const SCROLLBACK_MARK: &str = "settings:scrollback";
-const SHELL_ANGLE: f32 = 90.;
 const SHELL_OUTLINE: f32 = 1.5;
 const TITLE: &str = "Settings";
 const OPEN_FILE_LABEL: &str = "Open settings.json";
@@ -449,7 +448,7 @@ fn segmented(segments: Vec<Segment>, look: &Look, cx: &mut Context<WindowView>) 
             .text_color(look.secondary_text)
             .child(segment.label);
         if segment.chosen {
-            let outline = shell_outline(SHELL_OUTLINE, SEGMENT_RADIUS, SHELL_ANGLE);
+            let outline = shell_outline(SHELL_OUTLINE, SEGMENT_RADIUS);
             shown = shown
                 .relative()
                 .bg(look.selected_card)
@@ -482,7 +481,7 @@ fn switch(
     let mut knob_color = look.secondary_text;
     let mut knob_left = KNOB_LEFT_OFF;
     if on {
-        track_color = shell_gradient(SHELL_ANGLE);
+        track_color = shell_orange().into();
         border_color = transparent_black();
         knob_color = white();
         knob_left = KNOB_LEFT_ON;
