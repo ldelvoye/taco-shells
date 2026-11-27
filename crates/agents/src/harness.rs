@@ -1,10 +1,17 @@
 use taco_protocol::{AgentSignal, HarnessId, Step};
 
-/// What a hook's payload adds to Agent Activity: the user's prompt, or a step the agent took.
+/// What a hook's payload adds to Agent Activity: the user's prompt, a step the agent took, or a note it wrote.
 #[derive(Clone, Debug, PartialEq)]
 pub enum EntryRead {
-    Asked { text: String },
+    Asked {
+        text: String,
+        /// The id of the agent's turn; a prompt sent while a turn runs carries that turn's.
+        turn: Option<String>,
+    },
     Step(Step),
+    Note {
+        text: String,
+    },
 }
 
 /// A terminal title read as a row name, and whether the agent said it is idle.
