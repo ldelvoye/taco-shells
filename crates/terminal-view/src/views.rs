@@ -206,14 +206,15 @@ impl Views {
         if self.reported_focus.as_ref() == Some(&current) {
             return;
         }
-        let attached = self.views.get(&id).is_some_and(|view| view.is_attached());
-        if !attached {
-            return;
-        }
         if let Some((previous, true)) = self.reported_focus.clone()
             && previous != id
         {
             self.send_focus(&previous, false);
+            self.reported_focus = Some((previous, false));
+        }
+        let attached = self.views.get(&id).is_some_and(|view| view.is_attached());
+        if !attached {
+            return;
         }
         self.send_focus(&id, focused);
         self.reported_focus = Some(current);
@@ -486,13 +487,15 @@ mod tests {
             vec![(a, b"\x1b[O".to_vec()), (b.clone(), b"\x1b[I".to_vec())]
         );
 
-        // A terminal whose view has not attached yet is told nothing; back on `b`, losing focus is reported.
+        // Switching to a terminal whose view has not attached yet still tells `b` it lost focus; the new one is told nothing.
         views.show(&open, Some(&c));
+        views.report_focus(true);
+        assert_eq!(writes(&mut views), vec![(b.clone(), b"\x1b[O".to_vec())]);
         views.report_focus(true);
         assert_eq!(writes(&mut views), vec![]);
         views.show(&open, Some(&b));
-        views.report_focus(false);
-        assert_eq!(writes(&mut views), vec![(b, b"\x1b[O".to_vec())]);
+        views.report_focus(true);
+        assert_eq!(writes(&mut views), vec![(b, b"\x1b[I".to_vec())]);
     }
 
     #[test]
