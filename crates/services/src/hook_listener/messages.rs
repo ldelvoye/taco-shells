@@ -5,22 +5,15 @@ use taco_protocol::{
     AgentHookBody, HookCall, HookMessage, SessionEndBody, SessionStartBody, SessionStateBody,
 };
 
-use super::is_any_channels_activity_call;
-
 pub(super) struct ParsedHook {
     pub(super) message: HookMessage,
     pub(super) source: String,
 }
 
-pub(super) fn parse_message(
-    route: &str,
-    body: &[u8],
-    sent_token: Option<&str>,
-    token: &str,
-) -> Option<HookMessage> {
+pub(super) fn parse_message(route: &str, body: &[u8]) -> Option<HookMessage> {
     match route {
         AGENT_HOOK => {
-            let parsed = parse_hook_message(body, sent_token, token)?;
+            let parsed = parse_hook_message(body)?;
             Some(parsed.message)
         }
         SESSION_START => parse_start(body),
@@ -79,24 +72,13 @@ fn parse_state(body: &[u8]) -> Option<HookMessage> {
     Some(HookMessage { pids, call })
 }
 
-pub(super) fn parse_hook_message(
-    body: &[u8],
-    sent_token: Option<&str>,
-    token: &str,
-) -> Option<ParsedHook> {
+pub(super) fn parse_hook_message(body: &[u8]) -> Option<ParsedHook> {
     let parsed: AgentHookBody<Box<RawValue>> = serde_json::from_slice(body).ok()?;
     let harness = harness_of(&parsed.harness.0)?;
     let pids = non_empty(parsed.pids)?;
 
     let payload_text = parsed.payload.get();
     let fields = harness.hook_fields(payload_text)?;
-
-    let tool_name = fields.tool_name.as_deref();
-    let is_activity_call = tool_name.is_some_and(is_any_channels_activity_call);
-    // Any local process can post here, so an activity call counts only with the token the app wrote for its own hook.
-    if is_activity_call && sent_token != Some(token) {
-        return None;
-    }
 
     let session_id = checked_session_id(harness, fields.session_id)?;
     let mut source = String::new();

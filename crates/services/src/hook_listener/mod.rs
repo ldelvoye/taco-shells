@@ -14,7 +14,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use taco_agents::{ACTIVITY_SERVER, ACTIVITY_TOOLS};
 use taco_protocol::routes::{CONTEXT, STOP};
 use taco_protocol::{HookMessage, deadlines};
 
@@ -29,7 +28,6 @@ pub const FOCUS_PORTS: std::ops::RangeInclusive<u16> = 23456..=23460;
 
 const UPDATE_CHECK_ROUTE: &str = "/update/check";
 
-const PLUGIN_TOOL_PREFIX: &str = "mcp__plugin_";
 // The plugin's hook gives up after 250 ms, so a connection still sending after a second is dead.
 const READ_DEADLINE: Duration = Duration::from_secs(1);
 const WAKE_TIMEOUT: Duration = Duration::from_millis(200);
@@ -163,16 +161,6 @@ fn write_token_file(path: &Path, token: &str) {
     }
 }
 
-fn is_any_channels_activity_call(tool_name: &str) -> bool {
-    if !tool_name.starts_with(PLUGIN_TOOL_PREFIX) {
-        return false;
-    }
-    ACTIVITY_TOOLS.iter().any(|name| {
-        let suffix = format!("_{ACTIVITY_SERVER}__{name}");
-        tool_name.ends_with(&suffix)
-    })
-}
-
 fn bind_first_free(ports: &[u16]) -> Option<TcpListener> {
     for port in ports {
         let bound = TcpListener::bind(("127.0.0.1", *port));
@@ -266,7 +254,7 @@ fn handle(mut stream: TcpStream, deadline: Instant, serving: &Serving) {
     if sent_token != Some(token) {
         return;
     }
-    let message = parse_message(&head.route, &body, sent_token, token);
+    let message = parse_message(&head.route, &body);
     if let Some(message) = message {
         on_event(ListenerEvent::Hook(message));
     }
