@@ -794,6 +794,7 @@ mod test_support {
 
     const SIGNATURE_SUFFIX: &str = ".sig";
     const SIGNING_TOOL: &str = "/usr/bin/ssh-keygen";
+    const SIGNING_DEADLINE: Duration = Duration::from_secs(10);
 
     static SHARED_KEY: OnceLock<(String, String)> = OnceLock::new();
 
@@ -805,6 +806,23 @@ mod test_support {
             .env("PATH", "/usr/bin:/bin")
             .stdin(std::process::Stdio::null());
         command
+    }
+
+    fn succeeds_in_time(command: &mut Command) -> bool {
+        let mut child = command.spawn().unwrap();
+        let deadline = Instant::now() + SIGNING_DEADLINE;
+        loop {
+            let polled = child.try_wait().unwrap();
+            if let Some(status) = polled {
+                return status.success();
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("{SIGNING_TOOL} overran {SIGNING_DEADLINE:?}");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     pub(super) struct ZipFeed {
@@ -872,12 +890,11 @@ mod test_support {
 
     fn generate_key(directory: &Path, name: &str) -> (String, String) {
         let private = directory.join(name);
-        let status = signing_tool()
+        let mut command = signing_tool();
+        command
             .args(["-q", "-t", "ed25519", "-N", "", "-f"])
-            .arg(&private)
-            .status()
-            .unwrap();
-        assert!(status.success());
+            .arg(&private);
+        assert!(succeeds_in_time(&mut command));
         let private_text = fs::read_to_string(&private).unwrap();
         let public_path = directory.join(format!("{name}.pub"));
         let public_text = fs::read_to_string(public_path).unwrap();
@@ -914,16 +931,15 @@ mod test_support {
     }
 
     pub(super) fn sign(key: &TestKey, file: &Path) -> PathBuf {
-        let status = signing_tool()
+        let mut command = signing_tool();
+        command
             .args(["-Y", "sign", "-f"])
             .arg(&key.private)
             .args(["-n", RELEASE_SIGNING_NAMESPACE])
             .arg(file)
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .unwrap();
-        assert!(status.success());
+            .stderr(std::process::Stdio::null());
+        assert!(succeeds_in_time(&mut command));
         let mut signature = file.as_os_str().to_os_string();
         signature.push(SIGNATURE_SUFFIX);
         PathBuf::from(signature)
