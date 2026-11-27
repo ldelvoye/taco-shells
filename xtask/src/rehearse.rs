@@ -9,8 +9,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use taco_identity::{
-    APP_PROGRAM, BACKGROUND_WINDOW_VARIABLE, CONFIG_DIRECTORY_VARIABLE, DEVELOPMENT,
-    INFO_PLIST_PATH, PROGRAMS_PATH, UPDATE_FEED_VARIABLE, release_zip_name,
+    APP_PROGRAM, BACKGROUND_WINDOW_VARIABLE, CONFIG_DIRECTORY_VARIABLE, INFO_PLIST_PATH,
+    PROGRAMS_PATH, UPDATE_FEED_VARIABLE, release_zip_name,
 };
 
 use crate::build::{Channel, Profile};
@@ -20,39 +20,23 @@ use crate::repo;
 
 const REHEARSAL_VERSION: &str = "999.0.0";
 const REHEARSAL_APP: &str = "/Applications/Taco Shells Rehearsal.app";
-const DEFAULT_ELECTRON_APP: &str = "/Applications/Taco Shells Dev.app";
 const READY_TIMEOUT: Duration = Duration::from_secs(120);
 const READY_POLL: Duration = Duration::from_millis(500);
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 // The Rust copy installed to be updated; any plain version below REHEARSAL_VERSION would do.
-const OLD_RUST_VERSION: &str = "0.0.1";
+const OLD_VERSION: &str = "0.0.1";
 const VERSION_KEY: &str = "CFBundleShortVersionString";
 const APP_LOG: &str = "app.log";
 const NOT_A_TERMINAL: &str = "the click-through waits for you to press Enter, and this has no terminal to read it from; run it in a terminal window, or use --until-ready";
-const ELECTRON_AND_RUST: &str = "--electron and --from-rust do not go together";
 
 pub struct Options {
-    pub electron: Option<PathBuf>,
-    pub from_rust: bool,
     pub until_ready: bool,
-}
-
-struct ElectronApp {
-    path: PathBuf,
-    executable: String,
-}
-
-/// The app the rehearsal installs and then updates: the Electron Dev build, or a Rust build of an older version.
-enum OldApp {
-    Electron(ElectronApp),
-    Rust,
 }
 
 struct Rehearsal {
     work: PathBuf,
     config: PathBuf,
     feed_url: String,
-    old: OldApp,
 }
 
 /// A child process a thread waits on; `exited` hears once it has been reaped.
@@ -66,16 +50,6 @@ pub fn run(options: &Options) -> Result<(), String> {
     if !options.until_ready && !stdin_is_a_terminal {
         return Err(NOT_A_TERMINAL.to_string());
     }
-    let old = if options.from_rust {
-        if options.electron.is_some() {
-            return Err(ELECTRON_AND_RUST.to_string());
-        }
-        OldApp::Rust
-    } else {
-        let electron = check_electron(&options.electron)?;
-        OldApp::Electron(electron)
-    };
-
     let target = repo::target_dir()?;
     let work = target.join("rehearsal.noindex");
     let config = work.join("config");
@@ -85,15 +59,9 @@ pub fn run(options: &Options) -> Result<(), String> {
     create_dir(&config)?;
 
     let profile = profile_for(options.until_ready);
-    let built = build_rust_bundle(&config, profile)?;
-    let (served, installed) = match &old {
-        OldApp::Electron(electron) => (built, electron.path.clone()),
-        OldApp::Rust => {
-            let older = versioned_copy(&built, &work.join("old"), OLD_RUST_VERSION)?;
-            let newer = versioned_copy(&built, &work.join("new"), REHEARSAL_VERSION)?;
-            (newer, older)
-        }
-    };
+    let built = build_bundle(&config, profile)?;
+    let installed = versioned_copy(&built, &work.join("old"), OLD_VERSION)?;
+    let served = versioned_copy(&built, &work.join("new"), REHEARSAL_VERSION)?;
     let zip = zip_up(&served, &work)?;
     let zip_size = file_size(&zip)?;
 
@@ -127,43 +95,11 @@ pub fn run(options: &Options) -> Result<(), String> {
         work,
         config,
         feed_url,
-        old,
     };
     if options.until_ready {
         run_until_ready(&rehearsal)
     } else {
         run_click_through(&rehearsal)
-    }
-}
-
-impl OldApp {
-    fn executable(&self) -> &str {
-        match self {
-            OldApp::Electron(electron) => &electron.executable,
-            OldApp::Rust => APP_PROGRAM,
-        }
-    }
-
-    fn described(&self) -> String {
-        match self {
-            OldApp::Electron(_) => "the Electron Dev build".to_string(),
-            OldApp::Rust => format!("a Rust build at version {OLD_RUST_VERSION}"),
-        }
-    }
-
-    // Electron is swapped for the Rust app; an older Rust build for the one with the served version.
-    fn was_swapped(&self) -> bool {
-        let rehearsal_app = Path::new(REHEARSAL_APP);
-        match self {
-            OldApp::Electron(_) => {
-                let rust_program = rehearsal_app.join(PROGRAMS_PATH).join(APP_PROGRAM);
-                rust_program.exists()
-            }
-            OldApp::Rust => {
-                let version = plist_value(rehearsal_app, VERSION_KEY);
-                matches!(version, Ok(version) if version == REHEARSAL_VERSION)
-            }
-        }
     }
 }
 
@@ -175,35 +111,9 @@ fn profile_for(until_ready: bool) -> Profile {
     Profile::Release
 }
 
-fn check_electron(requested: &Option<PathBuf>) -> Result<ElectronApp, String> {
-    let path = match requested {
-        Some(path) => path.clone(),
-        None => PathBuf::from(DEFAULT_ELECTRON_APP),
-    };
-    if !path.exists() {
-        return Err(format!(
-            "the Electron app {} does not exist",
-            path.display()
-        ));
-    }
-    let framework = path.join("Contents/Frameworks/Electron Framework.framework");
-    if !framework.exists() {
-        return Err(format!(
-            "{} is not an Electron app: {} is missing",
-            path.display(),
-            framework.display()
-        ));
-    }
-    let identifier = plist_value(&path, "CFBundleIdentifier")?;
-    let expected = DEVELOPMENT.bundle_id;
-    if identifier != expected {
-        return Err(format!(
-            "{} has bundle identifier {identifier}, expected {expected}",
-            path.display()
-        ));
-    }
-    let executable = plist_value(&path, "CFBundleExecutable")?;
-    Ok(ElectronApp { path, executable })
+fn was_updated() -> bool {
+    let version = plist_value(Path::new(REHEARSAL_APP), VERSION_KEY);
+    matches!(version, Ok(version) if version == REHEARSAL_VERSION)
 }
 
 fn plist_value(app: &Path, key: &str) -> Result<String, String> {
@@ -220,9 +130,9 @@ fn plist_value(app: &Path, key: &str) -> Result<String, String> {
     }
 }
 
-// The update script reopens the app with `open`, which passes it no environment, so the Rust app carries the
+// The update script reopens the app with `open`, which passes it no environment, so the app carries the
 // rehearsal's config directory compiled in and opens on what the old copy left there.
-fn build_rust_bundle(config: &Path, profile: Profile) -> Result<PathBuf, String> {
+fn build_bundle(config: &Path, profile: Profile) -> Result<PathBuf, String> {
     let options = BundleOptions {
         profile,
         channel: Channel::Development,
@@ -350,7 +260,7 @@ fn response_header(status: &str, content_type: &str, length: u64) -> String {
 
 fn launch(rehearsal: &Rehearsal, background: bool) -> Result<Child, String> {
     let programs = Path::new(REHEARSAL_APP).join(PROGRAMS_PATH);
-    let executable = programs.join(rehearsal.old.executable());
+    let executable = programs.join(APP_PROGRAM);
     let log_path = rehearsal.work.join(APP_LOG);
     let log = File::create(&log_path)
         .map_err(|error| format!("could not create {}: {error}", log_path.display()))?;
@@ -389,8 +299,7 @@ fn run_until_ready(rehearsal: &Rehearsal) -> Result<(), String> {
     match ready {
         Some(app) => {
             println!(
-                "ready: {} downloaded and unpacked the Rust bundle at {}",
-                rehearsal.old.described(),
+                "ready: version {OLD_VERSION} downloaded and unpacked version {REHEARSAL_VERSION} at {}",
                 app.display()
             );
             Ok(())
@@ -404,7 +313,7 @@ fn run_until_ready(rehearsal: &Rehearsal) -> Result<(), String> {
     }
 }
 
-// A person's run: the old copy is shown, they click Restart to Update, and the Rust app opens in its place.
+// A person's run: the old copy is shown, they click Restart to Update, and the served version opens in its place.
 fn run_click_through(rehearsal: &Rehearsal) -> Result<(), String> {
     let child = match launch(rehearsal, false) {
         Ok(child) => child,
@@ -416,13 +325,12 @@ fn run_click_through(rehearsal: &Rehearsal) -> Result<(), String> {
     let old_copy = reaped_when_it_exits(child);
 
     println!(
-        "Taco Shells Rehearsal is open: {}, on {}.",
-        rehearsal.old.described(),
+        "Taco Shells Rehearsal is open: version {OLD_VERSION}, on {}.",
         rehearsal.config.display()
     );
     println!("Wait for the Update menu (about 15 s), then click Restart to Update.");
     println!(
-        "It should reopen as the Rust app it was served, on the same config. The old copy goes to the Trash."
+        "It should reopen as version {REHEARSAL_VERSION}, on the same config. The old copy goes to the Trash."
     );
     println!("Press Enter here once you have looked.");
     let mut answer = String::new();
@@ -435,8 +343,8 @@ fn run_click_through(rehearsal: &Rehearsal) -> Result<(), String> {
     }
 
     end_reaped(&old_copy);
-    if rehearsal.old.was_swapped() {
-        println!("{REHEARSAL_APP} is now the Rust app it was served.");
+    if was_updated() {
+        println!("{REHEARSAL_APP} is now version {REHEARSAL_VERSION}, the one it was served.");
     } else {
         let updates = rehearsal.config.join("updates").join(REHEARSAL_VERSION);
         println!("{REHEARSAL_APP} was not replaced: the update did not happen.");
