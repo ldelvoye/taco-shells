@@ -84,7 +84,7 @@ const ASKED: &str = "asked";
 const CHANGED: &str = "changed";
 const SHORT_LOG_PAGE: usize = 6;
 const FULL_LOG_PAGE: usize = 200;
-// The full log's newest 17 entries start on the nudged fix's second step.
+// The newest page must start inside a noted stretch: here, the nudged fix's second step.
 const CUT_LOG_PAGE: usize = 17;
 const NARROW_PANEL: f32 = 140.;
 const PLAN_NOTE: &str = "Wrote PLAN-sigkill.md. Today a closed terminal or a stopping runtime gets one SIGHUP and \

@@ -358,8 +358,9 @@ fn quiet_button(id: ElementId, label: &str, look: &Look) -> Stateful<Div> {
         .child(label.to_string())
 }
 
-// The button's label lines up with the text above it, its padding hanging out to the left.
-fn aligned(button: Stateful<Div>) -> Stateful<Div> {
+// The label lines up with the text above it, the button's padding hanging out to the left.
+fn aligned_button(id: ElementId, label: &str, look: &Look) -> Stateful<Div> {
+    let button = quiet_button(id, label, look);
     button.ml(px(-QUIET_PADDING))
 }
 
@@ -451,7 +452,7 @@ fn log_section(input: &ActivityInput, row: &AgentRow, cx: &mut Context<WindowVie
         section = section.child(shown);
     }
     if !input.log.complete && !input.log.entries.is_empty() {
-        let label = aligned(quiet_button(OLDER_ID.into(), SHOW_OLDER, look));
+        let label = aligned_button(OLDER_ID.into(), SHOW_OLDER, look);
         let older = label.on_click(cx.listener(|view, _, _, _| view.show_older()));
         let placed = div().flex().pt(px(ITEM_PADDING)).child(older);
         section = section.child(placed);
@@ -467,7 +468,8 @@ fn item_element(item: &LogItem, input: &ActivityInput, cx: &mut Context<WindowVi
             text,
             steps,
         } => {
-            let mut body = vec![long_text(*seq, text, input, cx)];
+            let said = long_text(*seq, text, input, cx);
+            let mut body = vec![said];
             if let Some(steps) = steps
                 && let Some(fold) = fold(steps, input, cx)
             {
@@ -485,7 +487,8 @@ fn item_element(item: &LogItem, input: &ActivityInput, cx: &mut Context<WindowVi
         LogItem::Working { at_ms, steps } => {
             let mut body = Vec::new();
             if let Some(newest) = steps.steps.last() {
-                body.push(peek(&step_text(newest), input.look));
+                let newest_text = step_text(newest);
+                body.push(peek(&newest_text, input.look));
             }
             if let Some(fold) = fold(steps, input, cx) {
                 body.push(fold);
@@ -493,8 +496,8 @@ fn item_element(item: &LogItem, input: &ActivityInput, cx: &mut Context<WindowVi
             entry(Who::App, WORKING_LABEL, *at_ms, body, input)
         }
         LogItem::Asked { seq, at_ms, text } => {
-            let body = vec![long_text(*seq, text, input, cx)];
-            entry(Who::User, ASKED_LABEL, *at_ms, body, input)
+            let said = long_text(*seq, text, input, cx);
+            entry(Who::User, ASKED_LABEL, *at_ms, vec![said], input)
         }
         LogItem::MessageIn {
             seq,
@@ -503,8 +506,8 @@ fn item_element(item: &LogItem, input: &ActivityInput, cx: &mut Context<WindowVi
             text,
         } => {
             let label = format!("From {}", peer_name(from));
-            let body = vec![long_text(*seq, text, input, cx)];
-            entry(Who::OtherAgent, &label, *at_ms, body, input)
+            let said = long_text(*seq, text, input, cx);
+            entry(Who::OtherAgent, &label, *at_ms, vec![said], input)
         }
         LogItem::MessageOut {
             seq,
@@ -513,15 +516,16 @@ fn item_element(item: &LogItem, input: &ActivityInput, cx: &mut Context<WindowVi
             text,
         } => {
             let label = format!("To {}", peer_name(to));
-            let body = vec![long_text(*seq, text, input, cx)];
-            entry(Who::Agent, &label, *at_ms, body, input)
+            let said = long_text(*seq, text, input, cx);
+            entry(Who::Agent, &label, *at_ms, vec![said], input)
         }
         LogItem::Shared {
             at_ms, by, title, ..
         } => {
             let label = shared_label(by);
+            let who = Who::of(by);
             let shown = div().min_w_0().child(title.clone()).into_any_element();
-            entry(Who::of(by), &label, *at_ms, vec![shown], input)
+            entry(who, &label, *at_ms, vec![shown], input)
         }
         LogItem::AskedForNote { at_ms, .. } => {
             entry(Who::App, ASKED_FOR_NOTE_LABEL, *at_ms, Vec::new(), input)
@@ -619,15 +623,17 @@ fn long_text(
         shown = text.to_string();
         label = SHOW_LESS;
     }
-    let button = aligned(quiet_button(element_id("text", seq), label, input.look));
+    let id = element_id("text", seq);
+    let button = aligned_button(id, label, input.look);
     let toggle = button.on_click(cx.listener(move |view, _, _, cx| view.toggle_text(seq, cx)));
+    let words = div().min_w_0().child(shown);
     div()
         .flex()
         .flex_col()
         .items_start()
         .gap(px(2.))
         .min_w_0()
-        .child(div().min_w_0().child(shown))
+        .child(words)
         .child(toggle)
         .into_any_element()
 }
@@ -646,7 +652,8 @@ fn fold(
     let number = steps.number;
     let is_open = input.folds_open.contains(&number);
     let label = fold_label(steps, is_open);
-    let button = aligned(quiet_button(element_id("fold", number), &label, look));
+    let id = element_id("fold", number);
+    let button = aligned_button(id, &label, look);
     let toggle = button.on_click(cx.listener(move |view, _, _, cx| view.toggle_fold(number, cx)));
     let mut column = div()
         .flex()
@@ -670,26 +677,25 @@ fn fold(
         .text_size(px(STEP_TEXT_SIZE))
         .text_color(look.secondary_text);
     for line in step_lines(&steps.steps) {
-        list = list.child(div().min_w_0().child(line));
+        let step = div().min_w_0().child(line);
+        list = list.child(step);
     }
     column = column.child(list);
     if steps.earlier_not_loaded {
-        let button = aligned(quiet_button(
-            element_id("earlier", number),
-            LOAD_EARLIER,
-            look,
-        ));
+        let id = element_id("earlier", number);
+        let button = aligned_button(id, LOAD_EARLIER, look);
         let earlier = button.on_click(cx.listener(|view, _, _, _| view.show_older()));
         column = column.child(earlier);
     }
     Some(column.into_any_element())
 }
 
-// The hairlines take what room is left, so they go before the words wrap.
+// The hairlines shrink to nothing before the words wrap.
 fn session_divider(source: StartSource, at_ms: u64, input: &ActivityInput) -> Div {
     let look = input.look;
     let time = time_label(at_ms, input.now_ms);
-    let words = format!("{} · {time}", session_words(source));
+    let text = format!("{} · {time}", session_words(source));
+    let words = div().text_center().child(text);
     let rule = || div().flex_1().min_w_0().h(px(1.)).bg(look.hairline);
     div()
         .flex()
@@ -701,7 +707,7 @@ fn session_divider(source: StartSource, at_ms: u64, input: &ActivityInput) -> Di
         .text_size(px(SMALL_TEXT_SIZE))
         .text_color(look.secondary_text)
         .child(rule())
-        .child(div().text_center().child(words))
+        .child(words)
         .child(rule())
 }
 
@@ -716,6 +722,57 @@ mod tests {
             text: "Set up Claude?".to_string(),
             terminals: vec![TerminalId(terminal.to_string())],
         }
+    }
+
+    fn did(tool: &str, summary: &str) -> StretchStep {
+        let tool = tool.to_string();
+        let summary = summary.to_string();
+        StretchStep::Step(Step::Did { tool, summary })
+    }
+
+    fn changed(tool: &str, path: &str) -> StretchStep {
+        let tool = tool.to_string();
+        let path = path.to_string();
+        StretchStep::Step(Step::Changed { tool, path })
+    }
+
+    #[test]
+    fn steps_tell_a_run_of_searches_as_one_and_folds_count_what_is_held() {
+        let code_83 = Peer {
+            name: Some("code-83".to_string()),
+            address: None,
+        };
+        let steps = vec![
+            did("Grep", "SIGHUP"),
+            did("Glob", "*.rs"),
+            did("Read", "pty.rs"),
+            changed("Write", "PLAN.md"),
+            changed("Edit", "pty.rs"),
+            StretchStep::SentMessage(code_83),
+            did("Glob", "tests/*.rs"),
+        ];
+        let expected = [
+            "Searched 2 times",
+            "Read pty.rs",
+            "Wrote PLAN.md",
+            "Edited pty.rs",
+            "Sent a message to code-83",
+            "Searched for tests/*.rs",
+        ];
+        assert_eq!(step_lines(&steps), expected);
+
+        let stretch = |count: usize, earlier_not_loaded: bool| Stretch {
+            number: 1,
+            steps: steps[..count].to_vec(),
+            earlier_not_loaded,
+        };
+        assert_eq!(fold_label(&stretch(1, false), false), "Show the step");
+        assert_eq!(fold_label(&stretch(1, false), true), "Hide the step");
+        assert_eq!(fold_label(&stretch(7, true), false), "Show the 7+ steps");
+        assert_eq!(
+            fold_label(&stretch(0, true), false),
+            "Show the earlier steps"
+        );
     }
 
     #[test]

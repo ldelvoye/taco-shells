@@ -77,7 +77,8 @@ pub enum LogItem {
     },
 }
 
-/// The steps of one stretch, or of neighbouring stretches with nothing between them.
+/// The steps of one stretch, or of neighbouring stretches with nothing between them. A stretch is numbered by the
+/// `seq` of its first step, so a number older than the oldest entry held means its start is not loaded.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Stretch {
     /// Names the fold: the newest stretch number in it, so loading older steps never moves it.
@@ -166,16 +167,18 @@ impl ActivityLog {
     }
 }
 
-/// The log's lines, newest first. `agent_working` keeps the newest stretch open when no note names it.
+/// The log's lines, newest first. While `agent_working`, the newest stretch with no note stays open unless a prompt
+/// or session start came after it.
 pub fn log_items(log: &ActivityLog, agent_working: bool) -> Vec<LogItem> {
     let stretches = stretch_members(&log.entries);
     let noted = noted_stretches(&log.entries);
+    let turn_start = newest_turn_start(&log.entries);
     let mut open = None;
-    if agent_working
-        && let Some(newest) = stretches.keys().next_back()
-        && !noted.contains(newest)
-    {
-        open = Some(*newest);
+    if agent_working && let Some((newest, members)) = stretches.iter().next_back() {
+        let ended_by_a_turn = turn_start.is_some_and(|start| start > members.last_seq);
+        if !ended_by_a_turn {
+            open = Some(*newest);
+        }
     }
     let mut items = Vec::new();
     for entry in &log.entries {
@@ -251,18 +254,22 @@ pub fn log_items(log: &ActivityLog, agent_working: bool) -> Vec<LogItem> {
 }
 
 /// The start of a long text, cut at a word and marked, or none when the text is short enough to show whole.
-pub fn preview(text: &str) -> Option<String> {
+pub fn preview(whole: &str) -> Option<String> {
+    // Leading blank lines would otherwise leave a preview of nothing but the mark.
+    let text = whole.trim_start();
     let by_characters = text.char_indices().nth(PREVIEW_CHARACTERS);
     let character_cut = by_characters.map(|(at, _)| at);
     let mut newlines = text.match_indices('\n');
     let line_cut = newlines.nth(PREVIEW_LINES - 1).map(|(at, _)| at);
-    let cut = [character_cut, line_cut].into_iter().flatten().min()?;
+    let cuts = [character_cut, line_cut];
+    let found = cuts.into_iter().flatten();
+    let cut = found.min()?;
     let rest = &text[cut..];
     if rest.trim().is_empty() {
         return None;
     }
     let kept = &text[..cut];
-    let inside_a_word = line_cut != Some(cut) && !rest.starts_with(char::is_whitespace);
+    let inside_a_word = !rest.starts_with(char::is_whitespace);
     let mut shown = kept;
     if inside_a_word && let Some(space) = kept.rfind(char::is_whitespace) {
         shown = &kept[..space];
@@ -294,6 +301,20 @@ fn stretch_members(entries: &[ActivityEntry]) -> BTreeMap<u64, Members> {
         members.last_seq = entry.seq;
     }
     stretches
+}
+
+fn newest_turn_start(entries: &[ActivityEntry]) -> Option<u64> {
+    let mut newest = None;
+    for entry in entries {
+        let starts_a_turn = matches!(
+            entry.kind,
+            ActivityKind::Asked { .. } | ActivityKind::SessionStarted { .. }
+        );
+        if starts_a_turn {
+            newest = Some(entry.seq);
+        }
+    }
+    newest
 }
 
 fn noted_stretches(entries: &[ActivityEntry]) -> HashSet<u64> {
@@ -362,8 +383,7 @@ fn peer_of(author: &Author) -> Peer {
     }
 }
 
-// A real turn starts with a prompt or a message line, so only an earlier build's log, where every step is a stretch
-// of its own, puts two unnoted groups side by side.
+// An earlier build's log makes every step a stretch of its own; read side by side, they are one group.
 fn merge_neighbouring_unnoted(items: Vec<LogItem>) -> Vec<LogItem> {
     let mut merged: Vec<LogItem> = Vec::new();
     for item in items {
@@ -560,6 +580,62 @@ mod tests {
 
         let stopped = outline(&log_items(&log, false));
         assert_eq!(stopped[0], "unnoted #13 [13,14]");
+
+        writer.asked();
+        let prompted_again = writer.log();
+        let before_its_first_step = outline(&log_items(&prompted_again, true));
+        assert_eq!(
+            before_its_first_step[..2],
+            ["asked 15", "unnoted #13 [13,14]"]
+        );
+
+        writer.ran().noted();
+        let noted_while_working = outline(&log_items(&writer.log(), true));
+        assert_eq!(noted_while_working[0], "note 17 #16 [16]");
+    }
+
+    #[test]
+    fn the_log_takes_only_entries_it_does_not_hold_for_the_terminal_it_watches() {
+        let mut writer = Writer::default();
+        writer.ran().ran().ran().ran().ran().ran().ran();
+        let entries = writer.entries;
+        let watched = TerminalId("watched".to_string());
+        let other = TerminalId("other".to_string());
+        let mut log = ActivityLog {
+            terminal: Some(watched.clone()),
+            ..ActivityLog::default()
+        };
+        log.apply(ActivityEvent::Loaded {
+            terminal: watched.clone(),
+            entries: entries[4..6].to_vec(),
+            complete: false,
+            board: Board::default(),
+        });
+        let older = ActivityEvent::Older {
+            terminal: watched.clone(),
+            entries: entries[2..4].to_vec(),
+            complete: true,
+        };
+        log.apply(older.clone());
+        log.apply(older);
+        log.apply(ActivityEvent::Appended {
+            terminal: watched,
+            entry: entries[5].clone(),
+        });
+        log.apply(ActivityEvent::Appended {
+            terminal: other.clone(),
+            entry: entries[6].clone(),
+        });
+        log.apply(ActivityEvent::Loaded {
+            terminal: other,
+            entries: entries[..2].to_vec(),
+            complete: true,
+            board: Board::default(),
+        });
+
+        let held: Vec<u64> = log.entries.iter().map(|entry| entry.seq).collect();
+        assert_eq!(held, [3, 4, 5, 6]);
+        assert!(log.complete);
     }
 
     #[test]
@@ -585,6 +661,15 @@ mod tests {
         };
         let newer = writer.entries[3..].to_vec();
         let older = writer.entries[..3].to_vec();
+        log.apply(ActivityEvent::Loaded {
+            terminal: terminal.clone(),
+            entries: newer.clone(),
+            complete: true,
+            board: Board::default(),
+        });
+        let trimmed_for_good = outline(&log_items(&log, false));
+        assert_eq!(trimmed_for_good, ["note 6 #2 [4,5]"]);
+
         log.apply(ActivityEvent::Loaded {
             terminal: terminal.clone(),
             entries: newer,
@@ -616,5 +701,8 @@ mod tests {
 
         let six_and_a_trailing_break = "line\n".repeat(6);
         assert_eq!(preview(&six_and_a_trailing_break), None);
+
+        let blank_lines_first = "\n".repeat(7) + &words;
+        assert_eq!(preview(&blank_lines_first), Some(cut));
     }
 }
