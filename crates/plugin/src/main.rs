@@ -33,7 +33,6 @@ fn run_allow() -> std::io::Result<()> {
 }
 
 fn run_hook() -> std::io::Result<()> {
-    let deadline = Instant::now() + HOOK_DEADLINE;
     let mut raw_payload = String::new();
     std::io::stdin().read_to_string(&mut raw_payload)?;
 
@@ -59,15 +58,15 @@ fn run_hook() -> std::io::Result<()> {
     let pids = ancestor_pids(std::os::unix::process::parent_id(), ANCESTOR_LIMIT);
     let token = read_token(&path);
     let posts = posts_for(&payload, &pids);
-    send_posts(&posts, |request| {
-        post(port, request, token.as_deref(), deadline)
-    });
+    let token_text = token.as_deref();
+    let deadline = Instant::now() + HOOK_DEADLINE;
+    send_posts(&posts, |request| post(port, request, token_text, deadline));
     Ok(())
 }
 
 fn main() -> ExitCode {
     let mode = std::env::args().nth(1);
-    // A hook never fails the agent: every outcome exits 0, within the hook's deadline.
+    // A hook never fails the agent: every outcome exits 0, and its posts give up after the hook's deadline.
     if mode.as_deref() == Some("hook") {
         let _ = run_hook();
         return ExitCode::SUCCESS;

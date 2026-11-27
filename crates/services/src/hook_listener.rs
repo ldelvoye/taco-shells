@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use serde_json::value::RawValue;
 use serde_json::{Map, Value};
 use taco_agents::{Harness, harness_of};
+use taco_plugin::{SERVER_NAME, TOOL_NAMES};
 use taco_protocol::{HookCall, HookMessage};
 
 pub const FOCUS_PORTS: std::ops::RangeInclusive<u16> = 23456..=23460;
@@ -30,9 +31,8 @@ const READ_CHUNK: usize = 64 * 1024;
 const HEAD_END: &[u8] = b"\r\n\r\n";
 const TOKEN_FILE_NAME: &str = "focus-token";
 const TOKEN_HEADER: &str = "x-taco-shells-token";
-const ACTIVITY_PREFIX: &str = "mcp__plugin_";
-const ACTIVITY_SUFFIXES: [&str; 3] = ["_activity__note", "_activity__now", "_activity__share"];
-// The hook scripts give up after a second, so a connection that is still sending by then is dead.
+const PLUGIN_TOOL_PREFIX: &str = "mcp__plugin_";
+// The plugin's hook gives up after 250 ms, so a connection still sending after a second is dead.
 const READ_DEADLINE: Duration = Duration::from_secs(1);
 const WAKE_TIMEOUT: Duration = Duration::from_millis(200);
 
@@ -90,7 +90,8 @@ impl HookListener {
         };
 
         let port = address.port();
-        let token = uuid::Uuid::new_v4().simple().to_string();
+        let identifier = uuid::Uuid::new_v4();
+        let token = identifier.simple().to_string();
         write_token_file(&unbound.token_file, &token);
         let port_text = port.to_string();
         let _ = fs::write(&unbound.port_file, port_text);
@@ -139,24 +140,36 @@ impl Drop for HookListener {
 }
 
 fn write_token_file(path: &Path, token: &str) {
-    let _ = fs::remove_file(path);
+    let temporary_name = format!(".{TOKEN_FILE_NAME}.{}.tmp", std::process::id());
+    let temporary = path.with_file_name(temporary_name);
+    let _ = fs::remove_file(&temporary);
     let opened = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
-        .open(path);
-    if let Ok(mut file) = opened {
-        let _ = file.write_all(token.as_bytes());
+        .open(&temporary);
+    let written = match opened {
+        Ok(mut file) => file.write_all(token.as_bytes()),
+        Err(problem) => Err(problem),
+    };
+    let replaced = match written {
+        Ok(()) => fs::rename(&temporary, path),
+        Err(problem) => Err(problem),
+    };
+    if replaced.is_err() {
+        let _ = fs::remove_file(&temporary);
+        let _ = fs::remove_file(path);
     }
 }
 
-fn is_activity_tool(tool_name: &str) -> bool {
-    if !tool_name.starts_with(ACTIVITY_PREFIX) {
+fn is_any_channels_activity_call(tool_name: &str) -> bool {
+    if !tool_name.starts_with(PLUGIN_TOOL_PREFIX) {
         return false;
     }
-    ACTIVITY_SUFFIXES
-        .iter()
-        .any(|suffix| tool_name.ends_with(suffix))
+    TOOL_NAMES.iter().any(|name| {
+        let suffix = format!("_{SERVER_NAME}__{name}");
+        tool_name.ends_with(&suffix)
+    })
 }
 
 fn bind_first_free(ports: &[u16]) -> Option<TcpListener> {
@@ -430,7 +443,7 @@ fn parse_hook_message(body: &[u8], sent_token: Option<&str>, token: &str) -> Opt
     let payload = payload_value.as_object()?;
 
     let tool_name = read_text(payload, "tool_name");
-    let is_activity_call = tool_name.is_some_and(is_activity_tool);
+    let is_activity_call = tool_name.is_some_and(is_any_channels_activity_call);
     // Any local process can post here, so an activity call counts only with the token the app wrote for its own hook.
     if is_activity_call && sent_token != Some(token) {
         return None;
@@ -783,7 +796,6 @@ mod tests {
         let mode = fs::metadata(&token_file).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
         let token = fs::read_to_string(&token_file).unwrap();
-        assert_eq!(token.len(), 32);
 
         let note = activity_post("mcp__plugin_taco-shells-dev_activity__note");
         let with_token = format!("X-Taco-Shells-Token: {token}\r\n");

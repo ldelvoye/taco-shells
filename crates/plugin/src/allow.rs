@@ -20,7 +20,8 @@ pub fn permission_answer(hook_input: &str) -> Option<String> {
         return None;
     }
 
-    let is_subagent = parsed.get("agent_id").is_some();
+    let agent_id = parsed.get("agent_id").and_then(Value::as_str);
+    let is_subagent = agent_id.is_some_and(|id| !id.is_empty());
     if is_subagent {
         let deny = json!({
             "hookSpecificOutput": {
@@ -91,5 +92,19 @@ mod tests {
 
         let from_other_tool = json!({"tool_name": "Bash", "agent_id": "a1"}).to_string();
         assert_eq!(permission_answer(&from_other_tool), None);
+    }
+
+    #[test]
+    fn a_null_or_empty_agent_id_is_the_main_agent() {
+        let own_tool = format!("mcp__plugin_{PLUGIN_NAME}_activity__share");
+        for agent_id in [json!(null), json!("")] {
+            let input = json!({"tool_name": own_tool, "agent_id": agent_id}).to_string();
+            let answer = permission_answer(&input).unwrap();
+            let decision: Value = serde_json::from_str(&answer).unwrap();
+            assert_eq!(
+                decision["hookSpecificOutput"]["permissionDecision"],
+                "allow"
+            );
+        }
     }
 }

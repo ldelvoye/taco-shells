@@ -164,10 +164,8 @@ fn keep_pre_tool(payload: &Value, kept: &mut Map<String, Value>) {
         return;
     }
     if let Some(question) = first_question(payload) {
-        kept.insert(
-            String::from("tool_input"),
-            json!({ "questions": [question] }),
-        );
+        let kept_input = json!({ "questions": [question] });
+        kept.insert(String::from("tool_input"), kept_input);
     }
 }
 
@@ -216,10 +214,9 @@ fn cap_strings(value: Value) -> Value {
             Value::Array(capped)
         }
         Value::Object(fields) => {
-            let capped: Map<String, Value> = fields
-                .into_iter()
-                .map(|(key, field)| (key, cap_strings(field)))
-                .collect();
+            let pairs = fields.into_iter();
+            let capped_pairs = pairs.map(|(key, field)| (key, cap_strings(field)));
+            let capped: Map<String, Value> = capped_pairs.collect();
             Value::Object(capped)
         }
         other => other,
