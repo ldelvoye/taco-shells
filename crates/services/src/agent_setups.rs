@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use taco_protocol::{HarnessId, TerminalId};
 
 use crate::agent_flow::{
-    Agent, agents_of, copy_hook_scripts, hooks_directory, move_old_setup, read_state,
+    Agent, agents_of, copy_hook_scripts, hooks_directory, read_state, remove_old_setup,
     stub_hook_scripts,
 };
 use crate::agent_setup_state::{
@@ -28,6 +28,7 @@ const OLD_HOOKS_PROBLEM: &str = "settings.json still has the app's old hooks";
 const NO_TOKEN_PROBLEM: &str =
     "The app couldn't write its token file, so agents' activity can't reach it.";
 const VERSION_THREAD_NAME: &str = "agent-version";
+const NO_PROGRAM_PROBLEM: &str = "The app's own plugin program could not be found.";
 
 type ForegroundCommands = Box<dyn Fn(&TerminalId) -> Vec<String> + Send + Sync>;
 type Version = (u32, u32, u32);
@@ -73,7 +74,7 @@ pub struct AgentSetupsHost {
 pub(crate) struct SetupFiles {
     pub(crate) config_directory: PathBuf,
     pub(crate) hook_scripts_source: PathBuf,
-    pub(crate) plugin_program: PathBuf,
+    pub(crate) plugin_program: Option<PathBuf>,
     pub(crate) app_version: String,
 }
 
@@ -114,7 +115,7 @@ struct Shared {
     find_version: VersionFinder,
     version: Mutex<Option<Version>>,
     checking_version: AtomicBool,
-    prepared_for: Mutex<bool>,
+    prepared_for_activity: Mutex<bool>,
     state: Mutex<State>,
     // Held from computing the view to publishing it, so two refreshes never publish out of order.
     refresh_order: Mutex<()>,
@@ -187,7 +188,11 @@ fn notice_of(
         return notice(AgentSetupNoticeKind::Problem, problem.clone());
     }
     let is_done = matches!(recorded, Some(Recorded::Done));
-    if is_done && reading.state == AgentSetupState::On {
+    let hides_done = matches!(
+        reading.state,
+        AgentSetupState::NotInstalled | AgentSetupState::TooOld { .. }
+    );
+    if is_done && !hides_done {
         return notice(AgentSetupNoticeKind::Done, DONE_TEXT.to_string());
     }
     match &reading.state {
@@ -255,20 +260,16 @@ fn compute(shared: &Shared) -> (AgentSetupView, bool) {
 fn refresh(shared: &Shared) {
     let _order = lock(&shared.refresh_order);
     let (view, awaiting) = compute(shared);
-    let changed = {
+    {
         let mut state = lock(&shared.state);
         state.awaiting = awaiting;
         if state.view == view {
-            false
-        } else {
-            state.view = view.clone();
-            true
+            return;
         }
-    };
-    if changed {
-        let on_change = &shared.host.on_change;
-        on_change(view);
+        state.view = view.clone();
     }
+    let on_change = &shared.host.on_change;
+    on_change(view);
 }
 
 fn has_exited(shared: &Shared, terminal: &TerminalId) -> bool {
@@ -405,11 +406,15 @@ fn prepare_hooks(shared: &Shared, activity_on: bool) -> Vec<String> {
         return copy_hook_scripts(&files.hook_scripts_source, &destination);
     }
     let mut problems = Vec::new();
-    let plugin_directory = plugin_directory_path(&files.config_directory);
-    let refreshed =
-        refresh_plugin_folder(&plugin_directory, &files.plugin_program, &files.app_version);
-    if let Err(problem) = refreshed {
-        problems.push(format!("The agent plugin could not be written: {problem}"));
+    match &files.plugin_program {
+        Some(program) => {
+            let plugin_directory = plugin_directory_path(&files.config_directory);
+            let refreshed = refresh_plugin_folder(&plugin_directory, program, &files.app_version);
+            if let Err(problem) = refreshed {
+                problems.push(format!("The agent plugin could not be written: {problem}"));
+            }
+        }
+        None => problems.push(NO_PROGRAM_PROBLEM.to_string()),
     }
     let stubbed = stub_hook_scripts(&destination);
     problems.extend(stubbed);
@@ -418,12 +423,19 @@ fn prepare_hooks(shared: &Shared, activity_on: bool) -> Vec<String> {
 
 fn set_up(shared: &Arc<Shared>, agent: &Agent, state: &AgentSetupState) -> Vec<String> {
     let mut problems = prepare_hooks(shared, true);
+    if !problems.is_empty() {
+        return problems;
+    }
     // The click is the user's own consent, so a development build may make this one write into the agent's settings.
     if *state == AgentSetupState::OldSetup {
-        let moved = move_old_setup(agent);
-        if let Err(reason) = moved {
+        let removed = remove_old_setup(agent);
+        if let Err(reason) = removed {
             problems.push(format!("{OLD_HOOKS_PROBLEM}: {reason}"));
         }
+    }
+    {
+        let mut prepared = lock(&shared.prepared_for_activity);
+        *prepared = true;
     }
     (shared.host.turn_on)();
     let token = shared.files.config_directory.join(TOKEN_FILE_NAME);
@@ -439,7 +451,7 @@ impl AgentSetups {
     pub fn start(
         config_directory: PathBuf,
         hook_scripts_source: PathBuf,
-        plugin_program: PathBuf,
+        plugin_program: Option<PathBuf>,
         app_version: String,
         host: AgentSetupsHost,
     ) -> (AgentSetups, Vec<String>) {
@@ -482,7 +494,7 @@ impl AgentSetups {
             find_version,
             version: Mutex::new(None),
             checking_version: AtomicBool::new(false),
-            prepared_for: Mutex::new(activity_on),
+            prepared_for_activity: Mutex::new(activity_on),
             state: Mutex::new(state),
             refresh_order: Mutex::new(()),
             stopping: AtomicBool::new(false),
@@ -524,15 +536,20 @@ impl AgentSetups {
 
     pub fn activity_changed(&self, on: bool) {
         {
-            let mut prepared_for = lock(&self.shared.prepared_for);
-            if *prepared_for == on {
+            let mut prepared = lock(&self.shared.prepared_for_activity);
+            if *prepared == on {
                 return;
             }
-            *prepared_for = on;
+            *prepared = on;
         }
         let problems = prepare_hooks(&self.shared, on);
         if on {
             check_version(&self.shared);
+        } else {
+            let mut state = lock(&self.shared.state);
+            state
+                .recorded
+                .retain(|_, recorded| !matches!(recorded, Recorded::Done));
         }
         if problems.is_empty() {
             return;
@@ -543,6 +560,21 @@ impl AgentSetups {
             let harness = agent.harness_id.clone();
             let problem = Recorded::Problem(text.clone());
             state.recorded.insert(harness, problem);
+        }
+    }
+
+    pub fn recheck_if_too_old(&self) {
+        let activity_on = (self.shared.host.is_on)();
+        let version = current_version(&self.shared);
+        let mut is_too_old = false;
+        for agent in &self.shared.agents {
+            let state = read_state(agent, activity_on, version);
+            if matches!(state, AgentSetupState::TooOld { .. }) {
+                is_too_old = true;
+            }
+        }
+        if is_too_old {
+            check_version(&self.shared);
         }
     }
 
@@ -699,11 +731,10 @@ mod tests {
             .config_directory_variable;
         let variable = agent_directory.display().to_string();
         let env = move |name: &str| {
-            if name == variable_name {
-                Some(variable.clone())
-            } else {
-                None
+            if name != variable_name {
+                return None;
             }
+            Some(variable.clone())
         };
         let agents = agents_of(&config, &env, &home);
         let agent = agents[0].clone();
@@ -720,7 +751,7 @@ mod tests {
         SetupFiles {
             config_directory: environment.config.clone(),
             hook_scripts_source: checkout_hooks(),
-            plugin_program: environment.program.clone(),
+            plugin_program: Some(environment.program.clone()),
             app_version: "1.0.0".to_string(),
         }
     }
@@ -991,6 +1022,7 @@ mod tests {
         setups.note_submit(skipped.clone());
 
         switch.on.store(false, Ordering::SeqCst);
+        setups.activity_changed(false);
         setups.refresh();
         setups.note_submit(last.clone());
         let later_view = next_offer_covering(&views, &last);
@@ -1015,7 +1047,7 @@ mod tests {
         let foreground_commands: ForegroundCommands = Box::new(move |id| {
             if *id == held {
                 let _ = lock(&started_sender).send(());
-                let _ = lock(&release).recv_timeout(WAIT);
+                let _released = lock(&release).recv_timeout(WAIT);
             }
             vec!["claude".to_string()]
         });
@@ -1058,16 +1090,23 @@ mod tests {
     }
 
     #[test]
-    fn the_hooks_directory_is_the_one_the_scripts_are_copied_to() {
+    fn a_click_that_cannot_prepare_the_hooks_leaves_the_agents_settings_alone() {
         let environment = environment();
-        let switch = switch(false);
-        let checked: Arc<Mutex<Vec<TerminalId>>> = Arc::default();
-        let (setups, _views) = start_timed(&environment, &switch, running_claude(&checked));
+        let theirs = other_channel(&environment);
+        let ours_too = with_entries(&theirs, &environment.agent.paths.hooks_directory);
+        let settings_path = environment.agent.paths.settings_path.clone();
+        fs::write(&settings_path, &ours_too).unwrap();
+        let before = fs::read(&settings_path).unwrap();
+        fs::remove_file(&environment.program).unwrap();
+        let fixture = fixture_with(environment, false);
+        seen_claude(&fixture, "one");
 
-        let directory = setups.hooks_directory();
+        fixture.setups.act(&claude(), AgentMenuAction::SetUp);
 
-        let expected = hooks_directory(&environment.config);
-        assert_eq!(directory, expected);
-        setups.stop();
+        let after = fs::read(&settings_path).unwrap();
+        assert_eq!(after, before);
+        let turned_on = fixture.switch.turned_on.load(Ordering::SeqCst);
+        assert_eq!(turned_on, 0);
+        assert_eq!(only_notice(&fixture).kind, AgentSetupNoticeKind::Problem);
     }
 }

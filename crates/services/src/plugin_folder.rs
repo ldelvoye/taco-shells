@@ -2,10 +2,13 @@ use std::fs;
 use std::io::{self, ErrorKind};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const PROGRAM_PATH: &str = "libexec/taco-shells-plugin";
 
 const PROGRAM_MODE: u32 = 0o755;
+
+static TEMPORARY_WRITES: AtomicU64 = AtomicU64::new(0);
 
 fn problem(path: &Path, action: &str, error: io::Error) -> String {
     format!("could not {action} {}: {error}", path.display())
@@ -17,7 +20,8 @@ fn temporary_beside(target: &Path) -> Result<PathBuf, String> {
     };
     let shown_name = name.to_string_lossy();
     let process = std::process::id();
-    let temporary_name = format!(".{shown_name}.{process}.taco-tmp");
+    let counter = TEMPORARY_WRITES.fetch_add(1, Ordering::Relaxed);
+    let temporary_name = format!(".{shown_name}.{process}.{counter}.taco-tmp");
     Ok(target.with_file_name(temporary_name))
 }
 

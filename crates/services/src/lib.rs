@@ -19,9 +19,7 @@ mod sync;
 mod updater;
 
 pub use agent_flow::{copy_hook_scripts, hooks_directory, stub_hook_scripts};
-pub use agent_hooks::{
-    HookEdit, HookWiring, add_entries, remove_hand_entries, remove_managed_entries,
-};
+pub use agent_hooks::{HookEdit, HookWiring, add_entries, remove_managed_entries};
 pub use agent_setup_state::{
     AgentMenu, AgentMenuAction, AgentSetupFacts, AgentSetupState, agent_menu_of,
     agent_setup_state_of, runs_agent,

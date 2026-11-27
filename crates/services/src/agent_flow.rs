@@ -2,6 +2,7 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use taco_agents::{HARNESSES, HarnessSetup};
 use taco_protocol::HarnessId;
@@ -19,9 +20,10 @@ const HOOK_SCRIPT_NAMES: [&str; 3] = [
 ];
 const STUB_SCRIPT: &str = "#!/bin/sh\nexit 0\n";
 
+static STUB_WRITES: AtomicU64 = AtomicU64::new(0);
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AgentPaths {
-    pub(crate) config_directory: PathBuf,
     pub(crate) hooks_directory: PathBuf,
     pub(crate) agent_directory: PathBuf,
     pub(crate) settings_path: PathBuf,
@@ -72,7 +74,8 @@ pub fn copy_hook_scripts(source: &Path, destination: &Path) -> Vec<String> {
 
 fn write_stub(target: &Path, name: &str) -> io::Result<()> {
     let process = std::process::id();
-    let temporary_name = format!(".{name}.{process}.taco-tmp");
+    let counter = STUB_WRITES.fetch_add(1, Ordering::Relaxed);
+    let temporary_name = format!(".{name}.{process}.{counter}.taco-tmp");
     let temporary = target.with_file_name(temporary_name);
     let written = fs::write(&temporary, STUB_SCRIPT);
     let mode = fs::Permissions::from_mode(SCRIPT_MODE);
@@ -84,6 +87,7 @@ fn write_stub(target: &Path, name: &str) -> io::Result<()> {
     renamed
 }
 
+// The old settings.json entries may still call these from sessions started before Set up, so a stub answers them with nothing.
 pub fn stub_hook_scripts(destination: &Path) -> Vec<String> {
     let created = fs::create_dir_all(destination);
     if let Err(error) = created {
@@ -115,7 +119,6 @@ fn agent_paths_of(
     };
     let settings_path = agent_directory.join(setup.settings_file);
     AgentPaths {
-        config_directory: config_directory.to_path_buf(),
         hooks_directory: hooks_directory(config_directory),
         agent_directory,
         settings_path,
@@ -183,7 +186,7 @@ pub(crate) fn read_state(
     agent_setup_state_of(&facts)
 }
 
-pub(crate) fn move_old_setup(agent: &Agent) -> Result<(), String> {
+pub(crate) fn remove_old_setup(agent: &Agent) -> Result<(), String> {
     let read = read_settings(&agent.paths.settings_path)?;
     let Some(text) = read else {
         return Ok(());
@@ -223,11 +226,10 @@ mod tests {
         let variable_name = claude_setup().config_directory_variable;
         let variable = agent_directory.display().to_string();
         let env = move |name: &str| {
-            if name == variable_name {
-                Some(variable.clone())
-            } else {
-                None
+            if name != variable_name {
+                return None;
             }
+            Some(variable.clone())
         };
         let agents = agents_of(&config, &env, &home);
         let agent = agents.into_iter().next().unwrap();
@@ -268,7 +270,8 @@ mod tests {
         let private = fs::Permissions::from_mode(0o600);
         fs::set_permissions(&path, private).unwrap();
 
-        assert_eq!(write_settings(&path, Some("{}"), "{\"ours\": 1}"), Ok(()));
+        let rewritten = write_settings(&path, Some("{}"), "{\"ours\": 1}");
+        assert_eq!(rewritten, Ok(()));
 
         let metadata = fs::metadata(&path).unwrap();
         let mode = metadata.permissions().mode() & 0o777;
@@ -302,7 +305,7 @@ mod tests {
         symlink("settings.json", &middle).unwrap();
         symlink(&middle, &agent.paths.settings_path).unwrap();
 
-        assert_eq!(move_old_setup(agent), Ok(()));
+        assert_eq!(remove_old_setup(agent), Ok(()));
 
         let metadata = fs::symlink_metadata(&agent.paths.settings_path).unwrap();
         assert!(metadata.file_type().is_symlink());
