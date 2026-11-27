@@ -77,6 +77,13 @@ pub(crate) fn read_settings(path: &Path) -> Result<Option<String>, String> {
     read_text(path, &shown)
 }
 
+/// A settings file's text, or none when it is missing or cannot be read.
+pub(crate) fn settings_text(path: &Path) -> Option<String> {
+    let read = read_settings(path);
+    let readable = read.ok();
+    readable.flatten()
+}
+
 pub(crate) fn write_settings(
     path: &Path,
     original: Option<&str>,
@@ -99,9 +106,7 @@ pub(crate) fn label_of(agent: &Agent) -> String {
 }
 
 pub(crate) fn plugin_dirs_reading(agent: &Agent, user_text: Option<&str>) -> PluginDirs {
-    let managed_read = read_settings(&agent.paths.managed_settings_path);
-    let managed_readable = managed_read.ok();
-    let managed_text = managed_readable.flatten();
+    let managed_text = settings_text(&agent.paths.managed_settings_path);
     plugin_dirs_of(
         user_text,
         &agent.paths.settings_path,
@@ -118,9 +123,7 @@ pub(crate) fn read_state(
     version: Option<(u32, u32, u32)>,
 ) -> AgentSetupState {
     let installed = agent.paths.agent_directory.exists();
-    let read = read_settings(&agent.paths.settings_path);
-    let readable = read.ok();
-    let text = readable.flatten();
+    let text = settings_text(&agent.paths.settings_path);
     let has_old_entries = has_managed_entries(text.as_deref(), &agent.paths.hooks_directory);
     let plugin_dirs = plugin_dirs_reading(agent, text.as_deref());
     let facts = AgentSetupFacts {
