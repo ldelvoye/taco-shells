@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use futures::channel::mpsc::unbounded;
+use serde_json::Map;
 use taco_protocol::{
     ActivityEntry, ActivityEvent, ActivityRequest, Arrangement, DrawnState, HarnessId, Panels,
     RequestReply, TabGroupId, TerminalId, WorkspaceRequest,
@@ -15,15 +16,16 @@ use taco_rules::{
     open_panel, rename_tab_group, resize_panel, select_row, toggle_tab_group, ungroup_tab_group,
 };
 use taco_services::{AgentMenuAction, AgentSetupNoticeKind, AgentSetupView};
-use taco_settings::{KeymapChange, SettingChange};
+use taco_settings::{Appearance, Config, KeymapChange, SettingChange, apply_settings_layer};
 
 use crate::link::{Ports, ServicesOutput, ServicesPort, WindowOutput, WindowSender, WorkspacePort};
 use crate::window::Shown;
 
 const LOG_PAGE: usize = 6;
 const CHECKOUT_HOOKS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../hooks");
-// The stand-in has no file to write, so it refuses every write.
+// Without a config to write into, the stand-in refuses every write.
 const REFUSED_WRITE: &str = "settings.json is read-only, so nothing was changed.";
+const STAND_IN_LABEL: &str = "stand-in";
 const REFUSED_KEYMAP_WRITE: &str = "keybindings.json is read-only, so nothing was changed.";
 const SET_UP_TEXT: &str = "Claude Code is set up. Its activity shows here from its next session.";
 
@@ -33,17 +35,38 @@ pub struct StandIn {
     logs: BTreeMap<TerminalId, Vec<ActivityEntry>>,
     window: WindowSender,
     opened: Cell<u64>,
+    /// The config a setting is written into and published from; none when every write is refused.
+    config: Option<RefCell<Config>>,
 }
 
 impl StandIn {
-    pub fn start(shown: &Shown, logs: BTreeMap<TerminalId, Vec<ActivityEntry>>) -> Ports {
+    /// With `writes` set to the appearance drawn in, a setting written is applied and published as a new config.
+    pub fn start(
+        shown: &Shown,
+        logs: BTreeMap<TerminalId, Vec<ActivityEntry>>,
+        writes: Option<Appearance>,
+    ) -> Ports {
         let (window, outputs) = unbounded();
+        let mut config = None;
+        if let Some(appearance) = writes {
+            let written = Config {
+                settings: shown.settings.clone(),
+                appearance,
+                bindings: shown.bindings.clone(),
+                default_bindings: shown.default_bindings.clone(),
+                problems: shown.notices.config_problems.clone(),
+                unread_settings: shown.unread.clone(),
+                unread_keybindings: shown.unread_keybindings,
+            };
+            config = Some(RefCell::new(written));
+        }
         let stand_in = Rc::new(Self {
             state: RefCell::new(shown.drawn.clone()),
             setups: RefCell::new(shown.setups.clone()),
             logs,
             window,
             opened: Cell::new(0),
+            config,
         });
         let workspace: Rc<dyn WorkspacePort> = stand_in.clone();
         let services: Rc<dyn ServicesPort> = stand_in;
@@ -252,9 +275,20 @@ impl ServicesPort for StandIn {
 
     fn write_setting(&self, change: SettingChange) {
         let key = change.key();
-        let reason = REFUSED_WRITE.to_string();
-        let refused = ServicesOutput::SettingRefused { key, reason };
-        self.publish(WindowOutput::Services(refused));
+        let Some(config) = &self.config else {
+            let reason = REFUSED_WRITE.to_string();
+            let refused = ServicesOutput::SettingRefused { key, reason };
+            self.publish(WindowOutput::Services(refused));
+            return;
+        };
+        let mut layer = Map::new();
+        layer.insert(key.to_string(), change.value());
+        let mut written = config.borrow().clone();
+        let applied = apply_settings_layer(&written.settings, &layer, STAND_IN_LABEL);
+        written.settings = applied.settings;
+        *config.borrow_mut() = written.clone();
+        let published = ServicesOutput::Config(written);
+        self.publish(WindowOutput::Services(published));
     }
 
     fn write_keybinding(&self, change: KeymapChange) {
