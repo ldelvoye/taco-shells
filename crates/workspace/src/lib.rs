@@ -1,5 +1,6 @@
 //! The arrangement of terminals and everything that changes it.
 
+mod activity;
 mod asking;
 mod board;
 mod log;
@@ -14,7 +15,8 @@ mod workspace;
 mod tests;
 
 pub use log::KEPT_ENTRIES;
+pub use save::SAVE_DEBOUNCE_MS;
 pub use storage::{
     ACTIVITY_DIRECTORY, ELECTRON_COPY_FILE, FileStorage, Storage, UNREADABLE_COPY_FILE,
 };
-pub use workspace::{Options, Outbound, SAVE_DEBOUNCE_MS, Workspace};
+pub use workspace::{Options, Outbound, Workspace};

@@ -1,13 +1,20 @@
+use std::collections::BTreeMap;
+
 use serde_json::{Map, Value, json};
 use taco_agents::{Harness, harness_of, legacy_harness};
-use taco_protocol::{Panels, TerminalId};
+use taco_protocol::{Arrangement, Panels, TabGroupId, TerminalId};
 
-use crate::sessions::AgentSession;
+use crate::sessions::{AgentSession, AgentSessions};
+use crate::storage::Storage;
 
 /// The save file the Rust app writes: one row per terminal.
 pub const SAVE_VERSION: u64 = 2;
 /// The save file the Electron app writes: groups of split panes.
 pub const ELECTRON_VERSION: u64 = 1;
+/// How long the save waits after a change, so a burst of changes is written once.
+pub const SAVE_DEBOUNCE_MS: u64 = 250;
+const MAX_SAVE_WAIT_MS: u64 = 2_000;
+const SAVE_RETRY_MS: u64 = 1_000;
 
 /// A save file read and repaired: what a restore rebuilds.
 #[derive(Clone, Debug, PartialEq)]
@@ -32,6 +39,16 @@ pub struct SavedRow {
 pub struct SavedTabGroup {
     pub name: String,
     pub collapsed: bool,
+}
+
+/// When the save is due and what it should hold, so a burst of changes is written once.
+#[derive(Default)]
+pub(crate) struct SaveScheduler {
+    /// What the save should hold now, and what the file was last written with.
+    wanted_save: Option<Saved>,
+    written_save: Option<Saved>,
+    save_due: Option<u64>,
+    unsaved_since: Option<u64>,
 }
 
 /// The version a save file's text declares, if it is a JSON object with one.
@@ -76,6 +93,99 @@ pub fn saved_text(saved: &Saved) -> String {
         "panels": saved.panels,
     });
     file.to_string()
+}
+
+pub(crate) fn saved_from(
+    arrangement: &Arrangement,
+    directories: &BTreeMap<TerminalId, String>,
+    sessions: &AgentSessions,
+    panels: &Panels,
+) -> Saved {
+    // a tab group's index in the file is its place in the list, so the records follow the rows
+    let mut ordered: Vec<&TabGroupId> = Vec::new();
+    for row in &arrangement.rows {
+        if let Some(tab_group) = &row.tab_group
+            && !ordered.contains(&tab_group)
+        {
+            ordered.push(tab_group);
+        }
+    }
+    let rows = arrangement.rows.iter().map(|row| {
+        let tab_group = match &row.tab_group {
+            Some(tab_group) => ordered.iter().position(|known| *known == tab_group),
+            None => None,
+        };
+        SavedRow {
+            id: Some(row.terminal.clone()),
+            directory: directories.get(&row.terminal).cloned(),
+            agent: sessions.session_of(&row.terminal).cloned(),
+            tab_group,
+        }
+    });
+    let tab_groups = ordered.iter().filter_map(|id| {
+        let mut records = arrangement.tab_groups.iter();
+        let record = records.find(|record| record.id == **id)?;
+        let saved = SavedTabGroup {
+            name: record.name.clone(),
+            collapsed: record.collapsed,
+        };
+        Some(saved)
+    });
+    Saved {
+        rows: rows.collect(),
+        selected: arrangement.selected,
+        tab_groups: tab_groups.collect(),
+        panels: Some(panels.clone()),
+    }
+}
+
+impl SaveScheduler {
+    pub(crate) fn due(&self) -> Option<u64> {
+        self.save_due
+    }
+
+    // A steady stream of changes still saves at least every MAX_SAVE_WAIT_MS, so a crash never loses more.
+    pub(crate) fn schedule(&mut self, saved: Option<Saved>, now_ms: u64) {
+        let Some(saved) = saved else {
+            return;
+        };
+        if self.wanted_save.as_ref() == Some(&saved) {
+            return;
+        }
+        self.wanted_save = Some(saved);
+        let first_change = *self.unsaved_since.get_or_insert(now_ms);
+        let debounced = now_ms + SAVE_DEBOUNCE_MS;
+        let latest = first_change + MAX_SAVE_WAIT_MS;
+        self.save_due = Some(debounced.min(latest));
+    }
+
+    // After the freeze the save stays what it was when the quit began, so only the state from before it is written.
+    pub(crate) fn write(
+        &mut self,
+        saved_now: Option<Saved>,
+        frozen: bool,
+        storage: &mut dyn Storage,
+        now_ms: u64,
+    ) {
+        self.save_due = None;
+        if !frozen {
+            self.wanted_save = saved_now;
+        }
+        let Some(saved) = &self.wanted_save else {
+            return;
+        };
+        if self.written_save.as_ref() == Some(saved) {
+            self.unsaved_since = None;
+            return;
+        }
+        let text = saved_text(saved);
+        if !storage.write_save(&text) {
+            self.save_due = Some(now_ms + SAVE_RETRY_MS);
+            return;
+        }
+        self.written_save = Some(saved.clone());
+        self.unsaved_since = None;
+    }
 }
 
 fn string_in(record: &Map<String, Value>, key: &str) -> Option<String> {
