@@ -46,21 +46,29 @@ pub fn lists_no_tools_outside_the_dev_app(smoke: &Smoke) -> Result<(), String> {
     Ok(())
 }
 
-pub fn approves_its_own_tool_and_no_other(smoke: &Smoke) -> Result<(), String> {
+pub fn approves_its_own_tool_for_the_main_agent_only(smoke: &Smoke) -> Result<(), String> {
     let prefix = format!("mcp__plugin_{DEV_NAME}_activity__");
     let own_tool = format!("{prefix}note");
     let unlisted_tool = format!("{prefix}open_terminal");
 
-    let own_answer = hook_answer(smoke, &own_tool)?;
-    let parsed = serde_json::from_str::<Value>(&own_answer).map_err(|error| {
-        format!("its answer for {own_tool} is not JSON ({error}): {own_answer}")
-    })?;
-    let decision = &parsed["hookSpecificOutput"]["permissionDecision"];
-    if decision != "allow" {
-        return Err(format!("its answer for {own_tool} is {own_answer}"));
+    let from_main_agent = json!({"tool_name": own_tool});
+    let main_agent_answer = hook_answer(smoke, &from_main_agent)?;
+    let main_agent_decision = decision_in(&main_agent_answer)?;
+    if main_agent_decision != "allow" {
+        return Err(format!("its answer for {own_tool} is {main_agent_answer}"));
     }
 
-    let unlisted_answer = hook_answer(smoke, &unlisted_tool)?;
+    let from_subagent = json!({"tool_name": own_tool, "agent_id": "smoke-subagent"});
+    let subagent_answer = hook_answer(smoke, &from_subagent)?;
+    let subagent_decision = decision_in(&subagent_answer)?;
+    if subagent_decision != "deny" {
+        return Err(format!(
+            "its answer for {own_tool} from a subagent is {subagent_answer}"
+        ));
+    }
+
+    let unlisted = json!({"tool_name": unlisted_tool});
+    let unlisted_answer = hook_answer(smoke, &unlisted)?;
     if !unlisted_answer.trim().is_empty() {
         return Err(format!("it answered {unlisted_answer} for {unlisted_tool}"));
     }
@@ -117,9 +125,18 @@ fn tool_names(replies: &[Value]) -> Result<Vec<String>, String> {
     Ok(names)
 }
 
-fn hook_answer(smoke: &Smoke, tool_name: &str) -> Result<String, String> {
-    let input = json!({"tool_name": tool_name});
+fn hook_answer(smoke: &Smoke, input: &Value) -> Result<String, String> {
     run(smoke, "allow", None, &input.to_string())
+}
+
+fn decision_in(answer: &str) -> Result<String, String> {
+    let parsed = serde_json::from_str::<Value>(answer)
+        .map_err(|error| format!("its answer is not JSON ({error}): {answer}"))?;
+    let decision = parsed["hookSpecificOutput"]["permissionDecision"].as_str();
+    match decision {
+        Some(decision) => Ok(decision.to_string()),
+        None => Err(format!("its answer carries no decision: {answer}")),
+    }
 }
 
 fn run(smoke: &Smoke, mode: &str, app: Option<&str>, input: &str) -> Result<String, String> {
