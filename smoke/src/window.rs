@@ -50,6 +50,9 @@ const ADD_NEW_TERMINAL_PART: &str = "shortcut-add:terminal.new";
 const KEYBINDINGS_FILE: &str = "keybindings.json";
 const PRESSED_SHORTCUT: &str = "cmd-j";
 const WRITTEN_SHORTCUT: &str = "\"cmd+j\":\"terminal.new\"";
+const PAGE_COLUMN_PART: &str = "page:column";
+const SAME_PLACE: f32 = 0.5;
+const UNWANTED_SCROLLBACK: &str = "7777";
 const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
 const PNG_HEADER_LENGTH: usize = 24;
 
@@ -242,6 +245,45 @@ pub fn a_shortcut_set_by_pressing_keys_is_written_to_the_keybindings_file(
     // Esc goes back to Settings, then closes it.
     driver.keys(&["escape", "escape"])?;
     Ok(())
+}
+
+/// A page fading out after it closes sits exactly where it was, and a click on it then changes nothing.
+pub fn a_closing_page_stays_in_place_and_takes_no_clicks(
+    smoke: &Smoke,
+    driver: &mut Driver,
+) -> Result<(), String> {
+    driver.keys(&[OPEN_SETTINGS])?;
+    let open_column = settled_bounds(driver, PAGE_COLUMN_PART)?;
+    let field = settled_bounds(driver, SCROLLBACK_PART)?;
+    driver.keys(&["escape"])?;
+    let Some(closing_column) = driver.bounds(PAGE_COLUMN_PART)? else {
+        return Err("the closed page was not drawn fading out".to_string());
+    };
+    let shifted = (closing_column.origin.x - open_column.origin.x).abs();
+    if shifted > SAME_PLACE {
+        return Err(format!(
+            "the closing page moved {shifted} points: open at {:?}, closing at {:?}",
+            open_column.origin, closing_column.origin
+        ));
+    }
+    let settings = smoke.config.join(SETTINGS_FILE);
+    let before = read_text(&settings)?;
+    let inside = center(&field);
+    driver.drag(inside, inside)?;
+    driver.text(UNWANTED_SCROLLBACK)?;
+    driver.keys(&["enter"])?;
+    thread::sleep(SECOND_RUN_WINDOW);
+    let after = read_text(&settings)?;
+    if after != before {
+        return Err(format!(
+            "a click on the closing page changed settings.json: {after}"
+        ));
+    }
+    Ok(())
+}
+
+fn read_text(path: &Path) -> Result<String, String> {
+    fs::read_to_string(path).map_err(|error| format!("could not read {}: {error}", path.display()))
 }
 
 // Compared with all whitespace taken out, so the writer's formatting does not matter.
