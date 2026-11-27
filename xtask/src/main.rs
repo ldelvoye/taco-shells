@@ -23,7 +23,7 @@ use std::process::ExitCode;
 use build::{Channel, Profile};
 use bundle::Options;
 
-const USAGE: &str = "usage: cargo xtask <run [-- <app args>] | bundle [--release] [--stable] [--zip] [--config-dir <absolute path>] | install | rehearse-update [--electron <app> | --from-rust] [--until-ready] | smoke | measure [--terminals=N ...] | ghostty-bindings | release [--dry-run] | promote [--publish] [--notes-file=<path>] [--key=<path>] | try-stable>";
+const USAGE: &str = "usage: cargo xtask <run [-- <app args>] | bundle [--release] [--stable] [--zip] [--config-dir <absolute path>] | install | rehearse-update [--until-ready] | smoke | measure [--terminals=N ...] | ghostty-bindings | release [--dry-run] | promote [--publish] [--notes-file=<path>] [--key=<path>] | try-stable>";
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = env::args().skip(1).collect();
@@ -108,20 +108,10 @@ fn app_arguments(rest: &[String]) -> Option<&[String]> {
 }
 
 fn rehearse_options(rest: &[String]) -> Option<rehearse::Options> {
-    let mut options = rehearse::Options {
-        electron: None,
-        from_rust: false,
-        until_ready: false,
-    };
-    let mut remaining = rest.iter();
-    while let Some(argument) = remaining.next() {
+    let mut options = rehearse::Options { until_ready: false };
+    for argument in rest {
         match argument.as_str() {
-            "--electron" => {
-                let path = remaining.next()?;
-                options.electron = Some(PathBuf::from(path));
-            }
             "--until-ready" => options.until_ready = true,
-            "--from-rust" => options.from_rust = true,
             _ => return None,
         }
     }
