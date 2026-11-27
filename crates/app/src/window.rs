@@ -34,6 +34,7 @@ use crate::menu::{
     AgentMenuClicked, Minimize, Quit, RestartToUpdate, ShowHookScripts, Zoom, set_menus,
 };
 use crate::middle::{Attachable, attachable, line_editing_bytes, opens_link};
+use crate::page::{OverPage, Page, PageMove, over_page, pages_after};
 use crate::panels::{
     PanelDrag, ResizeDrag, bounded_size, docked, edge_near, landing_preview, open_on, place_of,
     size_for_pointer,
@@ -41,8 +42,7 @@ use crate::panels::{
 use crate::platform::TrafficLights;
 use crate::popups::{Popup, RenameStep, popup_layer, rename_step};
 use crate::settings_page::{
-    OverPage, Page, SettingsFields, SettingsInput, Typed, TypedSetting, over_page, published_text,
-    settings_page, typed,
+    SettingsFields, SettingsInput, Typed, TypedSetting, published_text, settings_page, typed,
 };
 use crate::shortcuts_page::{SEARCH_PLACEHOLDER, ShortcutsInput, shortcuts_page};
 use crate::slot::{Slot, SlotLine, opened_height, slot_line_for};
@@ -552,63 +552,39 @@ impl WindowView {
         self.open_file(ConfigFile::Keybindings, cx);
     }
 
-    /// Opens the settings page, or closes every page when one is open.
-    pub(crate) fn toggle_settings(&mut self, cx: &mut Context<Self>) {
-        if !self.pages.is_empty() {
-            self.close_pages(cx);
+    /// Moves through the pages, and gives the keyboard to the page now on top, or to the terminal once none is.
+    pub(crate) fn move_pages(&mut self, page_move: PageMove, cx: &mut Context<Self>) {
+        let after = pages_after(&self.pages, page_move);
+        if after == self.pages {
             return;
         }
-        self.push_page(Page::Settings, cx);
-    }
-
-    /// Opens the shortcuts page over Settings, or closes every page when it is on top.
-    pub(crate) fn toggle_shortcuts(&mut self, cx: &mut Context<Self>) {
-        if self.pages.last() == Some(&Page::Shortcuts) {
-            self.close_pages(cx);
-            return;
+        let opened = after.len() > self.pages.len();
+        let shortcuts_left = !after.contains(&Page::Shortcuts);
+        self.pages = after;
+        if shortcuts_left {
+            self.forget_search(cx);
         }
-        self.open_shortcuts(cx);
-    }
-
-    /// Puts the shortcuts page on top, with Settings under it to go back to.
-    pub(crate) fn open_shortcuts(&mut self, cx: &mut Context<Self>) {
-        if self.pages.last() == Some(&Page::Shortcuts) {
-            return;
-        }
-        if self.pages.is_empty() {
-            self.pages.push(Page::Settings);
-        }
-        self.push_page(Page::Shortcuts, cx);
-    }
-
-    fn push_page(&mut self, page: Page, cx: &mut Context<Self>) {
-        self.pages.push(page);
-        self.page_wants_keyboard = Some(keyboard_on_opening(page));
-        cx.notify();
-    }
-
-    /// Goes back one page, to the terminal from the last one.
-    pub(crate) fn close_page(&mut self, cx: &mut Context<Self>) {
-        if self.pages.pop().is_none() {
-            return;
-        }
-        if self.pages.is_empty() {
-            self.page_wants_keyboard = None;
-            self.terminal_wants_keyboard = true;
-        } else {
-            self.page_wants_keyboard = Some(PageKeyboard::Page);
+        let top = self.pages.last().copied();
+        match top {
+            None => {
+                self.page_wants_keyboard = None;
+                self.terminal_wants_keyboard = true;
+            }
+            Some(page) if opened => self.page_wants_keyboard = Some(keyboard_on_opening(page)),
+            Some(_) => self.page_wants_keyboard = Some(PageKeyboard::Page),
         }
         cx.notify();
     }
 
     /// Closes every page, for an action that means to show a terminal.
-    pub(crate) fn close_pages(&mut self, cx: &mut Context<Self>) {
-        if self.pages.is_empty() {
-            return;
-        }
-        self.pages.clear();
-        self.terminal_wants_keyboard = true;
-        cx.notify();
+    fn close_pages(&mut self, cx: &mut Context<Self>) {
+        self.move_pages(PageMove::CloseAll, cx);
+    }
+
+    fn forget_search(&mut self, cx: &mut Context<Self>) {
+        self.shortcut_query.clear();
+        self.shortcut_search
+            .update(cx, |field, cx| field.set_text("", cx));
     }
 
     pub(crate) fn change_setting(&mut self, change: SettingChange) {
@@ -623,9 +599,7 @@ impl WindowView {
             TextFieldEvent::Edited(text) => self.shortcut_query = text.clone(),
             TextFieldEvent::Submitted => {}
             TextFieldEvent::Cancelled => {
-                self.shortcut_query.clear();
-                self.shortcut_search
-                    .update(cx, |field, cx| field.set_text("", cx));
+                self.forget_search(cx);
                 self.page_wants_keyboard = Some(PageKeyboard::Page);
             }
         }
@@ -739,7 +713,7 @@ impl WindowView {
         let page_open = !self.pages.is_empty();
         let escaped = event.keystroke.key == ESCAPE && !event.keystroke.modifiers.modified();
         if page_open && escaped {
-            self.close_page(cx);
+            self.move_pages(PageMove::Back, cx);
             return true;
         }
         let chord = chord_of(&event.keystroke);
@@ -768,9 +742,7 @@ impl WindowView {
             return false;
         }
         match over_page(command) {
-            OverPage::ClosePages => self.close_pages(cx),
-            OverPage::ToggleSettings => self.toggle_settings(cx),
-            OverPage::ToggleShortcuts => self.toggle_shortcuts(cx),
+            OverPage::Move(page_move) => self.move_pages(page_move, cx),
             OverPage::ShowTerminal => {
                 self.close_pages(cx);
                 self.run(command, cx);
@@ -849,8 +821,8 @@ impl WindowView {
             CommandId::TerminalFocusNextGroup => self.move_focus(FocusMove::NextRow, cx),
             CommandId::TerminalFocusPreviousGroup => self.move_focus(FocusMove::PreviousRow, cx),
             CommandId::SidebarToggle => self.toggle_panel(Panel::Terminals),
-            CommandId::ConfigOpenSettings => self.toggle_settings(cx),
-            CommandId::ConfigOpenKeybindings => self.toggle_shortcuts(cx),
+            CommandId::ConfigOpenSettings => self.move_pages(PageMove::ToggleSettings, cx),
+            CommandId::ConfigOpenKeybindings => self.move_pages(PageMove::ToggleShortcuts, cx),
             _ => self.run_in_terminal(command, cx),
         }
     }
@@ -1051,8 +1023,8 @@ impl WindowView {
             center = center.child(self.panel(panel, place, drawn, mark, cx));
         }
 
-        let settings_open = !self.pages.is_empty();
-        let side_strip = strip(&drawn.panels, settings_open, look, cx);
+        let pages_open = !self.pages.is_empty();
+        let side_strip = strip(&drawn.panels, pages_open, look, cx);
         let mut body = div().relative().flex().flex_1().min_h_0().child(side_strip);
         if let Some((panel, place)) = open_on(&drawn.panels, Edge::Left) {
             body = body.child(self.panel(panel, place, drawn, mark, cx));
@@ -1379,7 +1351,9 @@ fn shipped_bindings() -> Vec<Binding> {
         settings: None,
         keybindings: None,
     };
-    let shipped = resolve_config(&no_files, false);
+    // The bindings do not depend on the appearance.
+    let system_is_dark = false;
+    let shipped = resolve_config(&no_files, system_is_dark);
     shipped.bindings
 }
 

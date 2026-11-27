@@ -7,6 +7,7 @@ use taco_protocol::{Edge, Panel, PanelPlace, Panels};
 use crate::assets::{AGENT_ACTIVITY_ICON, SETTINGS_ICON, TERMINALS_ICON};
 use crate::drive::mark;
 use crate::look::{ICON_SIZE, Look, STRIP_BUTTON_SIZE, STRIP_WIDTH};
+use crate::page::PageMove;
 use crate::panels::driver_name_of;
 use crate::window::WindowView;
 
@@ -35,7 +36,7 @@ pub fn strip(
     let marked = mark(settings_button, SETTINGS_MARK);
     let settings = marked
         .id(SETTINGS_ID)
-        .on_click(cx.listener(|view, _, _, cx| view.toggle_settings(cx)));
+        .on_click(cx.listener(|view, _, _, cx| view.move_pages(PageMove::ToggleSettings, cx)));
     div()
         .flex()
         .flex_col()
