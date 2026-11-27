@@ -269,15 +269,10 @@ fn open_window(started: Started, background: bool, cx: &mut App) -> Option<AnyWi
         }
         let services = hosts.services.clone();
         let activated = hosts.services.clone();
-        let terminal_settings = hosts.terminal_settings.clone();
-        let config_changed = move |config: &Config| {
-            let _ = terminal_settings.send(config.clone());
-        };
         let ports = Ports {
             workspace: Rc::new(hosts.workspace),
             services: Rc::new(hosts.services),
             outputs,
-            config_changed: Box::new(config_changed),
             terminals,
         };
         let lights = TrafficLights::Native;

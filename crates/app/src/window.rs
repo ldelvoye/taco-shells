@@ -12,7 +12,7 @@ use taco_host::{ServicesOutput, ServicesPort, WindowOutput, WorkspacePort};
 use taco_protocol::{ActivityEvent, DrawnState, TabGroupId, TerminalId, WorkspaceRequest};
 use taco_rules::{drop_mark_for, selected_terminal, slot_line_for};
 use taco_services::AgentSetupView;
-use taco_settings::{Binding, Config, Settings, UnreadSettings, palette_for};
+use taco_settings::{Binding, Settings, UnreadSettings, palette_for};
 use taco_terminal_view::{Terminals, TerminalsEvent};
 
 use crate::activity_log::ActivityLog;
@@ -72,7 +72,6 @@ pub struct WindowView {
     traffic_lights: TrafficLights,
     port: Rc<dyn WorkspacePort>,
     services: Rc<dyn ServicesPort>,
-    config_changed: Box<dyn Fn(&Config)>,
     activity: ActivityState,
     ahead: Option<Ahead>,
     /// The number of this window's last focus move.
@@ -122,7 +121,6 @@ impl WindowView {
             workspace: port,
             services,
             outputs,
-            config_changed,
             terminals,
         } = ports;
         if let Some(terminals) = &terminals {
@@ -212,7 +210,6 @@ impl WindowView {
             traffic_lights,
             port,
             services,
-            config_changed,
             activity,
             ahead: None,
             last_move,
@@ -271,7 +268,6 @@ impl WindowView {
                 set_menus(&self.shown, cx);
             }
             ServicesOutput::Config(config) => {
-                (self.config_changed)(&config);
                 if let Some(terminals) = &self.terminals {
                     let palette = palette_for(config.appearance);
                     terminals.update(cx, |view, cx| {
