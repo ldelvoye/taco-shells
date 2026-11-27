@@ -1,4 +1,4 @@
-use taco_protocol::{AgentSignal, HarnessId, Peer, SharedTarget, Step};
+use taco_protocol::{AgentSignal, HarnessId, Peer, PrState, SharedTarget, Step};
 
 /// Where a step was taken: the agent's turn, by its id, and whether one of the agent's subagents took it.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -44,6 +44,31 @@ pub enum EntryRead {
         target: Option<SharedTarget>,
         body: Option<String>,
     },
+    /// A thing the app found in what the agent did, for Shared.
+    Found(Found),
+}
+
+/// What the app found to share from one of the agent's tools.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Found {
+    Thing {
+        kind: String,
+        title: String,
+        target: SharedTarget,
+    },
+    PullRequest(PullRequestSeen),
+}
+
+/// A pull request a gh command touched. `url` is its plain link, which Claude Code gives for a created or edited
+/// pull request and not for a merged or closed one, and `state` is none when the action says nothing of it, as an
+/// edit does. `kind` and `title` label it in Shared if it is new there.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PullRequestSeen {
+    pub url: Option<String>,
+    pub number: u64,
+    pub state: Option<PrState>,
+    pub kind: String,
+    pub title: String,
 }
 
 /// A terminal title read as a row name, and whether the agent said it is idle.
