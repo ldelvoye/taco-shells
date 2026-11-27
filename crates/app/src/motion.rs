@@ -68,7 +68,8 @@ pub fn switch_value(setting: &SettingChange) -> Option<bool> {
     match setting {
         SettingChange::CursorBlink(on)
         | SettingChange::RestoreOnLaunch(on)
-        | SettingChange::AgentActivity(on) => Some(*on),
+        | SettingChange::AgentActivity(on)
+        | SettingChange::AskForActivityNotes(on) => Some(*on),
         _ => None,
     }
 }
@@ -134,6 +135,10 @@ pub fn moved_settings(before: &Settings, after: &Settings) -> Vec<SettingChange>
             SettingChange::AgentActivity(before.agent_activity),
             SettingChange::AgentActivity(after.agent_activity),
         ),
+        (
+            SettingChange::AskForActivityNotes(before.ask_for_activity_notes),
+            SettingChange::AskForActivityNotes(after.ask_for_activity_notes),
+        ),
     ];
     let mut moved = Vec::new();
     for (old, new) in pairs {
@@ -173,6 +178,7 @@ mod tests {
         after.cursor_blink = !before.cursor_blink;
         after.restore_on_launch = !before.restore_on_launch;
         after.agent_activity = !before.agent_activity;
+        after.ask_for_activity_notes = !before.ask_for_activity_notes;
         after.font_size = before.font_size + 1.;
         let moved = moved_settings(&before, &after);
         let expected = vec![
@@ -182,6 +188,7 @@ mod tests {
             SettingChange::CursorBlink(before.cursor_blink),
             SettingChange::RestoreOnLaunch(before.restore_on_launch),
             SettingChange::AgentActivity(before.agent_activity),
+            SettingChange::AskForActivityNotes(before.ask_for_activity_notes),
         ];
         assert_eq!(moved, expected);
         let unchanged = moved_settings(&before, &before);
