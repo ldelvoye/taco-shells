@@ -73,7 +73,6 @@ pub fn create(options: &Options) -> Result<Bundled, String> {
         let icon = ensure_icon(&repo_root, identity)?;
         copy_file(&icon, &resources.join("icon.icns"))?;
     }
-    copy_dir(&repo_root.join("hooks"), &resources.join("hooks"))?;
     let helper = repo_root.join("resources").join("update-helper.sh");
     copy_file(&helper, &resources.join("update-helper.sh"))?;
 
@@ -207,25 +206,5 @@ fn copy_file(from: &Path, to: &Path) -> Result<(), String> {
             to.display()
         )
     })?;
-    Ok(())
-}
-
-fn copy_dir(from: &Path, to: &Path) -> Result<(), String> {
-    create_dir(to)?;
-    let entries = fs::read_dir(from)
-        .map_err(|error| format!("could not read {}: {error}", from.display()))?;
-    for entry in entries {
-        let entry = entry.map_err(|error| format!("could not read {}: {error}", from.display()))?;
-        let source = entry.path();
-        let destination = to.join(entry.file_name());
-        let file_type = entry
-            .file_type()
-            .map_err(|error| format!("could not inspect {}: {error}", source.display()))?;
-        if file_type.is_dir() {
-            copy_dir(&source, &destination)?;
-        } else {
-            copy_file(&source, &destination)?;
-        }
-    }
     Ok(())
 }

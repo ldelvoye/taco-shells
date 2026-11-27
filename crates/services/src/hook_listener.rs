@@ -100,20 +100,9 @@ pub struct HookListener {
 }
 
 impl HookListener {
-    pub fn start(
-        port_file: PathBuf,
-        require_token: Arc<AtomicBool>,
-        on_event: OnEvent,
-    ) -> HookListener {
+    pub fn start(port_file: PathBuf, on_event: OnEvent) -> HookListener {
         let ports: Vec<u16> = FOCUS_PORTS.collect();
-        HookListener::start_on(
-            &ports,
-            port_file,
-            READ_DEADLINE,
-            ANSWER_DEADLINE,
-            require_token,
-            on_event,
-        )
+        HookListener::start_on(&ports, port_file, READ_DEADLINE, ANSWER_DEADLINE, on_event)
     }
 
     pub(crate) fn start_on(
@@ -121,7 +110,6 @@ impl HookListener {
         port_file: PathBuf,
         read_deadline: Duration,
         answer_window: Duration,
-        require_token: Arc<AtomicBool>,
         on_event: OnEvent,
     ) -> HookListener {
         let stopping = Arc::new(AtomicBool::new(false));
@@ -155,7 +143,6 @@ impl HookListener {
                 read_deadline,
                 answer_window,
                 &token,
-                &require_token,
                 &*on_event,
             );
         });
@@ -249,7 +236,6 @@ fn serve(
     read_deadline: Duration,
     answer_window: Duration,
     token: &str,
-    require_token: &AtomicBool,
     on_event: &(dyn Fn(ListenerEvent) + Send + Sync),
 ) {
     // One request at a time, so the app hears a session's start before its first state.
@@ -261,14 +247,7 @@ fn serve(
             continue;
         };
         let deadline = Instant::now() + read_deadline;
-        handle(
-            stream,
-            deadline,
-            answer_window,
-            token,
-            require_token,
-            on_event,
-        );
+        handle(stream, deadline, answer_window, token, on_event);
     }
 }
 
@@ -277,7 +256,6 @@ fn handle(
     deadline: Instant,
     answer_window: Duration,
     token: &str,
-    require_token: &AtomicBool,
     on_event: &(dyn Fn(ListenerEvent) + Send + Sync),
 ) {
     let Some((head_bytes, leftover)) = read_head(&mut stream, deadline) else {
@@ -348,9 +326,8 @@ fn handle(
     // Answered before any work on the body, so a hook that blocks the agent never waits on the app.
     respond(&mut stream, 200);
 
-    // While Agent Activity is on, every hook post comes from the plugin and carries the token; one without it is an old script or another process.
-    let is_required = require_token.load(Ordering::SeqCst);
-    if is_required && sent_token != Some(token) {
+    // Every post comes from the plugin and carries the token; one without it is another process.
+    if sent_token != Some(token) {
         return;
     }
     let message = parse_message(&head.route, &body, sent_token, token);
@@ -801,7 +778,6 @@ fn read_detail(object: &Map<String, Value>) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use std::process::{Child, Command, Stdio};
     use std::sync::Mutex;
     use std::sync::mpsc::{self, Receiver};
 
@@ -817,6 +793,14 @@ mod tests {
     struct Questioned {
         _listener: HookListener,
         port: u16,
+        token_header: String,
+        _directory: tempfile::TempDir,
+    }
+
+    struct Collecting {
+        listener: HookListener,
+        port: u16,
+        receiver: Receiver<ListenerEvent>,
         token_header: String,
         _directory: tempfile::TempDir,
     }
@@ -854,24 +838,27 @@ mod tests {
         (status.parse().unwrap(), reply_body.to_string())
     }
 
-    fn token_not_required() -> Arc<AtomicBool> {
-        Arc::new(AtomicBool::new(false))
-    }
-
-    fn start_collecting() -> (HookListener, u16, Receiver<ListenerEvent>) {
+    fn start_collecting() -> Collecting {
+        let directory = tempfile::tempdir().unwrap();
         let (sender, receiver) = mpsc::channel();
         let listener = HookListener::start_on(
             &[0],
-            PathBuf::from("/nonexistent/focus-port"),
+            directory.path().join("focus-port"),
             TEST_DEADLINE,
             ANSWER_DEADLINE,
-            token_not_required(),
             Box::new(move |event| {
                 let _ = sender.send(event);
             }),
         );
         let port = listener.port().unwrap();
-        (listener, port, receiver)
+        let token = fs::read_to_string(directory.path().join("focus-token")).unwrap();
+        Collecting {
+            listener,
+            port,
+            receiver,
+            token_header: format!("X-Taco-Shells-Token: {token}\r\n"),
+            _directory: directory,
+        }
     }
 
     fn hook(pids: Vec<u32>, call: HookCall) -> ListenerEvent {
@@ -886,23 +873,32 @@ mod tests {
         receiver.recv_timeout(WAIT).unwrap()
     }
 
-    fn expect_dropped(port: u16, receiver: &Receiver<ListenerEvent>, path: &str, body: &str) {
-        let status = post(port, "POST", path, body.as_bytes());
+    fn expect_dropped(collecting: &Collecting, path: &str, body: &str) {
+        let port = collecting.port;
+        let headers = &collecting.token_header;
+        let status = post_with(port, "POST", path, headers, body.as_bytes());
         assert_eq!(status, 200, "{path} {body}");
 
-        let marker = post(port, "POST", ATTENTION_ROUTE, br#"{"pids":[9]}"#);
-        assert_eq!(marker, 200);
-        let next = next_event(receiver);
+        let marker = br#"{"pids":[9]}"#;
+        let marked = post_with(port, "POST", ATTENTION_ROUTE, headers, marker);
+        assert_eq!(marked, 200);
+        let next = next_event(&collecting.receiver);
         assert_eq!(next, hook(vec![9], HookCall::Attention), "{path} {body}");
     }
 
     #[test]
     fn routes_accept_what_the_scripts_send_and_drop_the_rest() {
-        let (listener, port, receiver) = start_collecting();
+        let collecting = start_collecting();
+        let port = collecting.port;
+        let receiver = &collecting.receiver;
+        let token_header = &collecting.token_header;
+        let post = |port: u16, method: &str, path: &str, body: &[u8]| {
+            post_with(port, method, path, token_header, body)
+        };
 
         let status = post(port, "POST", UPDATE_CHECK_ROUTE, b"");
         assert_eq!(status, 200);
-        assert_eq!(next_event(&receiver), ListenerEvent::UpdateCheck);
+        assert_eq!(next_event(receiver), ListenerEvent::UpdateCheck);
 
         post(
             port,
@@ -910,7 +906,7 @@ mod tests {
             ATTENTION_ROUTE,
             br#"{"pids":[4,"x",-1,5.5,99999999999,5]}"#,
         );
-        let attention = next_event(&receiver);
+        let attention = next_event(receiver);
         assert_eq!(attention, hook(vec![4, 5], HookCall::Attention));
         assert_eq!(post(port, "POST", "/focus-tab", br#"{"pids":[4]}"#), 404);
 
@@ -924,7 +920,7 @@ mod tests {
             cwd: "/tmp/work".to_string(),
             has_conversation: true,
         };
-        let started = next_event(&receiver);
+        let started = next_event(receiver);
         assert_eq!(started, hook(vec![1], expected));
 
         let fresh_start = format!(
@@ -937,22 +933,22 @@ mod tests {
             cwd: "/tmp/new".to_string(),
             has_conversation: false,
         };
-        let started_fresh = next_event(&receiver);
+        let started_fresh = next_event(receiver);
         assert_eq!(started_fresh, hook(vec![1], fresh));
 
         let no_cwd =
             format!(r#"{{"pids":[1],"harness":"claude","sessionId":"{SESSION}","cwd":""}}"#);
-        expect_dropped(port, &receiver, AGENT_START_ROUTE, &no_cwd);
+        expect_dropped(&collecting, AGENT_START_ROUTE, &no_cwd);
         let bad_session = r#"{"pids":[1],"harness":"claude","sessionId":"nope","cwd":"/tmp"}"#;
-        expect_dropped(port, &receiver, AGENT_START_ROUTE, bad_session);
+        expect_dropped(&collecting, AGENT_START_ROUTE, bad_session);
         let unknown_harness =
             format!(r#"{{"pids":[1],"harness":"gemini","sessionId":"{SESSION}","cwd":"/tmp"}}"#);
-        expect_dropped(port, &receiver, AGENT_START_ROUTE, &unknown_harness);
+        expect_dropped(&collecting, AGENT_START_ROUTE, &unknown_harness);
 
         let idle = format!(
             r#"{{"pids":[1],"harness":"claude","sessionId":"{SESSION}","event":"Notification","detail":"idle_prompt"}}"#
         );
-        expect_dropped(port, &receiver, AGENT_STATE_ROUTE, &idle);
+        expect_dropped(&collecting, AGENT_STATE_ROUTE, &idle);
         let asking = format!(
             r#"{{"pids":[1],"harness":"claude","sessionId":"{SESSION}","event":"PreToolUse","detail":"AskUserQuestion"}}"#
         );
@@ -962,10 +958,10 @@ mod tests {
             session_id: SESSION.to_string(),
             signal: AgentSignal::Needs,
         };
-        let state = next_event(&receiver);
+        let state = next_event(receiver);
         assert_eq!(state, hook(vec![1], needs));
 
-        expect_dropped(port, &receiver, ATTENTION_ROUTE, r#"{"pids":[]}"#);
+        expect_dropped(&collecting, ATTENTION_ROUTE, r#"{"pids":[]}"#);
 
         assert_eq!(post(port, "GET", ATTENTION_ROUTE, b""), 404);
         assert_eq!(post(port, "POST", "/nope", b"{}"), 404);
@@ -979,7 +975,7 @@ mod tests {
         );
         let hook_body = format!(r#"{{"pids":[1],"harness":"claude","payload":{payload}}}"#);
         post(port, "POST", AGENT_HOOK_ROUTE, hook_body.as_bytes());
-        let received = next_event(&receiver);
+        let received = next_event(receiver);
         let ListenerEvent::Hook(HookMessage {
             call:
                 HookCall::AgentHook {
@@ -996,7 +992,7 @@ mod tests {
         assert_eq!(text, payload);
 
         let string_payload = r#"{"pids":[1],"harness":"claude","payload":"text"}"#;
-        expect_dropped(port, &receiver, AGENT_HOOK_ROUTE, string_payload);
+        expect_dropped(&collecting, AGENT_HOOK_ROUTE, string_payload);
 
         let from_a_page = "Origin: https://example.com\r\n";
         let refused = post_with(
@@ -1018,7 +1014,7 @@ mod tests {
         let page_check = post_with(port, "POST", UPDATE_CHECK_ROUTE, from_a_page, b"");
         assert_eq!(page_check, 403);
         post(port, "POST", ATTENTION_ROUTE, br#"{"pids":[8]}"#);
-        let after_page = next_event(&receiver);
+        let after_page = next_event(receiver);
         assert_eq!(after_page, hook(vec![8], HookCall::Attention));
 
         let mut stalled = TcpStream::connect(("127.0.0.1", port)).unwrap();
@@ -1026,11 +1022,11 @@ mod tests {
             format!("POST {AGENT_HOOK_ROUTE} HTTP/1.1\r\nContent-Length: 5000\r\n\r\n{{");
         stalled.write_all(stalled_head.as_bytes()).unwrap();
         post(port, "POST", ATTENTION_ROUTE, br#"{"pids":[7]}"#);
-        let after_stall = next_event(&receiver);
+        let after_stall = next_event(receiver);
         assert_eq!(after_stall, hook(vec![7], HookCall::Attention));
         drop(stalled);
 
-        listener.stop();
+        collecting.listener.stop();
     }
 
     fn activity_post(tool_name: &str) -> String {
@@ -1056,7 +1052,6 @@ mod tests {
             directory.path().join("focus-port"),
             TEST_DEADLINE,
             ANSWER_DEADLINE,
-            token_not_required(),
             Box::new(move |event| {
                 let _ = sender.send(event);
             }),
@@ -1099,13 +1094,20 @@ mod tests {
         let share = activity_post("mcp__plugin_other_activity__share");
         let status = post(port, "POST", AGENT_HOOK_ROUTE, share.as_bytes());
         assert_eq!(status, 200);
-        let marker = post(port, "POST", ATTENTION_ROUTE, br#"{"pids":[9]}"#);
-        assert_eq!(marker, 200);
+        let marker = br#"{"pids":[9]}"#;
+        let marked = post_with(port, "POST", ATTENTION_ROUTE, &with_token, marker);
+        assert_eq!(marked, 200);
         let next = next_event(&receiver);
         assert_eq!(next, hook(vec![9], HookCall::Attention));
 
         let ordinary = activity_post("Bash");
-        post(port, "POST", AGENT_HOOK_ROUTE, ordinary.as_bytes());
+        post_with(
+            port,
+            "POST",
+            AGENT_HOOK_ROUTE,
+            &with_token,
+            ordinary.as_bytes(),
+        );
         let event = next_event(&receiver);
         assert!(matches!(event, ListenerEvent::Hook(_)));
 
@@ -1133,17 +1135,15 @@ mod tests {
     }
 
     #[test]
-    fn every_hook_post_needs_the_token_while_it_is_required() {
+    fn every_hook_post_needs_the_token() {
         let directory = tempfile::tempdir().unwrap();
         let token_file = directory.path().join("focus-token");
-        let require_token = Arc::new(AtomicBool::new(true));
         let (sender, receiver) = mpsc::channel();
         let listener = HookListener::start_on(
             &[0],
             directory.path().join("focus-port"),
             TEST_DEADLINE,
             ANSWER_DEADLINE,
-            Arc::clone(&require_token),
             Box::new(move |event| {
                 let _ = sender.send(event);
             }),
@@ -1172,14 +1172,6 @@ mod tests {
         let check = post(port, "POST", UPDATE_CHECK_ROUTE, b"");
         assert_eq!(check, 200);
         assert_eq!(next_event(&receiver), ListenerEvent::UpdateCheck);
-
-        require_token.store(false, Ordering::SeqCst);
-        for (route, body) in &routes {
-            let status = post(port, "POST", route, body.as_bytes());
-            assert_eq!(status, 200, "{route}");
-            let delivered = next_event(&receiver);
-            assert!(matches!(delivered, ListenerEvent::Hook(_)), "{route}");
-        }
         listener.stop();
     }
 
@@ -1188,12 +1180,12 @@ mod tests {
         let (sender, events) = mpsc::channel();
         let (release, gate) = mpsc::channel::<()>();
         let gate = Mutex::new(gate);
+        let directory = tempfile::tempdir().unwrap();
         let blocked = HookListener::start_on(
             &[0],
-            PathBuf::from("/nonexistent/focus-port"),
+            directory.path().join("focus-port"),
             TEST_DEADLINE,
             ANSWER_DEADLINE,
-            token_not_required(),
             Box::new(move |event| {
                 let _ = sender.send(event);
                 let waiting = gate.lock().unwrap();
@@ -1204,7 +1196,10 @@ mod tests {
         let payload = format!(r#"{{"session_id":"{SESSION}","hook_event_name":"SessionStart"}}"#);
         let body = format!(r#"{{"pids":[1],"harness":"claude","payload":{payload}}}"#);
 
-        let status = post(port, "POST", AGENT_HOOK_ROUTE, body.as_bytes());
+        let token = fs::read_to_string(directory.path().join("focus-token")).unwrap();
+        let with_token = format!("X-Taco-Shells-Token: {token}\r\n");
+
+        let status = post_with(port, "POST", AGENT_HOOK_ROUTE, &with_token, body.as_bytes());
 
         assert_eq!(status, 200);
         let heard = events.recv_timeout(WAIT).unwrap();
@@ -1228,7 +1223,6 @@ mod tests {
             file.clone(),
             TEST_DEADLINE,
             ANSWER_DEADLINE,
-            token_not_required(),
             Box::new(|_| {}),
         );
         assert_eq!(listener.port(), Some(free));
@@ -1243,7 +1237,6 @@ mod tests {
             other_file.clone(),
             TEST_DEADLINE,
             ANSWER_DEADLINE,
-            token_not_required(),
             Box::new(|_| {}),
         );
         assert_eq!(unbound.port(), None);
@@ -1251,113 +1244,12 @@ mod tests {
         assert_eq!(fs::read_to_string(&other_file).unwrap(), "999");
     }
 
-    fn spawn_script(script: &str, directory: &std::path::Path, stdin_json: &str) -> Child {
-        let path = format!("{}/../../hooks/{script}", env!("CARGO_MANIFEST_DIR"));
-        let mut child = Command::new("/bin/sh")
-            .arg(path)
-            .env_clear()
-            .env("TACO_SHELLS_CONFIG_DIR", directory)
-            .env("PATH", "/bin:/usr/bin")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
-        let mut stdin = child.stdin.take().unwrap();
-        stdin.write_all(stdin_json.as_bytes()).unwrap();
-        drop(stdin);
-        child
-    }
-
-    #[test]
-    fn the_shipped_scripts_are_accepted() {
-        let directory = tempfile::tempdir().unwrap();
-        let (sender, receiver) = mpsc::channel();
-        let listener = HookListener::start_on(
-            &[0],
-            directory.path().join("focus-port"),
-            READ_DEADLINE,
-            ANSWER_DEADLINE,
-            token_not_required(),
-            Box::new(move |event| {
-                let _ = sender.send(event);
-            }),
-        );
-
-        let session_script = "taco-shells-claude-session.sh";
-        let session_events = [
-            r#""hook_event_name":"SessionStart","cwd":"/tmp/work","source":"resume""#,
-            r#""hook_event_name":"UserPromptSubmit","cwd":"/tmp/work""#,
-            r#""hook_event_name":"Notification","notification_type":"permission_prompt""#,
-            r#""hook_event_name":"SessionEnd","cwd":"/tmp/work""#,
-        ];
-        let mut children = Vec::new();
-        for fields in session_events {
-            let json = format!(r#"{{"session_id":"{SESSION}",{fields}}}"#);
-            let child = spawn_script(session_script, directory.path(), &json);
-            children.push(child);
-        }
-        let attention = spawn_script("taco-shells-attention.sh", directory.path(), "{}");
-        children.push(attention);
-        for mut child in children {
-            let status = child.wait().unwrap();
-            assert!(status.success());
-        }
-
-        let session_posts = session_events.len() * 2;
-        let expected_events = session_posts + 1;
-        let mut calls = Vec::new();
-        let mut hook_events = Vec::new();
-        for _ in 0..expected_events {
-            let event = next_event(&receiver);
-            let ListenerEvent::Hook(message) = event else {
-                panic!("not a hook: {event:?}");
-            };
-            assert!(message.pids.contains(&std::process::id()));
-            match message.call {
-                HookCall::AgentHook { event, .. } => hook_events.push(event),
-                call => calls.push(call),
-            }
-        }
-        listener.stop();
-
-        let state = |signal| HookCall::AgentState {
-            harness: claude(),
-            session_id: SESSION.to_string(),
-            signal,
-        };
-        let expected = vec![
-            HookCall::AgentStart {
-                harness: claude(),
-                session_id: SESSION.to_string(),
-                cwd: "/tmp/work".to_string(),
-                has_conversation: true,
-            },
-            state(AgentSignal::Working),
-            state(AgentSignal::Needs),
-            HookCall::AgentEnd {
-                harness: claude(),
-                session_id: SESSION.to_string(),
-            },
-            HookCall::Attention,
-        ];
-        assert_eq!(calls.len(), expected.len(), "{calls:?}");
-        for call in &expected {
-            assert!(calls.contains(call), "missing {call:?} in {calls:?}");
-        }
-        hook_events.sort();
-        let names = [
-            "Notification",
-            "SessionEnd",
-            "SessionStart",
-            "UserPromptSubmit",
-        ];
-        assert_eq!(hook_events, names);
-    }
-
     #[test]
     fn the_plugin_hook_is_accepted() {
-        let (listener, port, receiver) = start_collecting();
+        let collecting = start_collecting();
+        let port = collecting.port;
+        let receiver = &collecting.receiver;
+        let token_header = &collecting.token_header;
 
         let payloads = [
             serde_json::json!({
@@ -1387,7 +1279,8 @@ mod tests {
         for payload in &payloads {
             let posts = taco_plugin::posts_for(payload, &pids);
             for next in &posts {
-                let status = post(port, "POST", next.route, next.body.as_bytes());
+                let body = next.body.as_bytes();
+                let status = post_with(port, "POST", next.route, token_header, body);
                 assert_eq!(status, 200, "{}", next.route);
                 sent += 1;
             }
@@ -1396,7 +1289,7 @@ mod tests {
         let mut calls = Vec::new();
         let mut hook_events = Vec::new();
         for _ in 0..sent {
-            let event = next_event(&receiver);
+            let event = next_event(receiver);
             let ListenerEvent::Hook(message) = event else {
                 panic!("not a hook: {event:?}");
             };
@@ -1406,7 +1299,7 @@ mod tests {
                 call => calls.push(call),
             }
         }
-        listener.stop();
+        collecting.listener.stop();
 
         let state = |signal| HookCall::AgentState {
             harness: claude(),
@@ -1449,7 +1342,6 @@ mod tests {
             directory.path().join("focus-port"),
             TEST_DEADLINE,
             QUESTION_WINDOW,
-            token_not_required(),
             Box::new(on_event),
         );
         let port = listener.port().unwrap();
@@ -1529,7 +1421,14 @@ mod tests {
         thread::sleep(Duration::from_millis(100));
 
         let sent = Instant::now();
-        let status = post(port, "POST", ATTENTION_ROUTE, br#"{"pids":[3]}"#);
+        let attention = br#"{"pids":[3]}"#;
+        let status = post_with(
+            port,
+            "POST",
+            ATTENTION_ROUTE,
+            &questioned.token_header,
+            attention,
+        );
         let post_took = sent.elapsed();
         assert_eq!(status, 200);
         assert!(post_took < Duration::from_millis(150), "{post_took:?}");
@@ -1649,7 +1548,9 @@ mod tests {
             assert_eq!(reply, "{}", "{route}");
         }
 
-        post(port, "POST", ATTENTION_ROUTE, br#"{"pids":[9]}"#);
+        let marker = br#"{"pids":[9]}"#;
+        let headers = &questioned.token_header;
+        post_with(port, "POST", ATTENTION_ROUTE, headers, marker);
         assert_eq!(next_event(&receiver), hook(vec![9], HookCall::Attention));
     }
 }

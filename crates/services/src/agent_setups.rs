@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 use taco_protocol::{HarnessId, TerminalId};
 
 use crate::agent_flow::{
-    Agent, add_plugin_folder, agents_of, copy_hook_scripts, hides_plugin_folder, hooks_directory,
-    read_state, remove_old_setup, remove_plugin_folder, stub_hook_scripts,
+    Agent, add_plugin_folder, agents_of, hides_plugin_folder, hooks_directory, read_state,
+    remove_old_setup, remove_plugin_folder, stub_hook_scripts,
 };
 use crate::agent_setup_state::{
     AgentMenu, AgentMenuAction, AgentSetupState, agent_menu_of, runs_agent,
@@ -75,7 +75,6 @@ pub struct AgentSetupsHost {
 
 pub(crate) struct SetupFiles {
     pub(crate) config_directory: PathBuf,
-    pub(crate) hook_scripts_source: PathBuf,
     pub(crate) plugin_program: Option<PathBuf>,
     pub(crate) app_version: String,
 }
@@ -529,12 +528,8 @@ fn check_version(shared: &Arc<Shared>) {
     }
 }
 
-fn prepare_hooks(shared: &Shared, activity_on: bool) -> Vec<String> {
+fn refresh_plugin(shared: &Shared) -> Vec<String> {
     let files = &shared.files;
-    let destination = hooks_directory(&files.config_directory);
-    if !activity_on {
-        return copy_hook_scripts(&files.hook_scripts_source, &destination);
-    }
     let mut problems = Vec::new();
     match &files.plugin_program {
         Some(program) => {
@@ -546,8 +541,6 @@ fn prepare_hooks(shared: &Shared, activity_on: bool) -> Vec<String> {
         }
         None => problems.push(NO_PROGRAM_PROBLEM.to_string()),
     }
-    let stubbed = stub_hook_scripts(&destination);
-    problems.extend(stubbed);
     problems
 }
 
@@ -556,7 +549,7 @@ fn set_up(
     agent: &Agent,
     state: &AgentSetupState,
 ) -> (Vec<String>, Option<String>) {
-    let mut problems = prepare_hooks(shared, true);
+    let mut problems = refresh_plugin(shared);
     if !problems.is_empty() {
         return (problems, None);
     }
@@ -596,7 +589,6 @@ fn set_up(
 impl AgentSetups {
     pub fn start(
         config_directory: PathBuf,
-        hook_scripts_source: PathBuf,
         plugin_program: Option<PathBuf>,
         app_version: String,
         host: AgentSetupsHost,
@@ -610,7 +602,6 @@ impl AgentSetups {
             Box::new(move || installed_claude_version(home.as_deref()));
         let files = SetupFiles {
             config_directory,
-            hook_scripts_source,
             plugin_program,
             app_version,
         };
@@ -657,7 +648,16 @@ impl AgentSetups {
             stopping: AtomicBool::new(false),
         };
 
-        let problems = prepare_hooks(&shared, activity_on);
+        let mut problems = Vec::new();
+        if activity_on {
+            let refreshed = refresh_plugin(&shared);
+            problems.extend(refreshed);
+        }
+        if hooks.is_dir() {
+            // The Electron app's settings.json entries may still call these until Set up removes them; a stub answers with nothing.
+            let stubbed = stub_hook_scripts(&hooks);
+            problems.extend(stubbed);
+        }
         let (view, awaiting, watching) = compute(&shared);
         {
             let mut state = lock(&shared.state);
@@ -706,8 +706,10 @@ impl AgentSetups {
             state.heard.clear();
             state.unloaded.clear();
         }
-        let mut problems = prepare_hooks(&self.shared, on);
+        let mut problems = Vec::new();
         if on {
+            let refreshed = refresh_plugin(&self.shared);
+            problems.extend(refreshed);
             check_version(&self.shared);
         } else {
             // Only while the line is still exactly what this app wrote; otherwise it is the user's.
@@ -917,10 +919,6 @@ mod tests {
         taco_agents::CLAUDE.id()
     }
 
-    fn checkout_hooks() -> PathBuf {
-        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../hooks"))
-    }
-
     fn environment() -> Environment {
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config");
@@ -959,7 +957,6 @@ mod tests {
     fn files_of(environment: &Environment) -> SetupFiles {
         SetupFiles {
             config_directory: environment.config.clone(),
-            hook_scripts_source: checkout_hooks(),
             plugin_program: Some(environment.program.clone()),
             app_version: "1.0.0".to_string(),
         }
@@ -1155,11 +1152,9 @@ mod tests {
     }
 
     fn assert_stubbed(directory: &Path) {
-        let checkout = checkout_hooks();
-        for entry in fs::read_dir(&checkout).unwrap() {
-            let name = entry.unwrap().file_name();
-            let text = fs::read_to_string(directory.join(&name)).unwrap();
-            assert_eq!(text, STUB, "{name:?}");
+        for name in ["taco-shells-attention.sh", "taco-shells-claude-session.sh"] {
+            let text = fs::read_to_string(directory.join(name)).unwrap();
+            assert_eq!(text, STUB, "{name}");
         }
     }
 
@@ -1184,7 +1179,6 @@ mod tests {
         let plugin_directory = plugin_directory_path(config);
         let manifest = plugin_directory.join(".claude-plugin/plugin.json");
         assert!(manifest.is_file());
-        assert_stubbed(&hooks_directory(config));
         let turned_on = fixture.switch.turned_on.load(Ordering::SeqCst);
         assert_eq!(turned_on, 1);
         let done = only_notice(&fixture);
@@ -1324,25 +1318,32 @@ mod tests {
     }
 
     #[test]
-    fn turning_activity_on_silences_the_scripts_and_off_brings_them_back() {
-        let fixture = fixture_with(environment(), false);
-        let hooks = hooks_directory(&fixture.environment.config);
+    fn a_start_with_an_old_hooks_folder_leaves_both_scripts_as_stubs() {
+        for on in [false, true] {
+            let environment = environment();
+            let hooks = hooks_directory(&environment.config);
+            fs::create_dir_all(&hooks).unwrap();
+            for name in ["taco-shells-attention.sh", "taco-shells-claude-session.sh"] {
+                fs::write(hooks.join(name), "#!/bin/sh\necho real\n").unwrap();
+            }
 
-        fixture.setups.activity_changed(true);
+            let _fixture = fixture_with(environment, on);
 
-        assert_stubbed(&hooks);
-        let marker = hooks.join("taco-shells-attention.sh");
-        fs::write(&marker, "left alone").unwrap();
-        fixture.setups.activity_changed(true);
-        assert_eq!(fs::read_to_string(&marker).unwrap(), "left alone");
+            assert_stubbed(&hooks);
+        }
+    }
 
-        fixture.setups.activity_changed(false);
+    #[test]
+    fn a_start_without_a_hooks_folder_creates_nothing() {
+        for on in [false, true] {
+            let environment = environment();
+            let hooks = hooks_directory(&environment.config);
 
-        for entry in fs::read_dir(checkout_hooks()).unwrap() {
-            let entry = entry.unwrap();
-            let real = fs::read(entry.path()).unwrap();
-            let copied = fs::read(hooks.join(entry.file_name())).unwrap();
-            assert_eq!(copied, real, "{:?}", entry.file_name());
+            let fixture = fixture_with(environment, on);
+            fixture.setups.activity_changed(!on);
+            fixture.setups.activity_changed(on);
+
+            assert!(!hooks.exists());
         }
     }
 
