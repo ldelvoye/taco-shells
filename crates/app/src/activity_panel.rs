@@ -28,6 +28,7 @@ const SCROLL_ID: &str = "activity-scroll";
 const OLDER_ID: &str = "activity-older";
 const SHELL_TEXT: &str = "No agent here, just a shell.";
 const EMPTY_LOG_TEXT: &str = "Nothing in this agent's log yet.";
+const NO_TERMINAL_TEXT: &str = "No terminal is open.";
 const NEEDS_HEADING: &str = "Needs you.";
 const SET_UP_LABEL: &str = "Set up";
 const SHOW_OLDER: &str = "Show older";
@@ -78,6 +79,8 @@ const MINUTES_PER_HOUR: u64 = 60;
 /// The agent setup line for a terminal.
 #[derive(Clone, Debug, PartialEq)]
 pub enum NoAgentLine {
+    /// No terminal is open, after the last one closed.
+    NoTerminal,
     Shell,
     Offer {
         harness: HarnessId,
@@ -223,7 +226,7 @@ pub fn now_ms() -> u64 {
 fn no_agent_for(input: &ActivityInput) -> NoAgentLine {
     match input.terminal {
         Some(terminal) => no_agent_line(terminal, input.notices),
-        None => NoAgentLine::Shell,
+        None => NoAgentLine::NoTerminal,
     }
 }
 
@@ -429,7 +432,7 @@ fn question_card(question: &str, look: &Look) -> Div {
 // A row becomes an agent row from its title alone, hooks or not, so the offer has to draw beside one: that is the
 // terminal it is for.
 fn shows_beside_agent(line: &NoAgentLine) -> bool {
-    !matches!(line, NoAgentLine::Shell)
+    !matches!(line, NoAgentLine::Shell | NoAgentLine::NoTerminal)
 }
 
 fn card(look: &Look) -> Div {
@@ -465,6 +468,9 @@ fn aligned_button(id: ElementId, label: &str, look: &Look) -> Stateful<Div> {
 fn no_agent_element(line: &NoAgentLine, look: &Look, cx: &mut Context<WindowView>) -> Div {
     let row = div().flex().items_center().gap(px(10.));
     match line {
+        NoAgentLine::NoTerminal => div()
+            .text_color(look.secondary_text)
+            .child(NO_TERMINAL_TEXT),
         NoAgentLine::Shell => div().text_color(look.secondary_text).child(SHELL_TEXT),
         NoAgentLine::Offer {
             harness,

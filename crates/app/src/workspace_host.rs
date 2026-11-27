@@ -210,7 +210,6 @@ fn deliver(
             }
             Outbound::State(state) => WindowOutput::State(state),
             Outbound::Activity(event) => WindowOutput::Activity(event),
-            Outbound::Emptied => WindowOutput::Emptied,
         };
         // a send fails only once the window is gone
         let _ = window.unbounded_send(shown);

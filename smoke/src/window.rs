@@ -37,6 +37,8 @@ const CHORD_ANSWER: &str = "chord-6";
 const SECOND_RUN_WINDOW: Duration = Duration::from_millis(300);
 const OPEN_SETTINGS: &str = "cmd-,";
 const CLOSE_TERMINAL: &str = "cmd-w";
+const NEW_TERMINAL: &str = "cmd-t";
+const EXIT_COMMAND: &str = "exit";
 const LEAKED_COMMAND: &str = "echo leaked-$((5+5))";
 const LEAKED_ANSWER: &str = "leaked-10";
 const RETURNED_COMMAND: &str = "echo returned-$((4*4))";
@@ -362,6 +364,53 @@ pub fn draws_in_light_and_dark(smoke: &Smoke, driver: &mut Driver) -> Result<(),
         println!("      {} ({width}x{height})", path.display());
     }
     Ok(())
+}
+
+/// Closing the last terminal leaves the app open: every terminal but one goes by cmd+w, the last one's shell exits by
+/// itself, cmd+w with nothing open does nothing, and cmd+t opens a terminal that answers a command.
+pub fn the_app_outlives_its_last_terminal(
+    smoke: &Smoke,
+    driver: &mut Driver,
+) -> Result<(), String> {
+    let mut count = row_terminals(driver)?.len();
+    while count > 1 {
+        driver.keys(&[CLOSE_TERMINAL])?;
+        count = rows_become(driver, count - 1)?;
+    }
+    let Some(last) = row_terminals(driver)?.pop() else {
+        return Err("no terminal was open to close".to_string());
+    };
+    shown_lines(driver, &last, |lines| {
+        lines.iter().any(|line| !line.is_empty())
+    })?;
+    driver.text(EXIT_COMMAND)?;
+    driver.keys(&["enter"])?;
+    rows_become(driver, 0)?;
+
+    driver.keys(&[CLOSE_TERMINAL])?;
+    thread::sleep(SECOND_RUN_WINDOW);
+    let left = row_terminals(driver)?;
+    if !left.is_empty() {
+        return Err(format!("cmd+w with nothing open left {left:?}"));
+    }
+
+    driver.keys(&[NEW_TERMINAL])?;
+    rows_become(driver, 1)?;
+    a_typed_command_is_answered_on_screen(smoke, driver)
+}
+
+fn rows_become(driver: &mut Driver, wanted: usize) -> Result<usize, String> {
+    let started = Instant::now();
+    loop {
+        let count = row_terminals(driver)?.len();
+        if count == wanted {
+            return Ok(count);
+        }
+        if started.elapsed() >= SHELL_DEADLINE {
+            return Err(format!("{count} terminals are open, not {wanted}"));
+        }
+        thread::sleep(SETTLE_POLL);
+    }
 }
 
 fn drawn(driver: &mut Driver) -> Result<DrawnState, String> {

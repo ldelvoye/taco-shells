@@ -34,7 +34,7 @@ const BEFORE_LAUNCH: [Check; 4] = [
     },
 ];
 
-const LAUNCHED: [LaunchedCheck; 11] = [
+const LAUNCHED: [LaunchedCheck; 12] = [
     LaunchedCheck {
         name: "the window draws rows",
         run: window::draws_rows,
@@ -78,6 +78,10 @@ const LAUNCHED: [LaunchedCheck; 11] = [
     LaunchedCheck {
         name: "the window draws in light and in dark",
         run: window::draws_in_light_and_dark,
+    },
+    LaunchedCheck {
+        name: "closing the last terminal leaves the app open, and a new one answers",
+        run: window::the_app_outlives_its_last_terminal,
     },
 ];
 

@@ -299,8 +299,6 @@ impl WindowView {
         match output {
             WindowOutput::State(state) => self.show(state, cx),
             WindowOutput::Replied { token, reply } => self.replied(token, reply, cx),
-            // Through `Quit`, not `cx.quit()`, so everything behind the window is stopped in order first.
-            WindowOutput::Emptied => cx.dispatch_action(&Quit),
             WindowOutput::Activity(ActivityEvent::Body {
                 terminal,
                 thing,
