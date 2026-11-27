@@ -44,30 +44,34 @@ mod tests {
     use super::terminal_settings_of;
 
     #[test]
-    fn the_runtime_starts_terminals_with_the_configs_cursor_theme_and_agent_plugin_switch() {
+    fn each_cursor_style_is_its_shape_and_each_setting_comes_from_its_own_field_in_order() {
         let no_files = ConfigTexts {
             settings: None,
             keybindings: None,
         };
-        let mut config = resolve_config(&no_files, true);
-        config.settings.cursor_style = CursorStyle::Bar;
-        config.settings.cursor_blink = false;
-        config.settings.scrollback = 4321;
-        config.settings.agent_activity = true;
-
-        let commands = terminal_settings_of(&config);
-
-        let dark = palette_for(Appearance::Dark);
-        let expected = [
-            RuntimeCommand::Scrollback { lines: 4321 },
-            RuntimeCommand::Colors(dark.terminal),
-            RuntimeCommand::CursorDefaults {
-                shape: CursorShape::Bar,
-                blink: false,
-            },
-            RuntimeCommand::AgentPlugin { on: true },
+        let styles = [
+            (CursorStyle::Block, CursorShape::Block),
+            (CursorStyle::Bar, CursorShape::Bar),
+            (CursorStyle::Underline, CursorShape::Underline),
         ];
-        assert_eq!(config.appearance, Appearance::Dark);
-        assert_eq!(commands, expected);
+        for (style, shape) in styles {
+            let mut config = resolve_config(&no_files, true);
+            config.settings.cursor_style = style;
+            // Unlike the defaults, and the two switches unlike each other, so a setting sent from the wrong field shows.
+            config.settings.scrollback = 4321;
+            config.settings.cursor_blink = false;
+            config.settings.agent_activity = true;
+            let commands = terminal_settings_of(&config);
+            let expected = [
+                RuntimeCommand::Scrollback { lines: 4321 },
+                RuntimeCommand::Colors(palette_for(Appearance::Dark).terminal),
+                RuntimeCommand::CursorDefaults {
+                    shape,
+                    blink: false,
+                },
+                RuntimeCommand::AgentPlugin { on: true },
+            ];
+            assert_eq!(commands, expected, "{style:?}");
+        }
     }
 }
