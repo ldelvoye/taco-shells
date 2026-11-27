@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use taco_agents::Version;
+
 const STATUS_NOT_INSTALLED: &str = "Not installed";
 const STATUS_OFF: &str = "Off";
 const STATUS_OLD_SETUP: &str = "Set up the old way";
@@ -33,8 +35,8 @@ pub struct AgentSetupFacts {
     pub has_old_entries: bool,
     pub plugin_dirs: PluginDirs,
     pub home: PathBuf,
-    pub version: Option<(u32, u32, u32)>,
-    pub minimum_version: (u32, u32, u32),
+    pub version: Option<Version>,
+    pub minimum_version: Version,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,7 +52,7 @@ pub struct AgentMenu {
     pub enabled: bool,
 }
 
-fn version_text(version: (u32, u32, u32)) -> String {
+fn version_text(version: Version) -> String {
     let (major, minor, patch) = version;
     format!("{major}.{minor}.{patch}")
 }
@@ -115,14 +117,14 @@ pub fn agent_menu_of(state: &AgentSetupState, product_name: &str) -> AgentMenu {
 mod tests {
     use super::*;
 
-    const OLD: Option<(u32, u32, u32)> = Some((2, 1, 279));
-    const NEW: Option<(u32, u32, u32)> = Some((2, 1, 280));
+    const OLD: Option<Version> = Some((2, 1, 279));
+    const NEW: Option<Version> = Some((2, 1, 280));
 
     fn facts(
         installed: bool,
         has_old_entries: bool,
         activity_on: bool,
-        version: Option<(u32, u32, u32)>,
+        version: Option<Version>,
     ) -> AgentSetupFacts {
         AgentSetupFacts {
             installed,
