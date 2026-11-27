@@ -1,7 +1,9 @@
 //! The window's macOS chrome: the traffic lights, the name it gives this machine, and keeping out of sight when asked.
 
+use std::ffi::OsStr;
+
 use gpui::{ActivationPolicy, App, Pixels, Point, point, px};
-use taco_identity::BACKGROUND_WINDOW_VARIABLE;
+use taco_identity::{BACKGROUND_WINDOW_VARIABLE, IS_STABLE};
 
 use crate::look::TITLE_BAR_HEIGHT;
 
@@ -25,7 +27,16 @@ pub enum TrafficLights {
 }
 
 pub fn is_background_window() -> bool {
-    let Some(value) = std::env::var_os(BACKGROUND_WINDOW_VARIABLE) else {
+    let asked = std::env::var_os(BACKGROUND_WINDOW_VARIABLE);
+    keeps_out_of_sight(asked.as_deref(), IS_STABLE)
+}
+
+/// Whether a launch with this value of the variable keeps its window out of sight: never in the stable app.
+fn keeps_out_of_sight(asked: Option<&OsStr>, stable: bool) -> bool {
+    if stable {
+        return false;
+    }
+    let Some(value) = asked else {
         return false;
     };
     value == BACKGROUND_WINDOW_ON
@@ -55,4 +66,26 @@ pub fn traffic_light_centers() -> [Point<Pixels>; 3] {
     let step = (TRAFFIC_LIGHTS_WIDTH - TRAFFIC_LIGHT_HEIGHT) / 2.;
     let first = TRAFFIC_LIGHT_INSET + TRAFFIC_LIGHT_HEIGHT / 2.;
     [0., 1., 2.].map(|index| point(px(first + step * index), top))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsStr;
+
+    use super::keeps_out_of_sight;
+
+    #[test]
+    fn only_a_development_build_asked_with_1_keeps_out_of_sight() {
+        let on = Some(OsStr::new("1"));
+        let other = Some(OsStr::new("yes"));
+        let cases = [
+            ("development, asked", on, false, true),
+            ("stable, asked", on, true, false),
+            ("development, not asked", None, false, false),
+            ("development, another value", other, false, false),
+        ];
+        for (case, asked, stable, hidden) in cases {
+            assert_eq!(keeps_out_of_sight(asked, stable), hidden, "{case}");
+        }
+    }
 }
