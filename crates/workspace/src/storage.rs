@@ -82,7 +82,8 @@ fn replace_privately(path: &Path, temporary: &Path, text: &str) -> bool {
     renamed
 }
 
-// A log holds what the user typed to an agent and the commands it ran, so on Unix only their own account can read it.
+// A log holds what the user typed to an agent and the commands it ran, and the save its folders and session ids, so on
+// Unix only their own account can read them.
 fn private_file() -> OpenOptions {
     let mut options = OpenOptions::new();
     #[cfg(unix)]
@@ -170,11 +171,8 @@ impl Storage for FileStorage {
             }
         }
         let temporary = self.directory.join(TEMPORARY_FILE);
-        if fs::write(&temporary, text).is_err() {
-            return false;
-        }
         // the rename makes the write whole or nothing, so a quit mid-write never leaves half a file
-        fs::rename(&temporary, path).is_ok()
+        replace_privately(&path, &temporary, text)
     }
 
     // Read as bytes, so a crash that cut a character in half costs that line and not the whole log.
@@ -289,6 +287,12 @@ mod tests {
         let mut storage = FileStorage::new(directory.path().to_path_buf());
         assert_eq!(storage.read_save(), None);
         assert!(storage.write_save(OURS));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&save).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "readable by the user's own account only");
+        }
 
         let electron = r#"{"version":1,"groups":[]}"#;
         fs::write(&save, electron).unwrap();
