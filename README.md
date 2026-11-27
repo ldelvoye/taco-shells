@@ -1,12 +1,16 @@
 # Taco Shells
 
-A terminal manager for macOS, built with Electron.
+A terminal manager for macOS.
 
 I like VS Code's terminal manager: a sidebar list where splits show up as coupled rows, each with its own status. It's the only thing I've found that makes running two Claude Code sessions side by side legible. What I don't like is that it comes with an editor attached, and popping the terminal out into its own window leaves the sidebar behind.
 
 So I'm building just that part as its own app.
 
-Early. Right now it runs as many terminals as you like and lists them in the sidebar, each row named by whatever the program in it publishes as its title. You switch by clicking a row and move a terminal by dragging its row: onto the edge of another row to reorder, onto the middle of one to join it in a split, and back out to stand alone. A split's bracket drags the whole split. Right-click a row to start a group: a named, colored header you can collapse, drag as one, and drop terminals onto. Splitting a terminal puts its panes side by side, with a divider you can drag, and brackets their rows together in the sidebar so a group reads as a group. Hovering a row shows a trash can that closes that terminal, hovering a group's header shows a plus that opens a terminal in that group, and the plus beside the Taco Shells name opens one at the bottom of the list. A split starts in the directory the terminal you split was sitting in.
+Taco Shells shows your terminals as a list of rows instead of tabs. Each row names its terminal by its folder, or by the agent running in it, and clicking a row shows that terminal. Hover a row for a trash can that closes it; "+ New terminal" at the top of the list opens one.
+
+Gather rows into tab groups: right-click a row and choose New group. A group draws as a tray with its name and how many terminals it holds. Click its header to collapse it, hover the header for a + that opens a terminal inside it, and right-click it to rename it or ungroup it. Drag a row to move it, or to drop it into or out of a group; a slot opens where it will land.
+
+The Terminals list and Agent Activity are panels. Drag a panel by its title to the left, right or bottom edge, drag its inner edge to resize it, and show or hide it from the strip of icons down the left side, which also opens Settings and Keyboard shortcuts. cmd+B shows or hides the terminal list.
 
 ## Installing
 
@@ -24,74 +28,59 @@ To install by hand, download the zip from [the latest release](https://github.co
 xattr -dr com.apple.quarantine "/Applications/Taco Shells.app"
 ```
 
-Once it's installed, the app checks for a new stable release, downloads it in the background, and offers a restart that swaps in the new version and brings your terminals back.
-
 Releases marked as pre-releases are points in the project's history rather than builds to install; they carry no download.
+
+## Updates
+
+The app checks for a new release every six hours and downloads it in the background. When it's ready, a "Restart to update" button and an Update menu appear, and nothing changes until you choose to restart. Every update must carry a valid signature from the release key. If one doesn't, it's refused, nothing is installed, and the app says so once for that version.
+
+## Agent Activity
+
+Agent Activity follows the terminal you have selected when an agent such as Claude Code runs in it. A card at the top says what the agent is doing now. Below it, Shared lists what the agent shared or the app noticed: files, images, links and pull requests, with whether a pull request was open or merged when last seen. Click a thing to open it in the middle, or a link in your browser. Below that is the log: what you asked, the notes the agent writes when it finishes a piece of work, and its steps folded under each note, with any that failed marked. The first time an agent shows up, Agent Activity offers to set it up for you.
+
+Right-click a row running Claude Code and choose Fork with Claude to start a copy of that conversation in a new terminal.
 
 ## Setting up Claude Code
 
-The session markers, restoring a conversation, forking one and jumping to the terminal that wants you all rely on Claude Code telling Taco Shells what its sessions are doing, through hooks in Claude Code's `settings.json`. The app adds them for you. The first time you run Claude Code in a Taco Shells terminal without them, a strip at the top of the window offers to do it: **Set up** writes the hook entries, and **Not now** closes the strip for good. The markers start with the next Claude Code session you open.
+Turn Agent Activity on with the "Agent Activity in this app's terminals" switch on the settings page, or with Set Up Claude Code in the Agents menu. When Claude Code is running in a terminal but isn't set up, the app also offers a Set up button beside it.
 
-After that, setup lives in the **Agents** menu in the menu bar. **Claude Code** there shows whether it is set up, and holds one action:
+Set up installs nothing into Claude Code. The app keeps its own plugin in `~/.taco-shells/claude-plugin`, and while the switch is on, every new terminal hands that folder to Claude Code through `CLAUDE_CODE_PLUGIN_DIRS`. Terminals that were already open keep what they started with, so start Claude Code in a new terminal after setting up.
 
-- **Set Up Claude Code** writes the entries, whether or not you said Not now earlier.
-- **Remove Setup** deletes the entries the app wrote and nothing else. The app does not put them back by itself.
-- **Switch to Managed Setup** appears when your settings already run the hook scripts from somewhere else, such as a clone of this repo. The app leaves those entries alone until you pick it, then replaces them with its own.
+Set up edits your Claude Code `settings.json` only when it has to, and the app tells you when it did ("One line changed in …"). If your settings set `CLAUDE_CODE_PLUGIN_DIRS` in their `env` block, which would hide the app's folder, Set up adds the folder to that value. Switching Agent Activity off takes it back out, but only while the line is still exactly what the app wrote. If your settings still call the old app's hook scripts, Set up removes those entries. Managed settings are never edited.
 
-The app only touches entries that run its own scripts, which it keeps in `~/.taco-shells/hooks/`, and leaves the rest of the file the way you wrote it. When an update needs a new entry the app adds it, and an entry you deleted stays deleted.
-
-To wire the hooks yourself, set `"manageAgentHooks": false` in [settings](#settings): the app then neither offers nor changes anything. **Show Hook Scripts in Finder**, in the same menu, opens the folder holding the scripts, and [`setup.ts`](src/agents/claude/setup.ts) lists which script goes on which event and which entries are `async`. An entry looks like this:
-
-```json
-{ "hooks": [{ "type": "command", "command": "/Users/you/.taco-shells/hooks/taco-shells-claude-session.sh", "async": true }] }
-```
-
-If you moved Claude Code's config with `CLAUDE_CONFIG_DIR`, the app follows it only when it can see the variable. An app opened from Finder does not see one exported in a shell startup file, and looks in `~/.claude`.
-
-## Jumping to the terminal that wants you
-
-[Clawd on Desk](https://github.com/rullerzhou-afk/clawd-on-desk) shows a bubble when a Claude Code session needs you, with a "go to terminal" button. Clicking it raises Taco Shells and switches to the terminal that asked, rather than leaving you on whichever one you had open.
-
-It needs Claude Code [set up](#setting-up-claude-code), which is what tells Taco Shells a session is waiting. Without it nothing is ever flagged and the button only raises the app.
-
-## Picking up where you left off
-
-Quit and relaunch, and the terminals you had come back, each in the directory it was in. A terminal that was running Claude Code picks its conversation back up by resuming it. That part needs Claude Code [set up](#setting-up-claude-code), which is how Taco Shells learns which terminal is running which conversation. Set `"restoreOnLaunch": false` in settings to turn the whole thing off.
-
-## Coloring terminals
-
-Any row in the sidebar can carry a color, shown as a stripe down its left edge. The colors mean whatever you want: what's on your plate, what's waiting on someone else, work and personal. Right-click a row and hover the dots to preview one on the row; only a click keeps it. The crossed-out dot removes the color. `cmd+opt+1` to `cmd+opt+6` color the terminal you're in, and pressing the same one again removes it. Colors come back when you relaunch.
+The app finds Claude Code's settings in `CLAUDE_CONFIG_DIR` when that's set in the app's own environment, and in `~/.claude` otherwise. Claude Code 2.1.280 or later is needed; with an older one, the Agents menu says so.
 
 ## Seeing which session needs you
 
-A terminal running Claude Code gets a marker in front of its name in the sidebar: a grey ring while it sits idle, a spinner while Claude works, an amber dot when it is waiting on you, and a green check when it finished while you were looking at another terminal. The check clears once you switch to it. With the sidebar hidden, a "2 waiting" pill in the titlebar counts the amber ones.
+Each row running an agent carries a small mark: a turning ring while it works, a red dot with a ripple when it is waiting for you, and a green check when it has finished a turn you have not looked at yet. A row with no agent, or one you have already looked at, has no mark. When any agent is waiting, the title bar shows a red "N waiting" pill counting them.
 
-The markers come from Claude Code's hooks, so they need Claude Code [set up](#setting-up-claude-code).
+## Picking up where you left off
 
-## Forking a Claude conversation
+Quit Taco Shells and open it again, and your terminals come back as you left them: the same rows in the same order, each in its directory, in the same tab groups (with their names, and collapsed or open as they were), with the same row selected and the panels where you put them.
 
-Right-click a row that is running Claude Code and pick **Fork with Claude**. A copy of the conversation opens in a split beside it, so you can try a second direction while the first carries on untouched, even mid-reply. The fork wears the same color as its original and its name starts with `⑂`, then `⑂2`, `⑂3` for the ones after it. The item is greyed out where there is no conversation to copy: on a terminal that is not running Claude Code, and on a brand-new session or a fresh fork until its first message. It needs Claude Code [set up](#setting-up-claude-code).
+A terminal that was running Claude Code when you quit starts it again with `claude --resume`, in the directory the conversation began in, so the conversation picks up where it stopped. This needs Claude Code set up in Taco Shells, since that is how the app learns which conversation each terminal holds. A terminal where Claude Code had already exited comes back as a plain shell.
 
-## Other coding agents
+Agent Activity comes back with its terminal: the asks, steps, notes and Shared are all kept across a relaunch. A terminal's activity is deleted only when you close that terminal.
 
-Claude Code is the only agent Taco Shells supports today, and everything the app knows about it lives in one folder. Support for an agent is a harness: a folder under `src/agents/` that says how to read the agent's hook events, session ids and terminal title, and which commands resume and fork a session. Each harness also has a hook script in `hooks/` that posts those events to the app. [`types.ts`](src/agents/types.ts) lists what a harness declares, and [`claude/`](src/agents/claude) is the worked example. A new agent's script posts to `/agent-session/start`, `/agent-session/end` and `/agent-session/state` with its harness id in the body, and one line in [`registry.ts`](src/agents/registry.ts) registers it. A harness that also declares a `setup` (the settings file its hooks go in, and the entries) gets its own entry in the Agents menu and the same one-time offer Claude Code gets.
+To start with an empty window instead, turn off "Reopen my terminals" in Settings, or set `"restoreOnLaunch": false`. With it off nothing is restored, and the Agent Activity of the old terminals is deleted at launch.
 
 ## Settings
 
-It reads `~/.taco-shells/settings.json` and `~/.taco-shells/keybindings.json`, both written on first launch holding the defaults, so the file you open is the list of everything you can change. Edits apply when you save, without a restart. Comments and trailing commas are fine. Theme follows macOS unless you pin it to `light` or `dark`.
-
-Your file is layered over the defaults rather than replacing them, so deleting a line brings the default back. To turn a key off, bind it to `null`.
+Settings live in `~/.taco-shells/settings.json` and `~/.taco-shells/keybindings.json`, written with every default on first launch. An edit applies as soon as you save the file, and comments and trailing commas are fine. Anything you leave out keeps its default. A value the app can't use is reported, and the default stays until you fix it. `"theme": "system"` follows macOS; `"light"` or `"dark"` pins it. In `keybindings.json`, binding a key to `null` turns it off. The settings page writes to the same file and keeps your comments.
 
 ## Building it yourself
 
+It needs [rustup](https://rustup.rs). From the repo:
+
 ```sh
-npm install
-npm run dev
+rustup toolchain install   # the Rust version rust-toolchain.toml pins
+cargo xtask run       # build and start the app from target/
+cargo xtask install   # a release build in Applications
 ```
 
-A build from the working tree installs as **Taco Shells Dev**, a separate app that sits beside the released one and reads its own config, so developing it never disturbs the copy you use.
+A build from the working tree is **Taco Shells Dev**, a separate app that sits beside the released one and reads its own config, `~/.taco-shells-dev`, so developing it never disturbs the copy you use. `TACO_SHELLS_CONFIG_DIR` points either app at another folder.
 
-[AGENTS.md](AGENTS.md) covers the rest — testing, the two-app split, and how versions and releases work. It's written for coding agents, but you're welcome to read it.
+[AGENTS.md](AGENTS.md) covers the rest: testing, the two apps, and how versions and releases work. It's written for coding agents, but you're welcome to read it.
 
 ## License
 
