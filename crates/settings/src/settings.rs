@@ -21,6 +21,7 @@ const SETTING_KEYS: [&str; 10] = [
     "agentActivity",
     "shellRowName",
 ];
+// Keys an older version wrote: read without a problem line and ignored.
 const RETIRED_SETTING_KEYS: [&str; 1] = ["manageAgentHooks"];
 
 pub const FONT_SIZE_MIN: f64 = 1.0;

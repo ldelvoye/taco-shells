@@ -100,11 +100,9 @@ fn hook_scripts_source() -> PathBuf {
     hook_scripts_source_for(found.as_deref(), &checkout)
 }
 
-fn plugin_program_beside(executable: &Path) -> PathBuf {
-    let Some(directory) = executable.parent() else {
-        return PathBuf::from(PLUGIN_PROGRAM_NAME);
-    };
-    directory.join(PLUGIN_PROGRAM_NAME)
+fn plugin_program_beside(executable: &Path) -> Option<PathBuf> {
+    let directory = executable.parent()?;
+    Some(directory.join(PLUGIN_PROGRAM_NAME))
 }
 
 fn start_setups(
@@ -146,11 +144,12 @@ fn start_setups(
     };
     let source = hook_scripts_source();
     let found = std::env::current_exe();
-    let executable = match found {
-        Ok(path) => path,
-        Err(_) => PathBuf::new(),
-    };
-    let plugin_program = plugin_program_beside(&executable);
+    let mut executable = PathBuf::new();
+    let mut plugin_program = None;
+    if let Ok(path) = found {
+        plugin_program = plugin_program_beside(&path);
+        executable = path;
+    }
     let version = app_version(&executable);
     let (setups, problems) = AgentSetups::start(
         directory.to_path_buf(),
@@ -410,6 +409,7 @@ impl ServicesHost {
     pub fn app_activated(&self) {
         let setups = locked(&self.inner.setups);
         if let Some(setups) = setups.as_ref() {
+            setups.recheck_if_too_old();
             setups.refresh();
         }
     }

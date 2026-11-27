@@ -394,17 +394,6 @@ pub fn remove_managed_entries(text: &str, hooks_directory: &Path, label: &str) -
     remove_matching(text, label, &test)
 }
 
-pub fn remove_hand_entries(
-    text: &str,
-    setup: &HarnessSetup,
-    hooks_directory: &Path,
-    label: &str,
-) -> HookEdit {
-    let scripts = scripts_of(setup);
-    let test = |command: &str| is_hand_command(command, &scripts, hooks_directory);
-    remove_matching(text, label, &test)
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -589,22 +578,6 @@ mod tests {
         let after = hook_wiring_of(Some(&spaced_result), setup(), &spaced);
         assert_eq!(after, HookWiring::None);
         assert!(!spaced_result.contains("taco-shells-"));
-
-        let mixed = r#"{
-  "hooks": {
-    "Stop": [
-      { "hooks": [{ "type": "command", "command": "/Users/someone/bin/taco-shells-attention.sh" }] },
-      { "hooks": [{ "type": "command", "command": "/Users/someone/.taco-shells/hooks/taco-shells-attention.sh" }] }
-    ]
-  }
-}
-"#;
-        let by_hand = remove_hand_entries(mixed, setup(), &directory, LABEL);
-        let by_hand_text = changed_text(by_hand);
-        let by_hand_value = value_of(&by_hand_text);
-        let remaining = commands_under(&by_hand_value, "Stop");
-        let kept = "/Users/someone/.taco-shells/hooks/taco-shells-attention.sh";
-        assert_eq!(remaining, vec![kept]);
     }
 
     #[test]
