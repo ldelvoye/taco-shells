@@ -95,6 +95,7 @@ const FULL_LOG_PAGE: usize = 200;
 // The newest page must start inside a noted stretch: here, the nudged fix's second step.
 const CUT_LOG_PAGE: usize = 18;
 const NARROW_PANEL: f32 = 140.;
+const PLUGIN_DIRS_OFFER_TEXT: &str = "Claude Code can't load this app's plugin, because ~/.claude/settings.json sets CLAUDE_CODE_PLUGIN_DIRS. Set up adds this app's folder to it.";
 const PLAN_NOTE: &str = "Wrote PLAN-sigkill.md. Today a closed terminal or a stopping runtime gets one SIGHUP and \
 nothing after it, so a shell that ignores it keeps running with its children. The plan adds a SIGKILL to the whole \
 shell session, 2 s after a terminal is closed and 500 ms after the runtime is told to stop, and a test for each. It \
@@ -182,6 +183,10 @@ pub enum Fixture {
     SetupOffAgent,
     /// Agent Activity on, and an agent known only by its title, with nothing in its log yet.
     AgentNoLog,
+    /// The longest offer, Claude Code's own settings replacing the plugin folder, beside an agent.
+    SetupPluginDirs,
+    /// The same with Agent Activity at its narrowest.
+    SetupPluginDirsNarrow,
 }
 
 struct FixtureRow {
@@ -217,6 +222,8 @@ impl Fixture {
             "setupdone" => Some(Self::SetupDone),
             "setupoffagent" => Some(Self::SetupOffAgent),
             "agentnolog" => Some(Self::AgentNoLog),
+            "setupplugindirs" => Some(Self::SetupPluginDirs),
+            "setupplugindirsnarrow" => Some(Self::SetupPluginDirsNarrow),
             _ => None,
         }
     }
@@ -238,6 +245,8 @@ impl Fixture {
             Self::SetupDone => setup_beside_agent(AgentSetupNoticeKind::Done, DONE_TEXT),
             Self::SetupOffAgent => setup_beside_agent(offer_kind(), OFFER_TEXT),
             Self::AgentNoLog => quiet(),
+            Self::SetupPluginDirs => setup_beside_agent(offer_kind(), PLUGIN_DIRS_OFFER_TEXT),
+            Self::SetupPluginDirsNarrow => narrow_plugin_dirs_offer(),
         }
     }
 
@@ -280,7 +289,14 @@ impl Fixture {
         if full {
             working = full_log();
         }
-        if matches!(self, Self::SetupOffAgent | Self::AgentNoLog) {
+        let no_log = matches!(
+            self,
+            Self::SetupOffAgent
+                | Self::AgentNoLog
+                | Self::SetupPluginDirs
+                | Self::SetupPluginDirsNarrow
+        );
+        if no_log {
             working = Vec::new();
         }
         let needs = log_of(&NEEDS_LOG);
@@ -813,6 +829,12 @@ fn setup_on_shell(kind: AgentSetupNoticeKind) -> Shown {
 fn setup_beside_agent(kind: AgentSetupNoticeKind, text: &str) -> Shown {
     let mut shown = quiet();
     shown.setups = one_notice(kind, text, "t0");
+    shown
+}
+
+fn narrow_plugin_dirs_offer() -> Shown {
+    let mut shown = setup_beside_agent(offer_kind(), PLUGIN_DIRS_OFFER_TEXT);
+    shown.drawn.panels.agent_activity.size = NARROW_PANEL;
     shown
 }
 
