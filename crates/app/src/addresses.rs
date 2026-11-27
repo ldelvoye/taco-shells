@@ -2,15 +2,15 @@
 
 const HTTP: Scheme = Scheme {
     prefix: "http://",
-    has_host: true,
+    has_authority: true,
 };
 const HTTPS: Scheme = Scheme {
     prefix: "https://",
-    has_host: true,
+    has_authority: true,
 };
 const MAILTO: Scheme = Scheme {
     prefix: "mailto:",
-    has_host: false,
+    has_authority: false,
 };
 
 /// What a link clicked in a terminal may open: the web and mail, never a file or an app's own scheme.
@@ -22,11 +22,11 @@ pub const SHARED_SCHEMES: [Scheme; 1] = [HTTPS];
 pub struct Scheme {
     prefix: &'static str,
     /// Whether a host follows the prefix, which must then have no user part.
-    has_host: bool,
+    has_authority: bool,
 }
 
-/// Whether an address may be handed to the system: one of `schemes` in any case, a host with no user part where the
-/// scheme has one, and no spaces, control or direction characters anywhere, which could make it read as another address.
+/// Whether an address may be handed to the system: an allowed scheme, a host with no user part, and no space,
+/// control or direction character to make it read as another address.
 pub fn may_open(url: &str, schemes: &[Scheme]) -> bool {
     let found = schemes
         .iter()
@@ -40,7 +40,7 @@ pub fn may_open(url: &str, schemes: &[Scheme]) -> bool {
         return false;
     }
     let rest = &url[scheme.prefix.len()..];
-    if !scheme.has_host {
+    if !scheme.has_authority {
         return !rest.is_empty();
     }
     let mut authority = rest;
@@ -73,6 +73,8 @@ mod tests {
         let both = [
             "https://github.com/ldelvoye/taco-shells/pull/155",
             "HTTPS://claude.ai/artifact/x",
+            "https://github.com?from=me@example.com",
+            "https://github.com#me@example.com",
         ];
         for url in both {
             assert!(may_open(url, &SHARED_SCHEMES), "{url}");
@@ -93,7 +95,9 @@ mod tests {
             "https://:443/x",
             "https://git hub.com/x",
             "https://github.com/x\n",
+            "https://github.com/\u{7}x",
             "https://\u{202E}moc.buhtig/x",
+            "https://github.com/x\u{2069}",
             "mailto:",
             "mailto:someone@example.com\u{202E}",
             "file:///etc/passwd",

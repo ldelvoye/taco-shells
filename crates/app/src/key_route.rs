@@ -91,7 +91,6 @@ pub fn route(state: KeyState, key: Key) -> Route {
     Route::Run(command)
 }
 
-// Nothing closes a terminal nobody can see, and anything that shows one closes the pages first.
 fn over_page(kind: Kind, command: CommandId, held: bool) -> Route {
     if held {
         return Route::PassOn;
@@ -103,6 +102,7 @@ fn over_page(kind: Kind, command: CommandId, held: bool) -> Route {
     }
 }
 
+// Over a page, nothing closes a terminal nobody can see, and anything that shows one closes the pages first.
 fn kind_of(command: CommandId) -> Kind {
     match command {
         CommandId::TerminalNew
@@ -166,6 +166,14 @@ mod tests {
             page_open: true,
             ..opened
         };
+        let popup_over_page = KeyState {
+            popup_open: true,
+            ..page
+        };
+        let capturing_with_popup = KeyState {
+            popup_open: true,
+            ..capturing
+        };
         let no_terminal = KeyState::default();
 
         let escape = Key {
@@ -186,13 +194,40 @@ mod tests {
         let close = CommandId::TerminalClose;
         let cases = [
             (capturing, bound(close), Route::Capture),
+            (capturing_with_popup, escape, Route::Capture),
             (popup, bound(close), Route::PassOn),
+            (popup_over_page, escape, Route::PassOn),
             (page, escape, Route::MovePages(PageMove::Back)),
             (page_over_opened, escape, Route::MovePages(PageMove::Back)),
             (opened, escape, Route::CloseOpened),
             (terminal, escape, Route::PassOn),
             (terminal, unbound, Route::PassOn),
             (page, bound(close), Route::MovePages(PageMove::CloseAll)),
+            (
+                page_over_opened,
+                bound(close),
+                Route::MovePages(PageMove::CloseAll),
+            ),
+            (
+                page,
+                bound(CommandId::SidebarToggle),
+                Route::MovePages(PageMove::CloseAll),
+            ),
+            (
+                page,
+                bound(CommandId::TerminalFocusNextGroup),
+                Route::CloseThenRun(CommandId::TerminalFocusNextGroup),
+            ),
+            (
+                page,
+                bound(CommandId::ConfigOpenSettings),
+                Route::MovePages(PageMove::ToggleSettings),
+            ),
+            (
+                page,
+                bound(CommandId::ConfigOpenKeybindings),
+                Route::MovePages(PageMove::ToggleShortcuts),
+            ),
             (
                 page,
                 bound(CommandId::TerminalNew),
@@ -213,6 +248,11 @@ mod tests {
                 terminal,
                 held(CommandId::TerminalWordLeft),
                 Route::Run(CommandId::TerminalWordLeft),
+            ),
+            (
+                terminal,
+                held(CommandId::TerminalWordRight),
+                Route::Run(CommandId::TerminalWordRight),
             ),
             (terminal, held(CommandId::TerminalClear), Route::Swallow),
         ];
