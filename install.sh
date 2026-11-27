@@ -21,7 +21,7 @@ check_platform() {
   fi
 }
 
-# TACO_SHELLS_INSTALL_DIR and TACO_SHELLS_ZIP_URL exist for scripts/install.test.mjs.
+# TACO_SHELLS_INSTALL_DIR and TACO_SHELLS_ZIP_URL exist for the tests, in xtask/src/install_script.rs and scripts/install.test.mjs.
 choose_install_dir() {
   if [ -n "${TACO_SHELLS_INSTALL_DIR:-}" ]; then
     install_dir="$TACO_SHELLS_INSTALL_DIR"
@@ -49,7 +49,7 @@ latest_zip_url() {
     *) fail "could not find a stable release to install." ;;
   esac
   version="${tag#v}"
-  # Must match the artifactName template in electron-builder.js.
+  # Must match release_zip_name in crates/identity, which names the zip a release carries.
   zip_url="$REPO_URL/releases/download/$tag/taco-shells-$version-arm64.zip"
 }
 
