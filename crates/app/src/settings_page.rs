@@ -353,7 +353,17 @@ fn agents_group(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
     let activity_shown = SettingChange::AgentActivity(settings.agent_activity);
     let label = "Agent Activity in this app's terminals";
     let activity_row = setting_row(&activity_shown, label, hint, activity, input);
-    group("Agents", look).child(activity_row)
+    let ask = switch(
+        "ask-for-activity-notes",
+        settings.ask_for_activity_notes,
+        SettingChange::AskForActivityNotes,
+        input,
+        cx,
+    );
+    let ask_hint = Some("When an agent stops after real work without writing one.");
+    let ask_shown = SettingChange::AskForActivityNotes(settings.ask_for_activity_notes);
+    let ask_row = setting_row(&ask_shown, "Ask for a note", ask_hint, ask, input);
+    group("Agents", look).child(activity_row).child(ask_row)
 }
 
 fn foot(look: &Look, cx: &mut Context<WindowView>) -> Div {
