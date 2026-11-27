@@ -6,11 +6,9 @@ use gpui::{
     Context, Div, ElementId, Entity, FontWeight, InteractiveElement, MouseButton, ParentElement,
     SharedString, Stateful, StatefulInteractiveElement, Styled, div, px,
 };
-use taco_settings::{
-    Binding, Chord, CommandId, KeymapChange, chords_for, command_for, differs_from_defaults,
-    file_chord_text, modifier_spelling,
-};
+use taco_settings::{Binding, Chord, CommandId, chords_for, differs_from_defaults};
 
+use crate::capture::{Capture, CaptureProblem};
 use crate::drive::mark;
 use crate::look::{Look, SMALL_TEXT_SIZE};
 use crate::page_parts::{
@@ -19,6 +17,7 @@ use crate::page_parts::{
 };
 use crate::parts;
 use crate::shell::{shell_orange, shell_outline};
+use crate::shortcut_search::{is_found, normalized_query};
 use crate::text_field::TextField;
 use crate::window::WindowView;
 
@@ -82,22 +81,6 @@ const GROUPS: [(&str, &[(CommandId, &str)]); 3] = [
     ),
 ];
 
-// Keys that type no character.
-const NON_CHARACTER_KEYS: [&str; 12] = [
-    "enter",
-    "tab",
-    "backspace",
-    "delete",
-    "up",
-    "down",
-    "left",
-    "right",
-    "home",
-    "end",
-    "pageup",
-    "pagedown",
-];
-
 /// Everything one drawing of the shortcuts page reads.
 pub struct ShortcutsInput<'a> {
     pub bindings: &'a [Binding],
@@ -128,33 +111,6 @@ struct Row<'a> {
     chords: &'a [Chord],
     /// Its chords are not the shipped ones, so "Back to default" shows.
     changed: bool,
-}
-
-/// A shortcut being set on a row, from the click on a chip or + until it is written or cancelled.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Capture {
-    pub command: CommandId,
-    /// The chord being changed; none when one is being added.
-    pub changing: Option<Chord>,
-    /// The last keys pressed, kept while the row asks about them.
-    pub pending: Option<Chord>,
-    pub problem: Option<CaptureProblem>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CaptureProblem {
-    NeedsModifier,
-    /// Another command has the chord; "Use it here" takes it.
-    Clash(CommandId),
-}
-
-/// What keys pressed while a row is capturing come to.
-#[derive(Debug, PartialEq)]
-pub enum Pressed {
-    Write(KeymapChange),
-    /// The command already has the chord, so there is nothing to write.
-    Unchanged,
-    Ask(CaptureProblem),
 }
 
 pub fn shortcuts_page(input: &ShortcutsInput, cx: &mut Context<WindowView>) -> Div {
@@ -431,54 +387,6 @@ fn problem_card(problems: &[String], look: &Look, cx: &mut Context<WindowView>) 
     parts::problem_card(problems, open, look)
 }
 
-pub fn pressed(capture: &Capture, chord: Chord, bindings: &[Binding]) -> Pressed {
-    if !is_allowed(&chord) {
-        return Pressed::Ask(CaptureProblem::NeedsModifier);
-    }
-    let owner = command_for(bindings, &chord);
-    if owner == Some(capture.command) {
-        return Pressed::Unchanged;
-    }
-    if let Some(other) = owner {
-        return Pressed::Ask(CaptureProblem::Clash(other));
-    }
-    let change = change_for(capture, chord);
-    Pressed::Write(change)
-}
-
-/// The change that puts a chord on the capturing row: in place of the chip being changed, or beside the others.
-pub fn change_for(capture: &Capture, to: Chord) -> KeymapChange {
-    let command = capture.command;
-    match &capture.changing {
-        Some(from) => KeymapChange::Replace {
-            command,
-            from: from.clone(),
-            to,
-        },
-        None => KeymapChange::Add { command, chord: to },
-    }
-}
-
-/// A shortcut needs cmd, ctrl or opt; shift alone only with a key that types no character.
-fn is_allowed(chord: &Chord) -> bool {
-    if chord.cmd || chord.ctrl || chord.alt {
-        return true;
-    }
-    chord.shift && NON_CHARACTER_KEYS.contains(&chord.key.as_str())
-}
-
-/// Whether a capture still has something to set: the file can be changed, and a chip being changed is still there.
-pub fn capture_still_open(capture: &Capture, bindings: &[Binding], unread: bool) -> bool {
-    if unread {
-        return false;
-    }
-    let Some(changing) = &capture.changing else {
-        return true;
-    };
-    let chords = chords_for(bindings, capture.command);
-    chords.contains(changing)
-}
-
 impl<'a> RowSetting<'a> {
     fn capture(self) -> Option<&'a Capture> {
         match self {
@@ -505,158 +413,9 @@ fn foot(look: &Look, cx: &mut Context<WindowView>) -> Div {
     page_foot(FOOT_TEXT, open, look)
 }
 
-/// Whether the normalized query finds a command by its name or by a chord in the file's spelling.
-fn is_found(wanted: &str, name: &str, chords: &[Chord]) -> bool {
-    if wanted.is_empty() {
-        return true;
-    }
-    let lower_name = name.to_lowercase();
-    if lower_name.contains(wanted) {
-        return true;
-    }
-    for chord in chords {
-        let spelled = file_chord_text(chord);
-        if spelled.contains(wanted) {
-            return true;
-        }
-    }
-    false
-}
-
-fn normalized_query(query: &str) -> String {
-    let lower = query.trim().to_lowercase();
-    let mut parts = Vec::new();
-    for part in lower.split('+') {
-        let renamed = modifier_spelling(part);
-        match renamed {
-            Some(spelled) => parts.push(spelled.to_string()),
-            None => parts.push(part.to_string()),
-        }
-    }
-    parts.join("+")
-}
-
 #[cfg(test)]
 mod tests {
-    use taco_settings::parse_chord;
-
     use super::*;
-
-    fn chord(text: &str) -> Chord {
-        parse_chord(text).expect(text)
-    }
-
-    fn finds(query: &str, name: &str, chords: &[Chord]) -> bool {
-        let wanted = normalized_query(query);
-        is_found(&wanted, name, chords)
-    }
-
-    fn bound(text: &str, command: CommandId) -> Binding {
-        Binding {
-            chord: chord(text),
-            command,
-        }
-    }
-
-    #[test]
-    fn keys_pressed_on_a_row_are_written_asked_about_or_left() {
-        let bindings = [
-            bound("cmd+t", CommandId::TerminalNew),
-            bound("cmd+k", CommandId::TerminalClear),
-        ];
-        let adding = Capture {
-            command: CommandId::TerminalNew,
-            changing: None,
-            pending: None,
-            problem: None,
-        };
-        let changing = Capture {
-            changing: Some(chord("cmd+t")),
-            ..adding.clone()
-        };
-        let cases = [
-            (
-                &adding,
-                "cmd+j",
-                Pressed::Write(KeymapChange::Add {
-                    command: CommandId::TerminalNew,
-                    chord: chord("cmd+j"),
-                }),
-            ),
-            (
-                &changing,
-                "cmd+j",
-                Pressed::Write(KeymapChange::Replace {
-                    command: CommandId::TerminalNew,
-                    from: chord("cmd+t"),
-                    to: chord("cmd+j"),
-                }),
-            ),
-            (
-                &adding,
-                "cmd+k",
-                Pressed::Ask(CaptureProblem::Clash(CommandId::TerminalClear)),
-            ),
-            (&adding, "cmd+t", Pressed::Unchanged),
-            (&adding, "j", Pressed::Ask(CaptureProblem::NeedsModifier)),
-            (
-                &adding,
-                "shift+j",
-                Pressed::Ask(CaptureProblem::NeedsModifier),
-            ),
-            (
-                &adding,
-                "shift+enter",
-                Pressed::Write(KeymapChange::Add {
-                    command: CommandId::TerminalNew,
-                    chord: chord("shift+enter"),
-                }),
-            ),
-            (
-                &adding,
-                "shift+left",
-                Pressed::Write(KeymapChange::Add {
-                    command: CommandId::TerminalNew,
-                    chord: chord("shift+left"),
-                }),
-            ),
-            (
-                &adding,
-                "opt+j",
-                Pressed::Write(KeymapChange::Add {
-                    command: CommandId::TerminalNew,
-                    chord: chord("opt+j"),
-                }),
-            ),
-        ];
-        for (capture, keys, expected) in cases {
-            let result = pressed(capture, chord(keys), &bindings);
-            assert_eq!(result, expected, "{keys}");
-        }
-    }
-
-    #[test]
-    fn a_capture_closes_once_its_chip_is_gone_or_the_file_cannot_be_read() {
-        let bindings = [bound("cmd+t", CommandId::TerminalNew)];
-        let adding = Capture {
-            command: CommandId::TerminalNew,
-            changing: None,
-            pending: None,
-            problem: None,
-        };
-        let on_its_chip = Capture {
-            changing: Some(chord("cmd+t")),
-            ..adding.clone()
-        };
-        let on_a_gone_chip = Capture {
-            changing: Some(chord("cmd+n")),
-            ..adding.clone()
-        };
-        assert!(capture_still_open(&adding, &bindings, false));
-        assert!(capture_still_open(&on_its_chip, &bindings, false));
-        assert!(!capture_still_open(&on_a_gone_chip, &bindings, false));
-        assert!(!capture_still_open(&adding, &bindings, true));
-    }
 
     #[test]
     fn every_command_is_listed_once() {
@@ -671,18 +430,5 @@ mod tests {
             assert_eq!(times, 1, "{command:?}");
         }
         assert_eq!(listed.len(), CommandId::ALL.len());
-    }
-
-    #[test]
-    fn search_finds_a_command_by_name_or_by_any_spelling_of_its_shortcut() {
-        let clear = [chord("cmd+k")];
-        let word_left = [chord("opt+left")];
-        assert!(finds("", "Clear", &clear));
-        assert!(finds("  CLE ", "Clear", &clear));
-        assert!(finds("cmd+k", "Clear", &clear));
-        assert!(finds("command+k", "Clear", &clear));
-        assert!(finds("alt+left", "Back a word", &word_left));
-        assert!(finds("option+left", "Back a word", &word_left));
-        assert!(!finds("cmd+j", "Clear", &clear));
     }
 }

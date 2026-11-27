@@ -5,6 +5,7 @@ mod activity_panel;
 mod addresses;
 mod assets;
 mod banners;
+mod capture;
 mod done_checks;
 pub mod drive;
 #[cfg(feature = "render")]
@@ -28,6 +29,7 @@ mod row_name;
 mod settings_page;
 mod shared_view;
 mod shell;
+mod shortcut_search;
 mod shortcuts_page;
 mod slot;
 #[cfg(feature = "render")]
