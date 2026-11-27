@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use gpui::{AppContext, Context};
+use gpui::{AppContext, Context, FocusHandle};
 use taco_protocol::{
     ActivityRequest, DrawnState, HarnessId, SharedTarget, SharedThing, TerminalId,
 };
@@ -14,6 +14,20 @@ use crate::activity_log::ActivityLog;
 use crate::addresses::{SHARED_SCHEMES, may_open};
 use crate::shared_view::{Content, OpenedThing, file_content};
 
+/// Agent Activity's log, what is unfolded in it, and the shared thing opened in the middle.
+pub(super) struct ActivityState {
+    pub(super) log: ActivityLog,
+    /// The stretch numbers whose steps are shown.
+    pub(super) folds_open: HashSet<u64>,
+    /// The `seq` of each long text in the log shown whole.
+    pub(super) texts_open: HashSet<u64>,
+    /// Whether Shared lists every thing rather than the newest few.
+    pub(super) shared_all_shown: bool,
+    /// A shared thing shown in the middle in place of the terminal, under any page.
+    pub(super) opened: Option<OpenedThing>,
+    pub(super) opened_focus: FocusHandle,
+}
+
 impl WindowView {
     /// Watches the selected terminal's log while Agent Activity is open, and nothing while it is closed.
     pub(super) fn watch_activity(&mut self, drawn: &DrawnState) {
@@ -23,16 +37,16 @@ impl WindowView {
             let selected = selected_terminal(drawn.arrangement.as_ref());
             wanted = selected.cloned();
         }
-        if wanted == self.activity.terminal {
+        if wanted == self.activity.log.terminal {
             return;
         }
-        self.activity = ActivityLog {
+        self.activity.log = ActivityLog {
             terminal: wanted.clone(),
             ..ActivityLog::default()
         };
-        self.folds_open.clear();
-        self.texts_open.clear();
-        self.shared_all_shown = false;
+        self.activity.folds_open.clear();
+        self.activity.texts_open.clear();
+        self.activity.shared_all_shown = false;
         let request = ActivityRequest::Watch { terminal: wanted };
         self.port.activity(request);
     }
@@ -46,23 +60,23 @@ impl WindowView {
     }
 
     pub(crate) fn toggle_fold(&mut self, stretch: u64, cx: &mut Context<Self>) {
-        toggle(&mut self.folds_open, stretch);
+        toggle(&mut self.activity.folds_open, stretch);
         cx.notify();
     }
 
     pub(crate) fn toggle_text(&mut self, seq: u64, cx: &mut Context<Self>) {
-        toggle(&mut self.texts_open, seq);
+        toggle(&mut self.activity.texts_open, seq);
         cx.notify();
     }
 
     pub(crate) fn toggle_shared_all(&mut self, cx: &mut Context<Self>) {
-        self.shared_all_shown = !self.shared_all_shown;
+        self.activity.shared_all_shown = !self.activity.shared_all_shown;
         cx.notify();
     }
 
     /// A shared thing opened: an https link in the browser, anything else in the middle; nothing is handed to the system.
     pub(crate) fn open_shared(&mut self, thing: &SharedThing, cx: &mut Context<Self>) {
-        let Some(terminal) = self.activity.terminal.clone() else {
+        let Some(terminal) = self.activity.log.terminal.clone() else {
             return;
         };
         let content = match &thing.target {
@@ -87,12 +101,12 @@ impl WindowView {
                 Content::Loading
             }
         };
-        self.opened = Some(OpenedThing {
+        self.activity.opened = Some(OpenedThing {
             terminal,
             thing: thing.clone(),
             content,
         });
-        self.opened_wants_keyboard = true;
+        self.keyboard.opened_wants_keyboard = true;
         cx.notify();
     }
 
@@ -117,7 +131,7 @@ impl WindowView {
         content: Content,
         cx: &mut Context<Self>,
     ) {
-        let Some(opened) = &mut self.opened else {
+        let Some(opened) = &mut self.activity.opened else {
             return;
         };
         let still_open = &opened.terminal == terminal && opened.thing.id == thing;
@@ -129,30 +143,30 @@ impl WindowView {
     }
 
     pub(crate) fn close_opened(&mut self, cx: &mut Context<Self>) {
-        let was_open = self.opened.take().is_some();
+        let was_open = self.activity.opened.take().is_some();
         if was_open {
-            self.terminal_wants_keyboard = true;
+            self.keyboard.terminal_wants_keyboard = true;
             cx.notify();
         }
     }
 
     // A thing belongs to the terminal whose log it came from, so another selection closes it.
     pub(super) fn close_opened_elsewhere(&mut self, drawn: &DrawnState) {
-        let Some(opened) = &self.opened else {
+        let Some(opened) = &self.activity.opened else {
             return;
         };
         let selected = selected_terminal(drawn.arrangement.as_ref());
         if selected != Some(&opened.terminal) {
-            self.opened = None;
-            self.terminal_wants_keyboard = true;
+            self.activity.opened = None;
+            self.keyboard.terminal_wants_keyboard = true;
         }
     }
 
     pub(crate) fn show_older(&self) {
-        let Some(terminal) = &self.activity.terminal else {
+        let Some(terminal) = &self.activity.log.terminal else {
             return;
         };
-        let Some(before) = self.activity.oldest() else {
+        let Some(before) = self.activity.log.oldest() else {
             return;
         };
         let request = ActivityRequest::Older {

@@ -1,14 +1,16 @@
 //! The window's settings: the typed fields, writing a setting and moving a control from its old value.
 
+use std::collections::HashMap;
 use std::time::Instant;
 
-use gpui::{AppContext, Context, Entity, Focusable, Window};
+use gpui::{AppContext, Context, Entity, Focusable, Subscription, Window};
 use taco_settings::{SettingChange, Settings};
 
 use super::{PageKeyboard, WindowView};
 use crate::look::Look;
 use crate::motion::{
-    LONGEST_SETTING_MOVE, Moved, SWITCH_TIME, card_name, progress, switch_amount, switch_value,
+    DrawnBounds, LONGEST_SETTING_MOVE, Moved, SWITCH_TIME, card_name, progress, switch_amount,
+    switch_value,
 };
 use crate::settings_page::{SettingsFields, Typed, TypedSetting, published_text, typed};
 use crate::text_field::{TextField, TextFieldEvent};
@@ -16,17 +18,31 @@ use crate::text_field::{TextField, TextFieldEvent};
 const NOT_WHOLE: &str = "Scrollback must be a whole number.";
 const TYPED_SETTINGS: [TypedSetting; 2] = [TypedSetting::Font, TypedSetting::Scrollback];
 
+/// The settings page's typed fields and what it last wrote or was refused.
+pub(super) struct SettingsState {
+    pub(super) fields: SettingsFields,
+    /// The typed setting whose field has the keyboard; a new config leaves its text alone.
+    pub(super) editing: Option<TypedSetting>,
+    /// Watches the fields' focus, set up on the first frame since it needs the window.
+    pub(super) field_focus: Vec<Subscription>,
+    /// Why each setting's last write was refused, by its name in settings.json, until it is written again.
+    pub(super) refused: HashMap<&'static str, String>,
+    /// The switches and segments a config changed, each with the value it is moving from.
+    pub(super) moved: HashMap<&'static str, Moved>,
+    pub(super) drawn_bounds: DrawnBounds,
+}
+
 impl WindowView {
     pub(crate) fn change_setting(&mut self, change: SettingChange) {
         let key = change.key();
-        self.refused.remove(key);
+        self.settings.refused.remove(key);
         self.services.write_setting(change);
     }
 
     fn field(&self, setting: TypedSetting) -> &Entity<TextField> {
         match setting {
-            TypedSetting::Font => &self.fields.font,
-            TypedSetting::Scrollback => &self.fields.scrollback,
+            TypedSetting::Font => &self.settings.fields.font,
+            TypedSetting::Scrollback => &self.settings.fields.scrollback,
         }
     }
 
@@ -44,7 +60,7 @@ impl WindowView {
             TextFieldEvent::Cancelled => {
                 // The field gives the keyboard to the page, so the blur that follows finds nothing new to write and a second Esc closes the page.
                 self.show_published(setting, cx);
-                self.page_wants_keyboard = Some(PageKeyboard::Page);
+                self.keyboard.page_wants_keyboard = Some(PageKeyboard::Page);
                 cx.notify();
             }
         }
@@ -52,8 +68,8 @@ impl WindowView {
 
     /// Writes the field's value on losing focus, as Enter would.
     fn left_field(&mut self, setting: TypedSetting, cx: &mut Context<Self>) {
-        if self.editing == Some(setting) {
-            self.editing = None;
+        if self.settings.editing == Some(setting) {
+            self.settings.editing = None;
         }
         let sent = self.send_typed(setting, cx);
         if !sent {
@@ -73,11 +89,11 @@ impl WindowView {
                 true
             }
             Typed::Unchanged => {
-                self.refused.remove(key);
+                self.settings.refused.remove(key);
                 false
             }
             Typed::NotWhole => {
-                self.refused.insert(key, NOT_WHOLE.to_string());
+                self.settings.refused.insert(key, NOT_WHOLE.to_string());
                 false
             }
         }
@@ -95,29 +111,30 @@ impl WindowView {
             let look = self.look.clone();
             let field = self.field(setting);
             field.update(cx, |field, cx| field.set_look(look, cx));
-            if self.editing != Some(setting) {
+            if self.settings.editing != Some(setting) {
                 self.show_published(setting, cx);
             }
         }
         let look = self.look.clone();
-        self.shortcut_search
+        self.shortcuts
+            .search
             .update(cx, |field, cx| field.set_look(look, cx));
     }
 
     pub(super) fn watch_field_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.field_focus.is_empty() {
+        if !self.settings.field_focus.is_empty() {
             return;
         }
         for setting in TYPED_SETTINGS {
             let handle = self.field(setting).focus_handle(cx);
             let entered = cx.on_focus(&handle, window, move |view, _, _| {
-                view.editing = Some(setting);
+                view.settings.editing = Some(setting);
             });
             let left = cx.on_blur(&handle, window, move |view, _, cx| {
                 view.left_field(setting, cx);
             });
-            self.field_focus.push(entered);
-            self.field_focus.push(left);
+            self.settings.field_focus.push(entered);
+            self.settings.field_focus.push(left);
         }
     }
 
@@ -132,7 +149,7 @@ impl WindowView {
         let mut start_amount = None;
         let mut start_bounds = None;
         let mut under_way = None;
-        if let Some(previous) = self.moved.get(key) {
+        if let Some(previous) = self.settings.moved.get(key) {
             let done = progress(previous.since, now, LONGEST_SETTING_MOVE, reduce_motion);
             if done < 1. {
                 under_way = Some(previous);
@@ -145,7 +162,7 @@ impl WindowView {
                 start_amount = Some(drawn);
             }
             let card = card_name(key);
-            let table = self.drawn_bounds.borrow();
+            let table = self.settings.drawn_bounds.borrow();
             start_bounds = table.get(&card).copied();
         }
         Moved {

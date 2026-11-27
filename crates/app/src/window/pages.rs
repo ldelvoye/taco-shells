@@ -2,7 +2,7 @@
 
 use std::time::Instant;
 
-use gpui::{Context, Div};
+use gpui::{Context, Div, FocusHandle};
 use taco_protocol::{ConfigFile, WorkspaceRequest};
 
 use super::{PageKeyboard, WindowView};
@@ -10,6 +10,17 @@ use crate::motion::{LONGEST_SETTING_MOVE, Motion, PAGE_TIME, progress};
 use crate::page::{Page, PageMove, pages_after};
 use crate::settings_page::{SettingsInput, settings_page};
 use crate::shortcuts_page::{ShortcutsInput, shortcuts_page};
+
+/// The pages over the middle and the one fading out.
+pub(super) struct PagesState {
+    /// The pages over the middle, the top one drawn; empty when the terminal shows.
+    pub(super) open: Vec<Page>,
+    pub(super) focus: FocusHandle,
+    /// When the page on top came up, so it fades in.
+    pub(super) since: Option<Instant>,
+    /// The last page to close, fading out over the terminal.
+    pub(super) leaving: Option<(Page, Instant)>,
+}
 
 impl WindowView {
     fn open_file(&mut self, file: ConfigFile, cx: &mut Context<Self>) {
@@ -28,35 +39,37 @@ impl WindowView {
 
     /// Moves through the pages, and gives the keyboard to the page now on top, or to the terminal once none is.
     pub(crate) fn move_pages(&mut self, page_move: PageMove, cx: &mut Context<Self>) {
-        let after = pages_after(&self.pages, page_move);
-        if after == self.pages {
+        let after = pages_after(&self.pages.open, page_move);
+        if after == self.pages.open {
             return;
         }
-        let opened = after.len() > self.pages.len();
+        let opened = after.len() > self.pages.open.len();
         let shortcuts_left = !after.contains(&Page::Shortcuts);
-        let was_on_top = self.pages.last().copied();
+        let was_on_top = self.pages.open.last().copied();
         let now = Instant::now();
         let closing_all = after.is_empty();
         if closing_all && let Some(closed) = was_on_top {
-            self.leaving = Some((closed, now));
-            self.page_since = None;
+            self.pages.leaving = Some((closed, now));
+            self.pages.since = None;
         } else {
-            self.leaving = None;
-            self.page_since = Some(now);
+            self.pages.leaving = None;
+            self.pages.since = Some(now);
         }
-        self.pages = after;
+        self.pages.open = after;
         if shortcuts_left {
             self.forget_search(cx);
-            self.capture = None;
+            self.shortcuts.capture = None;
         }
-        let top = self.pages.last().copied();
+        let top = self.pages.open.last().copied();
         match top {
             None => {
-                self.page_wants_keyboard = None;
-                self.terminal_wants_keyboard = true;
+                self.keyboard.page_wants_keyboard = None;
+                self.keyboard.terminal_wants_keyboard = true;
             }
-            Some(page) if opened => self.page_wants_keyboard = Some(keyboard_on_opening(page)),
-            Some(_) => self.page_wants_keyboard = Some(PageKeyboard::Page),
+            Some(page) if opened => {
+                self.keyboard.page_wants_keyboard = Some(keyboard_on_opening(page))
+            }
+            Some(_) => self.keyboard.page_wants_keyboard = Some(PageKeyboard::Page),
         }
         cx.notify();
     }
@@ -77,17 +90,17 @@ impl WindowView {
         match page {
             Page::Settings => {
                 let motion = Motion {
-                    moved: &self.moved,
+                    moved: &self.settings.moved,
                     now,
                     reduce_motion,
-                    bounds: &self.drawn_bounds,
+                    bounds: &self.settings.drawn_bounds,
                 };
                 let input = SettingsInput {
                     settings: &self.shown.settings,
                     problems: &self.shown.notices.config_problems,
                     unread: &self.shown.unread,
-                    refused: &self.refused,
-                    fields: &self.fields,
+                    refused: &self.settings.refused,
+                    fields: &self.settings.fields,
                     bindings: &self.shown.bindings,
                     motion: &motion,
                     look,
@@ -98,10 +111,10 @@ impl WindowView {
                 let input = ShortcutsInput {
                     bindings: &self.shown.bindings,
                     defaults: &self.shown.default_bindings,
-                    query: &self.shortcut_query,
-                    search: &self.shortcut_search,
-                    capture: self.capture.as_ref(),
-                    refused: &self.keymap_refused,
+                    query: &self.shortcuts.query,
+                    search: &self.shortcuts.search,
+                    capture: self.shortcuts.capture.as_ref(),
+                    refused: &self.shortcuts.refused,
                     unread: self.shown.unread_keybindings,
                     problems: &self.shown.notices.config_problems,
                     look,
@@ -113,7 +126,7 @@ impl WindowView {
 
     /// How far the page on top has faded in since it came up.
     pub(super) fn page_appeared(&self, now: Instant, reduce_motion: bool) -> f32 {
-        let Some(since) = self.page_since else {
+        let Some(since) = self.pages.since else {
             return 1.;
         };
         progress(since, now, PAGE_TIME, reduce_motion)
@@ -126,11 +139,11 @@ impl WindowView {
         }
         let page_fading = self.page_appeared(now, reduce_motion) < 1.;
         let mut leaving = false;
-        if let Some((_, since)) = self.leaving {
+        if let Some((_, since)) = self.pages.leaving {
             leaving = progress(since, now, PAGE_TIME, reduce_motion) < 1.;
         }
         let mut setting_moving = false;
-        for moved in self.moved.values() {
+        for moved in self.settings.moved.values() {
             if progress(moved.since, now, LONGEST_SETTING_MOVE, reduce_motion) < 1. {
                 setting_moving = true;
             }

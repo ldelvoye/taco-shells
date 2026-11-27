@@ -1,9 +1,12 @@
 //! The window's arrangement: panels, popups and drags of terminals and tab groups.
 
+use std::collections::HashMap;
 use std::time::Instant;
 
 use gpui::{App, AppContext, Bounds, Context, Pixels, Point, Size, Window, point, px, size};
-use taco_protocol::{Dragged, Panel, RequestReply, TabGroupId, TerminalId, WorkspaceRequest};
+use taco_protocol::{
+    Dragged, DropPlace, Edge, Panel, RequestReply, TabGroupId, TerminalId, WorkspaceRequest,
+};
 use taco_rules::{DropPoint, drop_for};
 
 use super::{Awaited, WindowView};
@@ -15,9 +18,25 @@ use crate::slot::{Slot, SlotLine, opened_height};
 use crate::terminal_list::ListDrag;
 use crate::text_field::{TextField, TextFieldEvent};
 
+/// The gestures in progress on the list and the panels, and the popup and requests they wait on.
+pub(super) struct ArrangementState {
+    pub(super) drop_place: Option<DropPlace>,
+    pub(super) popup: Option<Popup>,
+    /// A panel being resized, and the size it is drawn at until the release sends it.
+    pub(super) resizing: Option<(Panel, f32)>,
+    /// A panel being moved by its title, and the edge it would go to with the pointer where it is.
+    pub(super) panel_target: Option<(Panel, Edge)>,
+    pub(super) last_token: u64,
+    pub(super) awaiting: HashMap<u64, Awaited>,
+    /// Where the landing slot is and when it started opening there.
+    pub(super) slot_opened: Option<(SlotLine, Instant)>,
+    /// The slot as drawn this frame.
+    pub(super) slot: Option<Slot>,
+}
+
 impl WindowView {
     pub(super) fn replied(&mut self, token: u64, reply: RequestReply, cx: &mut Context<Self>) {
-        let Some(awaited) = self.awaiting.remove(&token) else {
+        let Some(awaited) = self.arrangement.awaiting.remove(&token) else {
             return;
         };
         match awaited {
@@ -26,7 +45,7 @@ impl WindowView {
                     return;
                 };
                 // A popup opened since the request is the user's more recent choice.
-                if self.popup.is_some() {
+                if self.arrangement.popup.is_some() {
                     return;
                 }
                 self.open_group_popup(tab_group, at, cx);
@@ -35,9 +54,9 @@ impl WindowView {
     }
 
     fn send_awaiting(&mut self, request: WorkspaceRequest, awaited: Awaited) {
-        self.last_token += 1;
-        let token = self.last_token;
-        self.awaiting.insert(token, awaited);
+        self.arrangement.last_token += 1;
+        let token = self.arrangement.last_token;
+        self.arrangement.awaiting.insert(token, awaited);
         self.port.send(request, Some(token));
     }
 
@@ -47,7 +66,7 @@ impl WindowView {
         at: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        self.popup = Some(Popup::Row { terminal, at });
+        self.arrangement.popup = Some(Popup::Row { terminal, at });
         cx.notify();
     }
 
@@ -73,7 +92,7 @@ impl WindowView {
                 }
             }
         });
-        self.popup = Some(Popup::Group {
+        self.arrangement.popup = Some(Popup::Group {
             tab_group,
             at,
             field,
@@ -97,7 +116,7 @@ impl WindowView {
 
     /// A panel's strip button: over a page, it closes the pages and shows the window as it was, toggling nothing unseen.
     pub(crate) fn strip_panel_clicked(&mut self, panel: Panel, cx: &mut Context<Self>) {
-        if !self.pages.is_empty() {
+        if !self.pages.open.is_empty() {
             self.move_pages(PageMove::CloseAll, cx);
             return;
         }
@@ -128,17 +147,17 @@ impl WindowView {
         cx: &App,
     ) -> Option<Slot> {
         let Some(line) = line else {
-            self.slot_opened = None;
+            self.arrangement.slot_opened = None;
             return None;
         };
         let now = Instant::now();
         let mut opened = now;
-        if let Some((open_line, since)) = self.slot_opened
+        if let Some((open_line, since)) = self.arrangement.slot_opened
             && open_line == line
         {
             opened = since;
         }
-        self.slot_opened = Some((line, opened));
+        self.arrangement.slot_opened = Some((line, opened));
         let mut height = ROW_HEIGHT;
         if !cx.reduce_motion() {
             height = opened_height(now - opened, ROW_HEIGHT);
@@ -165,15 +184,15 @@ impl WindowView {
         if let Some(edge) = edge {
             target = Some((panel, edge));
         }
-        if target == self.panel_target {
+        if target == self.arrangement.panel_target {
             return false;
         }
-        self.panel_target = target;
+        self.arrangement.panel_target = target;
         true
     }
 
     pub(super) fn drop_panel(&mut self, drag: &PanelDrag, cx: &mut Context<Self>) {
-        let target = self.panel_target.take();
+        let target = self.arrangement.panel_target.take();
         cx.notify();
         let Some((panel, edge)) = target else {
             return;
@@ -193,16 +212,16 @@ impl WindowView {
     ) -> bool {
         let size = size_for_pointer(drag.edge, pointer, window);
         let live = Some((drag.panel, size));
-        if self.resizing == live {
+        if self.arrangement.resizing == live {
             return false;
         }
-        self.resizing = live;
+        self.arrangement.resizing = live;
         true
     }
 
     // The size goes to the workspace once, on release, so a resize is one save and one terminal resize.
     pub(super) fn finish_resize(&mut self, cx: &mut Context<Self>) {
-        let Some((panel, size)) = self.resizing.take() else {
+        let Some((panel, size)) = self.arrangement.resizing.take() else {
             return;
         };
         cx.notify();
@@ -211,10 +230,10 @@ impl WindowView {
     }
 
     pub(crate) fn close_popup(&mut self, cx: &mut Context<Self>) {
-        if self.popup.is_none() {
+        if self.arrangement.popup.is_none() {
             return;
         }
-        self.popup = None;
+        self.arrangement.popup = None;
         cx.notify();
     }
 
@@ -256,10 +275,10 @@ impl WindowView {
     }
 
     pub(crate) fn leave_list(&mut self, cx: &mut Context<Self>) {
-        if self.drop_place.is_none() {
+        if self.arrangement.drop_place.is_none() {
             return;
         }
-        self.drop_place = None;
+        self.arrangement.drop_place = None;
         cx.notify();
     }
 
@@ -274,15 +293,15 @@ impl WindowView {
             return;
         };
         let place = drop_for(arrangement, dragged, &point);
-        if place == self.drop_place {
+        if place == self.arrangement.drop_place {
             return;
         }
-        self.drop_place = place;
+        self.arrangement.drop_place = place;
         cx.notify();
     }
 
     pub(crate) fn drop_on_list(&mut self, drag: &ListDrag, cx: &mut Context<Self>) {
-        let place = self.drop_place.take();
+        let place = self.arrangement.drop_place.take();
         cx.notify();
         let Some(place) = place else {
             return;
