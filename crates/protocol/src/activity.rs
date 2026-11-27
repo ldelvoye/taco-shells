@@ -25,7 +25,6 @@ pub enum Step {
         tool: String,
         summary: String,
         /// The first line of a failed tool's error, "Exit code 1"; none for a tool that succeeded.
-        #[serde(default)]
         failed: Option<String>,
     },
     Changed {
@@ -78,7 +77,6 @@ pub enum ActivityKind {
 
 /// One line of a terminal's agent log. `seq` orders the entries of one log.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(from = "EntryLine")]
 pub struct ActivityEntry {
     pub seq: u64,
     pub at_ms: u64,
@@ -176,74 +174,4 @@ pub enum ActivityEvent {
         thing: u64,
         body: Option<String>,
     },
-}
-
-// A line as an earlier build wrote it has no author and a kind of Asked, Did or Changed.
-// Untagged tries the arms in order, so `Current` stays first: a line with an author is read as written.
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum EntryLine {
-    Current {
-        seq: u64,
-        at_ms: u64,
-        author: Author,
-        kind: ActivityKind,
-    },
-    Earlier {
-        seq: u64,
-        at_ms: u64,
-        kind: EarlierKind,
-    },
-}
-
-#[derive(Deserialize)]
-enum EarlierKind {
-    Asked { text: String },
-    Did { tool: String, summary: String },
-    Changed { tool: String, path: String },
-}
-
-impl From<EntryLine> for ActivityEntry {
-    fn from(line: EntryLine) -> ActivityEntry {
-        match line {
-            EntryLine::Current {
-                seq,
-                at_ms,
-                author,
-                kind,
-            } => ActivityEntry {
-                seq,
-                at_ms,
-                author,
-                kind,
-            },
-            EntryLine::Earlier { seq, at_ms, kind } => earlier_entry(seq, at_ms, kind),
-        }
-    }
-}
-
-// An earlier step is a stretch of its own, numbered by its own seq.
-fn earlier_entry(seq: u64, at_ms: u64, kind: EarlierKind) -> ActivityEntry {
-    let step = match kind {
-        EarlierKind::Asked { text } => {
-            return ActivityEntry {
-                seq,
-                at_ms,
-                author: Author::User,
-                kind: ActivityKind::Asked { text },
-            };
-        }
-        EarlierKind::Did { tool, summary } => Step::Did {
-            tool,
-            summary,
-            failed: None,
-        },
-        EarlierKind::Changed { tool, path } => Step::Changed { tool, path },
-    };
-    ActivityEntry {
-        seq,
-        at_ms,
-        author: Author::App,
-        kind: ActivityKind::Step { stretch: seq, step },
-    }
 }
