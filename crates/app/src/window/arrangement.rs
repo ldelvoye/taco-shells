@@ -7,14 +7,14 @@ use gpui::{App, AppContext, Bounds, Context, Pixels, Point, Size, Window, point,
 use taco_protocol::{
     Dragged, DropPlace, Edge, Panel, RequestReply, TabGroupId, TerminalId, WorkspaceRequest,
 };
-use taco_rules::{DropPoint, drop_for};
+use taco_rules::{DropPoint, SlotLine, drop_for};
 
 use super::{Awaited, WindowView};
 use crate::look::{ROW_HEIGHT, STRIP_WIDTH, TITLE_BAR_HEIGHT};
 use crate::page::PageMove;
 use crate::panels::{PanelDrag, ResizeDrag, edge_near, size_for_pointer};
 use crate::popups::{Popup, RenameStep, rename_step};
-use crate::slot::{Slot, SlotLine, opened_height};
+use crate::slot::{Slot, opened_height};
 use crate::terminal_list::ListDrag;
 use crate::text_field::{TextField, TextFieldEvent};
 

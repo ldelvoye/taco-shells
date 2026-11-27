@@ -3,10 +3,10 @@ use std::path::Path;
 use std::time::Duration;
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, App, AppContext, Context, Div, DragMoveEvent, Easing,
-    FontWeight, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement,
-    Pixels, Point, Render, Stateful, StatefulInteractiveElement, Styled, TimedTransformation,
-    Transformation, Window, div, px, size, svg, transparent_black,
+    Animation, AnimationExt, AnyElement, App, AppContext, Bounds, Context, Div, DragMoveEvent,
+    Easing, FontWeight, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
+    ParentElement, Pixels, Point, Render, Stateful, StatefulInteractiveElement, Styled,
+    TimedTransformation, Transformation, Window, div, px, size, svg, transparent_black,
 };
 use taco_protocol::{
     AgentRow, Arrangement, Dragged, DrawnState, Row, RowState, TabGroup, TabGroupId, TerminalId,
@@ -21,7 +21,7 @@ use crate::look::{FONT_FAMILY, Look, MARK_SIZE, ROW_HEIGHT, ROW_RADIUS, TEXT_SIZ
 use crate::parts::element_id;
 use crate::row_name::row_name;
 use crate::shell::{shell_orange, shell_outline};
-use crate::slot::{ENTRY_GAP, Slot, fraction_at};
+use crate::slot::{ENTRY_GAP, Slot};
 use crate::window::WindowView;
 
 const UNNAMED_TAB_GROUP: &str = "Group";
@@ -454,7 +454,6 @@ fn agent_state(
     Some(agent_row.state)
 }
 
-/// The pointer's height within the hovered element, 0 to 1.
 fn drag_preview(
     drag: &ListDrag,
     _position: Point<Pixels>,
@@ -468,7 +467,23 @@ fn drag_preview(
     cx.new(|_| preview)
 }
 
-// The "taco shell slot" Lucas chose: a row-sized gap outlined in the shell's orange.
+/// How far down a thing the pointer is, 0 to 1, taking it where it would be with no slot: the slot moving things must not move the drop.
+fn fraction_at(bounds: Bounds<Pixels>, pointer: Point<Pixels>, shift: f32) -> Option<f32> {
+    let height = f32::from(bounds.size.height);
+    let top = f32::from(bounds.top()) - shift;
+    let left = f32::from(bounds.left());
+    let right = f32::from(bounds.right());
+    let x = f32::from(pointer.x);
+    let y = f32::from(pointer.y);
+    let inside = height > 0. && x >= left && x <= right && y >= top && y < top + height;
+    if !inside {
+        return None;
+    }
+    let fraction = (y - top) / height;
+    Some(fraction.clamp(0., 1.))
+}
+
+// A row-sized gap outlined in the shell's orange.
 fn slot_element(slot: Slot) -> AnyElement {
     let opened = slot.height / ROW_HEIGHT;
     let wash = shell_orange().opacity(SLOT_WASH);
@@ -604,4 +619,51 @@ fn new_terminal_row(look: &Look, cx: &mut Context<WindowView>) -> Stateful<Div> 
         .child(plus)
         .child(NEW_TERMINAL)
         .on_click(cx.listener(|view, _, _, cx| view.open_terminal_in(None, cx)))
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::{Bounds, point, px, size};
+    use taco_rules::SlotLine;
+
+    use super::fraction_at;
+    use crate::slot::{ENTRY_GAP, Slot};
+
+    const ROW: f32 = 30.;
+    const PITCH: f32 = ROW + ENTRY_GAP;
+
+    // Which row and how far down it the pointer is, over rows laid out from the top, the slot's push already applied.
+    fn under(pointer_y: f32, rows: usize, slot: Option<Slot>) -> Option<(usize, f32)> {
+        let pointer = point(px(10.), px(pointer_y));
+        for index in 0..rows {
+            let mut shift = 0.;
+            if let Some(slot) = slot {
+                shift = slot.shift_of_row(index);
+            }
+            let top = index as f32 * PITCH + shift;
+            let bounds = Bounds::new(point(px(0.), px(top)), size(px(200.), px(ROW)));
+            if let Some(fraction) = fraction_at(bounds, pointer, shift) {
+                return Some((index, fraction));
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn the_drop_under_the_pointer_is_the_same_with_the_slot_open_as_without_it() {
+        let line = SlotLine {
+            at: 2,
+            header_before: false,
+        };
+        let opening = Slot { line, height: 12. };
+        let open = Slot { line, height: ROW };
+        let rows = 5;
+        let mut y = 0.;
+        while y < rows as f32 * PITCH {
+            let without = under(y, rows, None);
+            assert_eq!(under(y, rows, Some(opening)), without, "opening, at {y}");
+            assert_eq!(under(y, rows, Some(open)), without, "open, at {y}");
+            y += 1.;
+        }
+    }
 }

@@ -42,6 +42,14 @@ pub struct DropMark {
     pub tab_group: Option<TabGroupId>,
 }
 
+/// Where the slot sits: before the row at `at`, and before or after the header of a tab group that starts there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SlotLine {
+    pub at: usize,
+    /// The slot is the first thing inside that group, under its header.
+    pub header_before: bool,
+}
+
 fn place(index: usize, tab_group: Option<TabGroupId>) -> DropPlace {
     DropPlace { index, tab_group }
 }
@@ -309,6 +317,38 @@ pub fn drop_mark_for(arrangement: &Arrangement, place: &DropPlace) -> Option<Dro
     }
 }
 
+/// Where the slot goes for a drop mark; none for a mark over a whole thing, as a collapsed group is.
+pub fn slot_line_for(arrangement: &Arrangement, mark: &DropMark) -> Option<SlotLine> {
+    let before = |at| SlotLine {
+        at,
+        header_before: false,
+    };
+    match (&mark.target, mark.edge) {
+        (_, MarkEdge::Whole) => None,
+        (MarkTarget::Row(index), MarkEdge::Above) => Some(before(*index)),
+        (MarkTarget::Row(index), MarkEdge::Below) => Some(before(index + 1)),
+        (MarkTarget::Wrapper(tab_group), edge) => {
+            let (first, last) = block_of(arrangement, tab_group)?;
+            match edge {
+                MarkEdge::Above => Some(before(first)),
+                _ => Some(before(last + 1)),
+            }
+        }
+        (MarkTarget::Header(tab_group), MarkEdge::Above) => {
+            let (first, _) = block_of(arrangement, tab_group)?;
+            Some(before(first))
+        }
+        (MarkTarget::Header(tab_group), MarkEdge::Below) => {
+            let (first, _) = block_of(arrangement, tab_group)?;
+            let inside = SlotLine {
+                at: first,
+                header_before: true,
+            };
+            Some(inside)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -444,5 +484,35 @@ mod tests {
             line(&collapsed, 3, Some("g")),
             Some(mark(head(), MarkEdge::Whole, inside()))
         );
+    }
+
+    #[test]
+    fn the_slot_opens_where_the_mark_points_and_under_a_header_it_opens_inside_the_group() {
+        let list = built("a g:b g:c d", "a");
+        let before = |at| SlotLine {
+            at,
+            header_before: false,
+        };
+        let under_header = SlotLine {
+            at: 1,
+            header_before: true,
+        };
+        let tray = MarkTarget::Wrapper(tab("g"));
+        let head = MarkTarget::Header(tab("g"));
+        let gone = MarkTarget::Wrapper(tab("gone"));
+        let cases = [
+            (MarkTarget::Row(0), MarkEdge::Above, Some(before(0))),
+            (MarkTarget::Row(3), MarkEdge::Below, Some(before(4))),
+            (tray.clone(), MarkEdge::Above, Some(before(1))),
+            (tray, MarkEdge::Below, Some(before(3))),
+            (head.clone(), MarkEdge::Above, Some(before(1))),
+            (head.clone(), MarkEdge::Below, Some(under_header)),
+            (head, MarkEdge::Whole, None),
+            (gone, MarkEdge::Above, None),
+        ];
+        for (target, edge, expected) in cases {
+            let pointed = mark(target, edge, None);
+            assert_eq!(slot_line_for(&list, &pointed), expected, "{pointed:?}");
+        }
     }
 }

@@ -10,7 +10,7 @@ use gpui::{
 };
 use taco_host::{ServicesOutput, ServicesPort, WindowOutput, WorkspacePort};
 use taco_protocol::{ActivityEvent, DrawnState, TabGroupId, TerminalId, WorkspaceRequest};
-use taco_rules::{drop_mark_for, selected_terminal};
+use taco_rules::{drop_mark_for, selected_terminal, slot_line_for};
 use taco_services::AgentSetupView;
 use taco_settings::{Binding, Config, Settings, UnreadSettings, palette_for};
 use taco_terminal_view::{Terminals, TerminalsEvent};
@@ -28,7 +28,6 @@ use crate::panels::{PanelDrag, ResizeDrag};
 use crate::platform::TrafficLights;
 use crate::popups::{Popup, popup_layer};
 use crate::shared_view::body_content;
-use crate::slot::slot_line_for;
 use crate::title_bar::title_bar;
 
 mod activity_state;
