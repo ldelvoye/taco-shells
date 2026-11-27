@@ -4,6 +4,8 @@ mod bundle;
 mod ghostty_bindings;
 mod identity;
 mod install;
+#[cfg(test)]
+mod install_script;
 mod measure;
 mod rehearse;
 mod release;
