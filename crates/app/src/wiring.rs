@@ -14,7 +14,7 @@ use taco_protocol::{
 use taco_rules::default_panels;
 use taco_services::{
     AGENT_APP_NAME, AgentMenuAction, config_directory, config_file_path, focus_port_path,
-    read_config_texts,
+    plugin_directory_path, read_config_texts,
 };
 use taco_settings::{
     Config, CursorStyle, KeymapChange, SettingChange, palette_for, resolve_config,
@@ -97,6 +97,7 @@ pub fn start(system_is_dark: bool) -> Result<Started, String> {
     let context = ShellContext {
         app: AGENT_APP_NAME.to_string(),
         port_file: focus_port_path(&directory),
+        plugin_directory: plugin_directory_path(&directory),
     };
     let started = RuntimeClient::start(&program, &context, on_event);
     let started =
@@ -142,8 +143,8 @@ pub fn send_terminal_settings(runtime: &RuntimeClient, config: &Config) {
     }
 }
 
-/// The scrollback, the colors and the cursor every terminal starts with, from the config.
-fn terminal_settings_of(config: &Config) -> [RuntimeCommand; 3] {
+/// The scrollback, the colors, the cursor and the agent plugin switch every new terminal starts with, from the config.
+fn terminal_settings_of(config: &Config) -> [RuntimeCommand; 4] {
     let settings = &config.settings;
     let palette = palette_for(config.appearance);
     let shape = match settings.cursor_style {
@@ -159,7 +160,10 @@ fn terminal_settings_of(config: &Config) -> [RuntimeCommand; 3] {
         shape,
         blink: settings.cursor_blink,
     };
-    [scrollback, colors, cursor]
+    let agent_plugin = RuntimeCommand::AgentPlugin {
+        on: settings.agent_activity,
+    };
+    [scrollback, colors, cursor, agent_plugin]
 }
 
 /// Saves, stops the services, then the runtime. Blocks for seconds at worst: never on gpui's thread.
@@ -286,7 +290,7 @@ mod tests {
     use super::terminal_settings_of;
 
     #[test]
-    fn the_runtime_starts_terminals_with_the_configs_cursor_and_theme() {
+    fn the_runtime_starts_terminals_with_the_configs_cursor_theme_and_agent_plugin_switch() {
         let no_files = ConfigTexts {
             settings: None,
             keybindings: None,
@@ -295,6 +299,7 @@ mod tests {
         config.settings.cursor_style = CursorStyle::Bar;
         config.settings.cursor_blink = false;
         config.settings.scrollback = 4321;
+        config.settings.agent_activity = true;
 
         let commands = terminal_settings_of(&config);
 
@@ -306,6 +311,7 @@ mod tests {
                 shape: CursorShape::Bar,
                 blink: false,
             },
+            RuntimeCommand::AgentPlugin { on: true },
         ];
         assert_eq!(config.appearance, Appearance::Dark);
         assert_eq!(commands, expected);

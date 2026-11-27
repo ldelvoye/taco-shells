@@ -157,6 +157,7 @@ impl<S: Shells> Core<S> {
             RuntimeCommand::CursorDefaults { shape, blink } => {
                 self.set_cursor_defaults(shape, blink)
             }
+            RuntimeCommand::AgentPlugin { on } => self.shells.set_agent_plugin(on),
             RuntimeCommand::Ask { ask, query } => {
                 let value = self.answer(query);
                 self.report(RuntimeReport::Answer { ask, value });

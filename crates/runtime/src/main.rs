@@ -8,7 +8,7 @@ use std::process::ExitCode;
 use taco_runtime::program;
 use taco_runtime::pty::{ShellContext, ShellProgram};
 
-const USAGE: &str = "usage: taco-shells-runtime --control-fd=<fd> --terminals-fd=<fd> --app=<name> --port-file=<path>";
+const USAGE: &str = "usage: taco-shells-runtime --control-fd=<fd> --terminals-fd=<fd> --app=<name> --port-file=<path> --plugin-dir=<path>";
 const BAD_START: u8 = 2;
 const PANICKED: i32 = 101;
 /// From `<sys/syslimits.h>`.
@@ -55,12 +55,13 @@ fn main() -> ExitCode {
     }
 }
 
-/// All four arguments, or none if one is missing, empty or not known. The port file's path is taken as bytes, so any path works.
+/// All five arguments, or none if one is missing, empty or not known. Paths are taken as bytes, so any path works.
 fn parsed(arguments: &[OsString]) -> Option<Arguments> {
     let mut control = None;
     let mut terminals = None;
     let mut app = None;
     let mut port_file = None;
+    let mut plugin_directory = None;
     for argument in arguments {
         let bytes = argument.as_bytes();
         let equals = bytes.iter().position(|byte| *byte == b'=')?;
@@ -77,12 +78,14 @@ fn parsed(arguments: &[OsString]) -> Option<Arguments> {
                 app = Some(text.to_string());
             }
             "--port-file" => port_file = Some(PathBuf::from(value)),
+            "--plugin-dir" => plugin_directory = Some(PathBuf::from(value)),
             _ => return None,
         }
     }
     let context = ShellContext {
         app: app?,
         port_file: port_file?,
+        plugin_directory: plugin_directory?,
     };
     Some(Arguments {
         control: control?,
