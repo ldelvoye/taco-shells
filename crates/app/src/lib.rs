@@ -9,6 +9,7 @@ mod done_checks;
 pub mod drive;
 #[cfg(feature = "render")]
 mod fixture;
+mod key_route;
 mod keys;
 pub mod link;
 mod look;

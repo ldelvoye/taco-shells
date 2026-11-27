@@ -5,7 +5,7 @@ use gpui::{
     Context, Div, FontWeight, Hsla, InteractiveElement, ParentElement, Stateful,
     StatefulInteractiveElement, Styled, div, px,
 };
-use taco_settings::{Chord, CommandId};
+use taco_settings::Chord;
 
 use crate::drive::mark;
 use crate::look::{FONT_FAMILY, Look, SMALL_TEXT_SIZE, TEXT_SIZE, TITLE_BAR_HEIGHT};
@@ -76,16 +76,6 @@ pub enum PageMove {
     CloseAll,
 }
 
-/// What a command does while a page covers the terminal.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OverPage {
-    Move(PageMove),
-    /// It shows a terminal, so the pages close first.
-    ShowTerminal,
-    /// The terminal's own commands: left to whatever on the page has the keyboard.
-    PassOn,
-}
-
 /// The pages open after a move.
 pub fn pages_after(pages: &[Page], page_move: PageMove) -> Vec<Page> {
     let mut after = pages.to_vec();
@@ -114,20 +104,6 @@ pub fn pages_after(pages: &[Page], page_move: PageMove) -> Vec<Page> {
         PageMove::CloseAll => after.clear(),
     }
     after
-}
-
-/// Nothing closes a terminal nobody can see, and anything that shows one closes the pages first.
-pub fn over_page(command: CommandId) -> OverPage {
-    match command {
-        CommandId::TerminalClose => OverPage::Move(PageMove::CloseAll),
-        CommandId::ConfigOpenSettings => OverPage::Move(PageMove::ToggleSettings),
-        CommandId::ConfigOpenKeybindings => OverPage::Move(PageMove::ToggleShortcuts),
-        CommandId::TerminalNew
-        | CommandId::TerminalFocusNextGroup
-        | CommandId::TerminalFocusPreviousGroup => OverPage::ShowTerminal,
-        CommandId::SidebarToggle => OverPage::Move(PageMove::CloseAll),
-        _ => OverPage::PassOn,
-    }
 }
 
 /// A page's header above its scrolling form; each page scrolls on its own id, so one never opens at the other's offset.
@@ -352,29 +328,6 @@ mod tests {
         for (before, page_move, expected) in cases {
             let after = pages_after(before, page_move);
             assert_eq!(after, expected, "{before:?} {page_move:?}");
-        }
-    }
-
-    #[test]
-    fn no_command_closes_a_terminal_behind_the_page_or_types_into_it() {
-        let cases = [
-            (CommandId::TerminalClose, OverPage::Move(PageMove::CloseAll)),
-            (
-                CommandId::ConfigOpenSettings,
-                OverPage::Move(PageMove::ToggleSettings),
-            ),
-            (
-                CommandId::ConfigOpenKeybindings,
-                OverPage::Move(PageMove::ToggleShortcuts),
-            ),
-            (CommandId::TerminalNew, OverPage::ShowTerminal),
-            (CommandId::TerminalFocusNextGroup, OverPage::ShowTerminal),
-            (CommandId::SidebarToggle, OverPage::Move(PageMove::CloseAll)),
-            (CommandId::TerminalPaste, OverPage::PassOn),
-            (CommandId::TerminalKillLine, OverPage::PassOn),
-        ];
-        for (command, expected) in cases {
-            assert_eq!(over_page(command), expected, "{command:?}");
         }
     }
 

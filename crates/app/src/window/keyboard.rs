@@ -6,94 +6,43 @@ use taco_rules::{focus_target, selected_terminal};
 use taco_settings::{CommandId, command_for};
 
 use super::{PageKeyboard, WindowView};
+use crate::key_route::{Key, KeyState, Route, route};
 use crate::keys::chord_of;
 use crate::middle::{attachable, line_editing_bytes};
-use crate::page::{OverPage, PageMove, over_page};
+use crate::page::PageMove;
 
 const ESCAPE: &str = "escape";
 
 impl WindowView {
     /// Runs the command a key-down's chord is bound to; false when the window has nothing to run for it, so the key goes on to the terminal.
     pub(super) fn key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
-        // A shortcut being set takes every key first, so cmd+w sets cmd+w instead of closing anything.
-        if self.capture.is_some() {
-            self.capture_key(&event.keystroke, cx);
-            return true;
-        }
-        // The name field keeps every key while it is open.
-        if self.popup.is_some() {
-            return false;
-        }
-        let page_open = !self.pages.is_empty();
-        let escaped = is_bare_escape(&event.keystroke);
-        if page_open && escaped {
-            self.move_pages(PageMove::Back, cx);
-            return true;
-        }
-        let thing_open = self.opened.is_some();
-        if !page_open && thing_open && escaped {
-            self.close_opened(cx);
-            return true;
-        }
-        let chord = chord_of(&event.keystroke);
-        let Some(command) = command_for(&self.shown.bindings, &chord) else {
-            return false;
+        let state = KeyState {
+            capturing: self.capture.is_some(),
+            popup_open: self.popup.is_some(),
+            page_open: !self.pages.is_empty(),
+            thing_open: self.opened.is_some(),
+            terminal_on_screen: self.attached.on_screen.is_some(),
         };
-        if page_open {
-            return self.run_over_page(command, event.is_held, cx);
-        }
-        // Close-terminal closes the opened thing first, as it closes a page.
-        if thing_open && command == CommandId::TerminalClose {
-            if !event.is_held {
-                self.close_opened(cx);
-            }
-            return true;
-        }
-        if !self.runs(command) {
-            return false;
-        }
-        // Moving a word at a time repeats while held, as in any terminal; every other command runs once.
-        let repeats = matches!(
+        let chord = chord_of(&event.keystroke);
+        let command = command_for(&self.shown.bindings, &chord);
+        let key = Key {
+            bare_escape: is_bare_escape(&event.keystroke),
             command,
-            CommandId::TerminalWordLeft | CommandId::TerminalWordRight
-        );
-        if !event.is_held || repeats {
-            self.run(command, cx);
-        }
-        true
-    }
-
-    fn run_over_page(&mut self, command: CommandId, held: bool, cx: &mut Context<Self>) -> bool {
-        if held {
-            return false;
-        }
-        match over_page(command) {
-            OverPage::Move(page_move) => self.move_pages(page_move, cx),
-            OverPage::ShowTerminal => {
+            held: event.is_held,
+        };
+        match route(state, key) {
+            Route::Capture => self.capture_key(&event.keystroke, cx),
+            Route::PassOn => return false,
+            Route::Swallow => {}
+            Route::MovePages(page_move) => self.move_pages(page_move, cx),
+            Route::CloseOpened => self.close_opened(cx),
+            Route::CloseThenRun(command) => {
                 self.close_pages(cx);
                 self.run(command, cx);
             }
-            OverPage::PassOn => return false,
+            Route::Run(command) => self.run(command, cx),
         }
         true
-    }
-
-    fn runs(&self, command: CommandId) -> bool {
-        let window_command = matches!(
-            command,
-            CommandId::TerminalNew
-                | CommandId::TerminalClose
-                | CommandId::TerminalFocusNextGroup
-                | CommandId::TerminalFocusPreviousGroup
-                | CommandId::SidebarToggle
-                | CommandId::ConfigOpenSettings
-                | CommandId::ConfigOpenKeybindings
-        );
-        if window_command {
-            return true;
-        }
-        // The terminal's own commands need a terminal on screen to act on, not one an opened thing covers.
-        self.attached.on_screen.is_some() && self.opened.is_none()
     }
 
     fn run_in_terminal(&mut self, command: CommandId, cx: &mut Context<Self>) {
