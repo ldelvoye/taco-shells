@@ -23,11 +23,6 @@ pub fn default_harness() -> &'static Harness {
     &CLAUDE
 }
 
-/// The agent a save file from before harnesses means: it names none, and held only Claude sessions.
-pub fn legacy_harness() -> &'static Harness {
-    &CLAUDE
-}
-
 pub fn harness_of(id: &str) -> Option<&'static Harness> {
     let mut known = HARNESSES.iter();
     let found = known.find(|harness| harness.id == id)?;

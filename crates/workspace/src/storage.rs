@@ -5,12 +5,10 @@ use std::path::{Path, PathBuf};
 
 use taco_protocol::TerminalId;
 
-use crate::save::{ELECTRON_VERSION, SAVE_VERSION, read_saved, version_of};
+use crate::save::{SAVE_VERSION, read_saved, version_of};
 
 const SAVE_FILE: &str = "workspace.json";
 const TEMPORARY_FILE: &str = "workspace.json.tmp";
-/// Where the Electron app's save is kept when the Rust app replaces it.
-pub const ELECTRON_COPY_FILE: &str = "workspace.electron.json";
 /// Where a save this build cannot read, such as one from a newer build, is kept when it is replaced.
 pub const UNREADABLE_COPY_FILE: &str = "workspace.unreadable.json";
 /// The folder of the config directory that holds one Agent Activity log per terminal.
@@ -123,9 +121,6 @@ fn copy_for(replaced: &[u8]) -> Option<&'static str> {
         return Some(UNREADABLE_COPY_FILE);
     };
     let version = version_of(text);
-    if version == Some(ELECTRON_VERSION) {
-        return Some(ELECTRON_COPY_FILE);
-    }
     let ours = version == Some(SAVE_VERSION) && read_saved(text).is_some();
     if ours {
         return None;
@@ -294,26 +289,22 @@ mod tests {
             assert_eq!(mode, 0o600, "readable by the user's own account only");
         }
 
-        let electron = r#"{"version":1,"groups":[]}"#;
-        fs::write(&save, electron).unwrap();
-        assert!(storage.write_save(OURS));
-        let electron_copy = directory.path().join(ELECTRON_COPY_FILE);
-        assert_eq!(fs::read_to_string(&electron_copy).unwrap(), electron);
-        assert_eq!(storage.read_save().as_deref(), Some(OURS));
-
         let unreadable_copy = directory.path().join(UNREADABLE_COPY_FILE);
         assert!(storage.write_save(OURS));
         assert!(!unreadable_copy.exists(), "our own save is not copied");
-        for unreadable in [r#"{"version":3,"rows":[]}"#, "not json"] {
+        let electron = r#"{"version":1,"groups":[]}"#;
+        let no_rows = r#"{"version":2}"#;
+        for unreadable in [electron, no_rows, r#"{"version":3,"rows":[]}"#, "not json"] {
             fs::write(&save, unreadable).unwrap();
             assert!(storage.write_save(OURS));
             assert_eq!(fs::read_to_string(&unreadable_copy).unwrap(), unreadable);
         }
+        assert_eq!(storage.read_save().as_deref(), Some(OURS));
 
         // a copy that cannot be written leaves the original where it was
         fs::write(&save, electron).unwrap();
-        fs::remove_file(&electron_copy).unwrap();
-        fs::create_dir(&electron_copy).unwrap();
+        fs::remove_file(&unreadable_copy).unwrap();
+        fs::create_dir(&unreadable_copy).unwrap();
         assert!(!storage.write_save(OURS));
         assert_eq!(fs::read_to_string(&save).unwrap(), electron);
 

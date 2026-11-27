@@ -4,7 +4,13 @@ use crate::sessions::PROVISIONAL_MS;
 
 use super::*;
 
-const ELECTRON_FILE: &str = include_str!("../../tests/fixtures/electron-workspace.json");
+const RESTORED_FILE: &str = concat!(
+    r#"{"version":2,"selected":1,"rows":["#,
+    r#"{"id":"t1","directory":"/Users/me/code/tacos","agent":{"harness":"claude","sessionId":"123e4567-e89b-12d3-a456-426614174000","cwd":"/Users/me/code/tacos"}},"#,
+    r#"{"id":"t2","directory":"/Users/me/code/tacos/docs"},"#,
+    r#"{"id":"t3","directory":"/Users/me","agent":{"harness":"claude","sessionId":"223e4567-e89b-12d3-a456-426614174000","cwd":"/Users/me/notes"}},"#,
+    r#"{"id":"t4"}]}"#,
+);
 
 fn grouped_collapsed_and_moved_by_300_ms(disk: &Disk) -> Workspace {
     let mut workspace = Workspace::new(options_on(disk, 0));
@@ -30,8 +36,8 @@ fn grouped_collapsed_and_moved_by_300_ms(disk: &Disk) -> Workspace {
 }
 
 #[test]
-fn an_electron_save_reopens_each_pane_as_a_row_where_it_was_and_resumes_its_agent() {
-    let disk = Disk::holding(ELECTRON_FILE);
+fn a_save_reopens_each_row_in_its_directory_and_resumes_its_agent_where_it_ran() {
+    let disk = Disk::holding(RESTORED_FILE);
     let (workspace, starts) = launched(&disk);
 
     let resume = |session: &str| format!("claude --resume {session}\n");
@@ -202,7 +208,7 @@ fn quitting_or_losing_the_runtime_keeps_the_open_terminals_in_the_save() {
 
 #[test]
 fn a_restored_agent_that_never_starts_again_is_forgotten_and_one_that_does_is_kept() {
-    let disk = Disk::holding(ELECTRON_FILE);
+    let disk = Disk::holding(RESTORED_FILE);
     let (mut workspace, _) = launched(&disk);
     workspace.tick(1_000);
     let first = disk.text().unwrap();
@@ -243,7 +249,7 @@ fn a_restore_keeps_ids_apart_opens_the_selected_group_and_falls_back_to_one_fres
             "{text}"
         );
     }
-    let disk = Disk::holding(ELECTRON_FILE);
+    let disk = Disk::holding(RESTORED_FILE);
     let mut workspace = Workspace::new(Options {
         restore_on_launch: false,
         ..options_on(&disk, 0)
