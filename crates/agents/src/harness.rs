@@ -1,4 +1,11 @@
-use taco_protocol::{ActivityKind, AgentSignal, HarnessId};
+use taco_protocol::{AgentSignal, HarnessId, Step};
+
+/// What a hook's payload adds to Agent Activity: the user's prompt, or a step the agent took.
+#[derive(Clone, Debug, PartialEq)]
+pub enum EntryRead {
+    Asked { text: String },
+    Step(Step),
+}
 
 /// A terminal title read as a row name, and whether the agent said it is idle.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,7 +47,7 @@ pub struct Harness {
     pub(crate) resume_line: fn(&str) -> Option<String>,
     pub(crate) fork_line: Option<fn(&str, &str) -> Option<String>>,
     pub(crate) question_reader: Option<fn(&str, &str) -> Option<String>>,
-    pub(crate) entry_reader: Option<fn(&str, &str) -> Option<ActivityKind>>,
+    pub(crate) entry_reader: Option<fn(&str, &str) -> Option<EntryRead>>,
     pub(crate) setup: Option<&'static HarnessSetup>,
 }
 
@@ -99,7 +106,7 @@ impl Harness {
     }
 
     /// The Agent Activity entry a hook's payload makes, or none when it makes none.
-    pub fn entry_of(&self, event: &str, payload: &str) -> Option<ActivityKind> {
+    pub fn entry_of(&self, event: &str, payload: &str) -> Option<EntryRead> {
         let reader = self.entry_reader?;
         reader(event, payload)
     }

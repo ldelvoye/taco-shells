@@ -4,8 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use taco_protocol::{
-    ActivityEntry, ActivityKind, AgentLabel, AgentRow, Arrangement, DrawnState, HarnessId, Row,
-    RowState, TabGroup, TabGroupId, TerminalId,
+    ActivityEntry, ActivityKind, AgentLabel, AgentRow, Arrangement, Author, DrawnState, HarnessId,
+    Row, RowState, Step, TabGroup, TabGroupId, TerminalId,
 };
 use taco_rules::default_panels;
 use taco_services::{AgentSetupNotice, AgentSetupNoticeKind, AgentSetupView};
@@ -205,21 +205,31 @@ fn log_of(lines: &[FixtureEntry]) -> Vec<ActivityEntry> {
     for (seq, line) in numbered {
         let ago = line.minutes_ago * MS_PER_MINUTE;
         let text = line.text.to_string();
-        let kind = match line.tool {
-            ASKED => ActivityKind::Asked { text },
-            CHANGED => ActivityKind::Changed {
+        let at_ms = now.saturating_sub(ago);
+        let step = match line.tool {
+            ASKED => {
+                entries.push(ActivityEntry {
+                    seq,
+                    at_ms,
+                    author: Author::User,
+                    kind: ActivityKind::Asked { text },
+                });
+                continue;
+            }
+            CHANGED => Step::Changed {
                 tool: "Edit".to_string(),
                 path: text,
             },
-            tool => ActivityKind::Did {
+            tool => Step::Did {
                 tool: tool.to_string(),
                 summary: text,
             },
         };
         entries.push(ActivityEntry {
             seq,
-            at_ms: now.saturating_sub(ago),
-            kind,
+            at_ms,
+            author: Author::App,
+            kind: ActivityKind::Step { stretch: seq, step },
         });
     }
     entries
