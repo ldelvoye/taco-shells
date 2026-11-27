@@ -15,9 +15,7 @@ pub fn render(flags: &Flags, measured: &Measured) -> String {
     report.push_str(&format!(
         "Measured with {used}. The printing and filled terminals are the ones after the first in the list. \
 Each delay ends when the change is in the window's view of the terminal, not when a frame shows it, \
-because the driver has no frame timing yet. \
-The Electron report's frame gap, long task, timer lag, output rate and graphics context rows \
-have no equivalent here.\n\n"
+because the driver has no frame timing yet.\n\n"
     ));
     report.push_str("| Measure | Value |\n");
     report.push_str("| --- | --- |\n");
