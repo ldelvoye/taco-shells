@@ -1,4 +1,4 @@
-//! The app's side of the terminal runtime: starting `taco-shells-runtime`, its control connection, and its exit.
+//! The host's side of the terminal runtime: starting `taco-shells-runtime`, its control connection, and its exit.
 
 use std::collections::HashMap;
 use std::io;
@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, TryLockError};
+// The locks are taken past a poisoning: a panic another host thread survived must not make every later send, ask or stop panic too.
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -156,7 +157,10 @@ impl RuntimeClient {
             .name("wait for the runtime".into())
             .spawn(move || {
                 let status = child.wait();
-                let mut exit = waiter_shared.exit.lock().expect("runtime exit lock");
+                let mut exit = waiter_shared
+                    .exit
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
                 *exit = status.ok();
                 waiter_shared.exited.notify_all();
             })?;
@@ -174,7 +178,11 @@ impl RuntimeClient {
 
     /// Dropped silently once the runtime is gone.
     pub fn send(&self, command: RuntimeCommand) {
-        let mut control = self.shared.control.lock().expect("runtime connection lock");
+        let mut control = self
+            .shared
+            .control
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let _ = taco_wire::write_frame(&mut *control, &command);
     }
 
@@ -183,7 +191,11 @@ impl RuntimeClient {
         let (answer, answered) = mpsc::channel();
         let ask = self.shared.next_ask.fetch_add(1, Ordering::SeqCst);
         {
-            let mut asks = self.shared.asks.lock().expect("runtime asks lock");
+            let mut asks = self
+                .shared
+                .asks
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
             let Some(waiting) = asks.as_mut() else {
                 let _ = answer.send(None);
                 return answered;
@@ -247,12 +259,16 @@ impl RuntimeClient {
 
     /// Whether the runtime has exited, waiting up to `patience` for it.
     fn wait_for_exit(&self, patience: Duration) -> bool {
-        let exit = self.shared.exit.lock().expect("runtime exit lock");
+        let exit = self
+            .shared
+            .exit
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let (exit, _) = self
             .shared
             .exited
             .wait_timeout_while(exit, patience, |status| status.is_none())
-            .expect("runtime exit lock");
+            .unwrap_or_else(PoisonError::into_inner);
         exit.is_some()
     }
 }
@@ -271,18 +287,22 @@ fn read_reports(
     }
 
     // The connection is gone, so the runtime is too, or about to be: nothing in flight will be answered.
-    let in_flight = shared.asks.lock().expect("runtime asks lock").take();
+    let in_flight = shared
+        .asks
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take();
     if let Some(in_flight) = in_flight {
         for (_, waiting) in in_flight {
             let _ = waiting.send(None);
         }
     }
 
-    let exit = shared.exit.lock().expect("runtime exit lock");
+    let exit = shared.exit.lock().unwrap_or_else(PoisonError::into_inner);
     let exit = shared
         .exited
         .wait_while(exit, |status| status.is_none())
-        .expect("runtime exit lock");
+        .unwrap_or_else(PoisonError::into_inner);
     let status = *exit;
     drop(exit);
     if shared.stopping.load(Ordering::SeqCst) {
@@ -293,7 +313,7 @@ fn read_reports(
 }
 
 fn answer(shared: &Shared, ask: u64, value: Option<RuntimeAnswer>) {
-    let mut asks = shared.asks.lock().expect("runtime asks lock");
+    let mut asks = shared.asks.lock().unwrap_or_else(PoisonError::into_inner);
     let Some(waiting) = asks.as_mut() else {
         return;
     };

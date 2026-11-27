@@ -1,6 +1,5 @@
 //! The real app: the runtime, the workspace and the services started for the window, and stopped in order at quit.
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::thread;
@@ -9,10 +8,7 @@ use std::time::Duration;
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use futures::channel::mpsc;
 use taco_identity::{CURRENT, config_directory};
-use taco_protocol::{
-    ConfigFile, CursorShape, DrawnState, HarnessId, RuntimeCommand, RuntimeReport,
-};
-use taco_rules::default_panels;
+use taco_protocol::{ConfigFile, CursorShape, HarnessId, RuntimeCommand, RuntimeReport};
 use taco_services::{
     AgentMenuAction, config_file_path, focus_port_path, plugin_directory_path, read_config_files,
 };
@@ -22,13 +18,16 @@ use taco_settings::{
 use taco_wire::launch::ShellContext;
 use taco_workspace::{FileStorage, Options};
 
-use crate::ports::{ServicesPort, WindowReceiver};
+use crate::ports::{ServicesPort, WindowReceiver, WindowSender};
 use crate::runtime_client::{RuntimeClient, RuntimeEvent};
 use crate::services_host::ServicesHost;
+use crate::supervised::spawn_supervised;
+pub use crate::workspace_host::nothing_drawn;
 use crate::workspace_host::{RuntimeCommands, WorkspaceHost, new_terminal_id};
 
 /// A healthy save takes milliseconds; this only bounds one stuck behind a wedged runtime.
 const SAVE_PATIENCE: Duration = Duration::from_millis(1500);
+const EVENTS_STOPPED: &str = "Taco Shells hit an internal error and stopped hearing from its terminals: titles, folders and exits no longer update. Quit and reopen Taco Shells.";
 
 /// Everything the window runs on, started.
 #[derive(Clone)]
@@ -110,7 +109,7 @@ pub fn start(system_is_dark: bool) -> Result<Started, String> {
         system_is_dark,
         runtime.clone(),
         workspace.clone(),
-        window,
+        window.clone(),
     );
     let terminal_settings = terminal_settings_writer(runtime.clone());
     let hosts = Hosts {
@@ -119,7 +118,7 @@ pub fn start(system_is_dark: bool) -> Result<Started, String> {
         services,
         terminal_settings,
     };
-    forward_runtime_events(received, hosts.clone());
+    forward_runtime_events(received, hosts.clone(), window);
     // The files can change while everything starts; the window and the runtime start from the same config.
     let first_config = hosts.services.config();
     if first_config != first {
@@ -201,23 +200,6 @@ fn saved_within(save: &Option<Receiver<()>>, patience: Duration) -> bool {
     waited.is_ok()
 }
 
-/// The state drawn before the workspace publishes its first.
-pub fn nothing_drawn() -> DrawnState {
-    DrawnState {
-        revision: 0,
-        arrangement: None,
-        agent_rows: BTreeMap::new(),
-        directories: BTreeMap::new(),
-        refocus: 0,
-        focus_count: 0,
-        agents: BTreeMap::new(),
-        default_agent_name: String::new(),
-        panels: default_panels(),
-        problem: None,
-        started: BTreeSet::new(),
-    }
-}
-
 fn workspace_options(directory: &Path, config: &Config) -> Options {
     let settings_path = config_file_path(directory, ConfigFile::Settings);
     let keybindings_path = config_file_path(directory, ConfigFile::Keybindings);
@@ -249,7 +231,7 @@ fn terminal_settings_writer(runtime: RuntimeClient) -> Sender<Config> {
 }
 
 /// Forwards on one thread so each report reaches the workspace, and the services, in arrival order.
-fn forward_runtime_events(events: Receiver<RuntimeEvent>, hosts: Hosts) {
+fn forward_runtime_events(events: Receiver<RuntimeEvent>, hosts: Hosts, window: WindowSender) {
     let forward = move || {
         for event in events {
             match event {
@@ -263,9 +245,7 @@ fn forward_runtime_events(events: Receiver<RuntimeEvent>, hosts: Hosts) {
             }
         }
     };
-    let spawned = thread::Builder::new()
-        .name("runtime events".into())
-        .spawn(forward);
+    let spawned = spawn_supervised("runtime events", EVENTS_STOPPED, window, forward);
     if let Err(error) = spawned {
         eprintln!("the runtime's reports have no thread to go through: {error}");
     }
