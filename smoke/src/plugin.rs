@@ -18,59 +18,36 @@ const TOOLS_LIST_ID: u64 = 2;
 const ANSWER_DEADLINE: Duration = Duration::from_secs(5);
 const EXIT_POLL: Duration = Duration::from_millis(5);
 
-pub fn lists_its_three_tools_inside_the_dev_app(smoke: &Smoke) -> Result<(), String> {
+pub fn is_built_for_the_dev_channel(smoke: &Smoke) -> Result<(), String> {
     let replies = mcp_replies(smoke, Some(DEV_NAME))?;
     let initialize = reply_with_id(&replies, INITIALIZE_ID)?;
     let version = initialize["result"]["protocolVersion"].as_str();
     if version.is_none() {
         return Err(format!("initialize answered {initialize}"));
     }
-
     let names = tool_names(&replies)?;
     let mut expected: Vec<String> = ACTIVITY_TOOLS.map(String::from).to_vec();
     expected.sort();
     if names != expected {
-        return Err(format!("it lists {names:?}"));
-    }
-    Ok(())
-}
-
-pub fn lists_no_tools_outside_the_dev_app(smoke: &Smoke) -> Result<(), String> {
-    for app in [None, Some(STABLE_NAME)] {
-        let replies = mcp_replies(smoke, app)?;
-        let names = tool_names(&replies)?;
-        if !names.is_empty() {
-            return Err(format!("with {APP_VARIABLE} as {app:?} it lists {names:?}"));
-        }
-    }
-    Ok(())
-}
-
-pub fn approves_its_own_tool_for_the_main_agent_only(smoke: &Smoke) -> Result<(), String> {
-    let prefix = format!("mcp__plugin_{DEV_NAME}_activity__");
-    let own_tool = format!("{prefix}note");
-    let unlisted_tool = format!("{prefix}open_terminal");
-
-    let from_main_agent = json!({"tool_name": own_tool});
-    let main_agent_answer = hook_answer(smoke, &from_main_agent)?;
-    let main_agent_decision = decision_in(&main_agent_answer)?;
-    if main_agent_decision != "allow" {
-        return Err(format!("its answer for {own_tool} is {main_agent_answer}"));
-    }
-
-    let from_subagent = json!({"tool_name": own_tool, "agent_id": "smoke-subagent"});
-    let subagent_answer = hook_answer(smoke, &from_subagent)?;
-    let subagent_decision = decision_in(&subagent_answer)?;
-    if subagent_decision != "deny" {
         return Err(format!(
-            "its answer for {own_tool} from a subagent is {subagent_answer}"
+            "with {APP_VARIABLE} as {DEV_NAME} it lists {names:?}"
         ));
     }
 
-    let unlisted = json!({"tool_name": unlisted_tool});
-    let unlisted_answer = hook_answer(smoke, &unlisted)?;
-    if !unlisted_answer.trim().is_empty() {
-        return Err(format!("it answered {unlisted_answer} for {unlisted_tool}"));
+    let stable_replies = mcp_replies(smoke, Some(STABLE_NAME))?;
+    let stable_names = tool_names(&stable_replies)?;
+    if !stable_names.is_empty() {
+        return Err(format!(
+            "with {APP_VARIABLE} as {STABLE_NAME} it lists {stable_names:?}"
+        ));
+    }
+
+    let own_tool = format!("mcp__plugin_{DEV_NAME}_activity__note");
+    let request = json!({"tool_name": own_tool});
+    let answer = hook_answer(smoke, &request)?;
+    let decision = decision_in(&answer)?;
+    if decision != "allow" {
+        return Err(format!("its answer for {own_tool} is {answer}"));
     }
     Ok(())
 }

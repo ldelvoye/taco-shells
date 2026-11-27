@@ -44,13 +44,7 @@ pub struct Build<'a> {
 }
 
 pub fn binaries(build: &Build) -> Result<PathBuf, String> {
-    let stable = matches!(build.channel, Channel::Stable);
-    if stable && build.drive {
-        return Err("the test driver is never built into the stable app".to_string());
-    }
-    if stable && build.config_dir.is_some() {
-        return Err("the stable app always uses its own config directory".to_string());
-    }
+    allowed(build)?;
     let repo_root = repo::root()?;
     let target = repo::target_dir()?;
     let program = repo::cargo_program();
@@ -60,6 +54,17 @@ pub fn binaries(build: &Build) -> Result<PathBuf, String> {
     repo::run(&mut cargo)?;
 
     Ok(target.join(build.profile.directory()))
+}
+
+fn allowed(build: &Build) -> Result<(), String> {
+    let stable = matches!(build.channel, Channel::Stable);
+    if stable && build.drive {
+        return Err("the test driver is never built into the stable app".to_string());
+    }
+    if stable && build.config_dir.is_some() {
+        return Err("the stable app always uses its own config directory".to_string());
+    }
+    Ok(())
 }
 
 fn cargo_command(program: OsString, build: &Build, target_dir: &Path) -> Command {
@@ -148,5 +153,30 @@ mod tests {
             Some(Some(OsString::from(STABLE_CHANNEL)))
         );
         assert_eq!(entry(&stable, DEV_CONFIG_DIR_VARIABLE), Some(None));
+    }
+
+    #[test]
+    fn the_stable_app_is_never_built_with_the_driver_or_a_baked_config_directory() {
+        let baked = Path::new("/tmp/rehearsal/config");
+        let cases = [
+            (Channel::Stable, true, None, false),
+            (Channel::Stable, false, Some(baked), false),
+            (Channel::Stable, false, None, true),
+            (Channel::Development, true, Some(baked), true),
+        ];
+        for (channel, drive, config_dir, expected) in cases {
+            let build = Build {
+                profile: Profile::Release,
+                channel,
+                drive,
+                config_dir,
+            };
+            let outcome = allowed(&build);
+            assert_eq!(
+                outcome.is_ok(),
+                expected,
+                "drive {drive}, config {config_dir:?}"
+            );
+        }
     }
 }
