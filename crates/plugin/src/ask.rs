@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use serde_json::Value;
 
-use crate::post::{connect, send_request, time_left};
+use crate::http::{connect, send_request, time_left};
 
 const READ_CHUNK: usize = 8 * 1024;
 const HEAD_END: &str = "\r\n\r\n";
