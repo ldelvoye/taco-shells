@@ -9,12 +9,13 @@ use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use taco_protocol::{
-    ConfigFile, HarnessId, HookEvent, HookMessage, RuntimeAnswer, RuntimeQuery, TerminalId,
+    ConfigFile, HarnessId, HookCall, HookEvent, HookMessage, RuntimeAnswer, RuntimeQuery,
+    TerminalId,
 };
 use taco_services::{
-    AgentMenuAction, AgentSetups, AgentSetupsHost, ConfigChange, ConfigStore, ConfigWriter,
-    HookListener, ListenerEvent, Refusal, UpdateEvent, Updater, UpdaterHost, app_version,
-    config_file_path, focus_port_path,
+    AgentMenuAction, AgentSetups, AgentSetupsHost, AnswerPart, ConfigChange, ConfigStore,
+    ConfigWriter, HookListener, ListenerEvent, Question, QuestionKind, Refusal, UpdateEvent,
+    Updater, UpdaterHost, app_version, config_file_path, focus_port_path,
 };
 use taco_settings::{Config, KeymapChange, SettingChange};
 
@@ -27,9 +28,17 @@ const ROUTE_NOT_STARTED: &str =
     "Agents' hooks cannot reach the terminals: the thread that routes them did not start.";
 // A runtime that is alive but never answers must not hold a hook, a setup check or quitting for ever.
 const RUNTIME_ANSWER_WAIT: Duration = Duration::from_secs(2);
+const QUESTION_PLACE_WAIT: Duration = Duration::from_millis(600);
+const FORWARD_WAIT: Duration = Duration::from_secs(1);
 const PLUGIN_PROGRAM_NAME: &str = "taco-shells-plugin";
 
 type Slot<T> = Mutex<Option<T>>;
+type Work = Box<dyn FnOnce() + Send>;
+
+enum Routed {
+    Post(HookMessage),
+    Question(Question),
+}
 
 #[derive(Clone)]
 pub struct ServicesHost {
@@ -42,7 +51,7 @@ struct Inner {
     setups: Arc<Slot<AgentSetups>>,
     updater: Arc<Slot<Updater>>,
     listener: Slot<HookListener>,
-    hook_inbox: Arc<Slot<Sender<HookMessage>>>,
+    hook_inbox: Arc<Slot<Sender<Routed>>>,
     hooks_directory: PathBuf,
     last_config: Mutex<Config>,
 }
@@ -223,38 +232,146 @@ fn start_writer(
 
 // One message at a time, each waiting for its own answer, so the workspace hears a session's start before its first state.
 fn route_hooks(
-    messages: Receiver<HookMessage>,
+    messages: Receiver<Routed>,
     answer_wait: Duration,
+    place_wait: Duration,
     resolve: impl Fn(Vec<u32>) -> mpsc::Receiver<Option<RuntimeAnswer>>,
     deliver: impl Fn(HookEvent),
+    ask: impl Fn(TerminalId, Question),
 ) {
-    for message in messages {
-        let answered = resolve(message.pids);
-        let answer = answered.recv_timeout(answer_wait);
-        if let Ok(Some(RuntimeAnswer::Terminal(Some(terminal)))) = answer {
-            let event = HookEvent {
-                terminal,
-                call: message.call,
-            };
-            deliver(event);
+    for routed in messages {
+        match routed {
+            Routed::Post(message) => {
+                let answered = resolve(message.pids);
+                let answer = answered.recv_timeout(answer_wait);
+                if let Ok(Some(RuntimeAnswer::Terminal(Some(terminal)))) = answer {
+                    let event = HookEvent {
+                        terminal,
+                        call: message.call,
+                    };
+                    deliver(event);
+                }
+            }
+            Routed::Question(question) => {
+                let pids = question.message.pids.clone();
+                let answered = resolve(pids);
+                let answer = answered.recv_timeout(place_wait);
+                if let Ok(Some(RuntimeAnswer::Terminal(Some(terminal)))) = answer {
+                    let _ = question.reply.send(AnswerPart::Placed(true));
+                    ask(terminal, question);
+                } else {
+                    let _ = question.reply.send(AnswerPart::Placed(false));
+                }
+            }
         }
     }
+}
+
+fn context_work(answered: mpsc::Receiver<Option<String>>, reply: mpsc::Sender<AnswerPart>) -> Work {
+    Box::new(move || {
+        let waited = answered.recv_timeout(FORWARD_WAIT);
+        let Ok(context) = waited else {
+            let _ = reply.send(AnswerPart::Context(None));
+            return;
+        };
+        let _ = reply.send(AnswerPart::Context(context));
+    })
+}
+
+fn stop_work(
+    notes_on: bool,
+    reply: mpsc::Sender<AnswerPart>,
+    request: impl FnOnce() -> mpsc::Receiver<Option<String>>,
+    record: impl FnOnce() + Send + 'static,
+) -> Option<Work> {
+    if !notes_on {
+        let _ = reply.send(AnswerPart::Nudge(None, None));
+        return None;
+    }
+    let answered = request();
+    let work: Work = Box::new(move || {
+        let waited = answered.recv_timeout(FORWARD_WAIT);
+        if let Ok(Some(reason)) = waited {
+            let on_delivered: Work = Box::new(record);
+            let _ = reply.send(AnswerPart::Nudge(Some(reason), Some(on_delivered)));
+        } else {
+            let _ = reply.send(AnswerPart::Nudge(None, None));
+        }
+    });
+    Some(work)
+}
+
+fn ask_workspace(
+    question: Question,
+    terminal: TerminalId,
+    notes_on: bool,
+    workspace: &WorkspaceHost,
+) {
+    let HookCall::AgentHook {
+        harness,
+        session_id,
+        ..
+    } = &question.message.call
+    else {
+        return;
+    };
+    let harness = harness.clone();
+    let session_id = session_id.clone();
+    let reply = question.reply.clone();
+    let work = match &question.kind {
+        QuestionKind::Context { source } => {
+            let source = source.clone();
+            let answered = workspace.session_context(terminal, harness, session_id, source);
+            Some(context_work(answered, reply))
+        }
+        QuestionKind::Stop => {
+            let asker = workspace.clone();
+            let asked_terminal = terminal.clone();
+            let asked_harness = harness.clone();
+            let asked_session = session_id.clone();
+            let request = move || asker.stop_nudge(asked_terminal, asked_harness, asked_session);
+            let recorder = workspace.clone();
+            let record = move || recorder.asked_for_note(terminal, harness, session_id);
+            stop_work(notes_on, reply, request, record)
+        }
+    };
+    let Some(work) = work else {
+        return;
+    };
+    // The route never waits on the workspace; a late answer is dropped by the responder.
+    let builder = thread::Builder::new().name("hook-answer".into());
+    let _ = builder.spawn(work);
 }
 
 fn start_hook_route(
     runtime: RuntimeClient,
     workspace: WorkspaceHost,
+    ask_notes_on: Arc<AtomicBool>,
     window: &WindowSender,
-) -> Sender<HookMessage> {
+) -> Sender<Routed> {
     let (inbox, messages) = unbounded();
     let resolve = move |pids| {
         let query = RuntimeQuery::TerminalForPids { pids };
         runtime.ask(query)
     };
+    let asking = workspace.clone();
     let deliver = move |event| workspace.hook(event);
+    let ask = move |terminal, question| {
+        let notes_on = ask_notes_on.load(Ordering::SeqCst);
+        ask_workspace(question, terminal, notes_on, &asking);
+    };
     let spawned = thread::Builder::new()
         .name("hook-route".into())
-        .spawn(move || route_hooks(messages, RUNTIME_ANSWER_WAIT, resolve, deliver));
+        .spawn(move || {
+            route_hooks(
+                messages,
+                RUNTIME_ANSWER_WAIT,
+                QUESTION_PLACE_WAIT,
+                resolve,
+                deliver,
+                ask,
+            )
+        });
     if spawned.is_err() {
         let problem = ROUTE_NOT_STARTED.to_string();
         send_to_window(window, ServicesOutput::Problem(problem));
@@ -272,14 +389,18 @@ impl ServicesHost {
     ) -> ServicesHost {
         // Copied from each config, so the setups can read it without calling back into the store.
         let activity_on = Arc::new(AtomicBool::new(false));
+        let ask_notes_on = Arc::new(AtomicBool::new(false));
         let setups: Arc<Slot<AgentSetups>> = Arc::new(Mutex::new(None));
 
         let changed_activity_on = Arc::clone(&activity_on);
+        let changed_ask_notes_on = Arc::clone(&ask_notes_on);
         let changed_setups = Arc::clone(&setups);
         let changed_window = window.clone();
         let on_change = move |config: Config| {
             let is_on = config.settings.agent_activity;
             changed_activity_on.store(is_on, Ordering::SeqCst);
+            let asks_notes = config.settings.ask_for_activity_notes;
+            changed_ask_notes_on.store(asks_notes, Ordering::SeqCst);
             send_to_window(&changed_window, ServicesOutput::Config(config));
             let setups = locked(&changed_setups);
             if let Some(setups) = setups.as_ref() {
@@ -290,6 +411,7 @@ impl ServicesHost {
         let store = ConfigStore::start(directory.clone(), system_is_dark, Box::new(on_change));
         let first = store.current();
         activity_on.store(first.settings.agent_activity, Ordering::SeqCst);
+        ask_notes_on.store(first.settings.ask_for_activity_notes, Ordering::SeqCst);
 
         let store: Arc<Slot<ConfigStore>> = Arc::new(Mutex::new(Some(store)));
         let started_writer = start_writer(&directory, &store, &window);
@@ -302,22 +424,22 @@ impl ServicesHost {
         let updater = start_updater(&directory, &window);
         let updater: Arc<Slot<Updater>> = Arc::new(Mutex::new(Some(updater)));
 
-        let inbox = start_hook_route(runtime, workspace, &window);
-        let hook_inbox: Arc<Slot<Sender<HookMessage>>> = Arc::new(Mutex::new(Some(inbox)));
+        let inbox = start_hook_route(runtime, workspace, ask_notes_on, &window);
+        let hook_inbox: Arc<Slot<Sender<Routed>>> = Arc::new(Mutex::new(Some(inbox)));
         let routed_inbox = Arc::clone(&hook_inbox);
         let checked_updater = Arc::clone(&updater);
         let on_event = move |event| match event {
             ListenerEvent::Hook(message) => {
                 let inbox = locked(&routed_inbox);
                 if let Some(inbox) = inbox.as_ref() {
-                    let _ = inbox.send(message);
+                    let _ = inbox.send(Routed::Post(message));
                 }
             }
-            // Every question is answered as not one of the app's terminals, which prints nothing.
             ListenerEvent::Question(question) => {
-                let _ = question
-                    .reply
-                    .send(taco_services::AnswerPart::Placed(false));
+                let inbox = locked(&routed_inbox);
+                if let Some(inbox) = inbox.as_ref() {
+                    let _ = inbox.send(Routed::Question(question));
+                }
             }
             ListenerEvent::UpdateCheck => {
                 let updater = locked(&checked_updater);
@@ -461,11 +583,34 @@ mod tests {
 
     use crossbeam_channel::unbounded;
     use taco_protocol::{HarnessId, HookCall, HookEvent, HookMessage, RuntimeAnswer, TerminalId};
+    use taco_services::{AnswerPart, Question, QuestionKind};
 
-    use super::{hook_scripts_source_for, route_hooks};
+    use super::{Routed, hook_scripts_source_for, route_hooks, stop_work};
 
     const WAIT: Duration = Duration::from_secs(2);
     const SHORT_ANSWER_WAIT: Duration = Duration::from_millis(50);
+
+    fn no_ask(_: TerminalId, _: Question) {}
+
+    fn placed_unless_pid_is_12(pids: Vec<u32>) -> mpsc::Receiver<Option<RuntimeAnswer>> {
+        let (answer, answered) = mpsc::channel();
+        let found = match pids[0] {
+            12 => None,
+            pid => Some(terminal(&format!("terminal-{pid}"))),
+        };
+        answer.send(Some(RuntimeAnswer::Terminal(found))).unwrap();
+        answered
+    }
+
+    fn question(pid: u32) -> (Question, mpsc::Receiver<AnswerPart>) {
+        let (reply, replies) = mpsc::channel();
+        let asked = Question {
+            kind: QuestionKind::Stop,
+            message: message(pid, "s"),
+            reply,
+        };
+        (asked, replies)
+    }
 
     fn call(session: &str) -> HookCall {
         HookCall::AgentEnd {
@@ -489,7 +634,7 @@ mod tests {
         let (inbox, messages) = unbounded();
         for (pid, session) in [(1, "a"), (2, "lost"), (3, "b"), (4, "unanswered")] {
             let next = message(pid, session);
-            inbox.send(next).unwrap();
+            inbox.send(Routed::Post(next)).unwrap();
         }
         drop(inbox);
 
@@ -526,8 +671,16 @@ mod tests {
             events.push(event);
         };
 
-        let route =
-            thread::spawn(move || route_hooks(messages, SHORT_ANSWER_WAIT, resolve, deliver));
+        let route = thread::spawn(move || {
+            route_hooks(
+                messages,
+                SHORT_ANSWER_WAIT,
+                SHORT_ANSWER_WAIT,
+                resolve,
+                deliver,
+                no_ask,
+            )
+        });
         let first_answer = first_ask.recv_timeout(WAIT).unwrap();
         let found = Some(RuntimeAnswer::Terminal(Some(terminal("terminal-a"))));
         first_answer.send(found).unwrap();
@@ -545,6 +698,100 @@ mod tests {
             },
         ];
         assert_eq!(delivered, expected);
+    }
+
+    #[test]
+    fn a_question_placed_in_a_terminal_is_asked_there_and_an_unplaced_one_is_not() {
+        let (inbox, messages) = unbounded();
+        let (placed, placed_replies) = question(11);
+        let (unplaced, unplaced_replies) = question(12);
+        inbox.send(Routed::Question(placed)).unwrap();
+        inbox.send(Routed::Question(unplaced)).unwrap();
+        drop(inbox);
+
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let asked_in_route = Arc::clone(&asked);
+        let ask = move |terminal: TerminalId, question: Question| {
+            let mut asked = asked_in_route.lock().unwrap();
+            asked.push((terminal, question.message.pids));
+        };
+        route_hooks(
+            messages,
+            SHORT_ANSWER_WAIT,
+            SHORT_ANSWER_WAIT,
+            placed_unless_pid_is_12,
+            |_| {},
+            ask,
+        );
+
+        let first = placed_replies.recv_timeout(WAIT).unwrap();
+        assert!(matches!(first, AnswerPart::Placed(true)));
+        let second = unplaced_replies.recv_timeout(WAIT).unwrap();
+        assert!(matches!(second, AnswerPart::Placed(false)));
+        let asked = asked.lock().unwrap().clone();
+        assert_eq!(asked, vec![(terminal("terminal-11"), vec![11])]);
+    }
+
+    #[test]
+    fn a_question_is_resolved_after_the_posts_queued_before_it() {
+        let (inbox, messages) = unbounded();
+        let (asked, _replies) = question(2);
+        inbox.send(Routed::Post(message(1, "a"))).unwrap();
+        inbox.send(Routed::Question(asked)).unwrap();
+        inbox.send(Routed::Post(message(3, "b"))).unwrap();
+        drop(inbox);
+
+        let resolved = Arc::new(Mutex::new(Vec::new()));
+        let resolved_in_route = Arc::clone(&resolved);
+        let resolve = move |pids: Vec<u32>| {
+            let mut resolved = resolved_in_route.lock().unwrap();
+            resolved.push(pids[0]);
+            placed_unless_pid_is_12(pids)
+        };
+        route_hooks(
+            messages,
+            SHORT_ANSWER_WAIT,
+            SHORT_ANSWER_WAIT,
+            resolve,
+            |_| {},
+            no_ask,
+        );
+
+        assert_eq!(*resolved.lock().unwrap(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn with_the_notes_switch_off_a_stop_is_not_nudged_and_the_workspace_is_not_asked() {
+        let (reply, replies) = mpsc::channel();
+        let request = || -> mpsc::Receiver<Option<String>> { panic!("the workspace was asked") };
+
+        let work = stop_work(false, reply, request, || {});
+
+        assert!(work.is_none());
+        let part = replies.recv_timeout(WAIT).unwrap();
+        assert!(matches!(part, AnswerPart::Nudge(None, None)));
+    }
+
+    #[test]
+    fn with_the_notes_switch_on_a_reason_is_forwarded_with_its_record() {
+        let (reply, replies) = mpsc::channel();
+        let (answer, answered) = mpsc::channel();
+        answer.send(Some(String::from("write a note"))).unwrap();
+        let recorded = Arc::new(Mutex::new(false));
+        let recorded_by_hand = Arc::clone(&recorded);
+        let record = move || *recorded_by_hand.lock().unwrap() = true;
+
+        let work = stop_work(true, reply, move || answered, record).unwrap();
+        work();
+
+        let part = replies.recv_timeout(WAIT).unwrap();
+        let AnswerPart::Nudge(Some(reason), Some(on_delivered)) = part else {
+            panic!("expected a nudge with a record");
+        };
+        assert_eq!(reason, "write a note");
+        assert!(!*recorded.lock().unwrap());
+        on_delivered();
+        assert!(*recorded.lock().unwrap());
     }
 
     #[test]

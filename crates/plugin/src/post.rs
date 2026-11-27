@@ -12,12 +12,48 @@ pub enum PostError {
     Other,
 }
 
-fn time_left(deadline: Instant) -> Result<Duration, PostError> {
+pub(crate) fn time_left(deadline: Instant) -> Result<Duration, PostError> {
     let left = deadline.checked_duration_since(Instant::now());
     match left {
         Some(left) if !left.is_zero() => Ok(left),
         _ => Err(PostError::Other),
     }
+}
+
+pub(crate) fn connect(port: u16, deadline: Instant) -> Result<TcpStream, PostError> {
+    let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let connect_budget = time_left(deadline)?;
+    let connected = TcpStream::connect_timeout(&address, connect_budget);
+    match connected {
+        Ok(stream) => Ok(stream),
+        Err(problem) if problem.kind() == ErrorKind::ConnectionRefused => Err(PostError::Refused),
+        Err(_) => Err(PostError::Other),
+    }
+}
+
+pub(crate) fn send_request(
+    stream: &mut TcpStream,
+    route: &str,
+    body: &str,
+    token: Option<&str>,
+    deadline: Instant,
+) -> Result<(), PostError> {
+    let mut token_header = String::new();
+    if let Some(token) = token {
+        token_header = format!("X-Taco-Shells-Token: {token}\r\n");
+    }
+    let text = format!(
+        "POST {route} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n{token_header}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len(),
+    );
+    for chunk in text.as_bytes().chunks(WRITE_CHUNK) {
+        let write_budget = time_left(deadline)?;
+        stream
+            .set_write_timeout(Some(write_budget))
+            .map_err(|_| PostError::Other)?;
+        stream.write_all(chunk).map_err(|_| PostError::Other)?;
+    }
+    Ok(())
 }
 
 pub fn post(
@@ -26,35 +62,9 @@ pub fn post(
     token: Option<&str>,
     deadline: Instant,
 ) -> Result<(), PostError> {
-    let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-    let connect_budget = time_left(deadline)?;
-    let connected = TcpStream::connect_timeout(&address, connect_budget);
-    let mut stream = match connected {
-        Ok(stream) => stream,
-        Err(problem) if problem.kind() == ErrorKind::ConnectionRefused => {
-            return Err(PostError::Refused);
-        }
-        Err(_) => return Err(PostError::Other),
-    };
-
-    let mut token_header = String::new();
-    if let Some(token) = token {
-        token_header = format!("X-Taco-Shells-Token: {token}\r\n");
-    }
-    let text = format!(
-        "POST {} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n{token_header}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
-        request.route,
-        request.body.len(),
-        request.body,
-    );
+    let mut stream = connect(port, deadline)?;
     // The listener reads the whole body before it answers, so waiting for the answer only adds time.
-    for chunk in text.as_bytes().chunks(WRITE_CHUNK) {
-        let write_budget = time_left(deadline)?;
-        stream
-            .set_write_timeout(Some(write_budget))
-            .map_err(|_| PostError::Other)?;
-        stream.write_all(chunk).map_err(|_| PostError::Other)?;
-    }
+    send_request(&mut stream, request.route, &request.body, token, deadline)?;
     let _ = stream.shutdown(Shutdown::Write);
     Ok(())
 }
