@@ -1,65 +1,104 @@
-# Verifies every push to main, then releases it as a prerelease carrying no
-# download. Promoting one to stable is `npm run promote`, which runs on a machine
-# rather than here. AGENTS.md, "Versions and releasing", has the whole picture.
+# Checks every pull request and every push to main. Each push to main is then released as a prerelease with no
+# download. Making a release stable is `cargo xtask promote`, run on Lucas's machine rather than here; AGENTS.md,
+# "Versions and releasing", has the whole picture.
 name: main
 
 on:
+  pull_request:
+    paths-ignore: &docs
+      - "docs/**"
+      - "README.md"
+      - "AGENTS.md"
+      - "LICENSE"
   push:
     branches: [main]
-    paths-ignore:
-      # The Rust app is not this app: a push touching only it must not cut a version.
-      # The same paths as OUTSIDE_THE_RUST_APP in scripts/repo.mjs.
-      - "crates/**"
-      - "xtask/**"
-      - "smoke/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain.toml"
-      - ".cargo/**"
-      - ".github/workflows/rust.yml"
+    paths-ignore: *docs
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
-# A second push while the first is still running would race on the tag.
+# A pull request's newer push cancels its older run. On main a run waits for the one before it instead, so two
+# releases never race on a tag; GitHub keeps only the newest waiting run, and the release reads every commit anyway.
 concurrency:
-  group: main
-  cancel-in-progress: false
+  group: main-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  verify:
-    # macOS because the app is macOS-only: the e2e suite launches a real
-    # Electron binary and the ptys it opens run login shells.
+  check:
+    # macOS because the app is macOS-only.
     runs-on: macos-latest
 
     steps:
       - uses: actions/checkout@v7
         with:
-          # The version comes from the tags and the notes read the log, so a
-          # shallow clone would get both wrong.
-          fetch-depth: 0
-          # Keeps the write token out of .git/config, where install scripts and
-          # tests could read it. The release step is handed it as GH_TOKEN.
           persist-credentials: false
 
-      - name: Lockfile resolves through Socket Firewall
-        run: "! grep -nE '\"resolved\": \"https?://' package-lock.json | grep -v '\"resolved\": \"https://sfw.security.sentry.io/npm/'"
+      # Installs the version rust-toolchain.toml pins.
+      - run: rustup toolchain install
 
-      - uses: actions/setup-node@v7
+      # Saved from main only: gpui makes each cache several GB, and caches saved from pull
+      # requests would push main's out of the repo's 10 GB, leaving every check to build cold.
+      - uses: Swatinem/rust-cache@v2
         with:
-          node-version: 26
-          cache: npm
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - run: npm ci
+      # Ghostty's library, which crates/ghostty/build.rs fetches into TACO_GHOSTTY_DIR on a
+      # miss. Keyed on build.rs, which pins it, so a new pin is a new cache.
+      - run: echo "TACO_GHOSTTY_DIR=$RUNNER_TEMP/libghostty-vt" >> "$GITHUB_ENV"
 
-      - run: npm test
+      - uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/libghostty-vt
+          key: libghostty-vt-${{ hashFiles('crates/ghostty/build.rs') }}
 
-      # Builds and drives the real app. Nothing here packages a bundle, so this
-      # needs neither electron-builder nor librsvg for the icon.
-      - run: npm run e2e
+      - run: cargo fmt --all --check
 
-      - run: node scripts/dev-release.mjs
+      # A config folder name spelled by hand outside crates/identity would let one channel touch the other's folder,
+      # and no binary scan can see it.
+      - name: Config folder names come only from crates/identity
+        run: "! git grep -n -E '\"\\.taco-shells(-dev)?\"' -- crates xtask smoke ':!crates/identity/src/lib.rs'"
+
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      # The code only tooling turns on: app's render and drive, terminal-view's capture, ghostty's bindings.
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - run: cargo test --workspace --locked --no-run
+
+      # The whole run is meant to stay under about 10 s once compiled. Twice that
+      # fails, which catches a test that sleeps or starts something, not a slow runner.
+      - name: cargo test, within 20 s
+        run: |
+          started=$(date +%s)
+          cargo test --workspace --locked
+          elapsed=$(( $(date +%s) - started ))
+          echo "cargo test took ${elapsed} s once compiled." >> "$GITHUB_STEP_SUMMARY"
+          if [ "$elapsed" -gt 20 ]; then
+            echo "::error::cargo test took ${elapsed} s once compiled, over the 20 s budget."
+            exit 1
+          fi
+
+      # Builds a development bundle and drives it. The runner has Metal, so the window draws.
+      - run: cargo xtask smoke
+
+  release:
+    needs: check
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The version comes from the tags and the notes read the log, so a shallow clone would get both wrong.
+          fetch-depth: 0
+          # Keeps the write token out of .git/config; the release step is handed it as GH_TOKEN.
+          persist-credentials: false
+
+      - run: rustup toolchain install
+
+      - run: cargo xtask release
         env:
           GH_TOKEN: ${{ github.token }}
-          GITHUB_SHA: ${{ github.sha }}
