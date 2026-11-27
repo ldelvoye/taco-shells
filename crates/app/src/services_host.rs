@@ -14,8 +14,8 @@ use taco_protocol::{
 };
 use taco_services::{
     AgentMenuAction, AgentSetups, AgentSetupsHost, AnswerPart, ConfigChange, ConfigStore,
-    ConfigWriter, HookListener, ListenerEvent, Question, QuestionKind, Refusal, UpdateEvent,
-    Updater, UpdaterHost, app_version, config_file_path, focus_port_path,
+    ConfigWriter, HookListener, ListenerEvent, PluginHeard, Question, QuestionKind, Refusal,
+    UpdateEvent, Updater, UpdaterHost, app_version, config_file_path, focus_port_path,
 };
 use taco_settings::{Config, KeymapChange, SettingChange};
 
@@ -353,7 +353,7 @@ fn start_hook_route(
     runtime: RuntimeClient,
     workspace: WorkspaceHost,
     activity_on: Arc<AtomicBool>,
-    setups: Arc<Slot<AgentSetups>>,
+    plugin_heard: PluginHeard,
     ask_notes_on: Arc<AtomicBool>,
     window: &WindowSender,
 ) -> Sender<Routed> {
@@ -368,10 +368,7 @@ fn start_hook_route(
         let is_on = delivering_activity_on.load(Ordering::SeqCst);
         if is_on {
             // While on, only the plugin's posts get through, so any post means the plugin loaded in this terminal.
-            let setups = locked(&setups);
-            if let Some(setups) = setups.as_ref() {
-                setups.note_plugin_heard(event.terminal.clone());
-            }
+            plugin_heard.note(event.terminal.clone());
         }
         workspace.hook(event);
     };
@@ -440,18 +437,18 @@ impl ServicesHost {
 
         let started = start_setups(&directory, &activity_on, &writer, &runtime, &window);
         let hooks_directory = started.hooks_directory();
+        let plugin_heard = started.plugin_heard();
         *locked(&setups) = Some(started);
 
         let updater = start_updater(&directory, &window);
         let updater: Arc<Slot<Updater>> = Arc::new(Mutex::new(Some(updater)));
 
         let routed_activity_on = Arc::clone(&activity_on);
-        let routed_setups = Arc::clone(&setups);
         let inbox = start_hook_route(
             runtime,
             workspace,
             routed_activity_on,
-            routed_setups,
+            plugin_heard,
             ask_notes_on,
             &window,
         );
