@@ -10,4 +10,5 @@ name = "taco-shells-plugin"
 path = "src/main.rs"
 
 [dependencies]
+taco-protocol.workspace = true
 serde_json.workspace = true

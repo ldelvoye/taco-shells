@@ -5106,6 +5106,7 @@ name = "taco-plugin"
 version = "0.0.0"
 dependencies = [
  "serde_json",
+ "taco-protocol",
 ]
 
 [[package]]
