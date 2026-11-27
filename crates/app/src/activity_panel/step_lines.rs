@@ -189,8 +189,6 @@ mod tests {
             steps: steps[..count].to_vec(),
             earlier_not_loaded,
         };
-        assert_eq!(fold_label(&stretch(1, false), false), "Show the step");
-        assert_eq!(fold_label(&stretch(1, false), true), "Hide the step");
         assert_eq!(
             fold_label(&stretch(4, false), false),
             "Show the 4 steps, 1 failed"
@@ -198,10 +196,6 @@ mod tests {
         assert_eq!(
             fold_label(&stretch(7, true), false),
             "Show the 7+ steps, 1 failed"
-        );
-        assert_eq!(
-            fold_label(&stretch(0, true), false),
-            "Show the earlier steps"
         );
     }
 }

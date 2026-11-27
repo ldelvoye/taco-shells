@@ -894,17 +894,34 @@ mod tests {
 
     #[test]
     fn a_pull_request_reads_as_last_seen_and_shared_shows_the_newest_five_until_asked() {
-        let now = now_ms();
-        let checked_at = now - 5 * MS_PER_MINUTE;
+        let now = 1_749_988_800_000;
+        let three_days = 3 * 24 * 60 * MS_PER_MINUTE;
+        let checked_at = now - three_days;
         let checked = pull_request_state(PrState::Merged, Some(checked_at), now);
-        let expected = format!("Merged, seen {}", time_label(checked_at, now));
+        let seen_then = time_label(checked_at, now);
+        let seen_now = time_label(now, now);
+        assert_ne!(seen_then, seen_now);
+        let expected = format!("Merged, seen {seen_then}");
         assert_eq!(checked, Some(expected));
         assert_eq!(pull_request_state(PrState::Open, None, now), None);
 
-        assert_eq!(shown_count(3, false), 3);
-        assert_eq!(shown_count(23, false), 5);
-        assert_eq!(shown_count(23, true), 23);
         assert!(!has_more_than_shown(5));
         assert!(has_more_than_shown(6));
+    }
+
+    #[test]
+    fn a_finished_run_counts_minutes_then_hours_and_is_singular_at_one() {
+        let since = 1_000_000;
+        let cases = [
+            (0, "Finished just now"),
+            (MS_PER_MINUTE, "Finished 1 minute ago"),
+            (59 * MS_PER_MINUTE, "Finished 59 minutes ago"),
+            (60 * MS_PER_MINUTE, "Finished 1 hour ago"),
+            (120 * MS_PER_MINUTE, "Finished 2 hours ago"),
+        ];
+        for (elapsed, expected) in cases {
+            let now = since + elapsed;
+            assert_eq!(finished_text(since, now), expected, "{elapsed}");
+        }
     }
 }

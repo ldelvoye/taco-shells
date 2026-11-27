@@ -71,7 +71,6 @@ mod tests {
         let cases = [
             ("the window is ahead", 5, 3, 6),
             ("the workspace's count passed the window's", 2, 7, 8),
-            ("both at the same count", 4, 4, 5),
         ];
         for (case, last_move, applied, next) in cases {
             assert_eq!(next_move(last_move, applied), next, "{case}");

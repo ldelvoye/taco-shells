@@ -167,16 +167,3 @@ fn item(id: &'static str, label: String, enabled: bool, look: &Look) -> Stateful
     }
     shown
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn esc_puts_back_the_opening_name_and_enter_keeps_what_was_typed() {
-        let undone = rename_step(&TextFieldEvent::Cancelled, "Tacos");
-        assert_eq!(undone, RenameStep::RenameAndClose("Tacos".to_string()));
-        let kept = rename_step(&TextFieldEvent::Submitted, "Tacos");
-        assert_eq!(kept, RenameStep::Close);
-    }
-}

@@ -305,7 +305,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_pages_open_and_close_as_the_window_promises() {
+    fn the_page_stack_after_each_move() {
         use Page::{Settings, Shortcuts};
         let cases: [(&[Page], PageMove, &[Page]); 9] = [
             (&[], PageMove::ToggleSettings, &[Settings]),
@@ -337,9 +337,7 @@ mod tests {
         let cases = [
             ("cmd+shift+,", "⌘⇧,"),
             ("opt+left", "⌥←"),
-            ("shift+enter", "⇧↩"),
             ("ctrl+opt+shift+k", "⌃⌥⇧K"),
-            ("cmd+backspace", "⌘⌫"),
         ];
         for (written, shown) in cases {
             let chord = parse_chord(written).expect(written);

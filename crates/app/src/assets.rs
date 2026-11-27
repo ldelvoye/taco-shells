@@ -118,3 +118,18 @@ fn development_mark(bytes: &[u8]) -> Vec<u8> {
     }
     text.into_bytes()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_stable_color_the_development_mark_turns_is_in_the_stable_mark() {
+        let found = FILES.iter().find(|(name, _)| *name == MARK);
+        let (_, bytes) = found.expect("the mark is a compiled-in file");
+        let svg = String::from_utf8_lossy(bytes);
+        for (stable, _) in DEVELOPMENT_COLORS {
+            assert!(svg.contains(stable), "{stable}");
+        }
+    }
+}
