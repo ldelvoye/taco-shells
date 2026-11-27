@@ -367,7 +367,7 @@ mod tests {
     use std::time::Instant;
 
     /// A stand-in runtime. It writes whether SIGTERM is blocked in it to `<itself>.mask`, takes one byte of what it is sent, and exits with `code`.
-    fn stand_in(name: &str, code: i32) -> PathBuf {
+    fn stand_in(name: &str, code: i32) -> StandIn {
         let script = format!(
             r#"#!/usr/bin/perl
 use POSIX;
@@ -384,15 +384,27 @@ exit {code};
         program(name, &script)
     }
 
-    fn program(name: &str, script: &str) -> PathBuf {
-        let directory =
-            std::env::temp_dir().join(format!("taco-runtime-client-{}", std::process::id()));
+    /// A stand-in's script, in a folder of its own that is removed with it.
+    struct StandIn {
+        directory: PathBuf,
+        path: PathBuf,
+    }
+
+    impl Drop for StandIn {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.directory);
+        }
+    }
+
+    fn program(name: &str, script: &str) -> StandIn {
+        let folder = format!("taco-runtime-client-{}-{name}", std::process::id());
+        let directory = std::env::temp_dir().join(folder);
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join(name);
         std::fs::write(&path, script).unwrap();
         let executable = std::fs::Permissions::from_mode(0o755);
         std::fs::set_permissions(&path, executable).unwrap();
-        path
+        StandIn { directory, path }
     }
 
     /// Short enough to keep the tests quick, long enough for a killed stand-in to be reaped.
@@ -440,15 +452,30 @@ exit {code};
     #[test]
     fn a_stop_ends_a_runtime_that_reads_nothing_while_a_send_waits_for_room() {
         let program = program("reads-nothing", "#!/bin/sh\nexec sleep 999\n");
-        let started = started_quick(&program);
+        let started = started_quick(&program.path);
         let sender = started.client.clone();
+        let sent = Arc::new(AtomicU64::new(0));
+        let counted = Arc::clone(&sent);
         thread::spawn(move || {
             for lines in 0..100_000 {
                 sender.send(RuntimeCommand::Scrollback { lines });
+                counted.fetch_add(1, Ordering::SeqCst);
             }
         });
-        // Long enough for the connection and the queue to fill, so the sender waits for room.
-        thread::sleep(Duration::from_millis(200));
+        // Seen stuck: past the queue's size, and no further over a while.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            assert!(
+                Instant::now() < deadline,
+                "the sender never waited for room"
+            );
+            let before = sent.load(Ordering::SeqCst);
+            thread::sleep(Duration::from_millis(50));
+            let after = sent.load(Ordering::SeqCst);
+            if after == before && after >= QUEUED_COMMANDS as u64 && after < 100_000 {
+                break;
+            }
+        }
         let exit = stopped_in_time(&started.client);
         assert!(exit.is_some(), "the runtime is gone");
     }
@@ -465,7 +492,7 @@ exit {code};
             let _ = events.send(event);
         };
         let started =
-            RuntimeClient::start_with(&program, &test_context(), report, patience).unwrap();
+            RuntimeClient::start_with(&program.path, &test_context(), report, patience).unwrap();
 
         // Far more than the queue and the connection hold together.
         let began = Instant::now();
@@ -496,9 +523,8 @@ exit {code};
             "ignores-sigterm",
             "#!/usr/bin/perl\n$SIG{TERM} = 'IGNORE';\nopen(my $ready, '>', \"$0.ready\");\nclose $ready;\nsleep 999;\n",
         );
-        let ready = program.with_extension("ready");
-        let _ = std::fs::remove_file(&ready);
-        let started = started_quick(&program);
+        let ready = program.path.with_extension("ready");
+        let started = started_quick(&program.path);
         let deadline = Instant::now() + Duration::from_secs(10);
         while !ready.exists() {
             assert!(Instant::now() < deadline, "the stand-in never got ready");
@@ -509,22 +535,13 @@ exit {code};
     }
 
     #[test]
-    fn an_ask_in_flight_when_the_runtime_dies_is_answered_with_none() {
-        // Whatever the starting thread blocks, the runtime starts with nothing blocked.
-        let mut blocked: libc::sigset_t = unsafe { std::mem::zeroed() };
-        let mut previous: libc::sigset_t = unsafe { std::mem::zeroed() };
-        unsafe {
-            libc::sigemptyset(&mut blocked);
-            libc::sigaddset(&mut blocked, libc::SIGTERM);
-            libc::pthread_sigmask(libc::SIG_BLOCK, &blocked, &mut previous);
-        }
+    fn a_runtime_that_dies_is_reported_with_its_exit_and_leaves_no_ask_waiting() {
         let (events, received) = mpsc::channel();
         let program = stand_in("dies", 7);
-        let started = RuntimeClient::start(&program, &test_context(), move |event| {
+        let started = RuntimeClient::start(&program.path, &test_context(), move |event| {
             let _ = events.send(event);
         })
         .unwrap();
-        unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, &previous, std::ptr::null_mut()) };
 
         let pending = started
             .client
@@ -545,14 +562,45 @@ exit {code};
             panic!("a report from a stand-in")
         };
         assert_eq!(reason, "The terminal runtime stopped (exit code 7).");
-        let mask_report = program.with_extension("mask");
-        let sigterm_blocked = std::fs::read_to_string(mask_report).unwrap();
-        assert_eq!(sigterm_blocked, "0", "SIGTERM blocked in the runtime");
+    }
 
-        // A runtime that goes because it was asked to is not reported as dying.
+    #[test]
+    fn the_runtime_starts_with_no_signal_blocked_whatever_its_starter_blocks() {
+        let mut blocked: libc::sigset_t = unsafe { std::mem::zeroed() };
+        let mut previous: libc::sigset_t = unsafe { std::mem::zeroed() };
+        unsafe {
+            libc::sigemptyset(&mut blocked);
+            libc::sigaddset(&mut blocked, libc::SIGTERM);
+            libc::pthread_sigmask(libc::SIG_BLOCK, &blocked, &mut previous);
+        }
+        let program = stand_in("masked", 0);
+        let started = RuntimeClient::start(&program.path, &test_context(), |_| {}).unwrap();
+        unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, &previous, std::ptr::null_mut()) };
+
+        // Its report written before it is stopped, however slow the machine.
+        let mask_report = program.path.with_extension("mask");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut sigterm_blocked = String::new();
+        while sigterm_blocked.is_empty() {
+            assert!(
+                Instant::now() < deadline,
+                "the stand-in never wrote its mask"
+            );
+            thread::sleep(Duration::from_millis(10));
+            let read = std::fs::read_to_string(&mask_report);
+            if let Ok(text) = read {
+                sigterm_blocked = text;
+            }
+        }
+        stopped_in_time(&started.client);
+        assert_eq!(sigterm_blocked, "0", "SIGTERM blocked in the runtime");
+    }
+
+    #[test]
+    fn a_runtime_stopped_on_request_is_not_reported_as_dying() {
         let (events, received) = mpsc::channel();
         let program = stand_in("stops", 0);
-        let started = RuntimeClient::start(&program, &test_context(), move |event| {
+        let started = RuntimeClient::start(&program.path, &test_context(), move |event| {
             let _ = events.send(event);
         })
         .unwrap();

@@ -674,58 +674,46 @@ mod tests {
     }
 
     #[test]
-    fn a_question_placed_in_a_terminal_is_asked_there_and_an_unplaced_one_is_not() {
-        let (inbox, messages) = unbounded();
-        let (placed, placed_replies) = question(11);
-        let (unplaced, unplaced_replies) = question(12);
-        inbox.send(Routed::Question(placed)).unwrap();
-        inbox.send(Routed::Question(unplaced)).unwrap();
-        drop(inbox);
+    fn a_question_is_asked_in_its_terminal_only_when_placed_and_while_agent_activity_is_on() {
+        // Whether Agent Activity is on, which is also whether the placed question is this app's; what the workspace is asked.
+        let cases = [
+            (true, vec![(terminal("terminal-11"), vec![11])]),
+            (false, Vec::new()),
+        ];
+        for (activity_on, expected_asked) in cases {
+            let (inbox, messages) = unbounded();
+            let (placed, placed_replies) = question(11);
+            let (unplaced, unplaced_replies) = question(12);
+            inbox.send(Routed::Question(placed)).unwrap();
+            inbox.send(Routed::Question(unplaced)).unwrap();
+            drop(inbox);
 
-        let asked = Arc::new(Mutex::new(Vec::new()));
-        let asked_in_route = Arc::clone(&asked);
-        let ask = move |terminal: TerminalId, question: Question| {
-            let mut asked = asked_in_route.lock().unwrap();
-            asked.push((terminal, question.message.pids));
-        };
-        route_hooks(
-            messages,
-            SHORT_ANSWER_WAIT,
-            SHORT_ANSWER_WAIT,
-            placed_unless_pid_is_12,
-            |_| {},
-            ask,
-            || true,
-        );
+            let asked = Arc::new(Mutex::new(Vec::new()));
+            let asked_in_route = Arc::clone(&asked);
+            let ask = move |terminal: TerminalId, question: Question| {
+                let mut asked = asked_in_route.lock().unwrap();
+                asked.push((terminal, question.message.pids));
+            };
+            route_hooks(
+                messages,
+                SHORT_ANSWER_WAIT,
+                SHORT_ANSWER_WAIT,
+                placed_unless_pid_is_12,
+                |_| {},
+                ask,
+                move || activity_on,
+            );
 
-        let first = placed_replies.recv_timeout(WAIT).unwrap();
-        assert!(matches!(first, AnswerPart::Placed(true)));
-        let second = unplaced_replies.recv_timeout(WAIT).unwrap();
-        assert!(matches!(second, AnswerPart::Placed(false)));
-        let asked = asked.lock().unwrap().clone();
-        assert_eq!(asked, vec![(terminal("terminal-11"), vec![11])]);
-    }
-
-    #[test]
-    fn with_agent_activity_off_a_placed_session_is_answered_not_mine_and_never_asked() {
-        let (inbox, messages) = unbounded();
-        let (placed, placed_replies) = question(11);
-        inbox.send(Routed::Question(placed)).unwrap();
-        drop(inbox);
-
-        let ask = |_: TerminalId, _: Question| panic!("the workspace was asked");
-        route_hooks(
-            messages,
-            SHORT_ANSWER_WAIT,
-            SHORT_ANSWER_WAIT,
-            placed_unless_pid_is_12,
-            |_| {},
-            ask,
-            || false,
-        );
-
-        let answer = placed_replies.recv_timeout(WAIT).unwrap();
-        assert!(matches!(answer, AnswerPart::Placed(false)));
+            let first = placed_replies.recv_timeout(WAIT).unwrap();
+            let AnswerPart::Placed(mine) = first else {
+                panic!("the placed question is answered with whether it is this app's");
+            };
+            assert_eq!(mine, activity_on, "activity on: {activity_on}");
+            let second = unplaced_replies.recv_timeout(WAIT).unwrap();
+            assert!(matches!(second, AnswerPart::Placed(false)));
+            let asked = asked.lock().unwrap().clone();
+            assert_eq!(asked, expected_asked, "activity on: {activity_on}");
+        }
     }
 
     #[test]
@@ -763,19 +751,16 @@ mod tests {
     }
 
     #[test]
-    fn with_the_notes_switch_off_a_stop_is_not_nudged_and_the_workspace_is_not_asked() {
+    fn a_stop_is_nudged_only_with_the_notes_switch_on_and_its_reason_is_recorded_once_delivered() {
+        // Off: answered at once with no nudge, and the workspace is not asked.
         let (reply, replies) = mpsc::channel();
         let request = || -> mpsc::Receiver<Option<String>> { panic!("the workspace was asked") };
-
         let work = stop_work(false, reply, request, || {});
-
         assert!(work.is_none());
         let part = replies.recv_timeout(WAIT).unwrap();
         assert!(matches!(part, AnswerPart::Nudge(None, None)));
-    }
 
-    #[test]
-    fn with_the_notes_switch_on_a_reason_is_forwarded_with_its_record() {
+        // On: the workspace's reason is forwarded, and recorded only once delivered.
         let (reply, replies) = mpsc::channel();
         let (answer, answered) = mpsc::channel();
         answer.send(Some(String::from("write a note"))).unwrap();
