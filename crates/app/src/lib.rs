@@ -12,6 +12,7 @@ pub mod link;
 mod look;
 mod menu;
 mod middle;
+mod page;
 mod panels;
 mod platform;
 mod popups;

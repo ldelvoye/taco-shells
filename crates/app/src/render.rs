@@ -119,6 +119,7 @@ fn play(cx: &mut HeadlessAppContext, window: AnyWindowHandle, gesture: &Gesture)
             draw(cx, window)
         }
         Gesture::Scroll(at, by) => {
+            // gpui's wheel delta moves the content, so scrolling down is a negative one.
             let moved = point(px(0.), -*by);
             let scrolled = ScrollEvent {
                 position: *at,

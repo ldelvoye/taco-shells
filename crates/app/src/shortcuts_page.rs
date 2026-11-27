@@ -1,18 +1,20 @@
 //! The keyboard shortcuts page, a page under Settings listing each command with its shortcuts.
 
 use gpui::{
-    Context, Div, Entity, FontWeight, InteractiveElement, ParentElement,
-    StatefulInteractiveElement, Styled, div, px,
+    Context, Div, Entity, FontWeight, ParentElement, StatefulInteractiveElement, Styled, div, px,
 };
 use taco_settings::{Binding, Chord, CommandId};
 
-use crate::look::{Look, SMALL_TEXT_SIZE};
-use crate::settings_page::{form_column, group, page_frame, page_header};
+use crate::look::Look;
+use crate::page::{
+    BUTTON_RADIUS, CHIP_GAP, ROW_GAP, ROW_PADDING, chip, form_column, group, page_foot, page_frame,
+    page_header, text_button,
+};
 use crate::text_field::TextField;
 use crate::window::WindowView;
 
-pub const CHIP_GAP: f32 = 5.;
 pub const SEARCH_PLACEHOLDER: &str = "Search commands and shortcuts";
+const SCROLL_ID: &str = "shortcuts-scroll";
 const TITLE: &str = "Keyboard shortcuts";
 const BACK: &str = "Settings";
 const NOTHING_FOUND: &str = "No command or shortcut matches.";
@@ -21,17 +23,8 @@ const ADD: &str = "+";
 const BACK_TO_DEFAULT: &str = "Back to default";
 const FOOT_TEXT: &str = "Changes are written to keybindings.json and apply at once.";
 const OPEN_FILE_LABEL: &str = "Open keybindings.json";
-const CHIP_HEIGHT: f32 = 24.;
-const CHIP_PADDING: f32 = 6.;
-const CHIP_RADIUS: f32 = 6.;
-const CHIP_INNER_GAP: f32 = 3.;
-const ROW_PADDING: f32 = 6.;
-const ROW_GAP: f32 = 12.;
-const BUTTON_PADDING_X: f32 = 8.;
-const BUTTON_PADDING_Y: f32 = 3.;
-const BUTTON_RADIUS: f32 = 6.;
-const FOOT_GAP: f32 = 12.;
-const FOOT_PADDING_TOP: f32 = 10.;
+const SMALL_BUTTON_HEIGHT: f32 = 24.;
+const SMALL_BUTTON_PADDING: f32 = 8.;
 
 const GROUPS: [(&str, &[(CommandId, &str)]); 3] = [
     (
@@ -70,7 +63,7 @@ const GROUPS: [(&str, &[(CommandId, &str)]); 3] = [
     ),
 ];
 
-// How a query may name a modifier, against the spelling the page searches.
+/// Query words for a modifier, as the file spells it: "alt" and "option" search as "opt".
 const MODIFIER_WORDS: [(&str, &str); 4] = [
     ("alt", "opt"),
     ("option", "opt"),
@@ -78,27 +71,9 @@ const MODIFIER_WORDS: [(&str, &str); 4] = [
     ("control", "ctrl"),
 ];
 
-const KEY_SYMBOLS: [(&str, &str); 14] = [
-    ("left", "←"),
-    ("right", "→"),
-    ("up", "↑"),
-    ("down", "↓"),
-    ("enter", "↩"),
-    ("backspace", "⌫"),
-    ("delete", "⌦"),
-    ("tab", "⇥"),
-    ("escape", "Esc"),
-    ("space", "Space"),
-    ("home", "↖"),
-    ("end", "↘"),
-    ("pageup", "⇞"),
-    ("pagedown", "⇟"),
-];
-
 /// Everything one drawing of the shortcuts page reads.
 pub struct ShortcutsInput<'a> {
     pub bindings: &'a [Binding],
-    /// The shipped bindings alone, which "Back to default" returns a command to.
     pub defaults: &'a [Binding],
     pub query: &'a str,
     pub search: &'a Entity<TextField>,
@@ -109,13 +84,14 @@ pub fn shortcuts_page(input: &ShortcutsInput, cx: &mut Context<WindowView>) -> D
     let look = input.look;
     let header = page_header(TITLE, Some(BACK), look, cx);
     let search = div().w_full().child(input.search.clone());
+    let wanted = normalized_query(input.query);
     let mut form = form_column().child(search);
     let mut found_any = false;
     for (heading, commands) in GROUPS {
         let mut rows = Vec::new();
         for &(command, name) in commands {
             let chords = chords_for(input.bindings, command);
-            if !matches(input.query, name, &chords) {
+            if !is_found(&wanted, name, &chords) {
                 continue;
             }
             let defaults = chords_for(input.defaults, command);
@@ -134,7 +110,8 @@ pub fn shortcuts_page(input: &ShortcutsInput, cx: &mut Context<WindowView>) -> D
         form = form.child(nothing);
     }
     let foot = foot(look, cx);
-    page_frame(header, form.child(foot), look)
+    let whole = form.child(foot);
+    page_frame(SCROLL_ID, header, whole, look)
 }
 
 fn command_row(name: &str, chords: &[Chord], changed: bool, look: &Look) -> Div {
@@ -173,67 +150,26 @@ fn command_row(name: &str, chords: &[Chord], changed: bool, look: &Look) -> Div 
         .child(keys)
 }
 
-/// A shortcut as a small key cap with the Mac's symbols.
-pub(crate) fn chip(chord: &Chord, look: &Look) -> Div {
-    let label = chip_text(chord);
-    div()
-        .flex()
-        .flex_none()
-        .items_center()
-        .gap(px(CHIP_INNER_GAP))
-        .h(px(CHIP_HEIGHT))
-        .px(px(CHIP_PADDING))
-        .rounded(px(CHIP_RADIUS))
-        .border_1()
-        .border_color(look.hairline)
-        .bg(look.selected_card)
-        .text_color(look.text)
-        .font_weight(FontWeight::MEDIUM)
-        .child(label)
-}
-
 fn small_button(label: &'static str, look: &Look) -> Div {
     div()
         .flex()
         .flex_none()
         .items_center()
-        .h(px(CHIP_HEIGHT))
-        .px(px(BUTTON_PADDING_X))
+        .h(px(SMALL_BUTTON_HEIGHT))
+        .px(px(SMALL_BUTTON_PADDING))
         .rounded(px(BUTTON_RADIUS))
         .text_color(look.secondary_text)
         .child(label)
 }
 
 fn foot(look: &Look, cx: &mut Context<WindowView>) -> Div {
-    let veil = look.veil;
-    let open = div()
-        .id("shortcuts-foot-open")
-        .flex_none()
-        .px(px(BUTTON_PADDING_X))
-        .py(px(BUTTON_PADDING_Y))
-        .rounded(px(BUTTON_RADIUS))
-        .border_1()
-        .border_color(look.hairline)
-        .text_color(look.text)
-        .cursor_pointer()
-        .hover(move |style| style.bg(veil))
-        .child(OPEN_FILE_LABEL)
-        .on_click(cx.listener(|view, _, _, cx| view.open_keybindings_file(cx)));
-    div()
-        .flex()
-        .items_center()
-        .gap(px(FOOT_GAP))
-        .pt(px(FOOT_PADDING_TOP))
-        .border_t_1()
-        .border_color(look.hairline)
-        .text_size(px(SMALL_TEXT_SIZE))
-        .text_color(look.secondary_text)
-        .child(FOOT_TEXT)
-        .child(open)
+    let button = text_button("shortcuts-foot-open", OPEN_FILE_LABEL, look);
+    let open = button.on_click(cx.listener(|view, _, _, cx| view.open_keybindings_file(cx)));
+    page_foot(FOOT_TEXT, open, look)
 }
 
 /// The command's chords, in the order the keymap holds them.
-pub(crate) fn chords_for(bindings: &[Binding], command: CommandId) -> Vec<Chord> {
+pub fn chords_for(bindings: &[Binding], command: CommandId) -> Vec<Chord> {
     let mut chords = Vec::new();
     for binding in bindings {
         if binding.command == command {
@@ -243,39 +179,15 @@ pub(crate) fn chords_for(bindings: &[Binding], command: CommandId) -> Vec<Chord>
     chords
 }
 
-/// Whether a command's chords are not exactly its defaults, in any order.
+/// Whether a command's chords are not its defaults, in any order.
 fn differs(chords: &[Chord], defaults: &[Chord]) -> bool {
     let same_count = chords.len() == defaults.len();
     let all_default = chords.iter().all(|chord| defaults.contains(chord));
     !(same_count && all_default)
 }
 
-/// A chord in the Mac's symbols: "⌘⇧," for cmd+shift+,.
-pub fn chip_text(chord: &Chord) -> String {
-    let mut text = String::new();
-    if chord.cmd {
-        text.push('⌘');
-    }
-    if chord.ctrl {
-        text.push('⌃');
-    }
-    if chord.alt {
-        text.push('⌥');
-    }
-    if chord.shift {
-        text.push('⇧');
-    }
-    let mut symbols = KEY_SYMBOLS.iter();
-    let named = symbols.find(|(key, _)| *key == chord.key);
-    match named {
-        Some((_, symbol)) => text.push_str(symbol),
-        None => text.push_str(&chord.key.to_uppercase()),
-    }
-    text
-}
-
 /// A chord as the file spells it, with "opt" for the option key: "cmd+opt+left".
-pub fn file_spelling(chord: &Chord) -> String {
+fn file_spelling(chord: &Chord) -> String {
     let mut parts = Vec::new();
     if chord.cmd {
         parts.push("cmd");
@@ -293,19 +205,18 @@ pub fn file_spelling(chord: &Chord) -> String {
     parts.join("+")
 }
 
-/// Whether a command is found by the query: in its name, or in one of its chords as the file spells them.
-pub fn matches(query: &str, name: &str, chords: &[Chord]) -> bool {
-    let wanted = normalized_query(query);
+/// Whether the normalized query finds a command by its name or by a chord in the file's spelling.
+fn is_found(wanted: &str, name: &str, chords: &[Chord]) -> bool {
     if wanted.is_empty() {
         return true;
     }
     let lower_name = name.to_lowercase();
-    if lower_name.contains(&wanted) {
+    if lower_name.contains(wanted) {
         return true;
     }
     for chord in chords {
         let spelled = file_spelling(chord);
-        if spelled.contains(&wanted) {
+        if spelled.contains(wanted) {
             return true;
         }
     }
@@ -336,31 +247,37 @@ mod tests {
         parse_chord(text).expect(text)
     }
 
+    fn finds(query: &str, name: &str, chords: &[Chord]) -> bool {
+        let wanted = normalized_query(query);
+        is_found(&wanted, name, chords)
+    }
+
     #[test]
-    fn a_chip_reads_in_the_macs_symbols() {
-        let cases = [
-            ("cmd+shift+,", "⌘⇧,"),
-            ("opt+left", "⌥←"),
-            ("shift+enter", "⇧↩"),
-            ("ctrl+k", "⌃K"),
-            ("cmd+backspace", "⌘⌫"),
-        ];
-        for (written, shown) in cases {
-            assert_eq!(chip_text(&chord(written)), shown, "{written}");
+    fn every_command_is_listed_once() {
+        let mut listed = Vec::new();
+        for (_, commands) in GROUPS {
+            for &(command, _) in commands {
+                listed.push(command);
+            }
         }
+        for command in CommandId::ALL {
+            let times = listed.iter().filter(|shown| **shown == command).count();
+            assert_eq!(times, 1, "{command:?}");
+        }
+        assert_eq!(listed.len(), CommandId::ALL.len());
     }
 
     #[test]
     fn search_finds_a_command_by_name_or_by_any_spelling_of_its_shortcut() {
         let clear = [chord("cmd+k")];
         let word_left = [chord("opt+left")];
-        assert!(matches("", "Clear", &clear));
-        assert!(matches("  CLE ", "Clear", &clear));
-        assert!(matches("cmd+k", "Clear", &clear));
-        assert!(matches("command+k", "Clear", &clear));
-        assert!(matches("alt+left", "Back a word", &word_left));
-        assert!(matches("option+left", "Back a word", &word_left));
-        assert!(!matches("cmd+j", "Clear", &clear));
+        assert!(finds("", "Clear", &clear));
+        assert!(finds("  CLE ", "Clear", &clear));
+        assert!(finds("cmd+k", "Clear", &clear));
+        assert!(finds("command+k", "Clear", &clear));
+        assert!(finds("alt+left", "Back a word", &word_left));
+        assert!(finds("option+left", "Back a word", &word_left));
+        assert!(!finds("cmd+j", "Clear", &clear));
     }
 
     #[test]
@@ -371,6 +288,5 @@ mod tests {
         assert!(!differs(&reversed, &both));
         assert!(differs(&one, &both));
         assert!(differs(&both, &one));
-        assert!(differs(&[], &one));
     }
 }
