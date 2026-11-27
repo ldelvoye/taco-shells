@@ -82,7 +82,7 @@ struct Shared {
     find_version: VersionFinder,
     version: Mutex<Option<Version>>,
     checking_version: AtomicBool,
-    prepared_for_activity: Mutex<bool>,
+    prepared_for_activity: AtomicBool,
     state: Mutex<State>,
     // Held from computing the view to publishing it, so two refreshes never publish out of order.
     refresh_order: Mutex<()>,
@@ -320,10 +320,7 @@ fn set_up(shared: &Arc<Shared>, agent: &Agent, state: &AgentSetupState) -> SetUp
             }
         }
     }
-    {
-        let mut prepared = lock(&shared.prepared_for_activity);
-        *prepared = true;
-    }
+    shared.prepared_for_activity.store(true, Ordering::SeqCst);
     (shared.host.turn_on)();
     let token = shared.files.config_directory.join(TOKEN_FILE_NAME);
     let has_token = token.exists();
@@ -395,7 +392,7 @@ impl AgentSetups {
             find_version,
             version: Mutex::new(None),
             checking_version: AtomicBool::new(false),
-            prepared_for_activity: Mutex::new(activity_on),
+            prepared_for_activity: AtomicBool::new(activity_on),
             state: Mutex::new(state),
             refresh_order: Mutex::new(()),
             stopping: AtomicBool::new(false),
@@ -449,12 +446,9 @@ impl AgentSetups {
     }
 
     pub fn activity_changed(&self, on: bool) {
-        {
-            let mut prepared = lock(&self.shared.prepared_for_activity);
-            if *prepared == on {
-                return;
-            }
-            *prepared = on;
+        let was_prepared = self.shared.prepared_for_activity.swap(on, Ordering::SeqCst);
+        if was_prepared == on {
+            return;
         }
         {
             let mut state = lock(&self.shared.state);
