@@ -470,7 +470,7 @@ fn segmented(segments: Vec<Segment>, input: &SettingsInput, cx: &mut Context<Win
         track = track.child(shown_card);
     }
     for segment in segments {
-        let name = segment_name(segment.label);
+        let name = segment_name(&segment);
         let id = name.clone();
         let mut shown = div()
             .id(ElementId::Name(id))
@@ -511,16 +511,19 @@ fn segmented(segments: Vec<Segment>, input: &SettingsInput, cx: &mut Context<Win
     track
 }
 
+// Keyed by the setting's name, so two controls that share a choice's label never share a record.
 fn track_name(segments: &[Segment]) -> SharedString {
-    let mut first = "";
+    let mut key = "";
     if let Some(segment) = segments.first() {
-        first = segment.label;
+        key = segment.change.key();
     }
-    SharedString::from(format!("track:{first}"))
+    SharedString::from(format!("track:{key}"))
 }
 
-fn segment_name(label: &str) -> SharedString {
-    SharedString::from(format!("segment:{label}"))
+fn segment_name(segment: &Segment) -> SharedString {
+    let key = segment.change.key();
+    let label = segment.label;
+    SharedString::from(format!("segment:{key}:{label}"))
 }
 
 fn raised_card(look: &Look) -> Div {
@@ -549,7 +552,7 @@ fn card_slide(
     let table = input.motion.bounds.borrow();
     let track = table.get(track_name)?;
     let start = slide_start(segments, moved, &table)?;
-    let end_name = segment_name(chosen.label);
+    let end_name = segment_name(chosen);
     let end = table.get(&end_name)?;
     let start_offset = start.left() - track.left();
     let end_offset = end.left() - track.left();
@@ -578,7 +581,7 @@ fn slide_start(
     }
     for segment in segments {
         if segment.change == moved.from {
-            let name = segment_name(segment.label);
+            let name = segment_name(segment);
             return table.get(&name).copied();
         }
     }
