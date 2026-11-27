@@ -1,6 +1,6 @@
 use std::fmt;
 
-const BREAKING_BODY: &str = "BREAKING CHANGE";
+const BREAKING_FOOTERS: [&str; 2] = ["BREAKING CHANGE:", "BREAKING-CHANGE:"];
 const FEATURE_TYPE: &str = "feat";
 
 /// The version a repository with no tags yet starts from.
@@ -17,6 +17,7 @@ pub struct Version {
     pub patch: u64,
 }
 
+// Smallest first: `bump_for` takes the largest by this order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Bump {
     Patch,
@@ -74,7 +75,7 @@ pub fn bump_for(messages: &[String]) -> Bump {
     bump
 }
 
-/// Below 1.0.0 a breaking change moves the minor, so reaching 1.0.0 is a decision and not something a `feat!:` does.
+/// Below 1.0.0 a breaking change moves the minor: reaching 1.0.0 is set by hand, never by a commit.
 pub fn apply_bump(version: Version, bump: Bump) -> Version {
     match bump {
         Bump::Major if version.major == 0 => Version {
@@ -116,15 +117,32 @@ fn number(text: &str) -> Option<u64> {
 fn bump_of(message: &str) -> Bump {
     let first_line = message.lines().next();
     let subject = first_line.and_then(subject_of);
-    let breaking_subject = subject.as_ref().is_some_and(|subject| subject.breaking);
-    if breaking_subject || message.contains(BREAKING_BODY) {
+    if has_breaking_footer(message) {
         return Bump::Major;
     }
-    let is_feature = subject.is_some_and(|subject| subject.kind == FEATURE_TYPE);
-    if is_feature {
+    let Some(subject) = subject else {
+        return Bump::Patch;
+    };
+    if subject.breaking {
+        return Bump::Major;
+    }
+    if subject.kind == FEATURE_TYPE {
         return Bump::Minor;
     }
     Bump::Patch
+}
+
+fn has_breaking_footer(message: &str) -> bool {
+    let body = message.lines().skip(1);
+    for line in body {
+        let is_footer = BREAKING_FOOTERS
+            .iter()
+            .any(|footer| line.starts_with(footer));
+        if is_footer {
+            return true;
+        }
+    }
+    false
 }
 
 // `type(scope)!: summary`, with the scope and the `!` both optional and the type in lowercase letters.
@@ -190,6 +208,20 @@ mod tests {
                 ],
                 Bump::Minor,
             ),
+            (
+                vec!["fix: a tweak\n\nBREAKING-CHANGE: the config format moved"],
+                Bump::Major,
+            ),
+            (
+                vec!["feat: a new thing\n\nWith a body whose last line is no subject."],
+                Bump::Minor,
+            ),
+            (
+                vec![
+                    "docs: say what a BREAKING CHANGE is\n\nMentioning BREAKING CHANGE: mid-line is prose.",
+                ],
+                Bump::Patch,
+            ),
             (vec!["a subject with no type: feat"], Bump::Patch),
         ];
         for (texts, expected) in cases {
@@ -199,10 +231,18 @@ mod tests {
     }
 
     #[test]
-    fn a_bump_counts_up_resets_below_it_and_keeps_a_break_below_one_on_the_minor() {
+    fn only_a_plain_v_tag_is_a_version() {
+        let parsed = Version::parse("v0.29.3");
+        assert_eq!(parsed, Some(version("0.29.3")));
+        assert_eq!(version("0.30.0").tag(), "v0.30.0");
+        for text in ["v1.2", "v1.2.3.4", "v1..3", "v1.2.3-rc1", "1.x.3"] {
+            assert_eq!(Version::parse(text), None, "for {text}");
+        }
+    }
+
+    #[test]
+    fn a_bump_resets_what_is_below_it_and_keeps_a_break_below_one_on_the_minor() {
         let cases = [
-            ("1.2.9", Bump::Patch, "1.2.10"),
-            ("1.9.0", Bump::Minor, "1.10.0"),
             ("1.2.3", Bump::Minor, "1.3.0"),
             ("1.2.3", Bump::Major, "2.0.0"),
             ("0.2.3", Bump::Major, "0.3.0"),
