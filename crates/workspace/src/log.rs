@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 
-use taco_protocol::{ActivityEntry, ActivityKind, Author, Step};
+use taco_agents::StepContext;
+use taco_protocol::{ActivityEntry, ActivityKind, Author, Peer, Step};
 
 /// How many entries other than steps a terminal's log keeps; older ones go as new ones come.
 pub const KEPT_ENTRIES: usize = 1_000;
@@ -10,6 +11,8 @@ pub const KEPT_STEPS: usize = 2_000;
 pub const PAGE: usize = 200;
 /// The file is rewritten down to the kept entries once it passes this many lines, twice what is kept.
 pub const REWRITE_AT_LINES: usize = 2 * (KEPT_ENTRIES + KEPT_STEPS);
+// How many turns' last stretches a subagent's late step can still find.
+const TURNS_REMEMBERED: usize = 8;
 
 /// One terminal's Agent Activity, oldest first.
 #[derive(Debug, Default)]
@@ -26,6 +29,8 @@ pub struct Log {
     turn: Option<String>,
     /// The agent session the open stretch and the turn belong to.
     session: Option<String>,
+    /// The last stretch of each of the newest turns, oldest first, for a subagent's step that arrives late.
+    turn_stretches: VecDeque<(String, u64)>,
 }
 
 /// A page of entries, oldest first, and whether nothing older is kept.
@@ -90,14 +95,63 @@ impl Log {
     }
 
     /// A step at the end, joining the open stretch or opening one.
-    pub fn append_step(&mut self, step: Step, at_ms: u64) -> ActivityEntry {
+    pub fn append_step(&mut self, step: Step, context: &StepContext, at_ms: u64) -> ActivityEntry {
+        let stretch = self.stretch_for(context);
+        let kind = ActivityKind::Step { stretch, step };
+        self.append(Author::App, kind, at_ms)
+    }
+
+    /// A message the agent sent another session, which is one of its steps as well as a line of its own.
+    pub fn append_message_out(
+        &mut self,
+        to: Peer,
+        text: String,
+        context: &StepContext,
+        at_ms: u64,
+    ) -> ActivityEntry {
+        let stretch = self.stretch_for(context);
+        let kind = ActivityKind::MessageOut { to, text, stretch };
+        self.append(Author::Agent, kind, at_ms)
+    }
+
+    // A step joins the open stretch, or opens one. The exception is a subagent's step that arrives once its turn's
+    // stretch is closed or another turn has begun: it joins its own turn's last stretch, so it folds under that note.
+    fn stretch_for(&mut self, context: &StepContext) -> u64 {
+        if context.subagent
+            && let Some(turn) = &context.turn
+        {
+            let its_turn_is_open = self.open_stretch.is_some() && self.turn.as_ref() == Some(turn);
+            if !its_turn_is_open && let Some(stretch) = self.last_stretch_of(turn) {
+                return stretch;
+            }
+        }
         let stretch = match self.open_stretch {
             Some(open) => open,
             None => self.next_seq,
         };
         self.open_stretch = Some(stretch);
-        let kind = ActivityKind::Step { stretch, step };
-        self.append(Author::App, kind, at_ms)
+        let mut turn = context.turn.clone();
+        if turn.is_none() {
+            turn = self.turn.clone();
+        }
+        if let Some(turn) = turn {
+            self.remember_stretch(turn, stretch);
+        }
+        stretch
+    }
+
+    fn last_stretch_of(&self, turn: &str) -> Option<u64> {
+        let mut turns = self.turn_stretches.iter();
+        let (_, stretch) = turns.find(|(kept, _)| kept == turn)?;
+        Some(*stretch)
+    }
+
+    fn remember_stretch(&mut self, turn: String, stretch: u64) {
+        self.turn_stretches.retain(|(kept, _)| *kept != turn);
+        self.turn_stretches.push_back((turn, stretch));
+        if self.turn_stretches.len() > TURNS_REMEMBERED {
+            self.turn_stretches.pop_front();
+        }
     }
 
     /// The agent's note, which takes the open stretch's steps and closes it.
@@ -114,13 +168,31 @@ impl Log {
         turn: Option<String>,
         at_ms: u64,
     ) -> ActivityEntry {
+        self.start_or_join_turn(turn);
+        let kind = ActivityKind::Asked { text };
+        self.append(Author::User, kind, at_ms)
+    }
+
+    /// A message from another session, which reaches the agent as a prompt and starts or joins a turn the same way.
+    pub fn append_message_in(
+        &mut self,
+        from: Peer,
+        text: String,
+        turn: Option<String>,
+        at_ms: u64,
+    ) -> ActivityEntry {
+        self.start_or_join_turn(turn);
+        let kind = ActivityKind::MessageIn { text };
+        self.append(Author::OtherAgent(from), kind, at_ms)
+    }
+
+    // A prompt from a new turn, or with no turn id, closes the open stretch with no note.
+    fn start_or_join_turn(&mut self, turn: Option<String>) {
         let same_turn = turn.is_some() && turn == self.turn;
         if !same_turn {
             self.open_stretch = None;
             self.turn = turn;
         }
-        let kind = ActivityKind::Asked { text };
-        self.append(Author::User, kind, at_ms)
     }
 
     /// An agent session starting in the terminal. A new session ends the open stretch with no note, and the turn with it;
@@ -133,6 +205,7 @@ impl Log {
         self.session = Some(session_id.to_string());
         self.open_stretch = None;
         self.turn = None;
+        self.turn_stretches.clear();
     }
 
     /// A new entry at the end, numbered after every earlier one.
@@ -266,9 +339,10 @@ mod tests {
         let step = || Step::Did {
             tool: "Bash".into(),
             summary: "ls".into(),
+            failed: None,
         };
         for _ in 0..(KEPT_STEPS + 10) {
-            log.append_step(step(), 0);
+            log.append_step(step(), &StepContext::default(), 0);
         }
         let counts = |log: &Log| {
             let steps = log.entries.iter().filter(|entry| is_step(entry)).count();
@@ -297,7 +371,8 @@ mod tests {
             r#"{"seq":4,"at_ms":11,"kind":{"Did":{"tool":"Bash","summary":"cargo test"}}}"#,
             r#"{"seq":5,"at_ms":12,"kind":{"Changed":{"tool":"Edit","path":"src/lib.rs"}}}"#,
             r#"{"seq":6,"at_ms":13,"author":"Agent","kind":{"Note":{"text":"Done","stretch":4}}}"#,
-            r#"{"seq":7,"at_ms":14,"kind":{"Danced":{}}}"#,
+            r#"{"seq":7,"at_ms":14,"author":"App","kind":{"Step":{"stretch":7,"step":{"Did":{"tool":"Bash","summary":"ls"}}}}}"#,
+            r#"{"seq":8,"at_ms":15,"kind":{"Danced":{}}}"#,
         ];
         let lines: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
         let mut read = Log::from_lines(&lines);
@@ -307,9 +382,10 @@ mod tests {
             .into_iter()
             .map(|entry| (entry.seq, entry.author, entry.kind))
             .collect();
-        let did = Step::Did {
+        let did = |summary: &str| Step::Did {
             tool: "Bash".into(),
-            summary: "cargo test".into(),
+            summary: summary.into(),
+            failed: None,
         };
         let changed = Step::Changed {
             tool: "Edit".into(),
@@ -319,6 +395,11 @@ mod tests {
             text: "Done".into(),
             stretch: Some(4),
         };
+        // a step line with no `failed` field reads as one that succeeded
+        let before_failures = ActivityKind::Step {
+            stretch: 7,
+            step: did("ls"),
+        };
         let expected = vec![
             (3, Author::User, asked("Fix the tacos")),
             (
@@ -326,7 +407,7 @@ mod tests {
                 Author::App,
                 ActivityKind::Step {
                     stretch: 4,
-                    step: did,
+                    step: did("cargo test"),
                 },
             ),
             (
@@ -338,20 +419,17 @@ mod tests {
                 },
             ),
             (6, Author::Agent, note),
+            (7, Author::App, before_failures),
         ];
         assert_eq!(read_as, expected);
         assert!(read.needs_rewrite(), "the line that is no entry is dropped");
-        let step = Step::Did {
-            tool: "Read".into(),
-            summary: "README.md".into(),
-        };
-        let next = read.append_step(step, 15);
+        let next = read.append_step(did("README.md"), &StepContext::default(), 16);
         let ActivityKind::Step { stretch, .. } = next.kind else {
             panic!("a step is appended as a step");
         };
         assert_eq!(
             (next.seq, stretch),
-            (7, 7),
+            (8, 8),
             "a new step is a stretch of its own"
         );
     }

@@ -1,7 +1,7 @@
 use serde_json::Value;
-use taco_protocol::{AgentSignal, Step};
+use taco_protocol::{AgentSignal, Peer, Step};
 
-use crate::harness::{AgentTitle, EntryRead, Harness, HarnessSetup, HookEntry};
+use crate::harness::{AgentTitle, EntryRead, Harness, HarnessSetup, HookEntry, StepContext};
 
 const ASKING_TOOL: &str = "AskUserQuestion";
 // ExitPlanMode needs you too, but asks no question in words: the window says a plan waits.
@@ -28,6 +28,16 @@ const MAX_ENTRY_CHARACTERS: usize = 1000;
 const MAX_WRITTEN_CHARACTERS: usize = 8_000;
 // The agent's line on what it is doing now is shown above the log, so it stays short.
 const MAX_NOW_CHARACTERS: usize = 300;
+// A failed step shows the first line of its error, this long at most.
+const MAX_FAILURE_CHARACTERS: usize = 200;
+const FAILED_WITHOUT_ERROR: &str = "Failed";
+// Another session's message, as Claude Code hands it to the agent in a prompt.
+const MESSAGE_OPEN: &str = "<cross-session-message";
+const MESSAGE_CLOSE: &str = "</cross-session-message>";
+// The tools that send another session a message; Claude Code has used both names.
+const MESSAGE_TOOLS: &[&str] = &["SendMessage", "CrossSessionMessage"];
+// How a session's address starts, as opposed to a name.
+const SESSION_ADDRESS_PREFIX: &str = "uds:";
 const CUT_MARK: &str = "… (cut)";
 // The tool-name prefixes of the app's activity server, for the stable app and for Dev.
 const ACTIVITY_SERVERS: &[&str] = &[
@@ -84,7 +94,7 @@ pub static CLAUDE: Harness = Harness {
     resume_line: resume_command,
     fork_line: Some(fork_command),
     question_reader: Some(question_of),
-    entry_reader: Some(entry_of),
+    entry_reader: Some(read_entries),
     setup: Some(&SETUP),
 };
 
@@ -113,7 +123,7 @@ fn is_session_id(value: &str) -> bool {
 
 fn signal_for(event: &str, detail: Option<&str>) -> Option<AgentSignal> {
     match event {
-        "UserPromptSubmit" | "PostToolUse" => Some(AgentSignal::Working),
+        "UserPromptSubmit" | "PostToolUse" | "PostToolUseFailure" => Some(AgentSignal::Working),
         "PreToolUse" => {
             let asks = detail.is_some_and(|tool| NEEDS_TOOLS.contains(&tool));
             if asks {
@@ -232,9 +242,13 @@ fn summary_of(tool: &str, parsed: &Value) -> String {
     }
 }
 
-// Prose someone wrote (a prompt, a note, a now line): trimmed, none when blank, and ending in CUT_MARK when cut.
 fn written_at(parsed: &Value, pointer: &str, limit: usize) -> Option<String> {
     let text = parsed.pointer(pointer)?.as_str()?;
+    written(text, limit)
+}
+
+// Prose someone wrote (a prompt, a message, a note, a now line): trimmed, none when blank, and ending in CUT_MARK when cut.
+fn written(text: &str, limit: usize) -> Option<String> {
     let kept = cut_to(text, limit + 1);
     if kept.is_empty() {
         return None;
@@ -268,31 +282,171 @@ fn activity_entry(name: &str, parsed: &Value) -> Option<EntryRead> {
     }
 }
 
-fn entry_of(event: &str, payload: &str) -> Option<EntryRead> {
-    let parsed: Value = serde_json::from_str(payload).ok()?;
+// The value of `name` among a tag's attributes: `code-83` for `from-name` in ` from="…" from-name="code-83"`.
+fn attribute(attributes: &str, name: &str) -> Option<String> {
+    let opening = format!(" {name}=\"");
+    let found = attributes.find(&opening)?;
+    let start = found + opening.len();
+    let rest = &attributes[start..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
+}
+
+fn asked(text: &str, turn: &Option<String>) -> Option<EntryRead> {
+    let text = written(text, MAX_WRITTEN_CHARACTERS)?;
+    let turn = turn.clone();
+    Some(EntryRead::Asked { text, turn })
+}
+
+// A prompt as its parts, in order: each message another session sent, and what the user typed around them.
+// A tag that never closes is left as the user's own text.
+fn prompt_entries(prompt: &str, turn: Option<String>) -> Vec<EntryRead> {
+    let mut entries = Vec::new();
+    let mut rest = prompt;
+    while let Some(start) = rest.find(MESSAGE_OPEN) {
+        let before = &rest[..start];
+        let tag = &rest[start + MESSAGE_OPEN.len()..];
+        let Some(attributes_end) = tag.find('>') else {
+            break;
+        };
+        let attributes = &tag[..attributes_end];
+        let body = &tag[attributes_end + 1..];
+        let Some(body_end) = body.find(MESSAGE_CLOSE) else {
+            break;
+        };
+        entries.extend(asked(before, &turn));
+        let from = Peer {
+            name: attribute(attributes, "from-name"),
+            address: attribute(attributes, "from"),
+        };
+        if let Some(text) = written(&body[..body_end], MAX_WRITTEN_CHARACTERS) {
+            let turn = turn.clone();
+            entries.push(EntryRead::MessageIn { from, text, turn });
+        }
+        rest = &body[body_end + MESSAGE_CLOSE.len()..];
+    }
+    entries.extend(asked(rest, &turn));
+    entries
+}
+
+fn step_context(parsed: &Value) -> StepContext {
+    let turn = text_at(parsed, "/prompt_id");
+    let agent = text_at(parsed, "/agent_id");
+    StepContext {
+        turn,
+        subagent: agent.is_some(),
+    }
+}
+
+// A message the agent sent another session, once it went; none for one that did not, which stays a plain step.
+fn message_out(parsed: &Value, context: StepContext) -> Option<EntryRead> {
+    let sent = parsed.pointer("/tool_response/success");
+    if sent != Some(&Value::Bool(true)) {
+        return None;
+    }
+    let to = text_at(parsed, "/tool_input/to")?;
+    let text = written_at(parsed, "/tool_input/message", MAX_WRITTEN_CHARACTERS)?;
+    let is_address = to.starts_with(SESSION_ADDRESS_PREFIX);
+    let mut peer = Peer {
+        name: None,
+        address: None,
+    };
+    if is_address {
+        peer.address = Some(to);
+    } else {
+        peer.name = Some(to);
+    }
+    Some(EntryRead::MessageOut {
+        to: peer,
+        text,
+        context,
+    })
+}
+
+fn tool_entry(parsed: &Value) -> Option<EntryRead> {
+    let tool = text_at(parsed, "/tool_name")?;
+    // the agent's own activity calls are what it wrote, never steps
+    if let Some(name) = activity_tool(&tool) {
+        return activity_entry(name, parsed);
+    }
+    let context = step_context(parsed);
+    if MESSAGE_TOOLS.contains(&tool.as_str())
+        && let Some(sent) = message_out(parsed, context.clone())
+    {
+        return Some(sent);
+    }
+    let mut paths = CHANGED_PATHS.iter();
+    let path = paths.find_map(|pointer| text_at(parsed, pointer));
+    let changes_files = CHANGING_TOOLS.contains(&tool.as_str());
+    if changes_files && let Some(path) = path {
+        let step = Step::Changed { tool, path };
+        return Some(EntryRead::Step { step, context });
+    }
+    let summary = summary_of(&tool, parsed);
+    let step = Step::Did {
+        tool,
+        summary,
+        failed: None,
+    };
+    Some(EntryRead::Step { step, context })
+}
+
+fn first_error_line(parsed: &Value) -> Option<String> {
+    let error = text_at(parsed, "/error")?;
+    let mut lines = error.lines();
+    let first = lines.next()?;
+    written(first, MAX_FAILURE_CHARACTERS)
+}
+
+// A tool that failed, as a step that says so; an interrupted one is not logged.
+fn failed_entry(parsed: &Value) -> Option<EntryRead> {
+    let interrupted = parsed.pointer("/is_interrupt");
+    if interrupted == Some(&Value::Bool(true)) {
+        return None;
+    }
+    let tool = text_at(parsed, "/tool_name")?;
+    if activity_tool(&tool).is_some() {
+        return None;
+    }
+    let reason = match first_error_line(parsed) {
+        Some(line) => line,
+        None => FAILED_WITHOUT_ERROR.to_string(),
+    };
+    let summary = summary_of(&tool, parsed);
+    let step = Step::Did {
+        tool,
+        summary,
+        failed: Some(reason),
+    };
+    let context = step_context(parsed);
+    Some(EntryRead::Step { step, context })
+}
+
+fn read_entries(event: &str, payload: &str) -> Vec<EntryRead> {
+    let Ok(parsed) = serde_json::from_str::<Value>(payload) else {
+        return Vec::new();
+    };
     match event {
         "UserPromptSubmit" => {
-            let text = written_at(&parsed, "/prompt", MAX_WRITTEN_CHARACTERS)?;
+            let Some(value) = parsed.pointer("/prompt") else {
+                return Vec::new();
+            };
+            let Some(prompt) = value.as_str() else {
+                return Vec::new();
+            };
             let turn = text_at(&parsed, "/prompt_id");
-            Some(EntryRead::Asked { text, turn })
+            prompt_entries(prompt, turn)
         }
         // logged once a tool has run, so one the user refused never shows as done
         "PostToolUse" => {
-            let tool = text_at(&parsed, "/tool_name")?;
-            // the agent's own activity calls are what it wrote, never steps
-            if let Some(name) = activity_tool(&tool) {
-                return activity_entry(name, &parsed);
-            }
-            let mut paths = CHANGED_PATHS.iter();
-            let path = paths.find_map(|pointer| text_at(&parsed, pointer));
-            let changes_files = CHANGING_TOOLS.contains(&tool.as_str());
-            if changes_files && let Some(path) = path {
-                return Some(EntryRead::Step(Step::Changed { tool, path }));
-            }
-            let summary = summary_of(&tool, &parsed);
-            Some(EntryRead::Step(Step::Did { tool, summary }))
+            let entry = tool_entry(&parsed);
+            entry.into_iter().collect()
         }
-        _ => None,
+        "PostToolUseFailure" => {
+            let entry = failed_entry(&parsed);
+            entry.into_iter().collect()
+        }
+        _ => Vec::new(),
     }
 }
 
@@ -451,18 +605,23 @@ mod tests {
 
     #[test]
     fn a_prompt_a_finished_tool_and_a_changed_file_each_make_an_entry_and_nothing_else_does() {
-        let entry = |event: &str, payload: &str| entry_of(event, payload);
+        let entry = one_entry;
         let did = |tool: &str, summary: &str| {
-            EntryRead::Step(Step::Did {
+            let step = Step::Did {
                 tool: tool.into(),
                 summary: summary.into(),
-            })
+                failed: None,
+            };
+            let context = StepContext::default();
+            EntryRead::Step { step, context }
         };
         let changed = |tool: &str, path: &str| {
-            EntryRead::Step(Step::Changed {
+            let step = Step::Changed {
                 tool: tool.into(),
                 path: path.into(),
-            })
+            };
+            let context = StepContext::default();
+            EntryRead::Step { step, context }
         };
 
         let prompt =
@@ -571,10 +730,149 @@ mod tests {
             r#"{{"tool_name":"Bash","tool_input":{{"command":"{}"}}}}"#,
             "y".repeat(5_000)
         );
-        let Some(EntryRead::Step(Step::Did { summary, .. })) = entry("PostToolUse", &long_command)
+        let Some(EntryRead::Step {
+            step: Step::Did { summary, .. },
+            ..
+        }) = entry("PostToolUse", &long_command)
         else {
             panic!("a command makes an entry");
         };
         assert_eq!(summary.chars().count(), MAX_ENTRY_CHARACTERS);
+    }
+
+    #[test]
+    fn a_prompt_splits_into_messages_and_the_users_words_and_a_sent_message_is_a_step() {
+        let peer = |name: &str, address: &str| Peer {
+            name: Some(name.into()),
+            address: Some(address.into()),
+        };
+        let prompt = serde_json::json!({
+            "prompt": "Before <cross-session-message from=\"uds:/tmp/cc-socks/9873.sock\" from-name=\"code-83\" from-mode=\"bypass\">\nReview #155.\n</cross-session-message><cross-session-message from=\"uds:/tmp/cc-socks/9879.sock\" from-name=\"code-f1\">\nRoute is up.\n</cross-session-message>\nThanks",
+            "prompt_id": "turn-a",
+        });
+        let turn = Some("turn-a".to_string());
+        let expected = vec![
+            EntryRead::Asked {
+                text: "Before".into(),
+                turn: turn.clone(),
+            },
+            EntryRead::MessageIn {
+                from: peer("code-83", "uds:/tmp/cc-socks/9873.sock"),
+                text: "Review #155.".into(),
+                turn: turn.clone(),
+            },
+            EntryRead::MessageIn {
+                from: peer("code-f1", "uds:/tmp/cc-socks/9879.sock"),
+                text: "Route is up.".into(),
+                turn: turn.clone(),
+            },
+            EntryRead::Asked {
+                text: "Thanks".into(),
+                turn,
+            },
+        ];
+        assert_eq!(
+            read_entries("UserPromptSubmit", &prompt.to_string()),
+            expected
+        );
+        let unclosed = r#"{"prompt":"<cross-session-message from=\"x\">never closed"}"#;
+        let Some(EntryRead::Asked { text, .. }) = one_entry("UserPromptSubmit", unclosed) else {
+            panic!("an unclosed tag is the user's own text");
+        };
+        assert!(text.starts_with("<cross-session-message"));
+
+        let sent = |to: &str, success: bool| {
+            serde_json::json!({
+                "tool_name": "SendMessage",
+                "tool_input": { "to": to, "summary": "s", "message": "ack" },
+                "tool_response": { "success": success },
+                "prompt_id": "turn-b",
+                "agent_id": "helper-1",
+            })
+            .to_string()
+        };
+        let context = StepContext {
+            turn: Some("turn-b".into()),
+            subagent: true,
+        };
+        for main_agent in [serde_json::json!(""), serde_json::Value::Null] {
+            let payload = serde_json::json!({ "tool_name": "Bash", "agent_id": main_agent });
+            assert!(
+                !step_context(&payload).subagent,
+                "an empty or null agent_id is the main agent"
+            );
+        }
+        let to_name = EntryRead::MessageOut {
+            to: Peer {
+                name: Some("code-78".into()),
+                address: None,
+            },
+            text: "ack".into(),
+            context: context.clone(),
+        };
+        assert_eq!(
+            read_entries("PostToolUse", &sent("code-78", true)),
+            vec![to_name]
+        );
+        let Some(EntryRead::MessageOut { to, .. }) =
+            one_entry("PostToolUse", &sent("uds:/tmp/cc-socks/1.sock", true))
+        else {
+            panic!("a message to an address is sent");
+        };
+        assert_eq!(to.address.as_deref(), Some("uds:/tmp/cc-socks/1.sock"));
+        let by_its_older_name = sent("code-78", true).replace("SendMessage", "CrossSessionMessage");
+        let Some(EntryRead::MessageOut { .. }) = one_entry("PostToolUse", &by_its_older_name)
+        else {
+            panic!("the tool's older name sends a message too");
+        };
+        let Some(EntryRead::Step { step, .. }) = one_entry("PostToolUse", &sent("x", false)) else {
+            panic!("a message that was not sent is a plain step");
+        };
+        assert!(matches!(step, Step::Did { .. }));
+    }
+
+    #[test]
+    fn a_failed_tool_is_a_failed_step_and_an_interrupted_one_is_not_logged() {
+        let failure = |error: &str, interrupted: bool| {
+            serde_json::json!({
+                "tool_name": "Bash",
+                "tool_input": { "command": "cargo test" },
+                "error": error,
+                "is_interrupt": interrupted,
+            })
+            .to_string()
+        };
+        let failed_with = |error: &str| {
+            let Some(EntryRead::Step {
+                step: Step::Did { failed, .. },
+                ..
+            }) = one_entry("PostToolUseFailure", &failure(error, false))
+            else {
+                panic!("a failure is a step");
+            };
+            failed
+        };
+        assert_eq!(
+            failed_with("Exit code 1\nerror[E0308]: mismatched types").as_deref(),
+            Some("Exit code 1")
+        );
+        let long = failed_with(&"e".repeat(MAX_FAILURE_CHARACTERS + 1)).unwrap();
+        assert!(long.ends_with(CUT_MARK), "a long error line is cut");
+        assert_eq!(failed_with("  ").as_deref(), Some(FAILED_WITHOUT_ERROR));
+        assert!(read_entries("PostToolUseFailure", &failure("Interrupted", true)).is_empty());
+        let refused =
+            r#"{"tool_name":"mcp__plugin_taco-shells_activity__note","error":"note needs a text"}"#;
+        assert!(read_entries("PostToolUseFailure", refused).is_empty());
+        assert_eq!(
+            signal_for("PostToolUseFailure", Some("Bash")),
+            Some(AgentSignal::Working),
+            "a tool that failed is the agent still at work"
+        );
+    }
+
+    fn one_entry(event: &str, payload: &str) -> Option<EntryRead> {
+        let mut reads = read_entries(event, payload);
+        assert!(reads.len() <= 1, "one entry at most from {payload}");
+        reads.pop()
     }
 }
