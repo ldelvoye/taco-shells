@@ -310,6 +310,7 @@ mod tests {
         let user = map_from(json!({
             "Command+K": "terminal.copy",
             "cmd+b": null,
+            "cmd+w": "terminal.split",
             "cmd+t": "terminal.teleport",
             "cmd+shift+7": 7,
             "cmd+cmd+x": "terminal.new"
@@ -331,6 +332,7 @@ mod tests {
             Some(CommandId::TerminalNew)
         );
         let expected = vec![
+            "keybindings.json: \"cmd+w\": \"terminal.split\" is not a known command id",
             "keybindings.json: \"cmd+t\": \"terminal.teleport\" is not a known command id",
             "keybindings.json: \"cmd+shift+7\": \"7\" is not a known command id",
             "keybindings.json: \"cmd+cmd+x\" is not a valid chord",
