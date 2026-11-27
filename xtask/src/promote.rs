@@ -375,8 +375,7 @@ fn release_notes(repo_root: &Path, tag: &str, notes_file: Option<&Path>) -> Resu
     Ok(format!("{changed}\n\n{INSTALL_NOTES}"))
 }
 
-// Whether the running stable app answered 200 to an update check on the port it wrote into its config folder. The
-// Electron app answers the same request, which is what tells it about the first Rust release.
+// Whether the running stable app answered 200 to an update check on the port it wrote into its config folder.
 fn running_app_answered_an_update_check() -> bool {
     let Some(home) = env::home_dir() else {
         return false;
