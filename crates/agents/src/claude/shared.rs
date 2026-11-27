@@ -29,10 +29,9 @@ pub(super) fn pull_request_of(url: &str) -> Option<PullRequestLink> {
         return None;
     }
     let number_part = parts.next()?;
-    let digits: String = number_part
-        .chars()
-        .take_while(|character| character.is_ascii_digit())
-        .collect();
+    let characters = number_part.chars();
+    let leading_digits = characters.take_while(|character| character.is_ascii_digit());
+    let digits: String = leading_digits.collect();
     let after = &number_part[digits.len()..];
     let ends_the_number = after.is_empty() || after.starts_with(['#', '?']);
     if !ends_the_number {

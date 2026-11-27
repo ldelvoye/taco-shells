@@ -38,7 +38,7 @@ pub trait Storage: Send {
     /// Replaces a terminal's log with these lines, and says whether it did.
     fn rewrite_log(&mut self, terminal: &TerminalId, lines: &[String]) -> bool;
     fn delete_log(&mut self, terminal: &TerminalId);
-    /// The text of a terminal's activity state file, which holds its now line, or none when it has none.
+    /// The text of a terminal's activity state file, which holds its now line and Shared, or none when it has none.
     fn read_state(&self, terminal: &TerminalId) -> Option<String>;
     /// Replaces a terminal's state file, and says whether it did.
     fn write_state(&mut self, terminal: &TerminalId, text: &str) -> bool;

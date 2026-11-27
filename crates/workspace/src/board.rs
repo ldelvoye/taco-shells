@@ -209,12 +209,11 @@ impl TerminalBoard {
                 matches!(target, SharedTarget::PullRequest { url: Some(kept), .. } if kept == url)
             });
         }
-        let with_the_number: Vec<usize> = pull_requests
-            .filter(|index| {
-                let target = &self.shared[*index].thing.target;
-                matches!(target, SharedTarget::PullRequest { number: kept, .. } if *kept == number)
-            })
-            .collect();
+        let numbered = pull_requests.filter(|index| {
+            let target = &self.shared[*index].thing.target;
+            matches!(target, SharedTarget::PullRequest { number: kept, .. } if *kept == number)
+        });
+        let with_the_number: Vec<usize> = numbered.collect();
         match with_the_number.as_slice() {
             [only] => Some(*only),
             _ => None,
