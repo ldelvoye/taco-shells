@@ -1,5 +1,7 @@
 //! The framing between the app and the runtime: each message is a little-endian `u32` length, then the message in postcard.
 
+pub mod launch;
+
 use std::io::{self, ErrorKind, Read, Write};
 
 use serde::Serialize;

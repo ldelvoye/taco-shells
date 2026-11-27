@@ -1,7 +1,6 @@
 //! The app's side of the terminal runtime: starting `taco-shells-runtime`, its control connection, and its exit.
 
 use std::collections::HashMap;
-use std::ffi::OsString;
 use std::io;
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
@@ -16,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use taco_identity::RUNTIME_PROGRAM;
 use taco_protocol::{RuntimeAnswer, RuntimeCommand, RuntimeQuery, RuntimeReport};
+use taco_wire::launch::{self, Launch, ShellContext};
 
 /// Where the runtime finds its two connections, as its arguments say.
 const CONTROL_FD: RawFd = 3;
@@ -40,16 +40,6 @@ struct StopPatience {
     exit: Duration,
     after_sigterm: Duration,
     after_sigkill: Duration,
-}
-
-/// What the runtime tells every shell about this app.
-pub struct ShellContext {
-    /// `taco-shells` or `taco-shells-dev`.
-    pub app: String,
-    /// This app's `focus-port` file.
-    pub port_file: PathBuf,
-    /// This app's agent plugin, which new shells load while Agent Activity is on.
-    pub plugin_directory: PathBuf,
 }
 
 pub enum RuntimeEvent {
@@ -114,16 +104,14 @@ impl RuntimeClient {
         let control_fd = control_end.as_raw_fd();
         let terminals_fd = terminals_end.as_raw_fd();
 
-        let mut port_file_argument = OsString::from("--port-file=");
-        port_file_argument.push(&context.port_file);
-        let mut plugin_directory_argument = OsString::from("--plugin-dir=");
-        plugin_directory_argument.push(&context.plugin_directory);
+        let given = Launch {
+            control: CONTROL_FD,
+            terminals: TERMINALS_FD,
+            context: context.clone(),
+        };
+        let arguments = launch::arguments(&given);
         let mut command = Command::new(program);
-        command.arg(format!("--control-fd={CONTROL_FD}"));
-        command.arg(format!("--terminals-fd={TERMINALS_FD}"));
-        command.arg(format!("--app={}", context.app));
-        command.arg(port_file_argument);
-        command.arg(plugin_directory_argument);
+        command.args(arguments);
         command.stdin(Stdio::null());
         // Between fork and exec only async-signal-safe calls. The copies at 3 and 4 stay open across exec; the ones above close.
         unsafe {

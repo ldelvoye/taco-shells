@@ -1,14 +1,12 @@
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::os::fd::{FromRawFd, OwnedFd, RawFd};
-use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
 use std::process::ExitCode;
 
 use taco_runtime::program;
-use taco_runtime::pty::{ShellContext, ShellProgram};
+use taco_runtime::pty::ShellProgram;
+use taco_wire::launch::{self, Launch, ShellContext, USAGE};
 
-const USAGE: &str = "usage: taco-shells-runtime --control-fd=<fd> --terminals-fd=<fd> --app=<name> --port-file=<path> --plugin-dir=<path>";
 const BAD_START: u8 = 2;
 const PANICKED: i32 = 101;
 /// From `<sys/syslimits.h>`.
@@ -55,48 +53,21 @@ fn main() -> ExitCode {
     }
 }
 
-/// All five arguments, or none if one is missing, empty or not known. Paths are taken as bytes, so any path works.
+/// The launch arguments with both connections opened, or none if an argument or a connection is wrong.
 fn parsed(arguments: &[OsString]) -> Option<Arguments> {
-    let mut control = None;
-    let mut terminals = None;
-    let mut app = None;
-    let mut port_file = None;
-    let mut plugin_directory = None;
-    for argument in arguments {
-        let bytes = argument.as_bytes();
-        let equals = bytes.iter().position(|byte| *byte == b'=')?;
-        let name = std::str::from_utf8(&bytes[..equals]).ok()?;
-        let value = OsStr::from_bytes(&bytes[equals + 1..]);
-        if value.is_empty() {
-            return None;
-        }
-        match name {
-            "--control-fd" => control = Some(open_fd(value)?),
-            "--terminals-fd" => terminals = Some(open_fd(value)?),
-            "--app" => {
-                let text = value.to_str()?;
-                app = Some(text.to_string());
-            }
-            "--port-file" => port_file = Some(PathBuf::from(value)),
-            "--plugin-dir" => plugin_directory = Some(PathBuf::from(value)),
-            _ => return None,
-        }
-    }
-    let context = ShellContext {
-        app: app?,
-        port_file: port_file?,
-        plugin_directory: plugin_directory?,
-    };
+    let Launch {
+        control,
+        terminals,
+        context,
+    } = launch::parsed(arguments)?;
     Some(Arguments {
-        control: control?,
-        terminals: terminals?,
+        control: open_fd(control)?,
+        terminals: open_fd(terminals)?,
         context,
     })
 }
 
-fn open_fd(value: &OsStr) -> Option<UnixStream> {
-    let text = value.to_str()?;
-    let fd: RawFd = text.parse().ok()?;
+fn open_fd(fd: RawFd) -> Option<UnixStream> {
     if fd <= libc::STDERR_FILENO {
         return None;
     }

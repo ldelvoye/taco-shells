@@ -19,10 +19,11 @@ use taco_services::{
 use taco_settings::{
     Config, CursorStyle, KeymapChange, SettingChange, palette_for, resolve_config,
 };
+use taco_wire::launch::ShellContext;
 use taco_workspace::{FileStorage, Options};
 
 use crate::ports::{ServicesPort, WindowReceiver};
-use crate::runtime_client::{RuntimeClient, RuntimeEvent, ShellContext};
+use crate::runtime_client::{RuntimeClient, RuntimeEvent};
 use crate::services_host::ServicesHost;
 use crate::workspace_host::{RuntimeCommands, WorkspaceHost, new_terminal_id};
 

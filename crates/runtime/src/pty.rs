@@ -7,7 +7,7 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use taco_protocol::{TerminalId, TerminalSize};
+use taco_wire::launch::ShellContext;
 
 use crate::budget::{Budget, Budgets};
 use crate::core::Input;
@@ -36,16 +37,6 @@ pub struct ShellProgram {
     /// The open-file limit the runtime was started with, given back to each shell when the runtime raised its own.
     pub open_file_limit: Option<libc::rlimit>,
     pub context: ShellContext,
-}
-
-/// What every shell is told about the app it runs in, as the app gave it at launch.
-pub struct ShellContext {
-    /// `taco-shells` or `taco-shells-dev`.
-    pub app: String,
-    /// The app's `focus-port` file.
-    pub port_file: PathBuf,
-    /// The app's agent plugin, which new shells load while Agent Activity is on.
-    pub plugin_directory: PathBuf,
 }
 
 struct Shell {
