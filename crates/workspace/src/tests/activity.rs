@@ -79,7 +79,7 @@ fn a_log_file_stays_small_and_a_failed_write_is_made_good_by_the_next_one() {
     }
     assert_eq!(
         lines(&disk),
-        crate::KEPT_ENTRIES,
+        crate::log::KEPT_ENTRIES,
         "rewritten down to what it keeps"
     );
 
@@ -88,7 +88,7 @@ fn a_log_file_stays_small_and_a_failed_write_is_made_good_by_the_next_one() {
     disk.fail(false);
     prompted(&mut workspace, "t1", SESSION, None, "after");
     let on_disk = disk.read_log(&id("t1"));
-    assert_eq!(on_disk.len(), crate::KEPT_ENTRIES);
+    assert_eq!(on_disk.len(), crate::log::KEPT_ENTRIES);
     assert!(on_disk[on_disk.len() - 2].contains("lost on the disk"));
 }
 
