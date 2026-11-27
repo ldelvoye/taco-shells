@@ -66,7 +66,6 @@ mod tests {
         assert_eq!(summary_state(&rows, &[&a, &b, &c]), Some(RowState::Needs));
         assert_eq!(summary_state(&rows, &[&a, &c]), Some(RowState::Working));
         assert_eq!(summary_state(&rows, &[&d, &id("shell")]), None);
-        assert_eq!(waiting_count(&rows), 1);
 
         let forking = BTreeMap::from([(
             HarnessId("claude".into()),

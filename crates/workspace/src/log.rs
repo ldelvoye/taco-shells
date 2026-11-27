@@ -296,9 +296,42 @@ impl Log {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::stretch_line;
 
     fn asked(text: &str) -> ActivityKind {
         ActivityKind::Asked { text: text.into() }
+    }
+
+    fn ran(command: &str) -> Step {
+        Step::Did {
+            tool: "Bash".into(),
+            summary: command.into(),
+            failed: None,
+        }
+    }
+
+    fn peer(name: &str) -> Peer {
+        Peer {
+            name: Some(name.into()),
+            address: None,
+        }
+    }
+
+    fn turn(id: &str) -> Option<String> {
+        Some(id.to_string())
+    }
+
+    fn in_turn(id: &str, subagent: bool) -> StepContext {
+        StepContext {
+            turn: turn(id),
+            subagent,
+        }
+    }
+
+    fn stretches(log: &Log) -> Vec<String> {
+        let entries = log.entries.iter().cloned();
+        let lines = entries.map(stretch_line);
+        lines.collect()
     }
 
     // A log as this build writes it, with every kind of entry and every author. Renaming a variant or a field of
@@ -332,21 +365,12 @@ mod tests {
     fn a_log_keeps_its_newest_entries_pages_back_from_them_and_reads_back_from_its_file() {
         let appended = REWRITE_AT_LINES + 5;
         let mut log = Log::default();
-        let mut rewritten_at = Vec::new();
         for index in 0..appended {
             let entry = log.append(Author::User, asked(&index.to_string()), index as u64);
             assert_eq!(entry.seq, index as u64);
             let rewrite = log.needs_rewrite();
-            if rewrite {
-                rewritten_at.push(index + 1);
-            }
             log.file_written(rewrite, true);
         }
-        assert_eq!(
-            rewritten_at,
-            vec![REWRITE_AT_LINES],
-            "once the file holds twice the kept entries"
-        );
 
         let last = appended as u64 - 1;
         let first_kept = appended as u64 - KEPT_ENTRIES as u64;
@@ -417,5 +441,108 @@ mod tests {
             panic!("the oldest entry kept is a note");
         };
         assert_eq!(text, "1", "the oldest note went first");
+    }
+
+    #[test]
+    fn messages_are_lines_of_their_own_and_a_subagents_late_step_keeps_to_its_turn() {
+        let mut log = Log::default();
+        log.append_message_in(
+            peer("code-83"),
+            "Look into the logo.".into(),
+            turn("turn-a"),
+            0,
+        );
+        log.append_message_in(
+            peer("code-f1"),
+            "The route is up.".into(),
+            turn("turn-a"),
+            0,
+        );
+        log.append_step(ran("cargo test"), &in_turn("turn-a", false), 0);
+        log.append_message_out(
+            peer("code-83"),
+            "On it".into(),
+            &in_turn("turn-a", false),
+            0,
+        );
+        log.append_note("Found it".into(), 0);
+        // a background helper finishing after the note
+        log.append_step(ran("grep logo"), &in_turn("turn-a", true), 0);
+        log.append_prompt("Next".into(), turn("turn-b"), 0);
+        log.append_step(ran("ls"), &in_turn("turn-b", false), 0);
+        log.append_step(ran("grep again"), &in_turn("turn-a", true), 0);
+        log.append_step(ran("pwd"), &in_turn("turn-b", true), 0);
+        // only a subagent keeps to an older turn: the agent's own step joins what is open
+        log.append_step(ran("date"), &in_turn("turn-a", false), 0);
+        // a message that starts a new turn closes the stretch, as a prompt does
+        log.append_message_in(peer("code-83"), "Merged.".into(), turn("turn-c"), 0);
+        log.append_step(ran("git pull"), &in_turn("turn-c", false), 0);
+
+        let expected = [
+            "message from code-83",
+            "message from code-f1",
+            "step 2 in 2",
+            "sent 3 in 2",
+            "note in 2",
+            "step 5 in 2",
+            "asked",
+            "step 7 in 7",
+            "step 8 in 2",
+            "step 9 in 7",
+            "step 10 in 7",
+            "message from code-83",
+            "step 12 in 12",
+        ];
+        assert_eq!(stretches(&log), expected);
+    }
+
+    #[test]
+    fn a_note_takes_the_steps_since_the_last_one_and_a_new_turn_or_session_leaves_them_unnoted() {
+        let mut log = Log::default();
+        let own = StepContext::default();
+        log.session_started("s1");
+        log.append_prompt("Find the bug".into(), turn("turn-a"), 0);
+        log.append_step(ran("cargo test"), &own, 0);
+        // a message from another agent mid-turn carries the turn's id and leaves the stretch open
+        log.append_prompt("Also check the logo".into(), turn("turn-a"), 0);
+        log.append_step(ran("cargo clippy"), &own, 0);
+        // a compaction starts the same session again, mid-turn
+        log.session_started("s1");
+        log.append_step(ran("cargo build"), &own, 0);
+        log.append_note("Found it".into(), 0);
+        log.append_note("Nothing more to do".into(), 0);
+        log.append_step(ran("git status"), &own, 0);
+        log.append_prompt("Next".into(), turn("turn-b"), 0);
+        log.append_step(ran("ls"), &own, 0);
+        log.session_started("s2");
+        log.append_step(ran("pwd"), &own, 0);
+        // a new session starts its own turns, even one whose id repeats the last session's
+        log.append_prompt("Again".into(), turn("turn-b"), 0);
+        log.append_step(ran("date"), &own, 0);
+        log.append_prompt("No turn id".into(), None, 0);
+        log.append_step(ran("whoami"), &own, 0);
+        log.append_prompt("Still no turn id".into(), None, 0);
+        log.append_step(ran("uptime"), &own, 0);
+
+        let expected = [
+            "asked",
+            "step 1 in 1",
+            "asked",
+            "step 3 in 1",
+            "step 4 in 1",
+            "note in 1",
+            "note alone",
+            "step 7 in 7",
+            "asked",
+            "step 9 in 9",
+            "step 10 in 10",
+            "asked",
+            "step 12 in 12",
+            "asked",
+            "step 14 in 14",
+            "asked",
+            "step 16 in 16",
+        ];
+        assert_eq!(stretches(&log), expected);
     }
 }

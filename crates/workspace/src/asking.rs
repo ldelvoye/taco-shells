@@ -227,8 +227,14 @@ mod tests {
     }
 
     #[test]
-    fn a_start_source_claude_code_has_no_name_for_is_a_new_session() {
-        assert_eq!(start_source("fork"), StartSource::New);
-        assert_eq!(start_source(""), StartSource::New);
+    fn clear_is_a_cleared_start_and_a_source_claude_code_has_no_name_for_is_a_new_one() {
+        let cases = [
+            ("clear", StartSource::Cleared),
+            ("fork", StartSource::New),
+            ("", StartSource::New),
+        ];
+        for (source, expected) in cases {
+            assert_eq!(start_source(source), expected, "{source:?}");
+        }
     }
 }

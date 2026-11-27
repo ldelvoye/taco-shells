@@ -40,18 +40,17 @@ pub fn built(spec: &str, selected: &str) -> Arrangement {
             Some((group, name)) => (Some(tab(group)), name),
             None => (None, token),
         };
-        if let Some(group) = &tab_group
-            && !arrangement
-                .tab_groups
-                .iter()
-                .any(|record| record.id == *group)
-        {
-            let record = TabGroup {
-                id: group.clone(),
-                name: group.0.clone(),
-                collapsed: false,
-            };
-            arrangement.tab_groups.push(record);
+        if let Some(group) = &tab_group {
+            let mut records = arrangement.tab_groups.iter();
+            let known = records.any(|record| record.id == *group);
+            if !known {
+                let record = TabGroup {
+                    id: group.clone(),
+                    name: group.0.clone(),
+                    collapsed: false,
+                };
+                arrangement.tab_groups.push(record);
+            }
         }
         let row = Row {
             terminal: id(name),
@@ -103,10 +102,9 @@ fn invariant_breaks(arrangement: &Arrangement) -> Option<&'static str> {
             return Some("a tab group has no rows");
         };
         let block = &rows[first..=last];
-        if block
-            .iter()
-            .any(|row| row.tab_group.as_ref() != Some(&record.id))
-        {
+        let mut block_rows = block.iter();
+        let apart = block_rows.any(|row| row.tab_group.as_ref() != Some(&record.id));
+        if apart {
             return Some("a tab group's rows are apart");
         }
     }
@@ -114,11 +112,9 @@ fn invariant_breaks(arrangement: &Arrangement) -> Option<&'static str> {
         let Some(group) = &row.tab_group else {
             continue;
         };
-        if !arrangement
-            .tab_groups
-            .iter()
-            .any(|record| record.id == *group)
-        {
+        let mut records = arrangement.tab_groups.iter();
+        let known = records.any(|record| record.id == *group);
+        if !known {
             return Some("a row names a tab group that is gone");
         }
     }
