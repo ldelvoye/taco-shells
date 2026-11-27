@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use taco_ghostty::input::Scroll;
 use taco_protocol::{CellSize, TerminalEvent, TerminalId, TerminalRequest, TerminalSize};
 
 use crate::shown::{KEPT_VIEWS, after_showing, viewed};
@@ -227,11 +228,14 @@ impl Views {
         }
     }
 
-    /// Sends what a view of the terminal on screen wants written, as typed.
-    pub fn write_on_screen(&mut self, data: Vec<u8>) {
-        let Some(id) = self.on_screen.clone() else {
+    /// Sends `data` as typed into the terminal, which brings its view back to the newest output.
+    pub fn type_into(&mut self, id: TerminalId, data: Vec<u8>) {
+        if data.is_empty() {
             return;
-        };
+        }
+        if let Some(view) = self.views.get_mut(&id) {
+            let _ = view.scroll(Scroll::Bottom);
+        }
         self.write(id, data);
     }
 
@@ -483,6 +487,35 @@ mod tests {
         views.show(&open, Some(&b));
         views.report_focus(false);
         assert_eq!(writes(&mut views), vec![(b, b"\x1b[O".to_vec())]);
+    }
+
+    #[test]
+    fn typing_brings_a_scrolled_back_view_to_the_newest_output() {
+        let mut views = views();
+        let a = id("a");
+        views.show(std::slice::from_ref(&a), Some(&a));
+        views.receive(attached(&a, 1, real_screen()));
+        let lines: String = (0..50).map(|line| format!("line {line}\r\n")).collect();
+        views.receive(TerminalEvent::Output {
+            id: a.clone(),
+            data: lines.into_bytes(),
+        });
+        views.take_requests();
+        let top_line = |views: &mut Views| {
+            let view = views.view(&id("a")).unwrap();
+            let lines = view.visible_lines().unwrap().unwrap();
+            lines[0].clone()
+        };
+        views.view(&a).unwrap().scroll(Scroll::Lines(-20)).unwrap();
+        assert_eq!(top_line(&mut views), "line 27");
+
+        views.type_into(a.clone(), b"x".to_vec());
+        assert_eq!(top_line(&mut views), "line 47");
+        let sent = vec![TerminalRequest::Write {
+            id: a,
+            data: b"x".to_vec(),
+        }];
+        assert_eq!(views.take_requests(), sent);
     }
 
     #[test]

@@ -3,7 +3,6 @@
 use std::ops::Range;
 
 use gpui::{Bounds, Context, EntityInputHandler, Pixels, Point, UTF16Selection, Window, px, size};
-use taco_ghostty::input::Scroll;
 
 use super::Terminals;
 
@@ -54,10 +53,9 @@ impl EntityInputHandler for Terminals {
     ) {
         self.marked_text = None;
         self.blink_on = true;
-        if let Some(view) = self.views.on_screen_view() {
-            let _ = view.scroll(Scroll::Bottom);
+        if let Some(id) = self.views.on_screen().cloned() {
+            self.views.type_into(id, text.as_bytes().to_vec());
         }
-        self.views.write_on_screen(text.as_bytes().to_vec());
         self.send_requests();
         cx.notify();
     }
