@@ -68,7 +68,7 @@ pub fn switch_value(setting: &SettingChange) -> Option<bool> {
     match setting {
         SettingChange::CursorBlink(on)
         | SettingChange::RestoreOnLaunch(on)
-        | SettingChange::ManageAgentHooks(on) => Some(*on),
+        | SettingChange::AgentActivity(on) => Some(*on),
         _ => None,
     }
 }
@@ -131,8 +131,8 @@ pub fn moved_settings(before: &Settings, after: &Settings) -> Vec<SettingChange>
             SettingChange::RestoreOnLaunch(after.restore_on_launch),
         ),
         (
-            SettingChange::ManageAgentHooks(before.manage_agent_hooks),
-            SettingChange::ManageAgentHooks(after.manage_agent_hooks),
+            SettingChange::AgentActivity(before.agent_activity),
+            SettingChange::AgentActivity(after.agent_activity),
         ),
     ];
     let mut moved = Vec::new();
@@ -172,7 +172,7 @@ mod tests {
         after.shell_row_name = ShellRowName::Path;
         after.cursor_blink = !before.cursor_blink;
         after.restore_on_launch = !before.restore_on_launch;
-        after.manage_agent_hooks = !before.manage_agent_hooks;
+        after.agent_activity = !before.agent_activity;
         after.font_size = before.font_size + 1.;
         let moved = moved_settings(&before, &after);
         let expected = vec![
@@ -181,7 +181,7 @@ mod tests {
             SettingChange::ShellRowName(before.shell_row_name),
             SettingChange::CursorBlink(before.cursor_blink),
             SettingChange::RestoreOnLaunch(before.restore_on_launch),
-            SettingChange::ManageAgentHooks(before.manage_agent_hooks),
+            SettingChange::AgentActivity(before.agent_activity),
         ];
         assert_eq!(moved, expected);
         let unchanged = moved_settings(&before, &before);

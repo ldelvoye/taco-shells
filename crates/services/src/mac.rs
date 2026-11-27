@@ -10,6 +10,7 @@ use crate::updater::is_version;
 const APPLICATIONS_DIRECTORY: &str = "/Applications";
 const VERSION_KEY: &str = "CFBundleShortVersionString";
 const EXTRACT_POLL: Duration = Duration::from_millis(50);
+const UNBUNDLED_VERSION: &str = "dev";
 
 fn bundle_of(executable: &Path) -> Option<PathBuf> {
     let macos_directory = executable.parent()?;
@@ -39,6 +40,14 @@ pub(crate) fn bundle_version(executable: &Path) -> Option<String> {
         return None;
     }
     Some(version.to_string())
+}
+
+pub fn app_version(executable: &Path) -> String {
+    let found = bundle_version(executable);
+    match found {
+        Some(version) => version,
+        None => UNBUNDLED_VERSION.to_string(),
+    }
 }
 
 pub(crate) fn installed_bundle(executable: &Path) -> Option<PathBuf> {

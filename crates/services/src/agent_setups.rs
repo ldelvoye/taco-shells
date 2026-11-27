@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
@@ -9,23 +9,33 @@ use std::time::{Duration, Instant};
 use taco_protocol::{HarnessId, TerminalId};
 
 use crate::agent_flow::{
-    Agent, agents_of, can_write_for, copy_hook_scripts, hooks_directory, keep_current, read_state,
-    remove_setup, set_up, switch_to_managed,
+    Agent, agents_of, copy_hook_scripts, hooks_directory, move_old_setup, read_state,
+    stub_hook_scripts,
 };
 use crate::agent_setup_state::{
-    AgentMenu, AgentMenuAction, AgentSetupState, NOTE_BUILD_MAY_NOT_WRITE, STATUS_OFF,
-    agent_menu_of, runs_agent,
+    AgentMenu, AgentMenuAction, AgentSetupState, agent_menu_of, runs_agent,
 };
-use crate::identity::IS_STABLE;
+use crate::claude_version::{MINIMUM_VERSION, claude_version, find_claude};
+use crate::config_files::plugin_directory_path;
+use crate::hook_listener::TOKEN_FILE_NAME;
+use crate::plugin_folder::refresh_plugin_folder;
 use crate::sync::lock;
 
 const SUBMIT_CHECK_DELAY: Duration = Duration::from_secs(1);
+const DONE_TEXT: &str =
+    "Agents already running stop reporting until you start them in a new terminal.";
+const OLD_HOOKS_PROBLEM: &str = "settings.json still has the app's old hooks";
+const NO_TOKEN_PROBLEM: &str =
+    "The app couldn't write its token file, so agents' activity can't reach it.";
+const VERSION_THREAD_NAME: &str = "agent-version";
 
 type ForegroundCommands = Box<dyn Fn(&TerminalId) -> Vec<String> + Send + Sync>;
+type Version = (u32, u32, u32);
+type VersionFinder = Box<dyn Fn() -> Option<Version> + Send + Sync>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AgentSetupNoticeKind {
-    Offer,
+    Offer { action: AgentMenuAction },
     Unavailable { reason: String },
     Done,
     Problem,
@@ -53,10 +63,18 @@ pub struct AgentSetupView {
 }
 
 pub struct AgentSetupsHost {
-    pub is_managing: Box<dyn Fn() -> bool + Send + Sync>,
+    pub is_on: Box<dyn Fn() -> bool + Send + Sync>,
+    pub turn_on: Box<dyn Fn() + Send + Sync>,
     pub foreground_commands: ForegroundCommands,
     // Called on the timer thread too, so it must not call back into the service.
     pub on_change: Box<dyn Fn(AgentSetupView) + Send + Sync>,
+}
+
+pub(crate) struct SetupFiles {
+    pub(crate) config_directory: PathBuf,
+    pub(crate) hook_scripts_source: PathBuf,
+    pub(crate) plugin_program: PathBuf,
+    pub(crate) app_version: String,
 }
 
 #[derive(Clone)]
@@ -79,7 +97,6 @@ enum Next {
 struct Reading<'a> {
     agent: &'a Agent,
     state: AgentSetupState,
-    may_write: bool,
 }
 
 struct State {
@@ -92,8 +109,12 @@ struct State {
 
 struct Shared {
     agents: Vec<Agent>,
-    can_write: Box<dyn Fn(&Agent) -> bool + Send + Sync>,
     host: AgentSetupsHost,
+    files: SetupFiles,
+    find_version: VersionFinder,
+    version: Mutex<Option<Version>>,
+    checking_version: AtomicBool,
+    prepared_for: Mutex<bool>,
     state: Mutex<State>,
     // Held from computing the view to publishing it, so two refreshes never publish out of order.
     refresh_order: Mutex<()>,
@@ -112,19 +133,33 @@ fn real_env(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
-fn is_awaiting(state: AgentSetupState) -> bool {
-    matches!(
-        state,
-        AgentSetupState::NotSetUp | AgentSetupState::Declined | AgentSetupState::Off
-    )
+fn installed_claude_version(home: Option<&Path>) -> Option<Version> {
+    let home = home?;
+    let claude = find_claude(home)?;
+    claude_version(&claude)
+}
+
+fn is_awaiting(state: &AgentSetupState) -> bool {
+    matches!(state, AgentSetupState::Off | AgentSetupState::OldSetup)
 }
 
 fn offer_text(product_name: &str) -> String {
     format!("{product_name} is running here but isn't set up, so its activity can't show.")
 }
 
-fn done_text(product_name: &str) -> String {
-    format!("{product_name} is set up. Its activity shows here from its next session.")
+fn too_old_reason(product_name: &str, version: &str) -> String {
+    let (major, minor, patch) = MINIMUM_VERSION;
+    format!(
+        "Agent Activity needs {product_name} {major}.{minor}.{patch} or later; this Mac has {version}."
+    )
+}
+
+fn recorded_of(problems: Vec<String>) -> Recorded {
+    if problems.is_empty() {
+        return Recorded::Done;
+    }
+    let text = problems.join(" ");
+    Recorded::Problem(text)
 }
 
 fn notice_of(
@@ -152,41 +187,37 @@ fn notice_of(
         return notice(AgentSetupNoticeKind::Problem, problem.clone());
     }
     let is_done = matches!(recorded, Some(Recorded::Done));
-    if is_done && reading.state == AgentSetupState::SetUp {
-        return notice(AgentSetupNoticeKind::Done, done_text(product_name));
+    if is_done && reading.state == AgentSetupState::On {
+        return notice(AgentSetupNoticeKind::Done, DONE_TEXT.to_string());
     }
-    match reading.state {
-        AgentSetupState::Off => {
-            let kind = AgentSetupNoticeKind::Unavailable {
-                reason: STATUS_OFF.to_string(),
+    match &reading.state {
+        AgentSetupState::Off | AgentSetupState::OldSetup => {
+            let kind = AgentSetupNoticeKind::Offer {
+                action: AgentMenuAction::SetUp,
             };
             notice(kind, offer_text(product_name))
         }
-        AgentSetupState::NotSetUp | AgentSetupState::Declined => {
-            if reading.may_write {
-                notice(AgentSetupNoticeKind::Offer, offer_text(product_name))
-            } else {
-                let kind = AgentSetupNoticeKind::Unavailable {
-                    reason: NOTE_BUILD_MAY_NOT_WRITE.to_string(),
-                };
-                notice(kind, offer_text(product_name))
-            }
+        AgentSetupState::TooOld { version } => {
+            let reason = too_old_reason(product_name, version);
+            let kind = AgentSetupNoticeKind::Unavailable { reason };
+            notice(kind, offer_text(product_name))
         }
         _ => None,
     }
 }
 
-fn read_all<'a>(shared: &'a Shared) -> Vec<Reading<'a>> {
-    let managing = (shared.host.is_managing)();
+fn current_version(shared: &Shared) -> Option<Version> {
+    let version = lock(&shared.version);
+    *version
+}
+
+fn read_all(shared: &Shared) -> Vec<Reading<'_>> {
+    let activity_on = (shared.host.is_on)();
+    let version = current_version(shared);
     let mut readings = Vec::new();
     for agent in &shared.agents {
-        let state = read_state(agent, managing);
-        let may_write = (shared.can_write)(agent);
-        readings.push(Reading {
-            agent,
-            state,
-            may_write,
-        });
+        let state = read_state(agent, activity_on, version);
+        readings.push(Reading { agent, state });
     }
     readings
 }
@@ -203,13 +234,13 @@ fn compute(shared: &Shared) -> (AgentSetupView, bool) {
     let mut awaiting = false;
     for reading in &readings {
         let product_name = reading.agent.setup.product_name;
-        let menu = agent_menu_of(reading.state, product_name, reading.may_write);
+        let menu = agent_menu_of(&reading.state, product_name);
         menus.push(AgentMenuEntry {
             harness: reading.agent.harness_id.clone(),
             product_name: product_name.to_string(),
             menu,
         });
-        if is_awaiting(reading.state) {
+        if is_awaiting(&reading.state) {
             awaiting = true;
         }
         let id = &reading.agent.harness_id;
@@ -258,7 +289,7 @@ fn check_terminal(shared: &Shared, terminal: &TerminalId) {
             return;
         }
         for reading in &readings {
-            if !is_awaiting(reading.state) {
+            if !is_awaiting(&reading.state) {
                 continue;
             }
             let commands = reading.agent.setup.commands;
@@ -338,46 +369,104 @@ fn timer_loop(shared: Arc<Shared>, messages: Receiver<TimerMessage>) {
     }
 }
 
-fn perform(agent: &Agent, action: AgentMenuAction) -> Result<(), String> {
-    match action {
-        AgentMenuAction::SetUp => set_up(agent),
-        AgentMenuAction::Remove => remove_setup(agent),
-        AgentMenuAction::Switch => switch_to_managed(agent),
+fn find_version_now(shared: &Shared) {
+    let found = (shared.find_version)();
+    {
+        let mut version = lock(&shared.version);
+        *version = found;
     }
+    shared.checking_version.store(false, Ordering::SeqCst);
+    if !shared.stopping.load(Ordering::SeqCst) {
+        refresh(shared);
+    }
+}
+
+fn check_version(shared: &Arc<Shared>) {
+    let claimed =
+        shared
+            .checking_version
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst);
+    if claimed.is_err() {
+        return;
+    }
+    let for_thread = Arc::clone(shared);
+    let builder = thread::Builder::new().name(VERSION_THREAD_NAME.to_string());
+    // Off the caller's thread: this runs the user's login shell, and a slow startup file must cost a late line, never a late window.
+    let spawned = builder.spawn(move || find_version_now(&for_thread));
+    if spawned.is_err() {
+        shared.checking_version.store(false, Ordering::SeqCst);
+    }
+}
+
+fn prepare_hooks(shared: &Shared, activity_on: bool) -> Vec<String> {
+    let files = &shared.files;
+    let destination = hooks_directory(&files.config_directory);
+    if !activity_on {
+        return copy_hook_scripts(&files.hook_scripts_source, &destination);
+    }
+    let mut problems = Vec::new();
+    let plugin_directory = plugin_directory_path(&files.config_directory);
+    let refreshed =
+        refresh_plugin_folder(&plugin_directory, &files.plugin_program, &files.app_version);
+    if let Err(problem) = refreshed {
+        problems.push(format!("The agent plugin could not be written: {problem}"));
+    }
+    let stubbed = stub_hook_scripts(&destination);
+    problems.extend(stubbed);
+    problems
+}
+
+fn set_up(shared: &Arc<Shared>, agent: &Agent, state: &AgentSetupState) -> Vec<String> {
+    let mut problems = prepare_hooks(shared, true);
+    // The click is the user's own consent, so a development build may make this one write into the agent's settings.
+    if *state == AgentSetupState::OldSetup {
+        let moved = move_old_setup(agent);
+        if let Err(reason) = moved {
+            problems.push(format!("{OLD_HOOKS_PROBLEM}: {reason}"));
+        }
+    }
+    (shared.host.turn_on)();
+    let token = shared.files.config_directory.join(TOKEN_FILE_NAME);
+    let has_token = token.exists();
+    if !has_token {
+        problems.push(NO_TOKEN_PROBLEM.to_string());
+    }
+    check_version(shared);
+    problems
 }
 
 impl AgentSetups {
     pub fn start(
         config_directory: PathBuf,
         hook_scripts_source: PathBuf,
+        plugin_program: PathBuf,
+        app_version: String,
         host: AgentSetupsHost,
     ) -> (AgentSetups, Vec<String>) {
-        let destination = hooks_directory(&config_directory);
-        let mut problems = copy_hook_scripts(&hook_scripts_source, &destination);
         let home = std::env::home_dir();
-        let agents = match home {
-            Some(home) => agents_of(&config_directory, &real_env, &home),
+        let agents = match &home {
+            Some(home) => agents_of(&config_directory, &real_env, home),
             None => Vec::new(),
         };
-        let can_write = Box::new(|agent: &Agent| can_write_for(agent.setup, IS_STABLE, &real_env));
-        let (setups, startup_problems) = AgentSetups::start_with(
-            agents,
-            can_write,
-            host,
-            SUBMIT_CHECK_DELAY,
+        let find_version: VersionFinder =
+            Box::new(move || installed_claude_version(home.as_deref()));
+        let files = SetupFiles {
             config_directory,
-        );
-        problems.extend(startup_problems);
-        (setups, problems)
+            hook_scripts_source,
+            plugin_program,
+            app_version,
+        };
+        AgentSetups::start_with(agents, files, find_version, host, SUBMIT_CHECK_DELAY)
     }
 
     pub(crate) fn start_with(
         agents: Vec<Agent>,
-        can_write: Box<dyn Fn(&Agent) -> bool + Send + Sync>,
+        files: SetupFiles,
+        find_version: VersionFinder,
         host: AgentSetupsHost,
         submit_delay: Duration,
-        config_directory: PathBuf,
     ) -> (AgentSetups, Vec<String>) {
+        let hooks = hooks_directory(&files.config_directory);
         let state = State {
             seen: BTreeMap::new(),
             exited: BTreeSet::new(),
@@ -385,26 +474,21 @@ impl AgentSetups {
             view: AgentSetupView::default(),
             awaiting: false,
         };
+        let activity_on = (host.is_on)();
         let shared = Shared {
             agents,
-            can_write,
             host,
+            files,
+            find_version,
+            version: Mutex::new(None),
+            checking_version: AtomicBool::new(false),
+            prepared_for: Mutex::new(activity_on),
             state: Mutex::new(state),
             refresh_order: Mutex::new(()),
             stopping: AtomicBool::new(false),
         };
 
-        let readings = read_all(&shared);
-        let mut problems = Vec::new();
-        for reading in &readings {
-            if reading.may_write && reading.state == AgentSetupState::SetUp {
-                let kept = keep_current(reading.agent);
-                if let Err(problem) = kept {
-                    problems.push(problem);
-                }
-            }
-        }
-        drop(readings);
+        let problems = prepare_hooks(&shared, activity_on);
         let (view, awaiting) = compute(&shared);
         {
             let mut state = lock(&shared.state);
@@ -413,12 +497,15 @@ impl AgentSetups {
         }
 
         let shared = Arc::new(shared);
+        if activity_on {
+            check_version(&shared);
+        }
         let (sender, messages) = mpsc::channel();
         let for_thread = Arc::clone(&shared);
         let thread = thread::spawn(move || timer_loop(for_thread, messages));
         let setups = AgentSetups {
             shared,
-            hooks_directory: hooks_directory(&config_directory),
+            hooks_directory: hooks,
             submit_delay,
             timer: Some(sender),
             thread: Some(thread),
@@ -433,6 +520,30 @@ impl AgentSetups {
     pub fn view(&self) -> AgentSetupView {
         let state = lock(&self.shared.state);
         state.view.clone()
+    }
+
+    pub fn activity_changed(&self, on: bool) {
+        {
+            let mut prepared_for = lock(&self.shared.prepared_for);
+            if *prepared_for == on {
+                return;
+            }
+            *prepared_for = on;
+        }
+        let problems = prepare_hooks(&self.shared, on);
+        if on {
+            check_version(&self.shared);
+        }
+        if problems.is_empty() {
+            return;
+        }
+        let text = problems.join(" ");
+        let mut state = lock(&self.shared.state);
+        for agent in &self.shared.agents {
+            let harness = agent.harness_id.clone();
+            let problem = Recorded::Problem(text.clone());
+            state.recorded.insert(harness, problem);
+        }
     }
 
     pub fn note_submit(&self, terminal: TerminalId) {
@@ -478,30 +589,17 @@ impl AgentSetups {
         let Some(agent) = found else {
             return;
         };
-        let managing = (self.shared.host.is_managing)();
-        let state = read_state(agent, managing);
-        let may_write = (self.shared.can_write)(agent);
+        let activity_on = (self.shared.host.is_on)();
+        let version = current_version(&self.shared);
+        let state = read_state(agent, activity_on, version);
         let product_name = agent.setup.product_name;
-        let fresh = agent_menu_of(state, product_name, may_write);
+        let fresh = agent_menu_of(&state, product_name);
         // The menu may have changed since it was drawn, so a click acts only if it would still be offered.
         if fresh.enabled && fresh.action == clicked {
-            let performed = perform(agent, clicked);
+            let problems = set_up(&self.shared, agent, &state);
+            let recorded = recorded_of(problems);
             let mut shared_state = lock(&self.shared.state);
-            match performed {
-                Err(text) => {
-                    shared_state
-                        .recorded
-                        .insert(harness.clone(), Recorded::Problem(text));
-                }
-                Ok(()) if clicked == AgentMenuAction::Remove => {
-                    shared_state.recorded.remove(harness);
-                }
-                Ok(()) => {
-                    shared_state
-                        .recorded
-                        .insert(harness.clone(), Recorded::Done);
-                }
-            }
+            shared_state.recorded.insert(harness.clone(), recorded);
         }
         refresh(&self.shared);
     }
@@ -541,31 +639,36 @@ impl Drop for AgentSetups {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::sync::atomic::AtomicUsize;
 
     use tempfile::TempDir;
 
-    use crate::agent_hooks::entry_key;
-    use crate::agent_record::{RECORD_FILE, read_agent_record, write_agent_record};
+    use crate::agent_hooks::{HookEdit, add_entries};
 
     use super::*;
 
     const WAIT: Duration = Duration::from_secs(2);
+    const MINE: &str = "{\n  // mine\n  \"model\": \"opus\"\n}\n";
+    const STUB: &str = "#!/bin/sh\nexit 0\n";
 
     struct Environment {
         temp: TempDir,
         agent: Agent,
         agents: Vec<Agent>,
         config: PathBuf,
+        program: PathBuf,
+    }
+
+    struct Switch {
+        on: Arc<AtomicBool>,
+        turned_on: Arc<AtomicUsize>,
     }
 
     struct Fixture {
-        _temp: TempDir,
-        agent: Agent,
+        environment: Environment,
         setups: AgentSetups,
         commands: Arc<Mutex<HashMap<TerminalId, Vec<String>>>>,
-        changes: Arc<Mutex<Vec<AgentSetupView>>>,
-        managing: Arc<AtomicBool>,
-        may_write: Arc<AtomicBool>,
+        switch: Switch,
     }
 
     fn terminal(name: &str) -> TerminalId {
@@ -576,12 +679,20 @@ mod tests {
         taco_agents::CLAUDE.id()
     }
 
+    fn checkout_hooks() -> PathBuf {
+        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../hooks"))
+    }
+
     fn environment() -> Environment {
         let temp = TempDir::new().unwrap();
         let config = temp.path().join("config");
         let home = temp.path().join("home");
         let agent_directory = temp.path().join("claude");
         fs::create_dir_all(&agent_directory).unwrap();
+        fs::create_dir_all(&config).unwrap();
+        fs::write(config.join(TOKEN_FILE_NAME), "token").unwrap();
+        let program = temp.path().join("plugin-program");
+        fs::write(&program, "program").unwrap();
         let variable_name = taco_agents::CLAUDE
             .setup()
             .unwrap()
@@ -601,71 +712,100 @@ mod tests {
             agent,
             agents,
             config,
+            program,
         }
     }
 
-    fn fixture() -> Fixture {
-        let environment = environment();
-        let commands: Arc<Mutex<HashMap<TerminalId, Vec<String>>>> = Arc::default();
-        let changes: Arc<Mutex<Vec<AgentSetupView>>> = Arc::default();
-        let managing = Arc::new(AtomicBool::new(true));
-        let may_write = Arc::new(AtomicBool::new(true));
+    fn files_of(environment: &Environment) -> SetupFiles {
+        SetupFiles {
+            config_directory: environment.config.clone(),
+            hook_scripts_source: checkout_hooks(),
+            plugin_program: environment.program.clone(),
+            app_version: "1.0.0".to_string(),
+        }
+    }
 
-        let managing_flag = Arc::clone(&managing);
-        let commands_map = Arc::clone(&commands);
-        let changes_log = Arc::clone(&changes);
-        let may_write_flag = Arc::clone(&may_write);
+    fn switch(on: bool) -> Switch {
+        Switch {
+            on: Arc::new(AtomicBool::new(on)),
+            turned_on: Arc::default(),
+        }
+    }
+
+    fn start(
+        environment: &Environment,
+        switch: &Switch,
+        foreground_commands: ForegroundCommands,
+        on_change: Box<dyn Fn(AgentSetupView) + Send + Sync>,
+        submit_delay: Duration,
+    ) -> AgentSetups {
+        let is_on_flag = Arc::clone(&switch.on);
+        let turn_on_flag = Arc::clone(&switch.on);
+        let turned_on = Arc::clone(&switch.turned_on);
         let host = AgentSetupsHost {
-            is_managing: Box::new(move || managing_flag.load(Ordering::SeqCst)),
-            foreground_commands: Box::new(move |id| {
-                let map = lock(&commands_map);
-                let found = map.get(id);
-                match found {
-                    Some(lines) => lines.clone(),
-                    None => Vec::new(),
-                }
+            is_on: Box::new(move || is_on_flag.load(Ordering::SeqCst)),
+            turn_on: Box::new(move || {
+                turned_on.fetch_add(1, Ordering::SeqCst);
+                turn_on_flag.store(true, Ordering::SeqCst);
             }),
-            on_change: Box::new(move |view| lock(&changes_log).push(view)),
+            foreground_commands,
+            on_change,
         };
-        let can_write = Box::new(move |_: &Agent| may_write_flag.load(Ordering::SeqCst));
+        let files = files_of(environment);
+        let find_version: VersionFinder = Box::new(|| None);
         let (setups, _) = AgentSetups::start_with(
             environment.agents.clone(),
-            can_write,
+            files,
+            find_version,
             host,
+            submit_delay,
+        );
+        setups
+    }
+
+    fn fixture_with(environment: Environment, on: bool) -> Fixture {
+        let commands: Arc<Mutex<HashMap<TerminalId, Vec<String>>>> = Arc::default();
+        let commands_map = Arc::clone(&commands);
+        let foreground_commands: ForegroundCommands = Box::new(move |id| {
+            let map = lock(&commands_map);
+            let found = map.get(id);
+            match found {
+                Some(lines) => lines.clone(),
+                None => Vec::new(),
+            }
+        });
+        let switch = switch(on);
+        let setups = start(
+            &environment,
+            &switch,
+            foreground_commands,
+            Box::new(|_| {}),
             SUBMIT_CHECK_DELAY,
-            environment.config.clone(),
         );
         Fixture {
-            _temp: environment.temp,
-            agent: environment.agent,
+            environment,
             setups,
             commands,
-            changes,
-            managing,
-            may_write,
+            switch,
         }
     }
 
     fn start_timed(
         environment: &Environment,
+        switch: &Switch,
         foreground_commands: ForegroundCommands,
     ) -> (AgentSetups, Receiver<AgentSetupView>) {
         let (sender, views) = mpsc::channel();
         let sender = Mutex::new(sender);
-        let host = AgentSetupsHost {
-            is_managing: Box::new(|| true),
+        let on_change = Box::new(move |view| {
+            let _ = lock(&sender).send(view);
+        });
+        let setups = start(
+            environment,
+            switch,
             foreground_commands,
-            on_change: Box::new(move |view| {
-                let _ = lock(&sender).send(view);
-            }),
-        };
-        let can_write = Box::new(|_: &Agent| true);
-        let (setups, _) = AgentSetups::start_with(
-            environment.agents.clone(),
-            can_write,
-            host,
+            on_change,
             Duration::ZERO,
-            environment.config.clone(),
         );
         (setups, views)
     }
@@ -678,6 +818,10 @@ mod tests {
         })
     }
 
+    fn is_offer(kind: &AgentSetupNoticeKind) -> bool {
+        matches!(kind, AgentSetupNoticeKind::Offer { .. })
+    }
+
     fn next_offer_covering(
         views: &Receiver<AgentSetupView>,
         covered: &TerminalId,
@@ -686,8 +830,8 @@ mod tests {
             let received = views.recv_timeout(WAIT);
             let view = received.expect("no offer arrived in time");
             let offered = view.notices.iter().any(|notice| {
-                let is_offer = notice.kind == AgentSetupNoticeKind::Offer;
-                is_offer && notice.terminals.contains(covered)
+                let offers = is_offer(&notice.kind);
+                offers && notice.terminals.contains(covered)
             });
             if offered {
                 return view;
@@ -695,184 +839,145 @@ mod tests {
         }
     }
 
-    fn run_in(fixture: &Fixture, name: &str, line: &str) -> TerminalId {
+    fn seen_claude(fixture: &Fixture, name: &str) -> TerminalId {
         let id = terminal(name);
-        let mut map = lock(&fixture.commands);
-        map.insert(id.clone(), vec![line.to_string()]);
+        {
+            let mut map = lock(&fixture.commands);
+            map.insert(id.clone(), vec!["claude".to_string()]);
+        }
+        fixture.setups.check_terminal(&id);
         id
     }
 
     fn only_notice(fixture: &Fixture) -> AgentSetupNotice {
         let view = fixture.setups.view();
-        assert_eq!(view.notices.len(), 1);
+        assert_eq!(view.notices.len(), 1, "{:?}", view.notices);
         view.notices[0].clone()
     }
 
-    #[test]
-    fn the_line_follows_the_agent() {
-        let fixture = fixture();
-        let setups = &fixture.setups;
-        let claude_terminal = run_in(&fixture, "one", "claude --resume");
-        let vim_terminal = run_in(&fixture, "two", "vim notes.md");
-
-        setups.check_terminal(&vim_terminal);
-        assert!(setups.view().notices.is_empty());
-
-        setups.check_terminal(&claude_terminal);
-        let offer = only_notice(&fixture);
-        assert_eq!(offer.kind, AgentSetupNoticeKind::Offer);
-        assert_eq!(offer.terminals, vec![claude_terminal.clone()]);
-        let changes_so_far = lock(&fixture.changes).len();
-        assert_eq!(changes_so_far, 1);
-
-        setups.refresh();
-        assert_eq!(lock(&fixture.changes).len(), changes_so_far);
-
-        setups.act(&claude(), AgentMenuAction::SetUp);
-        let settings = fs::read_to_string(&fixture.agent.paths.settings_path).unwrap();
-        assert!(settings.contains("SessionStart"));
-        let done = only_notice(&fixture);
-        assert_eq!(done.kind, AgentSetupNoticeKind::Done);
-        assert_eq!(done.terminals, vec![claude_terminal.clone()]);
-
-        setups.dismiss(&claude());
-        assert!(setups.view().notices.is_empty());
-
-        setups.act(&claude(), AgentMenuAction::Remove);
-        assert_eq!(only_notice(&fixture).kind, AgentSetupNoticeKind::Offer);
-        setups.note_exit(&claude_terminal);
-        assert!(setups.view().notices.is_empty());
-
-        setups.check_terminal(&claude_terminal);
-        assert!(setups.view().notices.is_empty());
-
-        let other_terminal = run_in(&fixture, "three", "claude");
-        setups.check_terminal(&other_terminal);
-        fixture.managing.store(false, Ordering::SeqCst);
-        setups.refresh();
-        let off = only_notice(&fixture);
-        let turned_off = AgentSetupNoticeKind::Unavailable {
-            reason: STATUS_OFF.to_string(),
+    fn with_entries(text: &str, hooks_directory: &Path) -> String {
+        let entries = taco_agents::CLAUDE.setup().unwrap().entries;
+        let edit = add_entries(Some(text), entries, hooks_directory, "settings.json");
+        let HookEdit::Changed(changed) = edit else {
+            panic!("expected the entries to be added, got {edit:?}");
         };
-        assert_eq!(off.kind, turned_off);
-
-        fixture.managing.store(true, Ordering::SeqCst);
-        fixture.may_write.store(false, Ordering::SeqCst);
-        setups.refresh();
-        let development = only_notice(&fixture);
-        let leaves_alone = AgentSetupNoticeKind::Unavailable {
-            reason: NOTE_BUILD_MAY_NOT_WRITE.to_string(),
-        };
-        assert_eq!(development.kind, leaves_alone);
+        changed
     }
 
-    #[test]
-    fn a_stale_click_does_nothing() {
-        let fixture = fixture();
-        let setups = &fixture.setups;
-        let before_menu = setups.view().menus[0].menu.action;
-        assert_eq!(before_menu, AgentMenuAction::SetUp);
-
-        assert_eq!(set_up(&fixture.agent), Ok(()));
-        let path = &fixture.agent.paths.settings_path;
-        let before = fs::read(path).unwrap();
-
-        setups.act(&claude(), AgentMenuAction::SetUp);
-
-        let after = fs::read(path).unwrap();
-        assert_eq!(before, after);
-        assert!(setups.view().notices.is_empty());
-        let menu = setups.view().menus[0].menu.action;
-        assert_eq!(menu, AgentMenuAction::Remove);
-
-        setups.act(&claude(), AgentMenuAction::Switch);
-
-        let after_switch = fs::read(path).unwrap();
-        assert_eq!(before, after_switch);
+    fn other_channel(environment: &Environment) -> String {
+        let other_config = environment.temp.path().join("other-config");
+        let other_hooks = hooks_directory(&other_config);
+        with_entries(MINE, &other_hooks)
     }
 
-    #[test]
-    fn startup_keeps_current_only_where_writing_is_allowed() {
-        for may_write in [false, true] {
-            let environment = environment();
-            let agent = &environment.agent;
-            assert_eq!(set_up(agent), Ok(()));
-            let dropped = agent.setup.entries.last().unwrap();
-            let dropped_key = entry_key(dropped);
-
-            let text = fs::read_to_string(&agent.paths.settings_path).unwrap();
-            let mut root: serde_json::Value = serde_json::from_str(&text).unwrap();
-            let hooks = root.get_mut("hooks").unwrap().as_object_mut().unwrap();
-            hooks.remove(dropped.event);
-            let pruned = serde_json::to_string_pretty(&root).unwrap();
-            fs::write(&agent.paths.settings_path, &pruned).unwrap();
-            let id = &agent.harness_id.0;
-            let mut record = read_agent_record(&agent.paths.config_directory, id);
-            record.written.retain(|key| *key != dropped_key);
-            write_agent_record(&agent.paths.config_directory, id, &record).unwrap();
-            let before = fs::read(&agent.paths.settings_path).unwrap();
-
-            let host = AgentSetupsHost {
-                is_managing: Box::new(|| true),
-                foreground_commands: Box::new(|_| Vec::new()),
-                on_change: Box::new(|_| {}),
-            };
-            let can_write = Box::new(move |_: &Agent| may_write);
-            let (setups, problems) = AgentSetups::start_with(
-                environment.agents.clone(),
-                can_write,
-                host,
-                SUBMIT_CHECK_DELAY,
-                environment.config.clone(),
-            );
-            setups.stop();
-
-            assert!(problems.is_empty(), "{problems:?}");
-            let after = fs::read(&agent.paths.settings_path).unwrap();
-            if may_write {
-                assert_ne!(before, after);
-                let restored = fs::read_to_string(&agent.paths.settings_path).unwrap();
-                assert!(restored.contains(dropped.event));
-            } else {
-                assert_eq!(before, after);
-            }
+    fn assert_stubbed(directory: &Path) {
+        let checkout = checkout_hooks();
+        for entry in fs::read_dir(&checkout).unwrap() {
+            let name = entry.unwrap().file_name();
+            let text = fs::read_to_string(directory.join(&name)).unwrap();
+            assert_eq!(text, STUB, "{name:?}");
         }
     }
 
     #[test]
-    fn a_startup_problem_is_returned_not_shown_as_a_notice() {
+    fn the_click_on_an_old_setup_moves_off_only_this_builds_entries() {
         let environment = environment();
-        let agent = &environment.agent;
-        assert_eq!(set_up(agent), Ok(()));
-        fs::remove_dir_all(&environment.config).unwrap();
-        fs::write(&environment.config, "in the way").unwrap();
-        let state = read_state(agent, true);
-        assert_eq!(state, AgentSetupState::SetUp);
+        let theirs = other_channel(&environment);
+        let ours_too = with_entries(&theirs, &environment.agent.paths.hooks_directory);
+        let settings_path = environment.agent.paths.settings_path.clone();
+        fs::write(&settings_path, &ours_too).unwrap();
+        let fixture = fixture_with(environment, false);
+        let seen = seen_claude(&fixture, "one");
+        assert!(is_offer(&only_notice(&fixture).kind));
 
-        let host = AgentSetupsHost {
-            is_managing: Box::new(|| true),
-            foreground_commands: Box::new(|_| Vec::new()),
-            on_change: Box::new(|_| {}),
-        };
-        let can_write = Box::new(|_: &Agent| true);
-        let (setups, problems) = AgentSetups::start_with(
-            environment.agents.clone(),
-            can_write,
-            host,
-            SUBMIT_CHECK_DELAY,
-            environment.config.clone(),
-        );
+        fixture.setups.act(&claude(), AgentMenuAction::SetUp);
 
-        assert_eq!(problems.len(), 1);
-        assert!(problems[0].contains(RECORD_FILE), "{}", problems[0]);
-        assert!(setups.view().notices.is_empty());
+        let after = fs::read_to_string(&settings_path).unwrap();
+        assert_eq!(after, theirs);
+        let config = &fixture.environment.config;
+        let plugin_directory = plugin_directory_path(config);
+        let manifest = plugin_directory.join(".claude-plugin/plugin.json");
+        assert!(manifest.is_file());
+        assert_stubbed(&hooks_directory(config));
+        let turned_on = fixture.switch.turned_on.load(Ordering::SeqCst);
+        assert_eq!(turned_on, 1);
+        let done = only_notice(&fixture);
+        assert_eq!(done.kind, AgentSetupNoticeKind::Done);
+        assert_eq!(done.terminals, vec![seen]);
+    }
+
+    #[test]
+    fn the_click_leaves_a_file_without_this_builds_entries_byte_for_byte() {
+        let environment = environment();
+        let theirs = other_channel(&environment);
+        let settings_path = environment.agent.paths.settings_path.clone();
+        fs::write(&settings_path, &theirs).unwrap();
+        let before = fs::read(&settings_path).unwrap();
+        let fixture = fixture_with(environment, false);
+        seen_claude(&fixture, "one");
+
+        fixture.setups.act(&claude(), AgentMenuAction::SetUp);
+
+        let after = fs::read(&settings_path).unwrap();
+        assert_eq!(after, before);
+        assert_eq!(only_notice(&fixture).kind, AgentSetupNoticeKind::Done);
+    }
+
+    #[test]
+    fn a_missing_token_file_is_a_problem() {
+        let environment = environment();
+        fs::remove_file(environment.config.join(TOKEN_FILE_NAME)).unwrap();
+        let fixture = fixture_with(environment, false);
+        seen_claude(&fixture, "one");
+
+        fixture.setups.act(&claude(), AgentMenuAction::SetUp);
+
+        let problem = only_notice(&fixture);
+        assert_eq!(problem.kind, AgentSetupNoticeKind::Problem);
+        assert_eq!(problem.text, NO_TOKEN_PROBLEM);
+    }
+
+    #[test]
+    fn turning_activity_on_silences_the_scripts_and_off_brings_them_back() {
+        let fixture = fixture_with(environment(), false);
+        let hooks = hooks_directory(&fixture.environment.config);
+
+        fixture.setups.activity_changed(true);
+
+        assert_stubbed(&hooks);
+        let marker = hooks.join("taco-shells-attention.sh");
+        fs::write(&marker, "left alone").unwrap();
+        fixture.setups.activity_changed(true);
+        assert_eq!(fs::read_to_string(&marker).unwrap(), "left alone");
+
+        fixture.setups.activity_changed(false);
+
+        for entry in fs::read_dir(checkout_hooks()).unwrap() {
+            let entry = entry.unwrap();
+            let real = fs::read(entry.path()).unwrap();
+            let copied = fs::read(hooks.join(entry.file_name())).unwrap();
+            assert_eq!(copied, real, "{:?}", entry.file_name());
+        }
+    }
+
+    #[test]
+    fn a_stale_click_does_nothing() {
+        let fixture = fixture_with(environment(), true);
+        seen_claude(&fixture, "one");
+
+        fixture.setups.act(&claude(), AgentMenuAction::SetUp);
+
+        let turned_on = fixture.switch.turned_on.load(Ordering::SeqCst);
+        assert_eq!(turned_on, 0);
+        assert!(fixture.setups.view().notices.is_empty());
     }
 
     #[test]
     fn the_timer_checks_only_terminals_submitted_while_something_awaits() {
         let environment = environment();
+        let switch = switch(false);
         let checked: Arc<Mutex<Vec<TerminalId>>> = Arc::default();
-        let (setups, views) = start_timed(&environment, running_claude(&checked));
+        let (setups, views) = start_timed(&environment, &switch, running_claude(&checked));
         let first = terminal("first");
         let skipped = terminal("skipped");
         let last = terminal("last");
@@ -885,7 +990,7 @@ mod tests {
         setups.act(&claude(), AgentMenuAction::SetUp);
         setups.note_submit(skipped.clone());
 
-        assert_eq!(remove_setup(&environment.agent), Ok(()));
+        switch.on.store(false, Ordering::SeqCst);
         setups.refresh();
         setups.note_submit(last.clone());
         let later_view = next_offer_covering(&views, &last);
@@ -899,6 +1004,7 @@ mod tests {
     #[test]
     fn a_check_already_scheduled_does_not_bring_a_closed_terminal_back() {
         let environment = environment();
+        let switch = switch(false);
         let (started_sender, started) = mpsc::channel();
         let (release_sender, release) = mpsc::channel::<()>();
         let started_sender = Mutex::new(started_sender);
@@ -913,7 +1019,7 @@ mod tests {
             }
             vec!["claude".to_string()]
         });
-        let (setups, views) = start_timed(&environment, foreground_commands);
+        let (setups, views) = start_timed(&environment, &switch, foreground_commands);
 
         setups.note_submit(closed.clone());
         started.recv_timeout(WAIT).expect("the check never started");
@@ -931,6 +1037,7 @@ mod tests {
     #[test]
     fn a_panicking_check_costs_that_check_only() {
         let environment = environment();
+        let switch = switch(false);
         let bad = terminal("bad");
         let good = terminal("good");
         let panicking = bad.clone();
@@ -940,7 +1047,7 @@ mod tests {
             }
             vec!["claude".to_string()]
         });
-        let (setups, views) = start_timed(&environment, foreground_commands);
+        let (setups, views) = start_timed(&environment, &switch, foreground_commands);
 
         setups.note_submit(bad.clone());
         setups.note_submit(good.clone());
@@ -953,8 +1060,9 @@ mod tests {
     #[test]
     fn the_hooks_directory_is_the_one_the_scripts_are_copied_to() {
         let environment = environment();
+        let switch = switch(false);
         let checked: Arc<Mutex<Vec<TerminalId>>> = Arc::default();
-        let (setups, _views) = start_timed(&environment, running_claude(&checked));
+        let (setups, _views) = start_timed(&environment, &switch, running_claude(&checked));
 
         let directory = setups.hooks_directory();
 

@@ -306,10 +306,6 @@ fn remove_matching(text: &str, label: &str, test: &dyn Fn(&str) -> bool) -> Hook
     HookEdit::Changed(edited)
 }
 
-pub(crate) fn entry_key(entry: &HookEntry) -> String {
-    format!("{}:{}", entry.event, entry.script)
-}
-
 pub(crate) fn hook_wiring_of(
     text: Option<&str>,
     setup: &HarnessSetup,
@@ -325,17 +321,17 @@ pub(crate) fn hook_wiring_of(
 
     let refs = hook_refs_of(&hooks);
     let scripts = scripts_of(setup);
-    let has_hand = refs
-        .iter()
-        .any(|r| is_hand_command(&r.command, &scripts, hooks_directory));
-    if has_hand {
-        return HookWiring::ByHand;
-    }
     let has_managed = refs
         .iter()
         .any(|r| is_managed_command(&r.command, hooks_directory));
     if has_managed {
         return HookWiring::Managed;
+    }
+    let has_hand = refs
+        .iter()
+        .any(|r| is_hand_command(&r.command, &scripts, hooks_directory));
+    if has_hand {
+        return HookWiring::ByHand;
     }
     HookWiring::None
 }
@@ -641,7 +637,9 @@ mod tests {
         let both_edit = add_entries(Some(by_hand), setup().entries, &directory, LABEL);
         let both = changed_text(both_edit);
         let both_wiring = hook_wiring_of(Some(&both), setup(), &directory);
-        assert_eq!(both_wiring, HookWiring::ByHand);
+        assert_eq!(both_wiring, HookWiring::Managed);
+        let by_hand_wiring = hook_wiring_of(Some(by_hand), setup(), &directory);
+        assert_eq!(by_hand_wiring, HookWiring::ByHand);
     }
 
     #[test]

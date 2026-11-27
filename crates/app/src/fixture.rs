@@ -10,7 +10,7 @@ use taco_protocol::{
     TabGroup, TabGroupId, TerminalId,
 };
 use taco_rules::default_panels;
-use taco_services::{AgentSetupNotice, AgentSetupNoticeKind, AgentSetupView};
+use taco_services::{AgentMenuAction, AgentSetupNotice, AgentSetupNoticeKind, AgentSetupView};
 use taco_settings::{
     Binding, ConfigTexts, SettingChange, Settings, ShellRowName, UnreadSettings, resolve_config,
 };
@@ -747,7 +747,9 @@ fn default_bindings() -> Vec<Binding> {
 fn offered_setup() -> AgentSetupView {
     let notice = AgentSetupNotice {
         harness: HarnessId(CLAUDE.to_string()),
-        kind: AgentSetupNoticeKind::Offer,
+        kind: AgentSetupNoticeKind::Offer {
+            action: AgentMenuAction::SetUp,
+        },
         text: OFFER_TEXT.to_string(),
         terminals: vec![TerminalId("t4".to_string())],
     };

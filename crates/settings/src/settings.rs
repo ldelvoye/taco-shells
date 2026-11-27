@@ -9,7 +9,7 @@ const BOOLEAN_REQUIREMENT: &str = "must be true or false";
 const CURSOR_STYLE_REQUIREMENT: &str = "must be \"block\", \"underline\" or \"bar\"";
 const SHELL_ROW_NAME_REQUIREMENT: &str = "must be \"folder\" or \"path\"";
 const CHECK_LABEL: &str = "settings.json";
-const SETTING_KEYS: [&str; 11] = [
+const SETTING_KEYS: [&str; 10] = [
     "theme",
     "fontFamily",
     "fontSize",
@@ -18,10 +18,10 @@ const SETTING_KEYS: [&str; 11] = [
     "cursorBlink",
     "cursorStyle",
     "restoreOnLaunch",
-    "manageAgentHooks",
     "agentActivity",
     "shellRowName",
 ];
+const RETIRED_SETTING_KEYS: [&str; 1] = ["manageAgentHooks"];
 
 pub const FONT_SIZE_MIN: f64 = 1.0;
 pub const FONT_SIZE_MAX: f64 = 72.0;
@@ -57,7 +57,6 @@ pub enum SettingChange {
     CursorBlink(bool),
     CursorStyle(CursorStyle),
     RestoreOnLaunch(bool),
-    ManageAgentHooks(bool),
     AgentActivity(bool),
     ShellRowName(ShellRowName),
 }
@@ -72,7 +71,6 @@ pub struct Settings {
     pub cursor_blink: bool,
     pub cursor_style: CursorStyle,
     pub restore_on_launch: bool,
-    pub manage_agent_hooks: bool,
     pub agent_activity: bool,
     pub shell_row_name: ShellRowName,
 }
@@ -100,7 +98,6 @@ impl Default for Settings {
             cursor_blink: true,
             cursor_style: CursorStyle::Block,
             restore_on_launch: true,
-            manage_agent_hooks: true,
             agent_activity: false,
             shell_row_name: ShellRowName::Folder,
         }
@@ -128,7 +125,6 @@ impl SettingChange {
             SettingChange::CursorBlink(_) => "cursorBlink",
             SettingChange::CursorStyle(_) => "cursorStyle",
             SettingChange::RestoreOnLaunch(_) => "restoreOnLaunch",
-            SettingChange::ManageAgentHooks(_) => "manageAgentHooks",
             SettingChange::AgentActivity(_) => "agentActivity",
             SettingChange::ShellRowName(_) => "shellRowName",
         }
@@ -158,7 +154,6 @@ impl SettingChange {
                 Value::from(text)
             }
             SettingChange::RestoreOnLaunch(on) => Value::from(*on),
-            SettingChange::ManageAgentHooks(on) => Value::from(*on),
             SettingChange::AgentActivity(on) => Value::from(*on),
             SettingChange::ShellRowName(name) => {
                 let text = match name {
@@ -305,11 +300,6 @@ fn apply_setting(
             value.as_bool(),
             BOOLEAN_REQUIREMENT,
         ),
-        "manageAgentHooks" => assign(
-            &mut settings.manage_agent_hooks,
-            value.as_bool(),
-            BOOLEAN_REQUIREMENT,
-        ),
         "agentActivity" => assign(
             &mut settings.agent_activity,
             value.as_bool(),
@@ -334,6 +324,10 @@ pub fn apply_settings_layer(
     let mut rejected = Vec::new();
 
     for (key, value) in layer {
+        let is_retired = RETIRED_SETTING_KEYS.contains(&key.as_str());
+        if is_retired {
+            continue;
+        }
         let unknown = format!("{label}: \"{key}\" is not a setting");
         let Some(name) = setting_name(key) else {
             problems.push(unknown);
@@ -432,6 +426,12 @@ mod tests {
         );
         assert_eq!(result.rejected, ["shellRowName", "fontSize"]);
 
+        let retired = layer_from(json!({ "manageAgentHooks": false }));
+        let result = apply_settings_layer(&base, &retired, "settings.json");
+        assert!(result.problems.is_empty(), "{:?}", result.problems);
+        assert!(result.rejected.is_empty());
+        assert_eq!(result.settings, base);
+
         for (key, bad) in [
             ("fontSize", json!(73)),
             ("scrollback", json!(1.5)),
@@ -472,7 +472,6 @@ mod tests {
             SettingChange::CursorBlink(false),
             SettingChange::CursorStyle(CursorStyle::Bar),
             SettingChange::RestoreOnLaunch(false),
-            SettingChange::ManageAgentHooks(false),
             SettingChange::AgentActivity(true),
             SettingChange::ShellRowName(ShellRowName::Path),
         ];
@@ -512,10 +511,6 @@ mod tests {
                 },
                 SettingChange::RestoreOnLaunch(on) => Settings {
                     restore_on_launch: *on,
-                    ..base.clone()
-                },
-                SettingChange::ManageAgentHooks(on) => Settings {
-                    manage_agent_hooks: *on,
                     ..base.clone()
                 },
                 SettingChange::AgentActivity(on) => Settings {

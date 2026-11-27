@@ -267,7 +267,8 @@ impl ServicesPort for StandIn {
         }
         let mut setups = self.setups.borrow_mut();
         for notice in &mut setups.notices {
-            if &notice.harness == harness && notice.kind == AgentSetupNoticeKind::Offer {
+            let is_offer = matches!(notice.kind, AgentSetupNoticeKind::Offer { .. });
+            if &notice.harness == harness && is_offer {
                 notice.kind = AgentSetupNoticeKind::Done;
                 notice.text = SET_UP_TEXT.to_string();
             }

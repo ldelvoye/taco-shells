@@ -29,7 +29,7 @@ const AGENT_HOOK_BODY_CAP: u64 = 16 * 1024 * 1024;
 const HEAD_CAP: usize = 16 * 1024;
 const READ_CHUNK: usize = 64 * 1024;
 const HEAD_END: &[u8] = b"\r\n\r\n";
-const TOKEN_FILE_NAME: &str = "focus-token";
+pub(crate) const TOKEN_FILE_NAME: &str = "focus-token";
 const TOKEN_HEADER: &str = "x-taco-shells-token";
 const PLUGIN_TOOL_PREFIX: &str = "mcp__plugin_";
 // The plugin's hook gives up after 250 ms, so a connection still sending after a second is dead.
