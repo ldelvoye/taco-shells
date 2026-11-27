@@ -51,12 +51,13 @@ const ITEM_PADDING: f32 = 9.;
 const RULE_GAP: f32 = 8.;
 const QUIET_PADDING: f32 = 6.;
 const SHARED_ALL_ID: &str = "activity-shared-all";
-// Lucas chooses from pictures whether the Now card keeps the logo's lettuce along its top.
+/// Whether the Now card carries the logo's lettuce as a band along its top.
 const LETTUCE_BAND: bool = true;
 const LETTUCE_WIDTH: f32 = 3.;
 /// The ink on the shell orange, in both appearances: 6.53:1.
 const NOW_INK: u32 = 0x2B211C;
 const NOW_TEXT_SIZE: f32 = 13.5;
+const NOW_LINES: usize = 4;
 const NOW_RADIUS: f32 = 10.;
 const NOW_PADDING_X: f32 = 14.;
 const NOW_PADDING_Y: f32 = 11.;
@@ -507,6 +508,8 @@ fn now_card(now: &str, row: &AgentRow, input: &ActivityInput) -> Div {
     let line = div()
         .text_size(px(NOW_TEXT_SIZE))
         .font_weight(FontWeight::SEMIBOLD)
+        .line_clamp(NOW_LINES)
+        .text_ellipsis()
         .child(now.to_string());
     let mut card = div()
         .flex()
@@ -539,12 +542,15 @@ fn now_card(now: &str, row: &AgentRow, input: &ActivityInput) -> Div {
     card
 }
 
-/// How many of the shared things the list shows.
 fn shown_count(total: usize, all_shown: bool) -> usize {
     if all_shown {
         return total;
     }
     total.min(SHARED_SHOWN)
+}
+
+fn has_more_than_shown(total: usize) -> bool {
+    total > SHARED_SHOWN
 }
 
 /// A pull request's state as last seen, never as if current: "Open, seen 12:04".
@@ -557,7 +563,7 @@ fn pull_request_state(state: PrState, checked_ms: Option<u64>, at_ms: u64, now_m
     };
     let mut seen_ms = at_ms;
     if let Some(checked) = checked_ms {
-        seen_ms = checked;
+        seen_ms = seen_ms.max(checked);
     }
     let seen = time_label(seen_ms, now_ms);
     format!("{word}, seen {seen}")
@@ -611,9 +617,10 @@ fn shared_section(input: &ActivityInput, cx: &mut Context<WindowView>) -> Option
         .border_1()
         .border_color(look.hairline)
         .bg(look.selected_card);
-    for (index, thing) in shared[..count].iter().enumerate() {
-        let below_another = index > 0;
-        let row = shared_row(thing, below_another, input);
+    let shown = shared.iter().take(count).enumerate();
+    for (index, thing) in shown {
+        let ruled_above = index > 0;
+        let row = shared_row(thing, ruled_above, input);
         card = card.child(row);
     }
     let mut section = div()
@@ -623,7 +630,7 @@ fn shared_section(input: &ActivityInput, cx: &mut Context<WindowView>) -> Option
         .gap(px(6.))
         .child(heading)
         .child(card.w_full());
-    if shared.len() > SHARED_SHOWN {
+    if has_more_than_shown(shared.len()) {
         let mut label = format!("Show all {}", shared.len());
         if input.shared_all_shown {
             label = SHOW_FEWER.to_string();
@@ -635,7 +642,7 @@ fn shared_section(input: &ActivityInput, cx: &mut Context<WindowView>) -> Option
     Some(section)
 }
 
-fn shared_row(thing: &SharedThing, below_another: bool, input: &ActivityInput) -> Div {
+fn shared_row(thing: &SharedThing, ruled_above: bool, input: &ActivityInput) -> Div {
     let look = input.look;
     let icon_path = target_icon(&thing.target);
     let icon = svg()
@@ -657,12 +664,19 @@ fn shared_row(thing: &SharedThing, below_another: bool, input: &ActivityInput) -
         .size(px(AUTHOR_DOT))
         .rounded_full()
         .bg(who.dot(look));
+    let name = div()
+        .min_w_0()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_ellipsis()
+        .child(sharer_name(&thing.by));
     let sharer = div()
         .flex()
         .items_center()
+        .max_w_full()
         .gap(px(4.))
         .child(dot)
-        .child(sharer_name(&thing.by));
+        .child(name);
     let time = time_label(thing.at_ms, input.now_ms);
     let mut facts = div()
         .flex()
@@ -705,7 +719,7 @@ fn shared_row(thing: &SharedThing, below_another: bool, input: &ActivityInput) -
         .py(px(7.))
         .child(icon)
         .child(words);
-    if below_another {
+    if ruled_above {
         row = row.border_t_1().border_color(look.hairline);
     }
     row
@@ -1037,10 +1051,23 @@ mod tests {
         let never_checked = pull_request_state(PrState::Merged, None, shared_at, now);
         let expected = format!("Merged, seen {}", time_label(shared_at, now));
         assert_eq!(never_checked, expected);
+        let checked_before_shared = shared_at - 5 * MS_PER_MINUTE;
+        let not_earlier =
+            pull_request_state(PrState::Open, Some(checked_before_shared), shared_at, now);
+        assert_eq!(
+            not_earlier,
+            format!("Open, seen {}", time_label(shared_at, now))
+        );
 
         assert_eq!(shown_count(3, false), 3);
         assert_eq!(shown_count(23, false), 5);
         assert_eq!(shown_count(23, true), 23);
+        assert!(!has_more_than_shown(5));
+        assert!(has_more_than_shown(6));
+
+        assert!(is_image("/Users/me/view-check/logo-after.PNG"));
+        assert!(!is_image("/Users/me/PLAN-sigkill.md"));
+        assert!(!is_image("/Users/me/pictures.png/notes"));
     }
 
     #[test]
