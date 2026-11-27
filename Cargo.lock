@@ -5071,6 +5071,7 @@ dependencies = [
  "gpui_platform",
  "libc",
  "serde_json",
+ "taco-agents",
  "taco-drive",
  "taco-host",
  "taco-identity",
