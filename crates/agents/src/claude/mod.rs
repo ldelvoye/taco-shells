@@ -59,10 +59,9 @@ fn is_session_id(value: &str) -> bool {
     let mut bytes = value.bytes().enumerate();
     bytes.all(|(index, byte)| {
         if UUID_HYPHENS.contains(&index) {
-            byte == b'-'
-        } else {
-            byte.is_ascii_hexdigit()
+            return byte == b'-';
         }
+        byte.is_ascii_hexdigit()
     })
 }
 
@@ -72,10 +71,9 @@ fn signal_for(event: &str, detail: Option<&str>) -> Option<AgentSignal> {
         "PreToolUse" => {
             let asks = detail.is_some_and(|tool| NEEDS_TOOLS.contains(&tool));
             if asks {
-                Some(AgentSignal::Needs)
-            } else {
-                Some(AgentSignal::Working)
+                return Some(AgentSignal::Needs);
             }
+            Some(AgentSignal::Working)
         }
         "Notification" => {
             let asks = detail.is_some_and(|kind| NEEDS_NOTIFICATIONS.contains(&kind));

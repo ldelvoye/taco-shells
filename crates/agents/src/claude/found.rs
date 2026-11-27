@@ -88,9 +88,8 @@ fn found_file(parsed: &Value) -> Option<Found> {
     };
     let scratchpad = text_at(parsed, "/scratchpad_dir");
     let in_scratchpad = scratchpad.is_some_and(|folder| path.starts_with(&folder));
-    let in_a_tool_folder = NOT_SHARED_FOLDERS
-        .iter()
-        .any(|folder| path.contains(folder));
+    let mut tool_folders = NOT_SHARED_FOLDERS.iter();
+    let in_a_tool_folder = tool_folders.any(|folder| path.contains(folder));
     let is_absolute = file.is_absolute();
     if in_scratchpad || in_a_tool_folder || !is_absolute {
         return None;

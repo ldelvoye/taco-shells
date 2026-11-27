@@ -7,8 +7,7 @@ pub struct StepContext {
     pub subagent: bool,
 }
 
-/// What a hook's payload adds to Agent Activity: the user's prompt, a message from another agent, a step the agent took,
-/// a message it sent, a note it wrote, or its now line.
+/// What a hook's payload adds to Agent Activity.
 #[derive(Clone, Debug, PartialEq)]
 pub enum EntryRead {
     Asked {

@@ -537,11 +537,8 @@ impl Workspace {
         let Some(index) = locate_row(arrangement, source) else {
             return refused();
         };
-        let titles: Vec<&str> = arrangement
-            .rows
-            .iter()
-            .map(|row| row.title.as_str())
-            .collect();
+        let title_of_each = arrangement.rows.iter().map(|row| row.title.as_str());
+        let titles: Vec<&str> = title_of_each.collect();
         let name = fork_name_for(&arrangement.rows[index].title, &titles);
         let Some(shell) = fork_start(&self.sessions, source, &name) else {
             return refused();
@@ -756,11 +753,8 @@ impl Workspace {
         if saved.rows.is_empty() {
             return false;
         }
-        let tab_group_ids: Vec<TabGroupId> = saved
-            .tab_groups
-            .iter()
-            .map(|_| self.next_tab_group_id())
-            .collect();
+        let minted = saved.tab_groups.iter().map(|_| self.next_tab_group_id());
+        let tab_group_ids: Vec<TabGroupId> = minted.collect();
 
         let mut rows = Vec::new();
         let mut starts = Vec::new();
