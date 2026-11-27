@@ -68,7 +68,7 @@ pub struct PtyShells {
 }
 
 unsafe extern "C" {
-    fn notify_is_valid_token(token: libc::c_int) -> libc::c_int;
+    fn notify_is_valid_token(token: libc::c_int) -> bool;
 }
 
 impl ShellProgram {
