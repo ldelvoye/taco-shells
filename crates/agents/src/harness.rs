@@ -1,4 +1,4 @@
-use taco_protocol::{AgentSignal, HarnessId, Peer, Step};
+use taco_protocol::{AgentSignal, HarnessId, Peer, SharedTarget, Step};
 
 /// Where a step was taken: the agent's turn, by its id, and whether one of the agent's subagents took it.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -36,6 +36,13 @@ pub enum EntryRead {
     /// The agent's line on what it is doing now; it replaces the last one and is not logged.
     Now {
         text: String,
+    },
+    /// A thing the agent shared, with a target to open, a text to show, or both.
+    Share {
+        kind: String,
+        title: String,
+        target: Option<SharedTarget>,
+        body: Option<String>,
     },
 }
 

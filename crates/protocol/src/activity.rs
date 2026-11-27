@@ -98,7 +98,7 @@ pub enum PrState {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum SharedTarget {
     Text {
-        characters: usize,
+        characters: u64,
     },
     File {
         path: String,
