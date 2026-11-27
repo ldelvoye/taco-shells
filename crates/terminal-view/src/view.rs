@@ -345,7 +345,7 @@ fn configure_terminal(terminal: &mut Terminal, config: &ViewConfig) -> Result<()
 mod tests {
     use super::*;
     use taco_ghostty::Snapshot;
-    use taco_protocol::{TerminalId, TerminalSize};
+    use taco_protocol::{CursorShape, TerminalId, TerminalSize};
 
     const SIZE: TerminalSize = TerminalSize { cols: 20, rows: 4 };
     const GREY: Rgb = Rgb {
@@ -409,6 +409,16 @@ mod tests {
         view.visible_lines().unwrap().unwrap()
     }
 
+    /// A terminal's whole state as a snapshot writes it: the screen, then the history.
+    fn encoded(terminal: &Terminal) -> Vec<u8> {
+        let snapshot = Snapshot::take(terminal).unwrap();
+        let mut bytes = snapshot.screen().to_vec();
+        for part in snapshot.history() {
+            bytes.extend_from_slice(part);
+        }
+        bytes
+    }
+
     #[test]
     fn nothing_reaches_a_view_before_its_attached_or_for_another_attachment() {
         let mut source = Terminal::new(SIZE).unwrap();
@@ -454,28 +464,46 @@ mod tests {
     }
 
     #[test]
-    fn resize_and_clear_apply_where_they_come_in_the_output() {
-        let source = Terminal::new(SIZE).unwrap();
+    fn a_view_fed_the_runtimes_events_ends_up_byte_for_byte_the_runtimes_terminal() {
+        let mut source = Terminal::new(SIZE).unwrap();
+        configure_terminal(&mut source, &config()).unwrap();
+        for line in 0..2_000 {
+            let styled = format!("\x1b[3{}mline {line}\x1b[0m\r\n", line % 8);
+            source.write(styled.as_bytes());
+        }
+        source.write(b"\x1b[?1h\x1b]0;a title\x07prompt $ ");
         let mut view = View::new(1, config()).unwrap();
-        let (event, _) = attached(1, &source);
+        let (event, parts) = attached(1, &source);
         view.apply(event).unwrap();
+        for part in history(1, parts) {
+            view.apply(part).unwrap();
+        }
+        while view.step_history().unwrap() {}
 
-        view.apply(output("one\r\ntwo\r\nprompt $")).unwrap();
-        view.apply(TerminalEvent::Cleared { id: id() }).unwrap();
-        assert_eq!(texts(&mut view), vec!["prompt $", "", "", ""]);
-
-        let smaller = TerminalSize { cols: 10, rows: 2 };
-        view.apply(TerminalEvent::Resized {
+        // Each event the runtime sends after the snapshot, and the call it made on its own terminal.
+        let smaller = TerminalSize { cols: 12, rows: 3 };
+        view.apply(output("\x1b[1mbold\x1b[0m\r\nmore")).unwrap();
+        source.write(b"\x1b[1mbold\x1b[0m\r\nmore");
+        let resized = TerminalEvent::Resized {
             id: id(),
             size: smaller,
-        })
-        .unwrap();
-        assert_eq!(texts(&mut view).len(), 2);
+        };
+        view.apply(resized).unwrap();
+        source.resize(smaller, 0, 0).unwrap();
+        view.apply(TerminalEvent::Cleared { id: id() }).unwrap();
+        source.clear().unwrap();
+        let defaults = TerminalEvent::CursorDefaults {
+            id: id(),
+            shape: CursorShape::Bar,
+            blink: true,
+        };
+        view.apply(defaults).unwrap();
+        source.set_cursor_defaults(CursorShape::Bar, true).unwrap();
+        view.apply(output("\r\nafter")).unwrap();
+        source.write(b"\r\nafter");
 
-        assert_eq!(
-            view.apply(TerminalEvent::End { id: id() }).unwrap(),
-            Applied::Ended
-        );
+        let followed = view.terminal.as_ref().unwrap();
+        assert_eq!(encoded(followed), encoded(&source));
     }
 
     #[test]

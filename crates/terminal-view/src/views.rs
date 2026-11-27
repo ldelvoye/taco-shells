@@ -382,7 +382,8 @@ mod tests {
     }
 
     #[test]
-    fn a_failing_view_is_attached_again_once_per_change_to_the_arrangement() {
+    fn a_failing_view_is_attached_again_once_per_change_to_the_arrangement_and_an_ended_one_never()
+    {
         let mut views = views();
         let a = id("a");
         let open = [a.clone()];
@@ -398,7 +399,12 @@ mod tests {
         views.receive(attached(&a, 2, broken));
         assert_eq!(attaches(views.take_requests()), vec![]);
         views.show(&open, Some(&a));
-        assert_eq!(attaches(views.take_requests()), vec![(a, 3)]);
+        assert_eq!(attaches(views.take_requests()), vec![(a.clone(), 3)]);
+
+        // Once its shell has ended, the runtime holds nothing more for it: no attach while it stays in the arrangement.
+        views.receive(TerminalEvent::End { id: a.clone() });
+        views.show(&open, Some(&a));
+        assert_eq!(attaches(views.take_requests()), vec![]);
     }
 
     #[test]
