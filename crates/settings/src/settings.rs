@@ -9,7 +9,7 @@ const BOOLEAN_REQUIREMENT: &str = "must be true or false";
 const CURSOR_STYLE_REQUIREMENT: &str = "must be \"block\", \"underline\" or \"bar\"";
 const SHELL_ROW_NAME_REQUIREMENT: &str = "must be \"folder\" or \"path\"";
 const CHECK_LABEL: &str = "settings.json";
-const SETTING_KEYS: [&str; 10] = [
+const SETTING_KEYS: [&str; 11] = [
     "theme",
     "fontFamily",
     "fontSize",
@@ -19,6 +19,7 @@ const SETTING_KEYS: [&str; 10] = [
     "cursorStyle",
     "restoreOnLaunch",
     "agentActivity",
+    "askForActivityNotes",
     "shellRowName",
 ];
 // Keys an older version wrote: read without a problem line and ignored.
@@ -59,6 +60,7 @@ pub enum SettingChange {
     CursorStyle(CursorStyle),
     RestoreOnLaunch(bool),
     AgentActivity(bool),
+    AskForActivityNotes(bool),
     ShellRowName(ShellRowName),
 }
 
@@ -73,6 +75,7 @@ pub struct Settings {
     pub cursor_style: CursorStyle,
     pub restore_on_launch: bool,
     pub agent_activity: bool,
+    pub ask_for_activity_notes: bool,
     pub shell_row_name: ShellRowName,
 }
 
@@ -100,6 +103,7 @@ impl Default for Settings {
             cursor_style: CursorStyle::Block,
             restore_on_launch: true,
             agent_activity: false,
+            ask_for_activity_notes: true,
             shell_row_name: ShellRowName::Folder,
         }
     }
@@ -127,6 +131,7 @@ impl SettingChange {
             SettingChange::CursorStyle(_) => "cursorStyle",
             SettingChange::RestoreOnLaunch(_) => "restoreOnLaunch",
             SettingChange::AgentActivity(_) => "agentActivity",
+            SettingChange::AskForActivityNotes(_) => "askForActivityNotes",
             SettingChange::ShellRowName(_) => "shellRowName",
         }
     }
@@ -156,6 +161,7 @@ impl SettingChange {
             }
             SettingChange::RestoreOnLaunch(on) => Value::from(*on),
             SettingChange::AgentActivity(on) => Value::from(*on),
+            SettingChange::AskForActivityNotes(on) => Value::from(*on),
             SettingChange::ShellRowName(name) => {
                 let text = match name {
                     ShellRowName::Folder => "folder",
@@ -303,6 +309,11 @@ fn apply_setting(
         ),
         "agentActivity" => assign(
             &mut settings.agent_activity,
+            value.as_bool(),
+            BOOLEAN_REQUIREMENT,
+        ),
+        "askForActivityNotes" => assign(
+            &mut settings.ask_for_activity_notes,
             value.as_bool(),
             BOOLEAN_REQUIREMENT,
         ),
@@ -474,6 +485,7 @@ mod tests {
             SettingChange::CursorStyle(CursorStyle::Bar),
             SettingChange::RestoreOnLaunch(false),
             SettingChange::AgentActivity(true),
+            SettingChange::AskForActivityNotes(false),
             SettingChange::ShellRowName(ShellRowName::Path),
         ];
         for change in cases {
@@ -516,6 +528,10 @@ mod tests {
                 },
                 SettingChange::AgentActivity(on) => Settings {
                     agent_activity: *on,
+                    ..base.clone()
+                },
+                SettingChange::AskForActivityNotes(on) => Settings {
+                    ask_for_activity_notes: *on,
                     ..base.clone()
                 },
                 SettingChange::ShellRowName(name) => Settings {
