@@ -6,7 +6,8 @@ use std::time::{Duration, Instant};
 
 use taco_drive::{Appearance, Point, Rect};
 use taco_protocol::{DrawnState, Edge, Panel, TerminalId};
-use taco_smoke::driver::Driver;
+use taco_smoke::chords::{NEW_TERMINAL, NEXT_ROW, PREVIOUS_ROW};
+use taco_smoke::driver::{Driver, terminals_of};
 
 use crate::Smoke;
 
@@ -18,8 +19,6 @@ const SHELL_POLL: Duration = Duration::from_millis(50);
 // The command holds `$((6*7))`, so the line `smoke-42` can only be the shell's answer, never the typed echo.
 const TYPED_COMMAND: &str = "echo smoke-$((6*7))";
 const TYPED_ANSWER: &str = "smoke-42";
-const NEXT_ROW: &str = "cmd-shift-]";
-const PREVIOUS_ROW: &str = "cmd-shift-[";
 // Nothing in the app binds ctrl-u, so the shell gets it and erases the line typed before it.
 const UNBOUND_CHORD: &str = "ctrl-u";
 const ERASED_TEXT: &str = "echo garbage";
@@ -28,7 +27,6 @@ const CHORD_ANSWER: &str = "chord-6";
 const SECOND_RUN_WINDOW: Duration = Duration::from_millis(300);
 const OPEN_SETTINGS: &str = "cmd-,";
 const CLOSE_TERMINAL: &str = "cmd-w";
-const NEW_TERMINAL: &str = "cmd-t";
 const EXIT_COMMAND: &str = "exit";
 const LEAKED_COMMAND: &str = "echo leaked-$((5+5))";
 const LEAKED_ANSWER: &str = "leaked-10";
@@ -386,14 +384,6 @@ fn rows_become(driver: &mut Driver, wanted: usize) -> Result<usize, String> {
 
 fn drawn(driver: &mut Driver) -> Result<DrawnState, String> {
     driver.drawn_state()
-}
-
-fn terminals_of(state: &DrawnState) -> Vec<TerminalId> {
-    let Some(arrangement) = &state.arrangement else {
-        return Vec::new();
-    };
-    let rows = arrangement.rows.iter();
-    rows.map(|row| row.terminal.clone()).collect()
 }
 
 fn row_terminals(driver: &mut Driver) -> Result<Vec<TerminalId>, String> {
