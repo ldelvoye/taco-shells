@@ -128,7 +128,6 @@ struct Shared {
 
 pub struct AgentSetups {
     shared: Arc<Shared>,
-    hooks_directory: PathBuf,
     submit_delay: Duration,
     not_loaded_delay: Duration,
     timer: Option<Sender<TimerMessage>>,
@@ -675,17 +674,12 @@ impl AgentSetups {
         let thread = thread::spawn(move || timer_loop(for_thread, messages));
         let setups = AgentSetups {
             shared,
-            hooks_directory: hooks,
             submit_delay,
             not_loaded_delay,
             timer: Some(sender),
             thread: Some(thread),
         };
         (setups, problems)
-    }
-
-    pub fn hooks_directory(&self) -> PathBuf {
-        self.hooks_directory.clone()
     }
 
     pub fn view(&self) -> AgentSetupView {
