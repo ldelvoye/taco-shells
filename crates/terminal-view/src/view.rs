@@ -63,6 +63,15 @@ impl View {
         })
     }
 
+    /// New settings or theme colors, applied to the terminal at once if it has arrived.
+    pub fn configure(&mut self, config: ViewConfig) -> Result<(), Error> {
+        self.config = config;
+        let Some(terminal) = self.terminal.as_mut() else {
+            return Ok(());
+        };
+        configure_terminal(terminal, &self.config)
+    }
+
     pub fn apply(&mut self, event: TerminalEvent) -> Result<Applied, Error> {
         match event {
             TerminalEvent::Attached {
@@ -338,15 +347,6 @@ impl View {
             return None;
         }
         self.terminal.as_mut()
-    }
-
-    /// New settings or theme colors, applied to the terminal at once if it has arrived.
-    pub fn configure(&mut self, config: ViewConfig) -> Result<(), Error> {
-        self.config = config;
-        let Some(terminal) = self.terminal.as_mut() else {
-            return Ok(());
-        };
-        configure_terminal(terminal, &self.config)
     }
 }
 

@@ -37,6 +37,8 @@ pub struct Views {
     /// Used before the middle has been laid out.
     cell: CellSize,
     config: ViewConfig,
+    /// The focus last reported to a program, so each change is reported once and a terminal switched away from hears it lost focus.
+    reported_focus: Option<(TerminalId, bool)>,
     outbox: Vec<TerminalRequest>,
 }
 
@@ -56,8 +58,13 @@ impl Views {
             fit: None,
             cell,
             config,
+            reported_focus: None,
             outbox: Vec::new(),
         }
+    }
+
+    pub fn config(&self) -> &ViewConfig {
+        &self.config
     }
 
     /// The requests to send, in order.
@@ -186,6 +193,37 @@ impl Views {
         }
         for id in broken {
             self.start_over(id);
+        }
+    }
+
+    /// Tells programs that asked (mode 1004) when the terminal on screen gains or loses focus, and the one switched away from that it lost it.
+    pub fn report_focus(&mut self, focused: bool) {
+        let Some(id) = self.on_screen.clone() else {
+            return;
+        };
+        let current = (id.clone(), focused);
+        if self.reported_focus.as_ref() == Some(&current) {
+            return;
+        }
+        let attached = self.views.get(&id).is_some_and(|view| view.is_attached());
+        if !attached {
+            return;
+        }
+        if let Some((previous, true)) = self.reported_focus.clone()
+            && previous != id
+        {
+            self.send_focus(&previous, false);
+        }
+        self.send_focus(&id, focused);
+        self.reported_focus = Some(current);
+    }
+
+    fn send_focus(&mut self, id: &TerminalId, focused: bool) {
+        let Some(view) = self.views.get(id) else {
+            return;
+        };
+        if let Ok(Some(report)) = view.focus_report(focused) {
+            self.write(id.clone(), report);
         }
     }
 
@@ -393,6 +431,58 @@ mod tests {
         // Once that snapshot is read, `a` is attached afresh.
         views.receive(attached(&a, 1, real_screen()));
         assert_eq!(attaches(views.take_requests()), vec![(a, 11)]);
+    }
+
+    #[test]
+    fn focus_is_reported_once_per_change_and_a_terminal_switched_away_from_hears_it_lost_it() {
+        let mut views = views();
+        let a = id("a");
+        let b = id("b");
+        let c = id("c");
+        let open = [a.clone(), b.clone(), c.clone()];
+        let writes = |views: &mut Views| -> Vec<(TerminalId, Vec<u8>)> {
+            let mut found = Vec::new();
+            for request in views.take_requests() {
+                if let TerminalRequest::Write { id, data } = request {
+                    found.push((id, data));
+                }
+            }
+            found
+        };
+
+        views.show(&open, Some(&a));
+        views.show(&open, Some(&b));
+        for (terminal, attachment) in [(&a, 1), (&b, 2)] {
+            views.receive(attached(terminal, attachment, real_screen()));
+            let asks_for_focus_reports = TerminalEvent::Output {
+                id: terminal.clone(),
+                data: b"\x1b[?1004h".to_vec(),
+            };
+            views.receive(asks_for_focus_reports);
+        }
+        views.show(&open, Some(&a));
+        views.take_requests();
+
+        views.report_focus(true);
+        assert_eq!(writes(&mut views), vec![(a.clone(), b"\x1b[I".to_vec())]);
+        views.report_focus(true);
+        assert_eq!(writes(&mut views), vec![]);
+
+        // Switching tells the terminal left that it lost focus, and the new one that it has it.
+        views.show(&open, Some(&b));
+        views.report_focus(true);
+        assert_eq!(
+            writes(&mut views),
+            vec![(a, b"\x1b[O".to_vec()), (b.clone(), b"\x1b[I".to_vec())]
+        );
+
+        // A terminal whose view has not attached yet is told nothing; back on `b`, losing focus is reported.
+        views.show(&open, Some(&c));
+        views.report_focus(true);
+        assert_eq!(writes(&mut views), vec![]);
+        views.show(&open, Some(&b));
+        views.report_focus(false);
+        assert_eq!(writes(&mut views), vec![(b, b"\x1b[O".to_vec())]);
     }
 
     #[test]
