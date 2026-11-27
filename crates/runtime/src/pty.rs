@@ -426,6 +426,14 @@ mod tests {
     /// Prints whether SIGTERM is blocked, and how many devices the process holds besides its own terminal on 0 to 2.
     const REPORT_INHERITED: &str = r#"my $old = POSIX::SigSet->new; sigprocmask(SIG_BLOCK, POSIX::SigSet->new, $old); my $devices = grep { my $fd; open($fd, "<&=", $_) && -c $fd } 3..255; print "sigterm blocked: ", ($old->ismember(SIGTERM) ? 1 : 0), ", other devices: $devices\n";"#;
 
+    /// The runtime starts shells from one thread. Tests starting them on several at once could pass a pty one has just opened, before its close-on-exec is set, to a shell another starts.
+    static STARTING_SHELLS: Mutex<()> = Mutex::new(());
+
+    fn one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+        let locked = STARTING_SHELLS.lock();
+        locked.unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     fn test_context() -> ShellContext {
         ShellContext {
             app: "taco-shells-test".into(),
@@ -491,6 +499,7 @@ mod tests {
 
     #[test]
     fn a_shell_starts_where_asked_with_its_limit_and_follows_its_cd_size_program_and_exit() {
+        let _alone = one_at_a_time();
         let scratch = std::env::temp_dir().join(format!("taco-runtime-pty-{}", std::process::id()));
         let inner = scratch.join("inner");
         std::fs::create_dir_all(&inner).unwrap();
@@ -561,6 +570,7 @@ mod tests {
     /// zsh happens to clear its own mask, and macOS's `ps` does not show one, so a program that leaves it alone reports it.
     #[test]
     fn a_shell_starts_with_no_signal_blocked_and_no_other_terminal_open() {
+        let _alone = one_at_a_time();
         let mut blocked: libc::sigset_t = unsafe { std::mem::zeroed() };
         let mut previous: libc::sigset_t = unsafe { std::mem::zeroed() };
         unsafe {
@@ -587,6 +597,7 @@ mod tests {
     /// Its exit waits for the line to be read; without the reader's copy of the slave, macOS discards it after about 0.6 s.
     #[test]
     fn what_a_shell_prints_as_it_exits_reaches_the_core_though_nothing_had_read_it() {
+        let _alone = one_at_a_time();
         let print_then_exit = format!(
             r#"$| = 1; print "x" x {BUDGET_BYTES}; select(undef, undef, undef, 0.2); print "last line\n";"#
         );
@@ -606,6 +617,7 @@ mod tests {
     /// A process the shell left behind, deaf to the hang-up, holds the pty and prints until it is closed, or for 30 s should the test fail first.
     #[test]
     fn the_exit_of_a_shell_is_reported_though_a_process_it_left_behind_keeps_printing() {
+        let _alone = one_at_a_time();
         let leave_a_printer = r#"$| = 1; if (fork() == 0) { $SIG{HUP} = "IGNORE"; alarm 30; while (print "x" x 65536) {} exit 0; } exit 7;"#;
         let (inputs, received) = mpsc::channel();
         let mut shells = perl_shells(leave_a_printer.into(), inputs, Arc::new(Budgets::default()));
