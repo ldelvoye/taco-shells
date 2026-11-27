@@ -5,8 +5,8 @@ use gpui::{
     ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
     GlobalElementId, InteractiveElement, IntoElement, KeyBinding, LayoutId, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, ParentElement, Pixels, Point, Render,
-    ShapedLine, Style, Styled, TextAlign, TextRun, UTF16Selection, UnderlineStyle, Window, actions,
-    div, fill, point, px, relative, size, transparent_black,
+    ShapedLine, SharedString, Style, Styled, TextAlign, TextRun, UTF16Selection, UnderlineStyle,
+    Window, actions, div, fill, point, px, relative, size, transparent_black,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -65,6 +65,8 @@ pub struct TextField {
     scroll: f32,
     /// Whether the field holding the keyboard is ringed in the shell's colours.
     shell_focus: bool,
+    /// Shown in the secondary colour while the field is empty.
+    placeholder: Option<SharedString>,
 }
 
 struct TextElement {
@@ -73,6 +75,8 @@ struct TextElement {
 
 struct PrepaintState {
     line: Option<ShapedLine>,
+    /// The placeholder, while the field is empty.
+    hint: Option<ShapedLine>,
     /// Where the whole line sits, its start possibly left of the field.
     line_bounds: Bounds<Pixels>,
     scroll: f32,
@@ -97,11 +101,17 @@ impl TextField {
             is_selecting: false,
             scroll: 0.,
             shell_focus: false,
+            placeholder: None,
         }
     }
 
     pub fn with_shell_focus(mut self) -> Self {
         self.shell_focus = true;
+        self
+    }
+
+    pub fn with_placeholder(mut self, placeholder: &'static str) -> Self {
+        self.placeholder = Some(placeholder.into());
         self
     }
 
@@ -616,6 +626,23 @@ impl Element for TextElement {
         };
 
         let font_size = style.font_size.to_pixels(window.rem_size());
+        let mut hint = None;
+        if content.is_empty()
+            && let Some(placeholder) = field.placeholder.clone()
+        {
+            let hint_run = TextRun {
+                len: placeholder.len(),
+                font: style.font(),
+                color: look.secondary_text,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            let shaped = window
+                .text_system()
+                .shape_line(placeholder, font_size, &[hint_run], None);
+            hint = Some(shaped);
+        }
         let line = window
             .text_system()
             .shape_line(content.into(), font_size, &runs, None);
@@ -651,6 +678,7 @@ impl Element for TextElement {
         }
         PrepaintState {
             line: Some(line),
+            hint,
             line_bounds,
             scroll,
             caret,
@@ -703,6 +731,12 @@ fn paint_line(
     let painted = line.paint(origin, line_height, TextAlign::Left, None, window, cx);
     if let Err(error) = painted {
         eprintln!("the text field's line did not paint: {error:#}");
+    }
+    if let Some(hint) = prepaint.hint.take() {
+        let hint_painted = hint.paint(origin, line_height, TextAlign::Left, None, window, cx);
+        if let Err(error) = hint_painted {
+            eprintln!("the text field's placeholder did not paint: {error:#}");
+        }
     }
     if let Some(caret) = prepaint.caret.take() {
         window.paint_quad(caret);

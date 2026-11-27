@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use gpui::{
     AnyWindowHandle, AppContext, HeadlessAppContext, Keystroke, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, PlatformInput, Point, Result, px, size,
+    MouseMoveEvent, MouseUpEvent, Pixels, PlatformInput, Point, Result, ScrollDelta, ScrollEvent,
+    point, px, size,
 };
 use taco_settings::Appearance;
 
@@ -36,6 +37,8 @@ pub enum Gesture {
     Keys(Vec<String>),
     /// Time passing, drawn once at the end, for something that opens or moves over time.
     Wait(Duration),
+    /// The wheel turned over a point, by a distance in window points: positive scrolls down.
+    Scroll(Point<Pixels>, Pixels),
 }
 
 /// Writes the window, drawn from `fixture` in `appearance` after `gestures`, to a PNG at `out`.
@@ -113,6 +116,16 @@ fn play(cx: &mut HeadlessAppContext, window: AnyWindowHandle, gesture: &Gesture)
         }
         Gesture::Wait(time) => {
             std::thread::sleep(*time);
+            draw(cx, window)
+        }
+        Gesture::Scroll(at, by) => {
+            let moved = point(px(0.), -*by);
+            let scrolled = ScrollEvent {
+                position: *at,
+                delta: ScrollDelta::Pixels(moved),
+                ..Default::default()
+            };
+            send(cx, window, PlatformInput::Scroll(scrolled))?;
             draw(cx, window)
         }
     }

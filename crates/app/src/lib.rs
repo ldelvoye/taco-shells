@@ -22,6 +22,7 @@ pub mod runtime_client;
 pub mod services_host;
 mod settings_page;
 mod shell;
+mod shortcuts_page;
 mod slot;
 #[cfg(feature = "render")]
 mod stand_in;

@@ -16,7 +16,8 @@ use taco_protocol::{
 use taco_rules::{DropMark, DropPoint, drop_for, drop_mark_for, focus_target, selected_terminal};
 use taco_services::{AgentMenuAction, AgentSetupView};
 use taco_settings::{
-    Binding, CommandId, Config, SettingChange, Settings, UnreadSettings, command_for, palette_for,
+    Binding, CommandId, Config, ConfigTexts, SettingChange, Settings, UnreadSettings, command_for,
+    palette_for, resolve_config,
 };
 use taco_terminal_view::{Terminals, TerminalsEvent};
 
@@ -43,6 +44,7 @@ use crate::settings_page::{
     OverPage, Page, SettingsFields, SettingsInput, Typed, TypedSetting, over_page, published_text,
     settings_page, typed,
 };
+use crate::shortcuts_page::{SEARCH_PLACEHOLDER, ShortcutsInput, shortcuts_page};
 use crate::slot::{Slot, SlotLine, opened_height, slot_line_for};
 use crate::strip::strip;
 use crate::terminal_list::{ListDrag, ListInput, terminal_list};
@@ -121,8 +123,12 @@ pub struct WindowView {
     /// The pages over the middle, the top one drawn; empty when the terminal shows.
     pages: Vec<Page>,
     page_focus: FocusHandle,
-    /// A page has just opened and takes the keyboard on the next frame.
-    page_wants_keyboard: bool,
+    /// What on the page takes the keyboard on the next frame, after a page opens or a field lets go.
+    page_wants_keyboard: Option<PageKeyboard>,
+    shortcut_search: Entity<TextField>,
+    shortcut_query: String,
+    /// The shipped bindings alone, which "Back to default" returns a command to.
+    default_bindings: Vec<Binding>,
     /// The last page has just closed and the terminal on screen takes the keyboard back.
     terminal_wants_keyboard: bool,
     /// Why each setting's last write was refused, by its name in settings.json, until it is written again.
@@ -133,6 +139,13 @@ pub struct WindowView {
 enum Awaited {
     /// Open the new group's popup where the row's popup was.
     NewGroup { at: Point<Pixels> },
+}
+
+/// Where the keyboard goes on a page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PageKeyboard {
+    Page,
+    Search,
 }
 
 impl WindowView {
@@ -183,6 +196,7 @@ impl WindowView {
             }
         });
         let fields = settings_fields(&shown.settings, &look, cx);
+        let shortcut_search = search_field(&look, cx);
         Self {
             shown,
             look,
@@ -217,7 +231,10 @@ impl WindowView {
             slot: None,
             pages: Vec::new(),
             page_focus: cx.focus_handle(),
-            page_wants_keyboard: false,
+            page_wants_keyboard: None,
+            shortcut_search,
+            shortcut_query: String::new(),
+            default_bindings: shipped_bindings(),
             terminal_wants_keyboard: false,
             refused: HashMap::new(),
         }
@@ -531,28 +548,61 @@ impl WindowView {
         self.open_file(ConfigFile::Settings, cx);
     }
 
-    /// Opens the settings page, or closes it when it is the page on top.
+    pub(crate) fn open_keybindings_file(&mut self, cx: &mut Context<Self>) {
+        self.open_file(ConfigFile::Keybindings, cx);
+    }
+
+    /// Opens the settings page, or closes every page when one is open.
     pub(crate) fn toggle_settings(&mut self, cx: &mut Context<Self>) {
-        if self.pages.last() == Some(&Page::Settings) {
-            self.close_page(cx);
+        if !self.pages.is_empty() {
+            self.close_pages(cx);
             return;
         }
-        self.pages.push(Page::Settings);
-        self.page_wants_keyboard = true;
+        self.push_page(Page::Settings, cx);
+    }
+
+    /// Opens the shortcuts page over Settings, or closes every page when it is on top.
+    pub(crate) fn toggle_shortcuts(&mut self, cx: &mut Context<Self>) {
+        if self.pages.last() == Some(&Page::Shortcuts) {
+            self.close_pages(cx);
+            return;
+        }
+        self.open_shortcuts(cx);
+    }
+
+    /// Puts the shortcuts page on top, with Settings under it to go back to.
+    pub(crate) fn open_shortcuts(&mut self, cx: &mut Context<Self>) {
+        if self.pages.last() == Some(&Page::Shortcuts) {
+            return;
+        }
+        if self.pages.is_empty() {
+            self.pages.push(Page::Settings);
+        }
+        self.push_page(Page::Shortcuts, cx);
+    }
+
+    fn push_page(&mut self, page: Page, cx: &mut Context<Self>) {
+        self.pages.push(page);
+        self.page_wants_keyboard = Some(keyboard_on_opening(page));
         cx.notify();
     }
 
+    /// Goes back one page, to the terminal from the last one.
     pub(crate) fn close_page(&mut self, cx: &mut Context<Self>) {
         if self.pages.pop().is_none() {
             return;
         }
-        self.page_wants_keyboard = !self.pages.is_empty();
-        self.terminal_wants_keyboard = self.pages.is_empty();
+        if self.pages.is_empty() {
+            self.page_wants_keyboard = None;
+            self.terminal_wants_keyboard = true;
+        } else {
+            self.page_wants_keyboard = Some(PageKeyboard::Page);
+        }
         cx.notify();
     }
 
     /// Closes every page, for an action that means to show a terminal.
-    fn close_pages(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn close_pages(&mut self, cx: &mut Context<Self>) {
         if self.pages.is_empty() {
             return;
         }
@@ -565,6 +615,21 @@ impl WindowView {
         let key = change.key();
         self.refused.remove(key);
         self.services.write_setting(change);
+    }
+
+    // Esc in the search clears it and hands the keyboard to the page, so the next Esc goes back to Settings.
+    fn search_said(&mut self, event: &TextFieldEvent, cx: &mut Context<Self>) {
+        match event {
+            TextFieldEvent::Edited(text) => self.shortcut_query = text.clone(),
+            TextFieldEvent::Submitted => {}
+            TextFieldEvent::Cancelled => {
+                self.shortcut_query.clear();
+                self.shortcut_search
+                    .update(cx, |field, cx| field.set_text("", cx));
+                self.page_wants_keyboard = Some(PageKeyboard::Page);
+            }
+        }
+        cx.notify();
     }
 
     fn field(&self, setting: TypedSetting) -> &Entity<TextField> {
@@ -588,7 +653,7 @@ impl WindowView {
             TextFieldEvent::Cancelled => {
                 // The field gives the keyboard to the page, so the blur that follows finds nothing new to write and a second Esc closes the page.
                 self.show_published(setting, cx);
-                self.page_wants_keyboard = true;
+                self.page_wants_keyboard = Some(PageKeyboard::Page);
                 cx.notify();
             }
         }
@@ -643,6 +708,9 @@ impl WindowView {
                 self.show_published(setting, cx);
             }
         }
+        let look = self.look.clone();
+        self.shortcut_search
+            .update(cx, |field, cx| field.set_look(look, cx));
     }
 
     fn watch_field_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -700,8 +768,9 @@ impl WindowView {
             return false;
         }
         match over_page(command) {
-            OverPage::ClosePage => self.close_page(cx),
+            OverPage::ClosePages => self.close_pages(cx),
             OverPage::ToggleSettings => self.toggle_settings(cx),
+            OverPage::ToggleShortcuts => self.toggle_shortcuts(cx),
             OverPage::ShowTerminal => {
                 self.close_pages(cx);
                 self.run(command, cx);
@@ -781,7 +850,7 @@ impl WindowView {
             CommandId::TerminalFocusPreviousGroup => self.move_focus(FocusMove::PreviousRow, cx),
             CommandId::SidebarToggle => self.toggle_panel(Panel::Terminals),
             CommandId::ConfigOpenSettings => self.toggle_settings(cx),
-            CommandId::ConfigOpenKeybindings => self.open_file(ConfigFile::Keybindings, cx),
+            CommandId::ConfigOpenKeybindings => self.toggle_shortcuts(cx),
             _ => self.run_in_terminal(command, cx),
         }
     }
@@ -982,7 +1051,7 @@ impl WindowView {
             center = center.child(self.panel(panel, place, drawn, mark, cx));
         }
 
-        let settings_open = self.pages.contains(&Page::Settings);
+        let settings_open = !self.pages.is_empty();
         let side_strip = strip(&drawn.panels, settings_open, look, cx);
         let mut body = div().relative().flex().flex_1().min_h_0().child(side_strip);
         if let Some((panel, place)) = open_on(&drawn.panels, Edge::Left) {
@@ -1087,9 +1156,21 @@ impl WindowView {
                     unread: &self.shown.unread,
                     refused: &self.refused,
                     fields: &self.fields,
+                    bindings: &self.shown.bindings,
                     look,
                 };
                 let shown_page = settings_page(&input, cx).track_focus(&self.page_focus);
+                terminal = terminal.child(shown_page);
+            }
+            Some(Page::Shortcuts) => {
+                let input = ShortcutsInput {
+                    bindings: &self.shown.bindings,
+                    defaults: &self.default_bindings,
+                    query: &self.shortcut_query,
+                    search: &self.shortcut_search,
+                    look,
+                };
+                let shown_page = shortcuts_page(&input, cx).track_focus(&self.page_focus);
                 terminal = terminal.child(shown_page);
             }
             None => terminal = terminal.child(self.terminal_or_placeholder()),
@@ -1136,9 +1217,17 @@ impl WindowView {
         let unfocused = focused.is_none();
         // A page takes the keyboard on the frame after it opens, or whenever nothing holds it.
         if !self.pages.is_empty() {
-            if self.page_wants_keyboard || unfocused {
-                self.page_wants_keyboard = false;
-                window.focus(&self.page_focus, cx);
+            let mut wanted = self.page_wants_keyboard.take();
+            if wanted.is_none() && unfocused {
+                wanted = Some(PageKeyboard::Page);
+            }
+            match wanted {
+                Some(PageKeyboard::Page) => window.focus(&self.page_focus, cx),
+                Some(PageKeyboard::Search) => {
+                    let search = self.shortcut_search.focus_handle(cx);
+                    window.focus(&search, cx);
+                }
+                None => {}
             }
             return;
         }
@@ -1275,6 +1364,37 @@ impl Render for WindowView {
         }
         root
     }
+}
+
+// The shortcuts page opens on its search, so typing finds a command at once.
+fn keyboard_on_opening(page: Page) -> PageKeyboard {
+    match page {
+        Page::Settings => PageKeyboard::Page,
+        Page::Shortcuts => PageKeyboard::Search,
+    }
+}
+
+fn shipped_bindings() -> Vec<Binding> {
+    let no_files = ConfigTexts {
+        settings: None,
+        keybindings: None,
+    };
+    let shipped = resolve_config(&no_files, false);
+    shipped.bindings
+}
+
+fn search_field(look: &Look, cx: &mut Context<WindowView>) -> Entity<TextField> {
+    let look = look.clone();
+    let field = cx.new(|cx| {
+        TextField::new("", look, cx)
+            .with_shell_focus()
+            .with_placeholder(SEARCH_PLACEHOLDER)
+    });
+    let heard = cx.subscribe(&field, |view, _, event: &TextFieldEvent, cx| {
+        view.search_said(event, cx);
+    });
+    heard.detach();
+    field
 }
 
 fn settings_fields(
