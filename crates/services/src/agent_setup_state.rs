@@ -4,7 +4,6 @@ use taco_agents::Version;
 
 const STATUS_NOT_INSTALLED: &str = "Not installed";
 const STATUS_OFF: &str = "Off";
-const STATUS_OLD_SETUP: &str = "Set up the old way";
 const STATUS_ON: &str = "On";
 const STATUS_PLUGIN_DIRS_HIDDEN: &str = "Its settings hide the plugin";
 const STATUS_PLUGIN_DIRS_MANAGED: &str = "Blocked by managed settings";
@@ -21,7 +20,6 @@ pub enum PluginDirs {
 pub enum AgentSetupState {
     NotInstalled,
     Off,
-    OldSetup,
     PluginDirsHidden { file: String },
     PluginDirsManaged,
     TooOld { version: String },
@@ -32,7 +30,6 @@ pub enum AgentSetupState {
 pub struct AgentSetupFacts {
     pub installed: bool,
     pub activity_on: bool,
-    pub has_old_entries: bool,
     pub plugin_dirs: PluginDirs,
     pub home: PathBuf,
     pub version: Option<Version>,
@@ -72,9 +69,6 @@ pub fn agent_setup_state_of(facts: &AgentSetupFacts) -> AgentSetupState {
     if facts.plugin_dirs == PluginDirs::ManagedHides {
         return AgentSetupState::PluginDirsManaged;
     }
-    if facts.has_old_entries {
-        return AgentSetupState::OldSetup;
-    }
     if facts.activity_on
         && let Some(version) = facts.version
     {
@@ -99,7 +93,6 @@ pub fn agent_menu_of(state: &AgentSetupState, product_name: &str) -> AgentMenu {
     let (status, enabled) = match state {
         AgentSetupState::NotInstalled => (STATUS_NOT_INSTALLED.to_string(), false),
         AgentSetupState::Off => (STATUS_OFF.to_string(), true),
-        AgentSetupState::OldSetup => (STATUS_OLD_SETUP.to_string(), true),
         AgentSetupState::PluginDirsHidden { .. } => (STATUS_PLUGIN_DIRS_HIDDEN.to_string(), true),
         AgentSetupState::PluginDirsManaged => (STATUS_PLUGIN_DIRS_MANAGED.to_string(), false),
         AgentSetupState::TooOld { .. } => (format!("Needs a newer {product_name}"), false),
@@ -120,16 +113,10 @@ mod tests {
     const OLD: Option<Version> = Some((2, 1, 279));
     const NEW: Option<Version> = Some((2, 1, 280));
 
-    fn facts(
-        installed: bool,
-        has_old_entries: bool,
-        activity_on: bool,
-        version: Option<Version>,
-    ) -> AgentSetupFacts {
+    fn facts(installed: bool, activity_on: bool, version: Option<Version>) -> AgentSetupFacts {
         AgentSetupFacts {
             installed,
             activity_on,
-            has_old_entries,
             plugin_dirs: PluginDirs::Unset,
             home: PathBuf::from("/h"),
             version,
@@ -155,27 +142,20 @@ mod tests {
         let hidden = AgentSetupState::PluginDirsHidden {
             file: "~/.claude/settings.json".to_string(),
         };
-        let managed_over_old =
-            with_plugin_dirs(facts(true, true, true, OLD), PluginDirs::ManagedHides);
-        let old_over_hidden = with_plugin_dirs(facts(true, true, true, OLD), hides.clone());
-        let hidden_while_off = with_plugin_dirs(facts(true, false, false, OLD), hides.clone());
-        let hidden_while_on = with_plugin_dirs(facts(true, false, true, NEW), hides.clone());
-        let too_old_over_hidden = with_plugin_dirs(facts(true, false, true, OLD), hides);
+        let managed_over_old = with_plugin_dirs(facts(true, true, OLD), PluginDirs::ManagedHides);
+        let hidden_while_off = with_plugin_dirs(facts(true, false, OLD), hides.clone());
+        let hidden_while_on = with_plugin_dirs(facts(true, true, NEW), hides.clone());
+        let too_old_over_hidden = with_plugin_dirs(facts(true, true, OLD), hides);
         let cases = [
             (too_old_over_hidden, too_old.clone()),
             (managed_over_old, AgentSetupState::PluginDirsManaged),
-            (old_over_hidden, AgentSetupState::OldSetup),
             (hidden_while_off, hidden.clone()),
             (hidden_while_on, hidden),
-            (
-                facts(false, true, false, OLD),
-                AgentSetupState::NotInstalled,
-            ),
-            (facts(true, true, true, OLD), AgentSetupState::OldSetup),
-            (facts(true, false, false, OLD), AgentSetupState::Off),
-            (facts(true, false, true, OLD), too_old),
-            (facts(true, false, true, NEW), AgentSetupState::On),
-            (facts(true, false, true, None), AgentSetupState::On),
+            (facts(false, false, OLD), AgentSetupState::NotInstalled),
+            (facts(true, false, OLD), AgentSetupState::Off),
+            (facts(true, true, OLD), too_old),
+            (facts(true, true, NEW), AgentSetupState::On),
+            (facts(true, true, None), AgentSetupState::On),
         ];
         for (case, expected) in cases {
             let state = agent_setup_state_of(&case);
@@ -191,7 +171,6 @@ mod tests {
         let cases = [
             (AgentSetupState::NotInstalled, false),
             (AgentSetupState::Off, true),
-            (AgentSetupState::OldSetup, true),
             (too_old, false),
             (AgentSetupState::On, false),
         ];

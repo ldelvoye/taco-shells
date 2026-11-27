@@ -46,7 +46,7 @@ Turn Agent Activity on with the "Agent Activity in this app's terminals" switch 
 
 Set up installs nothing into Claude Code. The app keeps its own plugin in `~/.taco-shells/claude-plugin`, and while the switch is on, every new terminal hands that folder to Claude Code through `CLAUDE_CODE_PLUGIN_DIRS`. Terminals that were already open keep what they started with, so start Claude Code in a new terminal after setting up.
 
-Set up edits your Claude Code `settings.json` only when it has to, and the app tells you when it did ("One line changed in …"). If your settings set `CLAUDE_CODE_PLUGIN_DIRS` in their `env` block, which would hide the app's folder, Set up adds the folder to that value. Switching Agent Activity off takes it back out, but only while the line is still exactly what the app wrote. If your settings still call the old app's hook scripts, Set up removes those entries. Managed settings are never edited.
+Set up edits your Claude Code `settings.json` only when it has to, and the app tells you when it did ("One line changed in …"). If your settings set `CLAUDE_CODE_PLUGIN_DIRS` in their `env` block, which would hide the app's folder, Set up adds the folder to that value. Switching Agent Activity off takes it back out, but only while the line is still exactly what the app wrote. Managed settings are never edited.
 
 The app finds Claude Code's settings in `CLAUDE_CONFIG_DIR` when that's set in the app's own environment, and in `~/.claude` otherwise. Claude Code 2.1.280 or later is needed; with an older one, the Agents menu says so.
 

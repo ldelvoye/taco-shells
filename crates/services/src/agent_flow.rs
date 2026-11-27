@@ -3,19 +3,15 @@ use std::path::{Path, PathBuf};
 use taco_agents::{HARNESSES, HarnessSetup, Version};
 use taco_protocol::HarnessId;
 
-use crate::agent_hooks::{has_managed_entries, remove_managed_entries};
 use crate::agent_setup_state::{
     AgentSetupFacts, AgentSetupState, PluginDirs, agent_setup_state_of,
 };
 use crate::config_files::plugin_directory_path;
 use crate::file_write::{read_text, write_if_unchanged};
-use crate::hook_scripts::hooks_directory;
 use crate::plugin_dirs::{MANAGED_SETTINGS_PATH, plugin_dirs_of};
-use crate::settings_edit::HookEdit;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AgentPaths {
-    pub(crate) hooks_directory: PathBuf,
     pub(crate) agent_directory: PathBuf,
     pub(crate) settings_path: PathBuf,
     pub(crate) managed_settings_path: PathBuf,
@@ -43,7 +39,6 @@ fn agent_paths_of(
     };
     let settings_path = agent_directory.join(setup.settings_file);
     AgentPaths {
-        hooks_directory: hooks_directory(config_directory),
         agent_directory,
         settings_path,
         managed_settings_path: PathBuf::from(MANAGED_SETTINGS_PATH),
@@ -93,14 +88,6 @@ pub(crate) fn write_settings(
     write_if_unchanged(path, &shown, original, text)
 }
 
-fn write_edit(agent: &Agent, original: Option<&str>, edit: HookEdit) -> Result<(), String> {
-    match edit {
-        HookEdit::Changed(text) => write_settings(&agent.paths.settings_path, original, &text),
-        HookEdit::Unchanged => Ok(()),
-        HookEdit::Refused(problem) => Err(problem),
-    }
-}
-
 pub(crate) fn label_of(agent: &Agent) -> String {
     agent.paths.settings_path.display().to_string()
 }
@@ -124,12 +111,10 @@ pub(crate) fn read_state(
 ) -> AgentSetupState {
     let installed = agent.paths.agent_directory.exists();
     let text = settings_text(&agent.paths.settings_path);
-    let has_old_entries = has_managed_entries(text.as_deref(), &agent.paths.hooks_directory);
     let plugin_dirs = plugin_dirs_reading(agent, text.as_deref());
     let facts = AgentSetupFacts {
         installed,
         activity_on,
-        has_old_entries,
         plugin_dirs,
         home: agent.paths.home.clone(),
         version,
@@ -138,56 +123,14 @@ pub(crate) fn read_state(
     agent_setup_state_of(&facts)
 }
 
-pub(crate) fn remove_old_setup(agent: &Agent) -> Result<(), String> {
-    let read = read_settings(&agent.paths.settings_path)?;
-    let Some(text) = read else {
-        return Ok(());
-    };
-    let label = label_of(agent);
-    let removed = remove_managed_entries(&text, &agent.paths.hooks_directory, &label);
-    let original = Some(text.as_str());
-    write_edit(agent, original, removed)
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::os::unix::fs::PermissionsExt;
 
-    use serde_json::Value;
     use tempfile::TempDir;
 
-    use crate::agent_hooks::electron_fixture::electron_settings;
-
     use super::*;
-
-    struct Fixture {
-        temp: TempDir,
-        agent: Agent,
-    }
-
-    fn claude_setup() -> &'static HarnessSetup {
-        taco_agents::CLAUDE.setup().unwrap()
-    }
-
-    fn fixture() -> Fixture {
-        let temp = TempDir::new().unwrap();
-        let config = temp.path().join("config");
-        let home = temp.path().join("home");
-        let agent_directory = temp.path().join("claude");
-        fs::create_dir_all(&agent_directory).unwrap();
-        let variable_name = claude_setup().config_directory_variable;
-        let variable = agent_directory.display().to_string();
-        let env = move |name: &str| {
-            if name != variable_name {
-                return None;
-            }
-            Some(variable.clone())
-        };
-        let agents = agents_of(&config, &env, &home);
-        let agent = agents.into_iter().next().unwrap();
-        Fixture { temp, agent }
-    }
 
     fn file_names_in(directory: &Path) -> Vec<String> {
         let mut names = Vec::new();
@@ -238,36 +181,5 @@ mod tests {
         let shown = unwritable.display().to_string();
         assert!(problem.contains(&shown), "{problem}");
         assert!(!missing_directory.exists());
-    }
-
-    #[test]
-    fn a_symlinked_settings_file_stays_a_symlink() {
-        let fixture = fixture();
-        let agent = &fixture.agent;
-        let dotfiles = fixture.temp.path().join("dotfiles");
-        fs::create_dir_all(&dotfiles).unwrap();
-        let target = dotfiles.join("settings.json");
-        let hooks_directory = &agent.paths.hooks_directory;
-        let managed = electron_settings(hooks_directory, "{}");
-        fs::write(&target, managed).unwrap();
-        let middle = dotfiles.join("middle.json");
-        symlink("settings.json", &middle).unwrap();
-        symlink(&middle, &agent.paths.settings_path).unwrap();
-
-        assert_eq!(remove_old_setup(agent), Ok(()));
-
-        let metadata = fs::symlink_metadata(&agent.paths.settings_path).unwrap();
-        assert!(metadata.file_type().is_symlink());
-        let middle_metadata = fs::symlink_metadata(&middle).unwrap();
-        assert!(middle_metadata.file_type().is_symlink());
-        let text = fs::read_to_string(&target).unwrap();
-        assert!(!has_managed_entries(Some(&text), hooks_directory));
-        let parsed: Value = serde_json::from_str(&text).unwrap();
-        assert!(parsed.get("hooks").is_none());
-        let beside_target = file_names_in(&dotfiles);
-        let beside_link = file_names_in(&agent.paths.agent_directory);
-        for name in beside_target.iter().chain(beside_link.iter()) {
-            assert!(!name.ends_with("taco-tmp"), "{name}");
-        }
     }
 }
