@@ -4,6 +4,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+use taco_agents::CUT_MARK;
 use taco_protocol::{StartSource, Step};
 
 // How much of its own account a compacted agent is handed back, in characters, its last line included.
@@ -19,8 +20,6 @@ const STEPS_WORTH_A_NOTE: usize = 3;
 
 const CONTEXT_HEADING: &str = "Your earlier notes from this session, as you wrote them in Taco Shells' Agent Activity, newest first:";
 const NOW_PREFIX: &str = "What you were doing: ";
-// What ends a note cut to fit, as a cut prompt or note in the log ends.
-const CUT_MARK: &str = "… (cut)";
 const NUDGE_OPENING: &str = "Before you finish, write a short note for the user with the activity note tool. Since your last note you";
 
 /// How a session started, from Claude Code's `source`; a value it does not know counts as a new session.
@@ -134,8 +133,9 @@ fn bounded(text: &str, limit: usize) -> String {
     if length <= limit {
         return text.to_string();
     }
-    let kept: String = text.chars().take(limit - 1).collect();
-    format!("{kept}…")
+    let kept_length = limit - CUT_MARK.chars().count();
+    let kept: String = text.chars().take(kept_length).collect();
+    format!("{kept}{CUT_MARK}")
 }
 
 #[cfg(test)]
@@ -223,7 +223,7 @@ mod tests {
         let long_name = changed(&format!("/work/{}.rs", "x".repeat(1_000)));
         let text = nudge_text(&[&long_name], Some("/work")).unwrap();
         assert_eq!(text.chars().count(), MAX_NUDGE_CHARACTERS);
-        assert!(text.ends_with('…'));
+        assert!(text.ends_with(CUT_MARK));
     }
 
     #[test]

@@ -345,8 +345,9 @@ pub(super) fn read_entries(event: &str, payload: &str) -> Vec<EntryRead> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::text::{CUT_MARK, MAX_ENTRY_CHARACTERS};
+    use super::super::text::MAX_ENTRY_CHARACTERS;
     use super::*;
+    use crate::CUT_MARK;
 
     #[test]
     fn a_prompt_a_finished_tool_and_a_changed_file_each_make_an_entry_and_nothing_else_does() {
