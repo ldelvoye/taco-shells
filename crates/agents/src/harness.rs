@@ -78,14 +78,6 @@ pub struct AgentTitle {
     pub idle: bool,
 }
 
-/// One hook the app writes into the agent's settings: the event, the script it runs, and whether the agent waits for it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct HookEntry {
-    pub event: &'static str,
-    pub script: &'static str,
-    pub is_async: bool,
-}
-
 /// How the app wires an agent's hooks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HarnessSetup {
@@ -98,7 +90,6 @@ pub struct HarnessSetup {
     /// The config directory's name under home when the variable is unset.
     pub default_config_directory: &'static str,
     pub settings_file: &'static str,
-    pub entries: &'static [HookEntry],
 }
 
 /// What the app knows about one coding agent.

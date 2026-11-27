@@ -4,7 +4,7 @@ use serde_json::Value;
 use taco_protocol::{AgentSignal, Peer, PrState, SharedTarget, Step};
 
 use crate::harness::{
-    AgentTitle, EntryRead, Found, Harness, HarnessSetup, HookEntry, PullRequestSeen, StepContext,
+    AgentTitle, EntryRead, Found, Harness, HarnessSetup, PullRequestSeen, StepContext,
 };
 
 const ASKING_TOOL: &str = "AskUserQuestion";
@@ -92,27 +92,12 @@ const SUMMARY_FIELDS: &[(&str, &str)] = &[
 const UUID_LENGTH: usize = 36;
 const UUID_HYPHENS: [usize; 4] = [8, 13, 18, 23];
 
-const ATTENTION_SCRIPT: &str = "taco-shells-attention.sh";
-const SESSION_SCRIPT: &str = "taco-shells-claude-session.sh";
-
 static SETUP: HarnessSetup = HarnessSetup {
     product_name: "Claude Code",
     commands: &["claude"],
     config_directory_variable: "CLAUDE_CONFIG_DIR",
     default_config_directory: ".claude",
     settings_file: "settings.json",
-    entries: &[
-        entry("Notification", ATTENTION_SCRIPT, false),
-        entry("Stop", ATTENTION_SCRIPT, false),
-        entry("SessionStart", SESSION_SCRIPT, false),
-        entry("SessionEnd", SESSION_SCRIPT, false),
-        entry("UserPromptSubmit", SESSION_SCRIPT, true),
-        entry("PreToolUse", SESSION_SCRIPT, true),
-        entry("PostToolUse", SESSION_SCRIPT, true),
-        entry("Notification", SESSION_SCRIPT, true),
-        entry("Stop", SESSION_SCRIPT, true),
-        entry("StopFailure", SESSION_SCRIPT, true),
-    ],
 };
 
 pub static CLAUDE: Harness = Harness {
@@ -127,14 +112,6 @@ pub static CLAUDE: Harness = Harness {
     entry_reader: Some(read_entries),
     setup: Some(&SETUP),
 };
-
-const fn entry(event: &'static str, script: &'static str, is_async: bool) -> HookEntry {
-    HookEntry {
-        event,
-        script,
-        is_async,
-    }
-}
 
 /// Whether a value is a Claude Code session id: a UUID, in either case.
 fn is_session_id(value: &str) -> bool {
