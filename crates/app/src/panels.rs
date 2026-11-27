@@ -1,6 +1,6 @@
 use gpui::{
-    AnyElement, App, AppContext, Bounds, Context, CursorStyle, Div, ElementId, Entity, FontWeight,
-    InteractiveElement, IntoElement, ParentElement, Pixels, Point, Render, SharedString, Size,
+    AnyElement, App, AppContext, Bounds, Context, CursorStyle, Div, Entity, FontWeight,
+    InteractiveElement, IntoElement, ParentElement, Pixels, Point, Render, Size,
     StatefulInteractiveElement, Styled, Window, div, px, svg,
 };
 use taco_protocol::{Edge, Panel, PanelPlace, Panels};
@@ -8,6 +8,7 @@ use taco_protocol::{Edge, Panel, PanelPlace, Panels};
 use crate::assets::CLOSE_ICON;
 use crate::drive::mark;
 use crate::look::{FONT_FAMILY, Look, PANEL_TITLE_HEIGHT, SMALL_TEXT_SIZE, STRIP_WIDTH, TEXT_SIZE};
+use crate::parts::element_id;
 use crate::shell::{shell_orange, shell_outline};
 use crate::window::WindowView;
 
@@ -286,11 +287,6 @@ pub fn landing_preview(panel: Panel, edge: Edge, size: f32, look: &Look) -> Div 
             .bottom(inset)
             .h(extent),
     }
-}
-
-fn element_id(kind: &str, name: &str) -> ElementId {
-    let id = SharedString::from(format!("{kind}:{name}"));
-    ElementId::Name(id)
 }
 
 fn panel_preview(

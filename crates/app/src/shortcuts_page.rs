@@ -11,9 +11,10 @@ use taco_settings::{Binding, Chord, CommandId, KeymapChange, command_for};
 use crate::drive::mark;
 use crate::look::{Look, SMALL_TEXT_SIZE};
 use crate::page::{
-    BUTTON_RADIUS, CHIP_GAP, ROW_GAP, ROW_PADDING, chip, chip_text, form_column, group, page_foot,
-    page_frame, page_header, text_button,
+    BUTTON_RADIUS, CHIP_GAP, ROW_GAP, ROW_PADDING, UNREAD_OPACITY, chip, chip_text, form_column,
+    group, page_foot, page_frame, page_header, text_button,
 };
+use crate::parts;
 use crate::shell::{shell_orange, shell_outline};
 use crate::text_field::TextField;
 use crate::window::WindowView;
@@ -40,10 +41,6 @@ const CAPTURE_RADIUS: f32 = 6.;
 const CAPTURE_OUTLINE: f32 = 2.;
 const CAPTURE_WASH: f32 = 0.12;
 const HINT_GAP: f32 = 4.;
-const CARD_PADDING: f32 = 10.;
-const CARD_RADIUS: f32 = 8.;
-const CARD_GAP: f32 = 8.;
-const UNREAD_OPACITY: f32 = 0.45;
 
 const GROUPS: [(&str, &[(CommandId, &str)]); 3] = [
     (
@@ -434,24 +431,9 @@ fn small_button(id: impl Into<SharedString>, label: &'static str, look: &Look) -
 }
 
 fn problem_card(problems: &[String], look: &Look, cx: &mut Context<WindowView>) -> Div {
-    let mut card = div()
-        .flex()
-        .flex_col()
-        .items_start()
-        .gap(px(CARD_GAP))
-        .p(px(CARD_PADDING))
-        .rounded(px(CARD_RADIUS))
-        .bg(look.selected_card)
-        .border_1()
-        .border_color(look.hairline)
-        .text_color(look.text);
-    for problem in problems {
-        let line = div().child(problem.clone());
-        card = card.child(line);
-    }
     let open = text_button("shortcuts-problems-open", OPEN_FILE_LABEL, look)
         .on_click(cx.listener(|view, _, _, cx| view.open_keybindings_file(cx)));
-    card.child(open)
+    parts::problem_card(problems, open, look)
 }
 
 pub fn pressed(capture: &Capture, chord: Chord, bindings: &[Binding]) -> Pressed {

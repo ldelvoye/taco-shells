@@ -1,16 +1,12 @@
 use std::collections::HashSet;
 
-use gpui::{
-    Context, Div, ElementId, FontWeight, InteractiveElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, div, px, svg,
-};
+use gpui::{Context, Div, ParentElement, StatefulInteractiveElement, Styled, div, px};
 
-use crate::assets::CLOSE_ICON;
 use crate::look::Look;
+use crate::parts::{bordered_button, close_button, element_id};
 use crate::window::WindowView;
 
 const CARD_WIDTH: f32 = 340.;
-const CLOSE_SIZE: f32 = 14.;
 const RESTART_TO_UPDATE: &str = "Restart to update";
 
 /// What the services have reported that the window shows as cards.
@@ -151,47 +147,20 @@ fn filled(
     let text = div().flex().flex_col().flex_1().min_w_0().children(lines);
     let mut line = container.flex().items_center().gap(px(10.)).child(text);
     if let Some(BannerAction::RestartToUpdate) = banner.action {
-        let button = div()
-            .id(element_id("banner-action", index))
-            .flex_none()
-            .px(px(8.))
-            .py(px(2.))
-            .rounded(px(6.))
-            .border_1()
-            .border_color(look.hairline)
-            .bg(look.selected_card)
-            .cursor_pointer()
-            .font_weight(FontWeight::SEMIBOLD)
-            .child(RESTART_TO_UPDATE)
+        let id = element_id("banner-action", index);
+        let button = bordered_button(id, RESTART_TO_UPDATE, look)
             .on_click(cx.listener(|view, _, _, _| view.apply_update()));
         line = line.child(button);
     }
     if let Some(dismissal) = &banner.dismissal {
         let dismissed = dismissal.clone();
-        let veil = look.veil;
-        let cross = svg()
-            .path(CLOSE_ICON)
-            .size(px(CLOSE_SIZE))
-            .text_color(look.secondary_text);
-        let close = div()
-            .id(element_id("banner-dismiss", index))
-            .flex_none()
-            .p(px(2.))
-            .rounded(px(6.))
-            .cursor_pointer()
-            .hover(move |style| style.bg(veil))
-            .child(cross)
-            .on_click(cx.listener(move |view, _, _, cx| {
-                view.dismiss_banner(dismissed.clone(), cx);
-            }));
+        let id = element_id("banner-dismiss", index);
+        let close = close_button(id, look).on_click(cx.listener(move |view, _, _, cx| {
+            view.dismiss_banner(dismissed.clone(), cx);
+        }));
         line = line.child(close);
     }
     line
-}
-
-fn element_id(kind: &str, index: usize) -> ElementId {
-    let id = SharedString::from(format!("{kind}:{index}"));
-    ElementId::Name(id)
 }
 
 #[cfg(test)]
