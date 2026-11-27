@@ -5,11 +5,12 @@ use std::process::{self, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+const DITTO: &str = "/usr/bin/ditto";
 const EXTRACT_TIMEOUT: Duration = Duration::from_secs(120);
 const EXTRACT_POLL: Duration = Duration::from_millis(50);
 
 pub(super) fn extract_zip(zip: &Path, into: &Path) -> io::Result<()> {
-    let mut child = Command::new("ditto")
+    let mut child = Command::new(DITTO)
         .arg("-x")
         .arg("-k")
         .arg(zip)
