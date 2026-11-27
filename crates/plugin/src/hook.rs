@@ -10,14 +10,22 @@ use crate::panel_text::PANEL_TEXT;
 use crate::post::PostError;
 
 const HARNESS: &str = "claude";
-const FAILURE_EVENT: &str = "PostToolUseFailure";
+const SESSION_START_EVENT: &str = "SessionStart";
+const SESSION_END_EVENT: &str = "SessionEnd";
+const USER_PROMPT_SUBMIT_EVENT: &str = "UserPromptSubmit";
+const PRE_TOOL_USE_EVENT: &str = "PreToolUse";
+const POST_TOOL_USE_EVENT: &str = "PostToolUse";
+const POST_TOOL_USE_FAILURE_EVENT: &str = "PostToolUseFailure";
+const NOTIFICATION_EVENT: &str = "Notification";
+const STOP_EVENT: &str = "Stop";
+const STOP_FAILURE_EVENT: &str = "StopFailure";
 const STATE_EVENTS: [&str; 6] = [
-    "UserPromptSubmit",
-    "PreToolUse",
-    "PostToolUse",
-    "Notification",
-    "Stop",
-    "StopFailure",
+    USER_PROMPT_SUBMIT_EVENT,
+    PRE_TOOL_USE_EVENT,
+    POST_TOOL_USE_EVENT,
+    NOTIFICATION_EVENT,
+    STOP_EVENT,
+    STOP_FAILURE_EVENT,
 ];
 
 #[derive(Debug, PartialEq)]
@@ -40,7 +48,7 @@ fn harness_id() -> HarnessId {
 }
 
 fn event_post(payload: &Value, event: &str, session_id: &str, pids: &[u32]) -> Option<Request> {
-    if event == "SessionStart" {
+    if event == SESSION_START_EVENT {
         let cwd = text_field(payload, "cwd")?;
         let source = text_field(payload, "source");
         let started = match &source {
@@ -62,7 +70,7 @@ fn event_post(payload: &Value, event: &str, session_id: &str, pids: &[u32]) -> O
         });
     }
 
-    if event == "SessionEnd" {
+    if event == SESSION_END_EVENT {
         let body = SessionEndBody {
             pids: pids.to_vec(),
             harness: harness_id(),
@@ -80,8 +88,8 @@ fn event_post(payload: &Value, event: &str, session_id: &str, pids: &[u32]) -> O
     }
 
     let detail_key = match event {
-        "PreToolUse" | "PostToolUse" => Some("tool_name"),
-        "Notification" => Some("notification_type"),
+        PRE_TOOL_USE_EVENT | POST_TOOL_USE_EVENT => Some("tool_name"),
+        NOTIFICATION_EVENT => Some("notification_type"),
         _ => None,
     };
     let mut detail = None;
@@ -115,7 +123,7 @@ pub fn posts_for(payload: &Value, pids: &[u32]) -> Vec<Request> {
     let state_post = event_post(payload, &event, &session_id, pids);
     match state_post {
         Some(post) => posts.push(post),
-        None if event == FAILURE_EVENT => {}
+        None if event == POST_TOOL_USE_FAILURE_EVENT => {}
         None => return posts,
     }
 
@@ -141,8 +149,8 @@ fn hook_body(payload: &Value, pids: &[u32]) -> Option<String> {
 pub fn question_for(payload: &Value, pids: &[u32]) -> Option<Request> {
     let event = text_field(payload, "hook_event_name")?;
     let route = match event.as_str() {
-        "SessionStart" => CONTEXT,
-        "Stop" => {
+        SESSION_START_EVENT => CONTEXT,
+        STOP_EVENT => {
             let already_continued = payload.get("stop_hook_active") == Some(&Value::Bool(true));
             if already_continued {
                 return None;
@@ -168,7 +176,7 @@ pub fn session_start_output(answer: &ContextAnswer) -> Option<String> {
     }
     let output = json!({
         "hookSpecificOutput": {
-            "hookEventName": "SessionStart",
+            "hookEventName": SESSION_START_EVENT,
             "additionalContext": text,
         }
     });
