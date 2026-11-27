@@ -19,7 +19,7 @@ use crate::assets::{
     CLOSE_ICON, DOCUMENT_ICON, IMAGE_ICON, LINK_ICON, PULL_REQUEST_ICON, TEXT_ICON,
 };
 use crate::look::{Look, SMALL_TEXT_SIZE};
-use crate::shared_view::is_image;
+use crate::shared_view::{is_image, opens};
 use crate::shell::shell_orange;
 use crate::terminal_list::state_mark;
 use crate::window::WindowView;
@@ -548,20 +548,17 @@ fn has_more_than_shown(total: usize) -> bool {
     total > SHARED_SHOWN
 }
 
-/// A pull request's state as last seen, never as if current: "Open, seen 12:04".
-fn pull_request_state(state: PrState, checked_ms: Option<u64>, at_ms: u64, now_ms: u64) -> String {
+/// A pull request's state as last observed, "Open, seen 12:04"; none when nothing has observed it.
+fn pull_request_state(state: PrState, checked_ms: Option<u64>, now_ms: u64) -> Option<String> {
+    let checked = checked_ms?;
     let word = match state {
         PrState::Open => "Open",
         PrState::Draft => "Draft",
         PrState::Merged => "Merged",
         PrState::Closed => "Closed",
     };
-    let mut seen_ms = at_ms;
-    if let Some(checked) = checked_ms {
-        seen_ms = seen_ms.max(checked);
-    }
-    let seen = time_label(seen_ms, now_ms);
-    format!("{word}, seen {seen}")
+    let seen = time_label(checked, now_ms);
+    Some(format!("{word}, seen {seen}"))
 }
 
 fn target_icon(target: &SharedTarget) -> &'static str {
@@ -629,7 +626,7 @@ fn shared_section(input: &ActivityInput, cx: &mut Context<WindowView>) -> Option
     Some(section)
 }
 
-/// A share in the log: its title opens the thing while it is in Shared, and says when it has left.
+/// A share's title in the log, which opens the thing while it is still in Shared.
 fn shared_mention(
     id: u64,
     title: &str,
@@ -663,10 +660,6 @@ fn shared_mention(
         .hover(move |style| style.text_color(hover_ink))
         .on_click(cx.listener(move |view, _, _, cx| view.open_shared(&clicked, cx)))
         .into_any_element()
-}
-
-fn opens(target: &SharedTarget) -> bool {
-    !matches!(target, SharedTarget::PullRequest { url: None, .. })
 }
 
 fn shared_row(
@@ -724,8 +717,8 @@ fn shared_row(
     if let SharedTarget::PullRequest {
         state, checked_ms, ..
     } = &thing.target
+        && let Some(words) = pull_request_state(*state, *checked_ms, input.now_ms)
     {
-        let words = pull_request_state(*state, *checked_ms, thing.at_ms, input.now_ms);
         let pill = div()
             .max_w_full()
             .px(px(6.))
@@ -1092,21 +1085,11 @@ mod tests {
     #[test]
     fn a_pull_request_reads_as_last_seen_and_shared_shows_the_newest_five_until_asked() {
         let now = now_ms();
-        let shared_at = now - 40 * MS_PER_MINUTE;
         let checked_at = now - 5 * MS_PER_MINUTE;
-        let checked = pull_request_state(PrState::Open, Some(checked_at), shared_at, now);
-        let expected = format!("Open, seen {}", time_label(checked_at, now));
-        assert_eq!(checked, expected);
-        let never_checked = pull_request_state(PrState::Merged, None, shared_at, now);
-        let expected = format!("Merged, seen {}", time_label(shared_at, now));
-        assert_eq!(never_checked, expected);
-        let checked_before_shared = shared_at - 5 * MS_PER_MINUTE;
-        let not_earlier =
-            pull_request_state(PrState::Open, Some(checked_before_shared), shared_at, now);
-        assert_eq!(
-            not_earlier,
-            format!("Open, seen {}", time_label(shared_at, now))
-        );
+        let checked = pull_request_state(PrState::Merged, Some(checked_at), now);
+        let expected = format!("Merged, seen {}", time_label(checked_at, now));
+        assert_eq!(checked, Some(expected));
+        assert_eq!(pull_request_state(PrState::Open, None, now), None);
 
         assert_eq!(shown_count(3, false), 3);
         assert_eq!(shown_count(23, false), 5);

@@ -447,7 +447,7 @@ impl WindowView {
         cx.notify();
     }
 
-    /// Opens a shared thing: an https link in the browser, anything else in the middle. Nothing is handed to the system.
+    /// A shared thing opened: an https link in the browser, anything else in the middle; nothing is handed to the system.
     pub(crate) fn open_shared(&mut self, thing: &SharedThing, cx: &mut Context<Self>) {
         let Some(terminal) = self.activity.terminal.clone() else {
             return;
@@ -470,7 +470,7 @@ impl WindowView {
                 Content::Loading
             }
             SharedTarget::File { path } => {
-                self.read_shared_file(&terminal, thing.id, path.clone(), cx);
+                Self::read_shared_file(&terminal, thing.id, path.clone(), cx);
                 Content::Loading
             }
         };
@@ -483,13 +483,7 @@ impl WindowView {
         cx.notify();
     }
 
-    fn read_shared_file(
-        &self,
-        terminal: &TerminalId,
-        thing: u64,
-        path: String,
-        cx: &mut Context<Self>,
-    ) {
+    fn read_shared_file(terminal: &TerminalId, thing: u64, path: String, cx: &mut Context<Self>) {
         let terminal = terminal.clone();
         let reading = cx.background_spawn(async move { file_content(&path) });
         let filling = cx.spawn(async move |this, cx| {
@@ -502,7 +496,7 @@ impl WindowView {
         filling.detach();
     }
 
-    /// Shows what a shared thing holds, if that thing is still the one open.
+    /// What a shared thing holds, shown only while that thing is still the one open.
     fn fill_opened(
         &mut self,
         terminal: &TerminalId,
@@ -1064,8 +1058,8 @@ impl WindowView {
         if window_command {
             return true;
         }
-        // The terminal's own commands need a terminal on screen to act on.
-        self.attached.on_screen.is_some()
+        // The terminal's own commands need a terminal on screen to act on, not one an opened thing covers.
+        self.attached.on_screen.is_some() && self.opened.is_none()
     }
 
     fn run_in_terminal(&mut self, command: CommandId, cx: &mut Context<Self>) {
@@ -1627,7 +1621,7 @@ impl WindowView {
             }
             return;
         }
-        // An opened thing takes the keyboard when it opens, when the last page over it closes, or when nothing holds it.
+        // An opened thing takes the keyboard as it opens, as the last page over it closes, or when nothing holds it.
         if self.opened.is_some() {
             let wanted = self.opened_wants_keyboard || self.terminal_wants_keyboard || unfocused;
             self.opened_wants_keyboard = false;

@@ -1,14 +1,15 @@
 //! A shared thing opened in the middle, in place of the terminal: what it shows, read off the main thread, and its drawing.
 
-use std::fs::{self, File};
+use std::fs::{self, OpenOptions};
 use std::io::Read;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use gpui::{
     AnyElement, Context, Div, FontWeight, InteractiveElement, IntoElement, ObjectFit,
     ParentElement, StatefulInteractiveElement, Styled, StyledImage, div, img, px,
 };
-use taco_protocol::{SharedThing, TerminalId};
+use taco_protocol::{SharedTarget, SharedThing, TerminalId};
 
 use crate::look::{FONT_FAMILY, Look, SMALL_TEXT_SIZE, TEXT_SIZE, TITLE_BAR_HEIGHT};
 use crate::window::WindowView;
@@ -36,6 +37,7 @@ const NOT_REGULAR: &str = "Not a regular file, so it is not read.";
 const TOO_LARGE_TEXT: &str = "Over 1 MB, so it is not shown here.";
 const TOO_LARGE_IMAGE: &str = "Over 20 MB, so it is not drawn here.";
 const NOT_TEXT: &str = "Not text, so it is not shown here.";
+const UNREADABLE: &str = "It could not be read.";
 
 /// A shared thing shown in the middle, for the terminal whose log it came from.
 pub struct OpenedThing {
@@ -48,7 +50,11 @@ pub struct OpenedThing {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Content {
     Loading,
-    Text(String),
+    /// The text as drawn, and whether it was cut to fit.
+    Text {
+        shown: String,
+        cut: bool,
+    },
     Image(PathBuf),
     /// Shown only by its path, with a way to find it in the Finder.
     Reveal {
@@ -61,6 +67,11 @@ pub enum Content {
     Address(String),
 }
 
+/// Whether a click opens the thing; a pull request seen with no link has nothing to open.
+pub fn opens(target: &SharedTarget) -> bool {
+    !matches!(target, SharedTarget::PullRequest { url: None, .. })
+}
+
 pub fn is_image(path: &str) -> bool {
     let Some((_, extension)) = path.rsplit_once('.') else {
         return false;
@@ -69,7 +80,8 @@ pub fn is_image(path: &str) -> bool {
     IMAGE_EXTENSIONS.contains(&lowered.as_str())
 }
 
-/// Whether an address may be handed to the browser: `https://` in any case, then a host.
+/// Whether an address may be handed to the browser: `https://` in any case, then a host with no user part, and no
+/// spaces, control or direction characters anywhere, which could make it read as another address.
 pub fn is_https(url: &str) -> bool {
     let Some(scheme) = url.get(..HTTPS.len()) else {
         return false;
@@ -77,15 +89,27 @@ pub fn is_https(url: &str) -> bool {
     if !scheme.eq_ignore_ascii_case(HTTPS) {
         return false;
     }
-    let rest = &url[HTTPS.len()..];
-    let mut host = rest;
-    if let Some(host_end) = rest.find(['/', '?', '#']) {
-        host = &rest[..host_end];
+    let mut characters = url.chars();
+    let disguised = characters.any(could_disguise);
+    if disguised {
+        return false;
     }
-    !host.is_empty()
+    let rest = &url[HTTPS.len()..];
+    let mut authority = rest;
+    if let Some(authority_end) = rest.find(['/', '?', '#']) {
+        authority = &rest[..authority_end];
+    }
+    let has_user = authority.contains('@');
+    let has_host = !authority.is_empty() && !authority.starts_with(':');
+    has_host && !has_user
 }
 
-/// What a shared file shows as. Only a regular file is read, and no more than the text it would show.
+fn could_disguise(character: char) -> bool {
+    let direction_mark = matches!(character, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}');
+    character.is_whitespace() || character.is_control() || direction_mark
+}
+
+/// What a shared file shows as; only a regular file is read, and no more than it would show.
 pub fn file_content(path: &str) -> Content {
     let candidate = Path::new(path);
     let not_found = Content::Gone(format!("Not found at {path}"));
@@ -108,13 +132,24 @@ pub fn file_content(path: &str) -> Content {
     if metadata.len() > MAX_TEXT_BYTES {
         return reveal(shown_path, TOO_LARGE_TEXT);
     }
-    let Ok(file) = File::open(candidate) else {
-        return not_found;
+    // Opened without blocking and checked again on the handle, so a path swapped for a pipe after the check is not read.
+    let opening = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(candidate);
+    let Ok(file) = opening else {
+        return reveal(shown_path, UNREADABLE);
     };
+    let Ok(held) = file.metadata() else {
+        return reveal(shown_path, UNREADABLE);
+    };
+    if !held.is_file() {
+        return reveal(shown_path, NOT_REGULAR);
+    }
     let mut bytes = Vec::new();
     let mut limited = file.take(MAX_TEXT_BYTES);
     if limited.read_to_end(&mut bytes).is_err() {
-        return not_found;
+        return reveal(shown_path, UNREADABLE);
     }
     let sniffed_length = bytes.len().min(SNIFFED_BYTES);
     let sniffed = &bytes[..sniffed_length];
@@ -122,7 +157,7 @@ pub fn file_content(path: &str) -> Content {
         return reveal(shown_path, NOT_TEXT);
     }
     match String::from_utf8(bytes) {
-        Ok(text) => Content::Text(text),
+        Ok(text) => text_content(text),
         Err(_) => reveal(shown_path, NOT_TEXT),
     }
 }
@@ -130,7 +165,7 @@ pub fn file_content(path: &str) -> Content {
 /// A text body the workspace sent, or none when the thing is gone.
 pub fn body_content(body: Option<String>) -> Content {
     match body {
-        Some(text) => Content::Text(text),
+        Some(text) => text_content(text),
         None => Content::Gone(NO_LONGER_KEPT.to_string()),
     }
 }
@@ -140,12 +175,19 @@ fn reveal(path: PathBuf, reason: &str) -> Content {
     Content::Reveal { path, reason }
 }
 
-/// The text as drawn, and whether it was cut.
-fn shown_text(text: &str) -> (String, bool) {
-    let cut_at = text.char_indices().nth(SHOWN_CHARACTERS);
-    match cut_at {
-        Some((at, _)) => (text[..at].to_string(), true),
-        None => (text.to_string(), false),
+// Cut once, when the text arrives, rather than on every frame it is drawn.
+fn text_content(mut whole: String) -> Content {
+    let cut_at = whole.char_indices().nth(SHOWN_CHARACTERS);
+    let Some((at, _)) = cut_at else {
+        return Content::Text {
+            shown: whole,
+            cut: false,
+        };
+    };
+    whole.truncate(at);
+    Content::Text {
+        shown: whole,
+        cut: true,
     }
 }
 
@@ -215,14 +257,13 @@ fn body(content: &Content, look: &Look, cx: &mut Context<WindowView>) -> AnyElem
         .p(px(BODY_PADDING));
     match content {
         Content::Loading => scroll.child(quiet(LOADING, look)).into_any_element(),
-        Content::Text(text) => {
-            let (shown, was_cut) = shown_text(text);
+        Content::Text { shown, cut } => {
             let words = div()
                 .font_family(BODY_FONT)
                 .text_size(px(BODY_TEXT_SIZE))
-                .child(shown);
+                .child(shown.clone());
             let mut column = div().flex().flex_col().gap(px(10.)).child(words);
-            if was_cut {
+            if *cut {
                 let note = format!("Showing the first {SHOWN_CHARACTERS} characters.");
                 column = column.child(quiet(&note, look));
             }
@@ -293,7 +334,7 @@ fn reveal_button(path: &Path, look: &Look, cx: &mut Context<WindowView>) -> impl
 
 #[cfg(test)]
 mod tests {
-    use std::fs::OpenOptions;
+    use std::os::unix::fs::PermissionsExt;
 
     use super::*;
 
@@ -311,8 +352,33 @@ mod tests {
         assert!(!is_https("http://example.com"));
         assert!(!is_https("https://"));
         assert!(!is_https("https:///etc/passwd"));
-        assert!(!is_https("file:///Users/me/notes.md"));
-        assert!(!is_https("javascript:alert(1)"));
+        assert!(!is_https("https://github.com@evil.example/pull/1"));
+        assert!(!is_https("https://:443/x"));
+        assert!(!is_https("https://git hub.com/x"));
+        assert!(!is_https("https://github.com/x\n"));
+        assert!(!is_https("https://\u{202E}moc.buhtig/x"));
+    }
+
+    #[test]
+    fn a_long_text_is_cut_once_with_a_note_and_a_missing_body_reads_as_gone() {
+        let at_the_limit = "é".repeat(SHOWN_CHARACTERS);
+        let whole = text_content(at_the_limit.clone());
+        let kept = Content::Text {
+            shown: at_the_limit.clone(),
+            cut: false,
+        };
+        assert_eq!(whole, kept);
+
+        let past_the_limit = at_the_limit.clone() + "é";
+        let cut = text_content(past_the_limit);
+        let expected = Content::Text {
+            shown: at_the_limit,
+            cut: true,
+        };
+        assert_eq!(cut, expected);
+
+        let gone = Content::Gone(NO_LONGER_KEPT.to_string());
+        assert_eq!(body_content(None), gone);
     }
 
     #[test]
@@ -322,19 +388,24 @@ mod tests {
         let at = |name: &str| folder.join(name).to_string_lossy().into_owned();
 
         fs::write(at("plan.md"), "# Plan\n").unwrap();
-        assert_eq!(
-            file_content(&at("plan.md")),
-            Content::Text("# Plan\n".to_string())
-        );
+        let plan = Content::Text {
+            shown: "# Plan\n".to_string(),
+            cut: false,
+        };
+        assert_eq!(file_content(&at("plan.md")), plan);
 
         fs::write(at("binary.bin"), [b'a', 0, b'b']).unwrap();
         let binary = file_content(&at("binary.bin"));
         assert!(matches!(binary, Content::Reveal { .. }), "{binary:?}");
 
-        let large = File::create(at("large.log")).unwrap();
-        large.set_len(MAX_TEXT_BYTES + 1).unwrap();
+        let over_a_megabyte = vec![b'a'; MAX_TEXT_BYTES as usize + 1];
+        fs::write(at("large.log"), over_a_megabyte).unwrap();
         let too_large = file_content(&at("large.log"));
-        assert!(matches!(too_large, Content::Reveal { .. }), "{too_large:?}");
+        let refused = Content::Reveal {
+            path: PathBuf::from(at("large.log")),
+            reason: TOO_LARGE_TEXT.to_string(),
+        };
+        assert_eq!(too_large, refused);
 
         let picture = OpenOptions::new()
             .create(true)
@@ -348,8 +419,18 @@ mod tests {
             matches!(too_large_picture, Content::Reveal { .. }),
             "{too_large_picture:?}"
         );
-        picture.set_len(10).unwrap();
+        picture.set_len(MAX_TEXT_BYTES + 1).unwrap();
         assert!(matches!(file_content(&at("logo.PNG")), Content::Image(_)));
+
+        fs::write(at("private.md"), "secret").unwrap();
+        fs::set_permissions(at("private.md"), fs::Permissions::from_mode(0o000)).unwrap();
+        let unreadable = file_content(&at("private.md"));
+        let expected = Content::Reveal {
+            path: PathBuf::from(at("private.md")),
+            reason: UNREADABLE.to_string(),
+        };
+        assert_eq!(unreadable, expected);
+        fs::set_permissions(at("private.md"), fs::Permissions::from_mode(0o600)).unwrap();
 
         let not_regular = file_content(&folder.to_string_lossy());
         assert!(
@@ -357,7 +438,8 @@ mod tests {
             "{not_regular:?}"
         );
         assert!(matches!(file_content(&at("missing.md")), Content::Gone(_)));
-        assert!(matches!(file_content("notes/plan.md"), Content::Gone(_)));
+        // The test runs in the crate's folder, where this relative path does exist.
+        assert!(matches!(file_content("Cargo.toml"), Content::Gone(_)));
 
         fs::remove_dir_all(&folder).unwrap();
     }
