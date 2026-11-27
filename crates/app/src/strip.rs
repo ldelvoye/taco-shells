@@ -67,7 +67,7 @@ fn panel_button(
     let id = SharedString::from(format!("strip-button:{driver_name}"));
     marked
         .id(ElementId::Name(id))
-        .on_click(cx.listener(move |view, _, _, _| view.toggle_panel(panel)))
+        .on_click(cx.listener(move |view, _, _, cx| view.strip_panel_clicked(panel, cx)))
 }
 
 fn button(icon: &'static str, open: bool, look: &Look) -> Div {
