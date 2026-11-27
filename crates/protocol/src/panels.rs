@@ -38,7 +38,8 @@ pub struct Panels {
 }
 
 impl Panel {
-    /// Every panel, in the order the window draws them.
+    /// Every panel, in the order the window draws them. A new panel is added here too, in declaration order, or its
+    /// place is out of range.
     pub const ALL: [Panel; 2] = [Panel::Terminals, Panel::AgentActivity];
 
     /// Where the panel is before the user moves it.

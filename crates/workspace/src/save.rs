@@ -407,6 +407,21 @@ mod tests {
         let on_the_right = STORED_SAVE.replace("Bottom", "Right");
         let saved = read_saved(&on_the_right).unwrap();
         assert_eq!(saved_text(&saved), on_the_right);
+
+        // the panels as builds before panels were stored by name wrote them
+        let terminals_renamed = STORED_SAVE.replace(r#""Terminals":"#, r#""terminals":"#);
+        let earlier_panels =
+            terminals_renamed.replace(r#""AgentActivity":"#, r#""agent_activity":"#);
+        let read = read_saved(&earlier_panels).unwrap();
+        let current = read_saved(STORED_SAVE).unwrap();
+        let rows_kept = Saved {
+            panels: None,
+            ..current
+        };
+        assert_eq!(
+            read, rows_kept,
+            "every row survives; only the layout resets"
+        );
     }
 
     #[test]
