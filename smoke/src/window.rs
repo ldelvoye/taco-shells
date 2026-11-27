@@ -239,12 +239,12 @@ pub fn a_shortcut_set_by_pressing_keys_is_written_to_the_keybindings_file(
     driver.keys(&[PRESSED_SHORTCUT])?;
     let keybindings = smoke.config.join(KEYBINDINGS_FILE);
     file_gains(&keybindings, WRITTEN_SHORTCUT)?;
-    // Back to Settings, then closed.
+    // Esc goes back to Settings, then closes it.
     driver.keys(&["escape", "escape"])?;
     Ok(())
 }
 
-/// Waits until the file holds `wanted`, compared with all whitespace taken out.
+// Compared with all whitespace taken out, so the writer's formatting does not matter.
 fn file_gains(path: &Path, wanted: &str) -> Result<(), String> {
     let started = Instant::now();
     loop {

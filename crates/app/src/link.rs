@@ -32,7 +32,7 @@ pub trait ServicesPort {
     fn hooks_directory(&self) -> PathBuf;
     /// Answered by the next `Config` when it lands, or by `SettingRefused` when it does not.
     fn write_setting(&self, change: SettingChange);
-    /// Answered by the next `Config` when it lands, or by `KeymapRefused` when it does not.
+    /// Answered by the next `Config` when it lands, or by `KeymapRefused` when it is refused.
     fn write_keybinding(&self, change: KeymapChange);
 }
 

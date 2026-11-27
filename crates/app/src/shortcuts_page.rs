@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 
 use gpui::{
-    Context, Div, ElementId, Entity, FontWeight, InteractiveElement, ParentElement, SharedString,
-    Stateful, StatefulInteractiveElement, Styled, div, px,
+    Context, Div, ElementId, Entity, FontWeight, InteractiveElement, MouseButton, ParentElement,
+    SharedString, Stateful, StatefulInteractiveElement, Styled, div, px,
 };
 use taco_settings::{Binding, Chord, CommandId, KeymapChange, command_for};
 
@@ -91,7 +91,7 @@ const MODIFIER_WORDS: [(&str, &str); 4] = [
     ("control", "ctrl"),
 ];
 
-// Keys that type no character, so shift alone is enough with them, as shift+enter is.
+// Keys that type no character.
 const NON_CHARACTER_KEYS: [&str; 12] = [
     "enter",
     "tab",
@@ -120,6 +120,14 @@ pub struct ShortcutsInput<'a> {
     pub unread: bool,
     pub problems: &'a [String],
     pub look: &'a Look,
+}
+
+/// Whether a row is setting a shortcut, and which chip it is changing.
+#[derive(Clone, Copy)]
+enum RowSetting<'a> {
+    Idle,
+    Changing(&'a Capture, &'a Chord),
+    Adding(&'a Capture),
 }
 
 /// One command's row as the page draws it.
@@ -161,7 +169,11 @@ pub enum Pressed {
 pub fn shortcuts_page(input: &ShortcutsInput, cx: &mut Context<WindowView>) -> Div {
     let look = input.look;
     let header = page_header(TITLE, Some(BACK), look, cx);
-    let search = div().w_full().child(input.search.clone());
+    // Clicking into the search ends a capture, which would otherwise take every key typed there.
+    let search = div().w_full().child(input.search.clone()).on_mouse_down(
+        MouseButton::Left,
+        cx.listener(|view, _, _, cx| view.cancel_capture(cx)),
+    );
     let wanted = normalized_query(input.query);
     let mut form = form_column();
     if !input.problems.is_empty() {
@@ -206,15 +218,7 @@ pub fn shortcuts_page(input: &ShortcutsInput, cx: &mut Context<WindowView>) -> D
 fn command_row(row: &Row, input: &ShortcutsInput, cx: &mut Context<WindowView>) -> Div {
     let look = input.look;
     let command = row.command;
-    let mut capture = None;
-    let mut changing = None;
-    if let Some(open) = input.capture
-        && open.command == command
-    {
-        capture = Some(open);
-        changing = open.changing.as_ref();
-    }
-    let adding = capture.is_some() && changing.is_none();
+    let setting = row_setting(command, input.capture);
     let label = div()
         .flex_1()
         .min_w_0()
@@ -228,9 +232,10 @@ fn command_row(row: &Row, input: &ShortcutsInput, cx: &mut Context<WindowView>) 
         .justify_end()
         .gap(px(CHIP_GAP));
     for (index, chord) in row.chords.iter().enumerate() {
-        let being_changed = changing == Some(chord);
-        if being_changed {
-            keys = keys.child(capture_cap(capture, look));
+        if let RowSetting::Changing(open, changed) = setting
+            && changed == chord
+        {
+            keys = keys.child(capture_cap(open, look));
             continue;
         }
         let shown = chip(chord, look);
@@ -239,27 +244,29 @@ fn command_row(row: &Row, input: &ShortcutsInput, cx: &mut Context<WindowView>) 
             continue;
         }
         let id = SharedString::from(format!("chip:{}:{index}", command.id()));
-        let changing = Some(chord.clone());
+        let target = Some(chord.clone());
         let clickable = div()
             .id(ElementId::Name(id))
             .cursor_pointer()
             .child(shown)
             .on_click(cx.listener(move |view, _, _, cx| {
-                view.start_capture(command, changing.clone(), cx);
+                view.start_capture(command, target.clone(), cx);
             }));
         keys = keys.child(clickable);
     }
+    let adding = matches!(setting, RowSetting::Adding(_));
     if row.chords.is_empty() && !adding {
         let none = div().text_color(look.secondary_text).child(NONE);
         keys = keys.child(none);
     }
-    if adding {
-        keys = keys.child(capture_cap(capture, look));
+    if let RowSetting::Adding(open) = setting {
+        keys = keys.child(capture_cap(open, look));
     }
-    match capture {
-        Some(open) => keys = keys.children(capture_buttons(open, look, cx)),
-        None => keys = keys.children(row_buttons(row, input, cx)),
-    }
+    let buttons = match setting {
+        RowSetting::Changing(open, _) | RowSetting::Adding(open) => capture_buttons(open, look, cx),
+        RowSetting::Idle => row_buttons(row, input, cx),
+    };
+    keys = keys.children(buttons);
     let line = div()
         .flex()
         .items_center()
@@ -274,19 +281,30 @@ fn command_row(row: &Row, input: &ShortcutsInput, cx: &mut Context<WindowView>) 
         .border_t_1()
         .border_color(look.hairline)
         .child(line);
-    let hint = row_hint(command, capture, input, cx);
+    let hint = row_hint(command, setting.capture(), input, cx);
     if let Some(hint) = hint {
         shown_row = shown_row.child(hint);
     }
     shown_row
 }
 
-/// The chord being set: "Press keys" until keys are pressed, in the shell's outline.
-fn capture_cap(capture: Option<&Capture>, look: &Look) -> Div {
+fn row_setting(command: CommandId, capture: Option<&Capture>) -> RowSetting<'_> {
+    let Some(open) = capture else {
+        return RowSetting::Idle;
+    };
+    if open.command != command {
+        return RowSetting::Idle;
+    }
+    match &open.changing {
+        Some(chord) => RowSetting::Changing(open, chord),
+        None => RowSetting::Adding(open),
+    }
+}
+
+/// The chord being set: "Press keys" until keys are pressed.
+fn capture_cap(capture: &Capture, look: &Look) -> Div {
     let mut text = PRESS_KEYS.to_string();
-    if let Some(open) = capture
-        && let Some(pending) = &open.pending
-    {
+    if let Some(pending) = &capture.pending {
         text = chip_text(pending);
     }
     let outline = shell_outline(CAPTURE_OUTLINE, CAPTURE_RADIUS, CAPTURE_ANGLE);
@@ -328,15 +346,16 @@ fn row_buttons(
     input: &ShortcutsInput,
     cx: &mut Context<WindowView>,
 ) -> Vec<Stateful<Div>> {
-    let look = input.look;
-    let command = row.command;
     let mut buttons = Vec::new();
     if input.unread {
         return buttons;
     }
+    let look = input.look;
+    let command = row.command;
     let add_id = SharedString::from(format!("shortcut-add:{}", command.id()));
     let add = small_button(add_id.clone(), ADD, look)
         .on_click(cx.listener(move |view, _, _, cx| view.start_capture(command, None, cx)));
+    // The smoke check finds the + by this mark.
     buttons.push(mark(add, add_id));
     if row.changed {
         let reset_id = SharedString::from(format!("shortcut-reset:{}", command.id()));
@@ -431,7 +450,6 @@ fn problem_card(problems: &[String], look: &Look, cx: &mut Context<WindowView>) 
     card.child(open)
 }
 
-/// What keys pressed while a row captures come to; asked about rather than written when they need asking.
 pub fn pressed(capture: &Capture, chord: Chord, bindings: &[Binding]) -> Pressed {
     if !is_allowed(&chord) {
         return Pressed::Ask(CaptureProblem::NeedsModifier);
@@ -447,7 +465,7 @@ pub fn pressed(capture: &Capture, chord: Chord, bindings: &[Binding]) -> Pressed
     Pressed::Write(change)
 }
 
-/// The change that puts `to` on the capturing row: in place of the chip being changed, or added beside the others.
+/// The change that puts a chord on the capturing row: in place of the chip being changed, or beside the others.
 pub fn change_for(capture: &Capture, to: Chord) -> KeymapChange {
     let command = capture.command;
     match &capture.changing {
@@ -466,6 +484,27 @@ fn is_allowed(chord: &Chord) -> bool {
         return true;
     }
     chord.shift && NON_CHARACTER_KEYS.contains(&chord.key.as_str())
+}
+
+/// Whether a capture still has something to set: the file can be changed, and a chip being changed is still there.
+pub fn capture_still_open(capture: &Capture, bindings: &[Binding], unread: bool) -> bool {
+    if unread {
+        return false;
+    }
+    let Some(changing) = &capture.changing else {
+        return true;
+    };
+    let chords = chords_for(bindings, capture.command);
+    chords.contains(changing)
+}
+
+impl<'a> RowSetting<'a> {
+    fn capture(self) -> Option<&'a Capture> {
+        match self {
+            RowSetting::Idle => None,
+            RowSetting::Changing(open, _) | RowSetting::Adding(open) => Some(open),
+        }
+    }
 }
 
 fn name_of(command: CommandId) -> &'static str {
@@ -624,6 +663,14 @@ mod tests {
             ),
             (
                 &adding,
+                "shift+enter",
+                Pressed::Write(KeymapChange::Add {
+                    command: CommandId::TerminalNew,
+                    chord: chord("shift+enter"),
+                }),
+            ),
+            (
+                &adding,
                 "shift+left",
                 Pressed::Write(KeymapChange::Add {
                     command: CommandId::TerminalNew,
@@ -643,6 +690,29 @@ mod tests {
             let result = pressed(capture, chord(keys), &bindings);
             assert_eq!(result, expected, "{keys}");
         }
+    }
+
+    #[test]
+    fn a_capture_closes_once_its_chip_is_gone_or_the_file_cannot_be_read() {
+        let bindings = [bound("cmd+t", CommandId::TerminalNew)];
+        let adding = Capture {
+            command: CommandId::TerminalNew,
+            changing: None,
+            pending: None,
+            problem: None,
+        };
+        let on_its_chip = Capture {
+            changing: Some(chord("cmd+t")),
+            ..adding.clone()
+        };
+        let on_a_gone_chip = Capture {
+            changing: Some(chord("cmd+n")),
+            ..adding.clone()
+        };
+        assert!(capture_still_open(&adding, &bindings, false));
+        assert!(capture_still_open(&on_its_chip, &bindings, false));
+        assert!(!capture_still_open(&on_a_gone_chip, &bindings, false));
+        assert!(!capture_still_open(&adding, &bindings, true));
     }
 
     #[test]
