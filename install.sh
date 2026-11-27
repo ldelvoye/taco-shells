@@ -21,7 +21,7 @@ check_platform() {
   fi
 }
 
-# TACO_SHELLS_INSTALL_DIR and TACO_SHELLS_ZIP_URL exist for the tests, in xtask/src/install_script.rs and scripts/install.test.mjs.
+# TACO_SHELLS_INSTALL_DIR and TACO_SHELLS_ZIP_URL exist for the tests in xtask/src/install_script.rs.
 choose_install_dir() {
   if [ -n "${TACO_SHELLS_INSTALL_DIR:-}" ]; then
     install_dir="$TACO_SHELLS_INSTALL_DIR"
