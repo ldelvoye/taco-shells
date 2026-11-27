@@ -1,8 +1,9 @@
 use serde_json::Value;
 
+use crate::CUT_MARK;
+
 // A command or path is cut to this many characters in a log entry.
 pub(super) const MAX_ENTRY_CHARACTERS: usize = 1000;
-pub(super) const CUT_MARK: &str = "… (cut)";
 
 pub(super) fn cut_to(text: &str, limit: usize) -> String {
     let kept = text.trim().chars().take(limit);

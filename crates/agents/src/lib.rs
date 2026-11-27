@@ -8,6 +8,9 @@ pub use harness::{
     AgentTitle, EntryRead, Found, Harness, HarnessSetup, PullRequestSeen, StepContext,
 };
 
+/// What ends a text the app cut to fit, in the log and in what it hands an agent.
+pub const CUT_MARK: &str = "… (cut)";
+
 pub static HARNESSES: &[&Harness] = &[&CLAUDE];
 
 /// The agent the menu names when a row has none: "Fork with Claude".
