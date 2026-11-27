@@ -2,6 +2,7 @@
 //! failure. Run through `cargo xtask smoke`, which builds the bundle and the config directory it starts from.
 
 mod bundle;
+mod plugin;
 mod window;
 
 use std::env;
@@ -14,10 +15,24 @@ use taco_smoke::launch;
 const USAGE: &str = "usage: taco-smoke <path to the .app> <config directory to start from>";
 const APP_LOG: &str = "app.log";
 
-const BEFORE_LAUNCH: [Check; 1] = [Check {
-    name: "the dev bundle holds only the dev app's names",
-    run: bundle::holds_only_dev_names,
-}];
+const BEFORE_LAUNCH: [Check; 4] = [
+    Check {
+        name: "the dev bundle holds only the dev app's names",
+        run: bundle::holds_only_dev_names,
+    },
+    Check {
+        name: "with TACO_SHELLS_APP naming the dev app, the plugin program answers initialize and lists note, now and share",
+        run: plugin::lists_its_three_tools_inside_the_dev_app,
+    },
+    Check {
+        name: "the plugin program lists no tools with TACO_SHELLS_APP unset or naming the stable app",
+        run: plugin::lists_no_tools_outside_the_dev_app,
+    },
+    Check {
+        name: "the plugin program's hook approves its own tool and gives no decision for another under its prefix",
+        run: plugin::approves_its_own_tool_and_no_other,
+    },
+];
 
 const LAUNCHED: [LaunchedCheck; 11] = [
     LaunchedCheck {
