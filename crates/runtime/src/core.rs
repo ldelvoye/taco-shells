@@ -180,7 +180,7 @@ impl<S: Shells> Core<S> {
                 }
             }
             TerminalRequest::Write { id, data } => self.write(id, data),
-            TerminalRequest::Resize { id, size, cell } => self.resize(&id, size, Some(cell)),
+            TerminalRequest::Resize { id, size, cell } => self.resize(&id, size, cell),
             TerminalRequest::Clear { id } => self.clear(id),
         }
     }
@@ -364,7 +364,7 @@ impl<S: Shells> Core<S> {
         id: TerminalId,
         attachment: u64,
         size: Option<TerminalSize>,
-        cell: Option<CellSize>,
+        cell: CellSize,
     ) {
         let Some(screen) = self.screens.get_mut(&id) else {
             return;
@@ -425,28 +425,22 @@ impl<S: Shells> Core<S> {
         }
     }
 
-    /// A new size, a new cell, or both. Without a cell the terminal keeps the last one it was given.
-    fn resize(&mut self, id: &TerminalId, size: TerminalSize, cell: Option<CellSize>) {
+    /// A new size, a new cell, or both.
+    fn resize(&mut self, id: &TerminalId, size: TerminalSize, cell: CellSize) {
         let Some(screen) = self.screens.get_mut(id) else {
             return;
         };
-        let mut target_cell = screen.cell;
-        if let Some(cell) = cell {
-            target_cell = cell;
-        }
         let size_changed = screen.size != size;
-        if !size_changed && screen.cell == target_cell {
+        if !size_changed && screen.cell == cell {
             return;
         }
-        let resized = screen
-            .terminal
-            .resize(size, target_cell.width_px, target_cell.height_px);
+        let resized = screen.terminal.resize(size, cell.width_px, cell.height_px);
         if let Err(error) = resized {
             eprintln!("could not resize {}: {error}", id.0);
             return;
         }
         screen.size = size;
-        screen.cell = target_cell;
+        screen.cell = cell;
         // A new cell alone changes only what size reports answer: the shell and the view keep their size.
         if !size_changed {
             return;
