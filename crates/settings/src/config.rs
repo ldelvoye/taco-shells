@@ -24,6 +24,16 @@ pub enum UnreadSettings {
     Whole,
 }
 
+impl UnreadSettings {
+    pub fn contains(&self, key: &str) -> bool {
+        match self {
+            UnreadSettings::None => false,
+            UnreadSettings::Keys(keys) => keys.contains(&key),
+            UnreadSettings::Whole => true,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Config {
     pub settings: Settings,
