@@ -12,7 +12,7 @@ mod server;
 mod tools;
 
 pub use allow::permission_answer;
-pub use ancestors::{ANCESTOR_LIMIT, ancestor_pids};
+pub use ancestors::ancestor_pids;
 pub use ask::ask;
 pub use endpoint::{read_port, read_token};
 pub use folder::plugin_files;
