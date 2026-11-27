@@ -106,13 +106,21 @@ impl HookListener {
         on_event: OnEvent,
     ) -> HookListener {
         let ports: Vec<u16> = FOCUS_PORTS.collect();
-        HookListener::start_on(&ports, port_file, READ_DEADLINE, require_token, on_event)
+        HookListener::start_on(
+            &ports,
+            port_file,
+            READ_DEADLINE,
+            ANSWER_DEADLINE,
+            require_token,
+            on_event,
+        )
     }
 
     pub(crate) fn start_on(
         ports: &[u16],
         port_file: PathBuf,
         read_deadline: Duration,
+        answer_window: Duration,
         require_token: Arc<AtomicBool>,
         on_event: OnEvent,
     ) -> HookListener {
@@ -145,6 +153,7 @@ impl HookListener {
                 &listener,
                 &serving,
                 read_deadline,
+                answer_window,
                 &token,
                 &require_token,
                 &*on_event,
@@ -238,6 +247,7 @@ fn serve(
     listener: &TcpListener,
     stopping: &AtomicBool,
     read_deadline: Duration,
+    answer_window: Duration,
     token: &str,
     require_token: &AtomicBool,
     on_event: &(dyn Fn(ListenerEvent) + Send + Sync),
@@ -251,13 +261,21 @@ fn serve(
             continue;
         };
         let deadline = Instant::now() + read_deadline;
-        handle(stream, deadline, token, require_token, on_event);
+        handle(
+            stream,
+            deadline,
+            answer_window,
+            token,
+            require_token,
+            on_event,
+        );
     }
 }
 
 fn handle(
     mut stream: TcpStream,
     deadline: Instant,
+    answer_window: Duration,
     token: &str,
     require_token: &AtomicBool,
     on_event: &(dyn Fn(ListenerEvent) + Send + Sync),
@@ -265,7 +283,7 @@ fn handle(
     let Some((head_bytes, leftover)) = read_head(&mut stream, deadline) else {
         return;
     };
-    let answer_by = Instant::now() + ANSWER_DEADLINE;
+    let answer_by = Instant::now() + answer_window;
     let Some(head) = parse_head(&head_bytes) else {
         respond(&mut stream, 400);
         return;
@@ -507,7 +525,14 @@ fn ask_question(
     on_event(ListenerEvent::Question(question));
 
     // Answered off the serial loop, so a question waiting on the workspace holds up no other post.
-    thread::spawn(move || answer_question(stream, &kind, &replies, answer_by));
+    let spare = stream.try_clone();
+    let builder = thread::Builder::new().name("hook-question".into());
+    let spawned = builder.spawn(move || answer_question(stream, &kind, &replies, answer_by));
+    if spawned.is_err()
+        && let Ok(mut spare) = spare
+    {
+        respond_with_body(&mut spare, NO_ANSWER);
+    }
 }
 
 fn question_kind(route: &str, message: &HookMessage) -> QuestionKind {
@@ -526,11 +551,13 @@ fn payload_source(message: &HookMessage) -> String {
     let Ok(value) = parsed else {
         return String::new();
     };
-    let source = value.get("source").and_then(Value::as_str);
-    match source {
-        Some(text) => text.to_string(),
-        None => String::new(),
-    }
+    let Some(field) = value.get("source") else {
+        return String::new();
+    };
+    let Some(text) = field.as_str() else {
+        return String::new();
+    };
+    text.to_string()
 }
 
 fn answer_question(
@@ -539,38 +566,33 @@ fn answer_question(
     replies: &Receiver<AnswerPart>,
     answer_by: Instant,
 ) {
-    let mut placed = false;
-    let mut complete = None;
+    let mut placed: Option<bool> = None;
+    let mut content: Option<Answer> = None;
     loop {
+        if placed == Some(false) {
+            break;
+        }
+        if placed == Some(true) && content.is_some() {
+            break;
+        }
         let left = answer_by.saturating_duration_since(Instant::now());
         let Ok(part) = replies.recv_timeout(left) else {
             break;
         };
         if let AnswerPart::Placed(is_placed) = part {
-            placed = is_placed;
-            if !placed {
-                break;
-            }
+            placed = Some(is_placed);
             continue;
         }
-        if !placed {
-            continue;
-        }
-        complete = complete_answer(kind, part);
-        if complete.is_some() {
-            break;
+        let held = complete_answer(kind, part);
+        if held.is_some() {
+            content = held;
         }
     }
 
-    let answer = match complete {
-        Some(answer) => answer,
-        None => unfinished_answer(kind, placed),
-    };
+    let answer = final_answer(kind, placed, content);
     let body = answer.body.to_string();
     let written = respond_with_body(&mut stream, &body);
-    let in_time = Instant::now() <= answer_by;
-    let delivered = written && in_time;
-    if delivered && let Some(on_delivered) = answer.on_delivered {
+    if written && let Some(on_delivered) = answer.on_delivered {
         on_delivered();
     }
 }
@@ -597,16 +619,24 @@ fn complete_answer(kind: &QuestionKind, part: AnswerPart) -> Option<Answer> {
     }
 }
 
-fn unfinished_answer(kind: &QuestionKind, placed: bool) -> Answer {
-    let is_context = matches!(kind, QuestionKind::Context { .. });
-    let mut body = serde_json::json!({});
-    if placed && is_context {
-        body = serde_json::json!({"yours": true});
-    }
-    Answer {
-        body,
+fn final_answer(kind: &QuestionKind, placed: Option<bool>, content: Option<Answer>) -> Answer {
+    let nothing = Answer {
+        body: serde_json::json!({}),
         on_delivered: None,
+    };
+    if placed != Some(true) {
+        return nothing;
     }
+    if let Some(answer) = content {
+        return answer;
+    }
+    if matches!(kind, QuestionKind::Context { .. }) {
+        return Answer {
+            body: serde_json::json!({"yours": true}),
+            on_delivered: None,
+        };
+    }
+    nothing
 }
 
 fn body_cap(route: &str) -> Option<u64> {
@@ -782,6 +812,14 @@ mod tests {
     const SESSION: &str = "123e4567-e89b-12d3-a456-426614174000";
     const WAIT: Duration = Duration::from_secs(2);
     const TEST_DEADLINE: Duration = Duration::from_millis(200);
+    const QUESTION_WINDOW: Duration = Duration::from_millis(300);
+
+    struct Questioned {
+        _listener: HookListener,
+        port: u16,
+        token_header: String,
+        _directory: tempfile::TempDir,
+    }
 
     fn post(port: u16, method: &str, path: &str, body: &[u8]) -> u16 {
         post_with(port, method, path, "", body)
@@ -826,6 +864,7 @@ mod tests {
             &[0],
             PathBuf::from("/nonexistent/focus-port"),
             TEST_DEADLINE,
+            ANSWER_DEADLINE,
             token_not_required(),
             Box::new(move |event| {
                 let _ = sender.send(event);
@@ -1016,6 +1055,7 @@ mod tests {
             &[0],
             directory.path().join("focus-port"),
             TEST_DEADLINE,
+            ANSWER_DEADLINE,
             token_not_required(),
             Box::new(move |event| {
                 let _ = sender.send(event);
@@ -1102,6 +1142,7 @@ mod tests {
             &[0],
             directory.path().join("focus-port"),
             TEST_DEADLINE,
+            ANSWER_DEADLINE,
             Arc::clone(&require_token),
             Box::new(move |event| {
                 let _ = sender.send(event);
@@ -1151,6 +1192,7 @@ mod tests {
             &[0],
             PathBuf::from("/nonexistent/focus-port"),
             TEST_DEADLINE,
+            ANSWER_DEADLINE,
             token_not_required(),
             Box::new(move |event| {
                 let _ = sender.send(event);
@@ -1185,6 +1227,7 @@ mod tests {
             &[taken, free],
             file.clone(),
             TEST_DEADLINE,
+            ANSWER_DEADLINE,
             token_not_required(),
             Box::new(|_| {}),
         );
@@ -1199,6 +1242,7 @@ mod tests {
             &[taken],
             other_file.clone(),
             TEST_DEADLINE,
+            ANSWER_DEADLINE,
             token_not_required(),
             Box::new(|_| {}),
         );
@@ -1233,6 +1277,7 @@ mod tests {
             &[0],
             directory.path().join("focus-port"),
             READ_DEADLINE,
+            ANSWER_DEADLINE,
             token_not_required(),
             Box::new(move |event| {
                 let _ = sender.send(event);
@@ -1397,19 +1442,13 @@ mod tests {
         assert_eq!(hook_events, names);
     }
 
-    struct Questioned {
-        _listener: HookListener,
-        port: u16,
-        token_header: String,
-        _directory: tempfile::TempDir,
-    }
-
     fn start_questioned(on_event: impl Fn(ListenerEvent) + Send + Sync + 'static) -> Questioned {
         let directory = tempfile::tempdir().unwrap();
         let listener = HookListener::start_on(
             &[0],
             directory.path().join("focus-port"),
             TEST_DEADLINE,
+            QUESTION_WINDOW,
             token_not_required(),
             Box::new(on_event),
         );
@@ -1487,16 +1526,19 @@ mod tests {
             let (_, reply) = post_for_reply(port, "POST", CONTEXT_ROUTE, &headers, body.as_bytes());
             (reply, started.elapsed())
         });
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(Duration::from_millis(100));
 
+        let sent = Instant::now();
         let status = post(port, "POST", ATTENTION_ROUTE, br#"{"pids":[3]}"#);
+        let post_took = sent.elapsed();
         assert_eq!(status, 200);
+        assert!(post_took < Duration::from_millis(150), "{post_took:?}");
         assert_eq!(next_event(&receiver), hook(vec![3], HookCall::Attention));
 
         let (reply, waited) = asker.join().unwrap();
         assert_eq!(reply, "{}");
-        let seconds = waited.as_secs_f64();
-        assert!((0.8..1.5).contains(&seconds), "{seconds}");
+        let window = Duration::from_millis(200)..Duration::from_millis(800);
+        assert!(window.contains(&waited), "{waited:?}");
     }
 
     #[test]
@@ -1509,21 +1551,41 @@ mod tests {
         }));
         let (reply, waited) = ask(&with_context, CONTEXT_ROUTE);
         assert_eq!(reply, r#"{"yours":true,"context":"hello"}"#);
-        assert!(waited < Duration::from_millis(500), "{waited:?}");
+        assert!(waited < Duration::from_millis(200), "{waited:?}");
 
         let placed_only = start_questioned(answering(|| vec![AnswerPart::Placed(true)]));
         let (reply, waited) = ask(&placed_only, CONTEXT_ROUTE);
         assert_eq!(reply, r#"{"yours":true}"#);
-        assert!(waited > Duration::from_millis(800), "{waited:?}");
+        assert!(waited > Duration::from_millis(250), "{waited:?}");
 
         let elsewhere = start_questioned(answering(|| vec![AnswerPart::Placed(false)]));
         let (reply, waited) = ask(&elsewhere, CONTEXT_ROUTE);
         assert_eq!(reply, "{}");
-        assert!(waited < Duration::from_millis(500), "{waited:?}");
+        assert!(waited < Duration::from_millis(200), "{waited:?}");
     }
 
     #[test]
-    fn a_stop_question_runs_on_delivered_only_when_the_reason_arrived_in_time() {
+    fn a_question_is_answered_at_once_whatever_order_its_parts_arrive_in() {
+        let context_first = start_questioned(answering(|| {
+            vec![
+                AnswerPart::Context(Some("hello".to_string())),
+                AnswerPart::Placed(true),
+            ]
+        }));
+        let (reply, waited) = ask(&context_first, CONTEXT_ROUTE);
+        assert_eq!(reply, r#"{"yours":true,"context":"hello"}"#);
+        assert!(waited < Duration::from_millis(200), "{waited:?}");
+
+        let nothing_to_say = start_questioned(answering(|| {
+            vec![AnswerPart::Placed(true), AnswerPart::Nudge(None, None)]
+        }));
+        let (reply, waited) = ask(&nothing_to_say, STOP_ROUTE);
+        assert_eq!(reply, "{}");
+        assert!(waited < Duration::from_millis(200), "{waited:?}");
+    }
+
+    #[test]
+    fn a_stop_question_runs_on_delivered_only_when_the_reason_was_sent() {
         let delivered = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&delivered);
         let in_time = start_questioned(move |event| {
@@ -1553,7 +1615,7 @@ mod tests {
                 let on_delivered: OnDelivered =
                     Box::new(move || flag.store(true, Ordering::SeqCst));
                 let _ = question.reply.send(AnswerPart::Placed(true));
-                thread::sleep(Duration::from_millis(1200));
+                thread::sleep(Duration::from_millis(600));
                 let nudge = AnswerPart::Nudge(Some("too late".to_string()), Some(on_delivered));
                 let _ = question.reply.send(nudge);
             });

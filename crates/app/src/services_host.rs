@@ -313,7 +313,7 @@ impl ServicesHost {
                     let _ = inbox.send(message);
                 }
             }
-            // Not yet routed: every question is answered as not one of the app's terminals, which prints nothing.
+            // Every question is answered as not one of the app's terminals, which prints nothing.
             ListenerEvent::Question(question) => {
                 let _ = question
                     .reply
