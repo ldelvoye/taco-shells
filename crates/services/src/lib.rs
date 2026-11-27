@@ -2,7 +2,6 @@
 
 mod agent_flow;
 mod agent_hooks;
-mod agent_record;
 mod agent_setup_state;
 mod agent_setups;
 #[cfg(test)]
@@ -19,11 +18,10 @@ mod plugin_folder;
 mod sync;
 mod updater;
 
-pub use agent_flow::{copy_hook_scripts, hooks_directory};
+pub use agent_flow::{copy_hook_scripts, hooks_directory, stub_hook_scripts};
 pub use agent_hooks::{
     HookEdit, HookWiring, add_entries, remove_hand_entries, remove_managed_entries,
 };
-pub use agent_record::{AgentRecord, RECORD_FILE, read_agent_record, write_agent_record};
 pub use agent_setup_state::{
     AgentMenu, AgentMenuAction, AgentSetupFacts, AgentSetupState, agent_menu_of,
     agent_setup_state_of, runs_agent,
@@ -44,5 +42,6 @@ pub use identity::{
     AGENT_APP_NAME, APPLICATION_NAME, CONFIG_DIRECTORY_NAME, CONFIG_DIRECTORY_VARIABLE, IS_STABLE,
     config_directory,
 };
+pub use mac::app_version;
 pub use plugin_folder::{PROGRAM_PATH, refresh_plugin_folder};
 pub use updater::{UpdateEvent, Updater, UpdaterHost};

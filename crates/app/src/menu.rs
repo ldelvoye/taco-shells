@@ -83,7 +83,6 @@ fn menus_of(agents: &[AgentMenuEntry], update: Option<&str>) -> Vec<Menu> {
     menus
 }
 
-// gpui menus have no sublabel, so the action's note is a disabled line of its own.
 fn agent_submenu(entry: &AgentMenuEntry) -> MenuItem {
     let menu = &entry.menu;
     let status = MenuItem::action(menu.status.clone(), Caption).disabled(true);
@@ -93,10 +92,6 @@ fn agent_submenu(entry: &AgentMenuEntry) -> MenuItem {
     };
     let action = MenuItem::action(menu.action_label.clone(), clicked).disabled(!menu.enabled);
     let mut items = vec![status, action];
-    if let Some(note) = &menu.note {
-        let note_line = MenuItem::action(note.clone(), Caption).disabled(true);
-        items.push(note_line);
-    }
     let show_scripts = MenuItem::action(SHOW_HOOK_SCRIPTS, ShowHookScripts);
     items.push(MenuItem::separator());
     items.push(show_scripts);

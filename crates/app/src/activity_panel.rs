@@ -12,7 +12,7 @@ use taco_protocol::{
     AgentRow, Author, HarnessId, Peer, PrState, RowState, SharedTarget, SharedThing, StartSource,
     Step, TerminalId,
 };
-use taco_services::{AgentSetupNotice, AgentSetupNoticeKind};
+use taco_services::{AgentMenuAction, AgentSetupNotice, AgentSetupNoticeKind};
 
 use crate::activity_log::{ActivityLog, LogItem, Stretch, StretchStep, log_items, preview};
 use crate::assets::{
@@ -78,9 +78,19 @@ const MINUTES_PER_HOUR: u64 = 60;
 #[derive(Clone, Debug, PartialEq)]
 pub enum NoAgentLine {
     Shell,
-    Offer { harness: HarnessId, text: String },
-    Unavailable { text: String, reason: String },
-    Outcome { harness: HarnessId, text: String },
+    Offer {
+        harness: HarnessId,
+        action: AgentMenuAction,
+        text: String,
+    },
+    Unavailable {
+        text: String,
+        reason: String,
+    },
+    Outcome {
+        harness: HarnessId,
+        text: String,
+    },
 }
 
 /// Everything one drawing of the panel reads.
@@ -153,7 +163,11 @@ pub fn no_agent_line(terminal: &TerminalId, notices: &[AgentSetupNotice]) -> NoA
     let harness = notice.harness.clone();
     let text = notice.text.clone();
     match &notice.kind {
-        AgentSetupNoticeKind::Offer => NoAgentLine::Offer { harness, text },
+        AgentSetupNoticeKind::Offer { action } => NoAgentLine::Offer {
+            harness,
+            action: *action,
+            text,
+        },
         AgentSetupNoticeKind::Unavailable { reason } => {
             let reason = reason.clone();
             NoAgentLine::Unavailable { text, reason }
@@ -437,9 +451,13 @@ fn no_agent_element(line: &NoAgentLine, look: &Look, cx: &mut Context<WindowView
     let row = div().flex().items_center().gap(px(10.));
     match line {
         NoAgentLine::Shell => div().text_color(look.secondary_text).child(SHELL_TEXT),
-        NoAgentLine::Offer { harness, text } => {
+        NoAgentLine::Offer {
+            harness,
+            action,
+            text,
+        } => {
             let shown = text_cell(text);
-            let button = set_up_button(harness, look, cx);
+            let button = set_up_button(harness, *action, look, cx);
             row.child(shown).child(button)
         }
         NoAgentLine::Unavailable { text, reason } => {
@@ -462,7 +480,12 @@ fn text_cell(text: &str) -> Div {
     div().flex_1().min_w_0().child(text.to_string())
 }
 
-fn set_up_button(harness: &HarnessId, look: &Look, cx: &mut Context<WindowView>) -> Stateful<Div> {
+fn set_up_button(
+    harness: &HarnessId,
+    action: AgentMenuAction,
+    look: &Look,
+    cx: &mut Context<WindowView>,
+) -> Stateful<Div> {
     let chosen = harness.clone();
     div()
         .id("activity-set-up")
@@ -476,7 +499,7 @@ fn set_up_button(harness: &HarnessId, look: &Look, cx: &mut Context<WindowView>)
         .cursor_pointer()
         .font_weight(FontWeight::SEMIBOLD)
         .child(SET_UP_LABEL)
-        .on_click(cx.listener(move |view, _, _, _| view.set_up(&chosen)))
+        .on_click(cx.listener(move |view, _, _, _| view.set_up(&chosen, action)))
 }
 
 fn dismiss_button(harness: &HarnessId, look: &Look, cx: &mut Context<WindowView>) -> Stateful<Div> {
@@ -1207,12 +1230,16 @@ mod tests {
         let text = "Set up Claude?".to_string();
 
         assert_eq!(no_agent_line(&here, &[]), NoAgentLine::Shell);
-        let elsewhere = notice(AgentSetupNoticeKind::Offer, "there");
+        let offer_kind = AgentSetupNoticeKind::Offer {
+            action: AgentMenuAction::SetUp,
+        };
+        let elsewhere = notice(offer_kind.clone(), "there");
         assert_eq!(no_agent_line(&here, &[elsewhere]), NoAgentLine::Shell);
 
-        let offer = notice(AgentSetupNoticeKind::Offer, "here");
+        let offer = notice(offer_kind, "here");
         let expected = NoAgentLine::Offer {
             harness: harness.clone(),
+            action: AgentMenuAction::SetUp,
             text: text.clone(),
         };
         assert_eq!(no_agent_line(&here, &[offer]), expected);

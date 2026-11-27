@@ -1,38 +1,32 @@
 use crate::agent_hooks::HookWiring;
+use crate::claude_version::is_too_old;
 
 const STATUS_NOT_INSTALLED: &str = "Not installed";
-pub(crate) const STATUS_OFF: &str = "Turned off in settings";
-const STATUS_BY_HAND: &str = "Set up by hand";
-const STATUS_SET_UP: &str = "Set up";
-const STATUS_NOT_SET_UP: &str = "Not set up";
-const LABEL_SWITCH: &str = "Switch to Managed Setup";
-const LABEL_REMOVE: &str = "Remove Setup";
-pub(crate) const NOTE_BUILD_MAY_NOT_WRITE: &str = "Development builds leave your settings alone";
+const STATUS_OFF: &str = "Off";
+const STATUS_OLD_SETUP: &str = "Set up the old way";
+const STATUS_ON: &str = "On";
 const SCRIPT_RUNNER: &str = "node";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AgentSetupState {
     NotInstalled,
     Off,
-    ByHand,
-    SetUp,
-    Declined,
-    NotSetUp,
+    OldSetup,
+    TooOld { version: String },
+    On,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentSetupFacts {
     pub installed: bool,
-    pub managing: bool,
+    pub activity_on: bool,
     pub wiring: HookWiring,
-    pub declined: bool,
+    pub version: Option<(u32, u32, u32)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AgentMenuAction {
     SetUp,
-    Remove,
-    Switch,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -41,74 +35,46 @@ pub struct AgentMenu {
     pub action: AgentMenuAction,
     pub action_label: String,
     pub enabled: bool,
-    pub note: Option<String>,
+}
+
+fn version_text(version: (u32, u32, u32)) -> String {
+    let (major, minor, patch) = version;
+    format!("{major}.{minor}.{patch}")
 }
 
 pub fn agent_setup_state_of(facts: &AgentSetupFacts) -> AgentSetupState {
     if !facts.installed {
         return AgentSetupState::NotInstalled;
     }
-    if !facts.managing {
+    if facts.wiring == HookWiring::Managed {
+        return AgentSetupState::OldSetup;
+    }
+    if !facts.activity_on {
         return AgentSetupState::Off;
     }
-    if facts.wiring == HookWiring::ByHand {
-        return AgentSetupState::ByHand;
+    if let Some(version) = facts.version
+        && is_too_old(version)
+    {
+        let shown = version_text(version);
+        return AgentSetupState::TooOld { version: shown };
     }
-    if facts.wiring == HookWiring::Managed {
-        return AgentSetupState::SetUp;
-    }
-    if facts.declined {
-        return AgentSetupState::Declined;
-    }
-    AgentSetupState::NotSetUp
+    AgentSetupState::On
 }
 
-fn note_of(can_write: bool) -> Option<String> {
-    if can_write {
-        return None;
-    }
-    Some(NOTE_BUILD_MAY_NOT_WRITE.to_string())
-}
-
-pub fn agent_menu_of(state: AgentSetupState, product_name: &str, can_write: bool) -> AgentMenu {
-    let set_up_label = format!("Set Up {product_name}");
-    let note = note_of(can_write);
-    match state {
-        AgentSetupState::NotInstalled => AgentMenu {
-            status: STATUS_NOT_INSTALLED.to_string(),
-            action: AgentMenuAction::SetUp,
-            action_label: set_up_label,
-            enabled: false,
-            note: None,
-        },
-        AgentSetupState::Off => AgentMenu {
-            status: STATUS_OFF.to_string(),
-            action: AgentMenuAction::SetUp,
-            action_label: set_up_label,
-            enabled: false,
-            note: None,
-        },
-        AgentSetupState::ByHand => AgentMenu {
-            status: STATUS_BY_HAND.to_string(),
-            action: AgentMenuAction::Switch,
-            action_label: LABEL_SWITCH.to_string(),
-            enabled: can_write,
-            note,
-        },
-        AgentSetupState::SetUp => AgentMenu {
-            status: STATUS_SET_UP.to_string(),
-            action: AgentMenuAction::Remove,
-            action_label: LABEL_REMOVE.to_string(),
-            enabled: can_write,
-            note,
-        },
-        AgentSetupState::Declined | AgentSetupState::NotSetUp => AgentMenu {
-            status: STATUS_NOT_SET_UP.to_string(),
-            action: AgentMenuAction::SetUp,
-            action_label: set_up_label,
-            enabled: can_write,
-            note,
-        },
+pub fn agent_menu_of(state: &AgentSetupState, product_name: &str) -> AgentMenu {
+    let action_label = format!("Set Up {product_name}");
+    let (status, enabled) = match state {
+        AgentSetupState::NotInstalled => (STATUS_NOT_INSTALLED.to_string(), false),
+        AgentSetupState::Off => (STATUS_OFF.to_string(), true),
+        AgentSetupState::OldSetup => (STATUS_OLD_SETUP.to_string(), true),
+        AgentSetupState::TooOld { .. } => (format!("Needs a newer {product_name}"), false),
+        AgentSetupState::On => (STATUS_ON.to_string(), false),
+    };
+    AgentMenu {
+        status,
+        action: AgentMenuAction::SetUp,
+        action_label,
+        enabled,
     }
 }
 
@@ -153,78 +119,74 @@ pub fn runs_agent(command_lines: &[String], commands: &[&str]) -> bool {
 mod tests {
     use super::*;
 
+    const OLD: Option<(u32, u32, u32)> = Some((2, 1, 279));
+    const NEW: Option<(u32, u32, u32)> = Some((2, 1, 280));
+
     fn facts(
         installed: bool,
-        managing: bool,
         wiring: HookWiring,
-        declined: bool,
+        activity_on: bool,
+        version: Option<(u32, u32, u32)>,
     ) -> AgentSetupFacts {
         AgentSetupFacts {
             installed,
-            managing,
+            activity_on,
             wiring,
-            declined,
+            version,
         }
     }
 
     #[test]
     fn each_state_beats_the_ones_after_it() {
+        let too_old = AgentSetupState::TooOld {
+            version: "2.1.279".to_string(),
+        };
         let cases = [
             (
-                facts(false, false, HookWiring::ByHand, true),
+                facts(false, HookWiring::Managed, false, OLD),
                 AgentSetupState::NotInstalled,
             ),
             (
-                facts(true, false, HookWiring::ByHand, true),
+                facts(true, HookWiring::Managed, true, OLD),
+                AgentSetupState::OldSetup,
+            ),
+            (
+                facts(true, HookWiring::ByHand, false, OLD),
                 AgentSetupState::Off,
             ),
+            (facts(true, HookWiring::ByHand, true, OLD), too_old),
             (
-                facts(true, true, HookWiring::ByHand, true),
-                AgentSetupState::ByHand,
+                facts(true, HookWiring::ByHand, true, NEW),
+                AgentSetupState::On,
             ),
             (
-                facts(true, true, HookWiring::Managed, true),
-                AgentSetupState::SetUp,
-            ),
-            (
-                facts(true, true, HookWiring::None, true),
-                AgentSetupState::Declined,
-            ),
-            (
-                facts(true, true, HookWiring::None, false),
-                AgentSetupState::NotSetUp,
+                facts(true, HookWiring::None, true, None),
+                AgentSetupState::On,
             ),
         ];
         for (case, expected) in cases {
             let state = agent_setup_state_of(&case);
-            assert_eq!(state, expected);
+            assert_eq!(state, expected, "{case:?}");
         }
     }
 
     #[test]
-    fn the_menu_offers_one_action_and_says_why_it_is_off() {
-        let by_hand = agent_menu_of(AgentSetupState::ByHand, "Claude Code", true);
-        assert_eq!(by_hand.action, AgentMenuAction::Switch);
-        assert!(by_hand.enabled);
-        assert!(by_hand.note.is_none());
-
-        let set_up = agent_menu_of(AgentSetupState::SetUp, "Claude Code", false);
-        assert_eq!(set_up.action, AgentMenuAction::Remove);
-        assert!(!set_up.enabled);
-        assert!(set_up.note.is_some());
-
-        let declined = agent_menu_of(AgentSetupState::Declined, "Claude Code", true);
-        assert_eq!(declined.action, AgentMenuAction::SetUp);
-        assert!(declined.enabled);
-        assert!(declined.note.is_none());
-
-        let not_installed = agent_menu_of(AgentSetupState::NotInstalled, "Claude Code", true);
-        assert!(!not_installed.enabled);
-        assert!(not_installed.note.is_none());
-
-        let off = agent_menu_of(AgentSetupState::Off, "Claude Code", true);
-        assert!(!off.enabled);
-        assert!(off.note.is_none());
+    fn set_up_is_offered_only_while_off_or_set_up_the_old_way() {
+        let too_old = AgentSetupState::TooOld {
+            version: "2.1.279".to_string(),
+        };
+        let cases = [
+            (AgentSetupState::NotInstalled, false),
+            (AgentSetupState::Off, true),
+            (AgentSetupState::OldSetup, true),
+            (too_old, false),
+            (AgentSetupState::On, false),
+        ];
+        for (state, enabled) in cases {
+            let menu = agent_menu_of(&state, "Claude Code");
+            assert_eq!(menu.enabled, enabled, "{state:?}");
+            assert_eq!(menu.action, AgentMenuAction::SetUp);
+        }
     }
 
     #[test]

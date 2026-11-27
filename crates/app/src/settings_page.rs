@@ -340,19 +340,20 @@ fn start_group(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
 fn agents_group(input: &SettingsInput, cx: &mut Context<WindowView>) -> Div {
     let settings = input.settings;
     let look = input.look;
-    let hooks = switch(
-        "manage-agent-hooks",
-        settings.manage_agent_hooks,
-        SettingChange::ManageAgentHooks,
+    let activity = switch(
+        "agent-activity",
+        settings.agent_activity,
+        SettingChange::AgentActivity,
         input,
         cx,
     );
     let hint = Some(
-        "The app offers and keeps up the hooks coding agents need. Turn off to wire them by hand.",
+        "Agents in this app's terminals can write to the Agent Activity panel. Claude Code lists it in /plugin as the plugin taco-shells, inline.",
     );
-    let hooks_shown = SettingChange::ManageAgentHooks(settings.manage_agent_hooks);
-    let hooks_row = setting_row(&hooks_shown, "Keep agent hooks set up", hint, hooks, input);
-    group("Agents", look).child(hooks_row)
+    let activity_shown = SettingChange::AgentActivity(settings.agent_activity);
+    let label = "Agent Activity in this app's terminals";
+    let activity_row = setting_row(&activity_shown, label, hint, activity, input);
+    group("Agents", look).child(activity_row)
 }
 
 fn foot(look: &Look, cx: &mut Context<WindowView>) -> Div {

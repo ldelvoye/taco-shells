@@ -424,8 +424,8 @@ impl WindowView {
         self.port.activity(request);
     }
 
-    pub(crate) fn set_up(&self, harness: &HarnessId) {
-        self.services.agent_action(harness, AgentMenuAction::SetUp);
+    pub(crate) fn set_up(&self, harness: &HarnessId, action: AgentMenuAction) {
+        self.services.agent_action(harness, action);
     }
 
     pub(crate) fn dismiss_notice(&self, harness: &HarnessId) {

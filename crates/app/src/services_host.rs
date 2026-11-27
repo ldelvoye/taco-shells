@@ -13,8 +13,8 @@ use taco_protocol::{
 };
 use taco_services::{
     AgentMenuAction, AgentSetups, AgentSetupsHost, ConfigChange, ConfigStore, ConfigWriter,
-    HookListener, ListenerEvent, Refusal, UpdateEvent, Updater, UpdaterHost, config_file_path,
-    focus_port_path,
+    HookListener, ListenerEvent, Refusal, UpdateEvent, Updater, UpdaterHost, app_version,
+    config_file_path, focus_port_path,
 };
 use taco_settings::{Config, KeymapChange, SettingChange};
 
@@ -27,6 +27,7 @@ const ROUTE_NOT_STARTED: &str =
     "Agents' hooks cannot reach the terminals: the thread that routes them did not start.";
 // A runtime that is alive but never answers must not hold a hook, a setup check or quitting for ever.
 const RUNTIME_ANSWER_WAIT: Duration = Duration::from_secs(2);
+const PLUGIN_PROGRAM_NAME: &str = "taco-shells-plugin";
 
 type Slot<T> = Mutex<Option<T>>;
 
@@ -37,7 +38,7 @@ pub struct ServicesHost {
 
 struct Inner {
     store: Arc<Slot<ConfigStore>>,
-    writer: Slot<ConfigWriter>,
+    writer: Arc<Slot<ConfigWriter>>,
     setups: Arc<Slot<AgentSetups>>,
     updater: Arc<Slot<Updater>>,
     listener: Slot<HookListener>,
@@ -99,14 +100,30 @@ fn hook_scripts_source() -> PathBuf {
     hook_scripts_source_for(found.as_deref(), &checkout)
 }
 
+fn plugin_program_beside(executable: &Path) -> PathBuf {
+    let Some(directory) = executable.parent() else {
+        return PathBuf::from(PLUGIN_PROGRAM_NAME);
+    };
+    directory.join(PLUGIN_PROGRAM_NAME)
+}
+
 fn start_setups(
     directory: &Path,
-    managing: &Arc<AtomicBool>,
+    activity_on: &Arc<AtomicBool>,
+    writer: &Arc<Slot<ConfigWriter>>,
     runtime: &RuntimeClient,
     window: &WindowSender,
 ) -> AgentSetups {
-    let is_managing_flag = Arc::clone(managing);
-    let is_managing = move || is_managing_flag.load(Ordering::SeqCst);
+    let is_on_flag = Arc::clone(activity_on);
+    let is_on = move || is_on_flag.load(Ordering::SeqCst);
+    let turn_on_writer = Arc::clone(writer);
+    let turn_on = move || {
+        let writer = locked(&turn_on_writer);
+        if let Some(writer) = writer.as_ref() {
+            let change = SettingChange::AgentActivity(true);
+            writer.write(ConfigChange::Setting(change));
+        }
+    };
     let ask_runtime = runtime.clone();
     let foreground_commands = move |terminal: &TerminalId| {
         let query = RuntimeQuery::ForegroundCommands {
@@ -122,12 +139,26 @@ fn start_setups(
     let changed_window = window.clone();
     let on_change = move |view| send_to_window(&changed_window, ServicesOutput::Setups(view));
     let host = AgentSetupsHost {
-        is_managing: Box::new(is_managing),
+        is_on: Box::new(is_on),
+        turn_on: Box::new(turn_on),
         foreground_commands: Box::new(foreground_commands),
         on_change: Box::new(on_change),
     };
     let source = hook_scripts_source();
-    let (setups, problems) = AgentSetups::start(directory.to_path_buf(), source, host);
+    let found = std::env::current_exe();
+    let executable = match found {
+        Ok(path) => path,
+        Err(_) => PathBuf::new(),
+    };
+    let plugin_program = plugin_program_beside(&executable);
+    let version = app_version(&executable);
+    let (setups, problems) = AgentSetups::start(
+        directory.to_path_buf(),
+        source,
+        plugin_program,
+        version,
+        host,
+    );
     for problem in problems {
         send_to_window(window, ServicesOutput::Problem(problem));
     }
@@ -241,34 +272,31 @@ impl ServicesHost {
         window: WindowSender,
     ) -> ServicesHost {
         // Copied from each config, so the setups can read it without calling back into the store.
-        let managing = Arc::new(AtomicBool::new(true));
+        let activity_on = Arc::new(AtomicBool::new(false));
         let setups: Arc<Slot<AgentSetups>> = Arc::new(Mutex::new(None));
 
-        let require_token = Arc::new(AtomicBool::new(false));
-
-        let changed_managing = Arc::clone(&managing);
-        let changed_require_token = Arc::clone(&require_token);
+        let changed_activity_on = Arc::clone(&activity_on);
         let changed_setups = Arc::clone(&setups);
         let changed_window = window.clone();
         let on_change = move |config: Config| {
-            changed_managing.store(config.settings.manage_agent_hooks, Ordering::SeqCst);
-            changed_require_token.store(config.settings.agent_activity, Ordering::SeqCst);
+            let is_on = config.settings.agent_activity;
+            changed_activity_on.store(is_on, Ordering::SeqCst);
             send_to_window(&changed_window, ServicesOutput::Config(config));
             let setups = locked(&changed_setups);
             if let Some(setups) = setups.as_ref() {
+                setups.activity_changed(is_on);
                 setups.refresh();
             }
         };
         let store = ConfigStore::start(directory.clone(), system_is_dark, Box::new(on_change));
         let first = store.current();
-        let seeded = first.settings.manage_agent_hooks;
-        managing.store(seeded, Ordering::SeqCst);
-        require_token.store(first.settings.agent_activity, Ordering::SeqCst);
+        activity_on.store(first.settings.agent_activity, Ordering::SeqCst);
 
         let store: Arc<Slot<ConfigStore>> = Arc::new(Mutex::new(Some(store)));
-        let writer = start_writer(&directory, &store, &window);
+        let started_writer = start_writer(&directory, &store, &window);
+        let writer: Arc<Slot<ConfigWriter>> = Arc::new(Mutex::new(Some(started_writer)));
 
-        let started = start_setups(&directory, &managing, &runtime, &window);
+        let started = start_setups(&directory, &activity_on, &writer, &runtime, &window);
         let hooks_directory = started.hooks_directory();
         *locked(&setups) = Some(started);
 
@@ -294,14 +322,14 @@ impl ServicesHost {
             }
         };
         let port_file = focus_port_path(&directory);
-        let listener = HookListener::start(port_file, require_token, Box::new(on_event));
+        let listener = HookListener::start(port_file, activity_on, Box::new(on_event));
         if listener.port().is_none() {
             send_to_window(&window, ServicesOutput::Problem(PORTS_TAKEN.to_string()));
         }
 
         let inner = Inner {
             store,
-            writer: Mutex::new(Some(writer)),
+            writer,
             setups,
             updater,
             listener: Mutex::new(Some(listener)),
