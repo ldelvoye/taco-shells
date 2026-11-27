@@ -19,6 +19,8 @@ const STEPS_WORTH_A_NOTE: usize = 3;
 
 const CONTEXT_HEADING: &str = "Your earlier notes from this session, as you wrote them in Taco Shells' Agent Activity, newest first:";
 const NOW_PREFIX: &str = "What you were doing: ";
+// What ends a note cut to fit, as a cut prompt or note in the log ends.
+const CUT_MARK: &str = "… (cut)";
 const NUDGE_OPENING: &str = "Before you finish, write a short note for the user with the activity note tool. Since your last note you";
 
 /// How a session started, from Claude Code's `source`; a value it does not know counts as a new session.
@@ -43,9 +45,17 @@ pub fn context_text(now: Option<&str>, notes_newest_first: &[&str]) -> Option<St
     }
     let budget = MAX_CONTEXT_CHARACTERS - LEFT_OUT_ROOM;
     let mut left_out = 0;
-    for note in notes_newest_first {
+    for (index, note) in notes_newest_first.iter().enumerate() {
         let line = format!("\n- {note}");
-        let fits = text.chars().count() + line.chars().count() <= budget;
+        let room = budget.saturating_sub(text.chars().count());
+        let fits = line.chars().count() <= room;
+        // the newest note is never left out whole: what fits of it is handed back, cut with the mark
+        if index == 0 && !fits {
+            let kept_length = room.saturating_sub(CUT_MARK.chars().count());
+            let kept: String = line.chars().take(kept_length).collect();
+            text.push_str(&format!("{kept}{CUT_MARK}"));
+            continue;
+        }
         // once one note is left out every older one is too, so the notes handed back run unbroken from the newest
         if left_out == 0 && fits {
             text.push_str(&line);
@@ -81,13 +91,11 @@ pub fn nudge_text(steps: &[&Step], directory: Option<&str>) -> Option<String> {
     if changed.is_empty() && others < STEPS_WORTH_A_NOTE {
         return None;
     }
-    let what_was_done = match changed.is_empty() {
-        true => format!("took {others} steps that no note describes."),
-        false => {
-            let files = files_named(&changed);
-            format!("changed {files}, and no note says what or why.")
-        }
-    };
+    let mut what_was_done = format!("took {others} steps that no note describes.");
+    if !changed.is_empty() {
+        let files = files_named(&changed);
+        what_was_done = format!("changed {files}, and no note says what or why.");
+    }
     let text = format!("{NUDGE_OPENING} {what_was_done}");
     Some(bounded(&text, MAX_NUDGE_CHARACTERS))
 }
@@ -168,6 +176,18 @@ mod tests {
         assert!(text.ends_with("(2 older notes left out.)"), "{text}");
         let one_over = context_text(None, &[long.as_str(), long.as_str(), long.as_str()]).unwrap();
         assert!(one_over.ends_with("(1 older note left out.)"), "{one_over}");
+
+        let huge = "h".repeat(8_000);
+        let first_too_long = context_text(None, &[huge.as_str(), "older"]).unwrap();
+        assert!(
+            first_too_long.contains(&format!("hhh{CUT_MARK}")),
+            "the newest note comes back cut, not left out"
+        );
+        assert!(
+            first_too_long.ends_with("(1 older note left out.)"),
+            "{first_too_long}"
+        );
+        assert!(first_too_long.chars().count() <= MAX_CONTEXT_CHARACTERS);
         assert!(
             !text.contains("short"),
             "an older note never jumps a newer one that did not fit"
