@@ -5,10 +5,7 @@ use crate::hook::Request;
 use crate::http::{connect, send_request};
 
 #[derive(Debug, PartialEq)]
-pub enum PostError {
-    Refused,
-    Other,
-}
+pub struct PostError;
 
 pub fn post(
     port: u16,
@@ -93,7 +90,7 @@ mod tests {
     }
 
     #[test]
-    fn a_port_with_no_listener_is_refused() {
+    fn a_port_with_no_listener_fails_at_once() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         drop(listener);
@@ -102,7 +99,11 @@ mod tests {
             route: SESSION_STATE,
             body: String::from("{}"),
         };
-        assert_eq!(post(port, &sent, None, soon(1000)), Err(PostError::Refused));
+        let started = Instant::now();
+        let outcome = post(port, &sent, None, soon(5000));
+
+        assert!(outcome.is_err());
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     #[test]

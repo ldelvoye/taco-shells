@@ -1,4 +1,4 @@
-use std::io::{ErrorKind, Write};
+use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 
@@ -12,7 +12,7 @@ pub(crate) fn time_left(deadline: Instant) -> Result<Duration, PostError> {
     let left = deadline.checked_duration_since(Instant::now());
     match left {
         Some(left) if !left.is_zero() => Ok(left),
-        _ => Err(PostError::Other),
+        _ => Err(PostError),
     }
 }
 
@@ -22,8 +22,7 @@ pub(crate) fn connect(port: u16, deadline: Instant) -> Result<TcpStream, PostErr
     let connected = TcpStream::connect_timeout(&address, connect_budget);
     match connected {
         Ok(stream) => Ok(stream),
-        Err(problem) if problem.kind() == ErrorKind::ConnectionRefused => Err(PostError::Refused),
-        Err(_) => Err(PostError::Other),
+        Err(_) => Err(PostError),
     }
 }
 
@@ -46,8 +45,8 @@ pub(crate) fn send_request(
         let write_budget = time_left(deadline)?;
         stream
             .set_write_timeout(Some(write_budget))
-            .map_err(|_| PostError::Other)?;
-        stream.write_all(chunk).map_err(|_| PostError::Other)?;
+            .map_err(|_| PostError)?;
+        stream.write_all(chunk).map_err(|_| PostError)?;
     }
     Ok(())
 }
