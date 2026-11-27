@@ -29,7 +29,6 @@ const ROUTE_NOT_STARTED: &str =
     "Agents' hooks cannot reach the terminals: the thread that routes them did not start.";
 // A runtime that is alive but never answers must not hold a hook, a setup check or quitting for ever.
 const RUNTIME_ANSWER_WAIT: Duration = Duration::from_secs(2);
-const QUESTION_PLACE_WAIT: Duration = Duration::from_millis(600);
 const FORWARD_WAIT: Duration = Duration::from_secs(1);
 
 type Slot<T> = Mutex<Option<T>>;
@@ -331,7 +330,7 @@ fn start_hook_route(
             route_hooks(
                 messages,
                 RUNTIME_ANSWER_WAIT,
-                QUESTION_PLACE_WAIT,
+                taco_protocol::deadlines::QUESTION_PLACE,
                 resolve,
                 deliver,
                 ask,

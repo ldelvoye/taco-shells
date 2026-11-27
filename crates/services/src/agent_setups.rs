@@ -17,9 +17,9 @@ use crate::agent_setup_state::{
 };
 use crate::claude_version::{MINIMUM_VERSION, claude_version, find_claude};
 use crate::config_files::plugin_directory_path;
-use crate::hook_listener::TOKEN_FILE_NAME;
 use crate::plugin_folder::refresh_plugin_folder;
 use crate::sync::lock;
+use taco_protocol::TOKEN_FILE_NAME;
 
 const SUBMIT_CHECK_DELAY: Duration = Duration::from_secs(1);
 const NOT_LOADED_DELAY: Duration = Duration::from_secs(5);

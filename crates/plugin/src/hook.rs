@@ -1,20 +1,18 @@
 use std::path::Path;
 
 use serde_json::{Map, Value, json};
+use taco_protocol::routes::{AGENT_HOOK, CONTEXT, SESSION_END, SESSION_START, SESSION_STATE, STOP};
+use taco_protocol::{
+    AgentHookBody, ContextAnswer, HarnessId, SessionEndBody, SessionStartBody, SessionStateBody,
+    StopAnswer, TOKEN_FILE_NAME,
+};
 
 use crate::identity::tool_name_prefix;
 use crate::panel_text::PANEL_TEXT;
 use crate::post::PostError;
 use crate::tools::TOOL_NAMES;
 
-const START_ROUTE: &str = "/agent-session/start";
-const END_ROUTE: &str = "/agent-session/end";
-const STATE_ROUTE: &str = "/agent-session/state";
-const HOOK_ROUTE: &str = "/agent-session/hook";
-pub const CONTEXT_ROUTE: &str = "/agent-session/context";
-const STOP_ROUTE: &str = "/agent-session/stop";
 const HARNESS: &str = "claude";
-const TOKEN_FILE_NAME: &str = "focus-token";
 const FAILURE_EVENT: &str = "PostToolUseFailure";
 // One character over the largest limit the readers keep (a shared body), so a text cut here still shows as cut.
 const STRING_CAP: usize = 20_001;
@@ -67,34 +65,40 @@ fn text_field(payload: &Value, key: &str) -> Option<String> {
     Some(String::from(text))
 }
 
+fn harness_id() -> HarnessId {
+    HarnessId(String::from(HARNESS))
+}
+
 fn event_post(payload: &Value, event: &str, session_id: &str, pids: &[u32]) -> Option<Post> {
     if event == "SessionStart" {
         let cwd = text_field(payload, "cwd")?;
         let source = text_field(payload, "source");
         let has_conversation =
             source.as_deref() == Some("resume") || source.as_deref() == Some("compact");
-        let body = json!({
-            "pids": pids,
-            "harness": HARNESS,
-            "sessionId": session_id,
-            "cwd": cwd,
-            "hasConversation": has_conversation,
-        });
+        let body = SessionStartBody {
+            pids: pids.to_vec(),
+            harness: harness_id(),
+            session_id: String::from(session_id),
+            cwd,
+            has_conversation,
+        };
+        let text = serde_json::to_string(&body).ok()?;
         return Some(Post {
-            route: START_ROUTE,
-            body: body.to_string(),
+            route: SESSION_START,
+            body: text,
         });
     }
 
     if event == "SessionEnd" {
-        let body = json!({
-            "pids": pids,
-            "harness": HARNESS,
-            "sessionId": session_id,
-        });
+        let body = SessionEndBody {
+            pids: pids.to_vec(),
+            harness: harness_id(),
+            session_id: String::from(session_id),
+        };
+        let text = serde_json::to_string(&body).ok()?;
         return Some(Post {
-            route: END_ROUTE,
-            body: body.to_string(),
+            route: SESSION_END,
+            body: text,
         });
     }
 
@@ -112,18 +116,17 @@ fn event_post(payload: &Value, event: &str, session_id: &str, pids: &[u32]) -> O
         detail = text_field(payload, key);
     }
 
-    let mut body = json!({
-        "pids": pids,
-        "harness": HARNESS,
-        "sessionId": session_id,
-        "event": event,
-    });
-    if let Some(detail) = detail {
-        body["detail"] = Value::String(detail);
-    }
+    let body = SessionStateBody {
+        pids: pids.to_vec(),
+        harness: harness_id(),
+        session_id: String::from(session_id),
+        event: String::from(event),
+        detail,
+    };
+    let text = serde_json::to_string(&body).ok()?;
     Some(Post {
-        route: STATE_ROUTE,
-        body: body.to_string(),
+        route: SESSION_STATE,
+        body: text,
     })
 }
 
@@ -269,49 +272,50 @@ pub fn posts_for(payload: &Value, pids: &[u32]) -> Vec<Post> {
         None => return posts,
     }
 
-    posts.push(Post {
-        route: HOOK_ROUTE,
-        body: hook_body(payload, pids),
-    });
+    if let Some(body) = hook_body(payload, pids) {
+        posts.push(Post {
+            route: AGENT_HOOK,
+            body,
+        });
+    }
     posts
 }
 
-fn hook_body(payload: &Value, pids: &[u32]) -> String {
+fn hook_body(payload: &Value, pids: &[u32]) -> Option<String> {
     let reduced = reduced_payload(payload);
-    let body = json!({
-        "pids": pids,
-        "harness": HARNESS,
-        "payload": reduced,
-    });
-    body.to_string()
+    let body = AgentHookBody {
+        pids: pids.to_vec(),
+        harness: harness_id(),
+        payload: reduced,
+    };
+    serde_json::to_string(&body).ok()
 }
 
 pub fn question_for(payload: &Value, pids: &[u32]) -> Option<Question> {
     let event = text_field(payload, "hook_event_name")?;
     let route = match event.as_str() {
-        "SessionStart" => CONTEXT_ROUTE,
-        "Stop" => STOP_ROUTE,
+        "SessionStart" => CONTEXT,
+        "Stop" => STOP,
         _ => return None,
     };
     let already_continued = payload.get("stop_hook_active") == Some(&Value::Bool(true));
-    if route == STOP_ROUTE && already_continued {
+    if route == STOP && already_continued {
         return None;
     }
-    Some(Question {
-        route,
-        body: hook_body(payload, pids),
-    })
+    let body = hook_body(payload, pids)?;
+    Some(Question { route, body })
 }
 
-pub fn session_start_output(answer: &Value) -> Option<String> {
-    if answer["yours"] != Value::Bool(true) {
+pub fn session_start_output(answer: &ContextAnswer) -> Option<String> {
+    if !answer.yours {
         return None;
     }
     let mut text = String::from(PANEL_TEXT);
-    let context = text_field(answer, "context");
-    if let Some(context) = context {
+    if let Some(context) = &answer.context
+        && !context.is_empty()
+    {
         text.push_str("\n\n");
-        text.push_str(&context);
+        text.push_str(context);
     }
     let output = json!({
         "hookSpecificOutput": {
@@ -322,8 +326,11 @@ pub fn session_start_output(answer: &Value) -> Option<String> {
     Some(output.to_string())
 }
 
-pub fn stop_output(answer: &Value) -> Option<String> {
-    let reason = text_field(answer, "reason")?;
+pub fn stop_output(answer: &StopAnswer) -> Option<String> {
+    let reason = answer.reason.as_ref()?;
+    if reason.is_empty() {
+        return None;
+    }
     let output = json!({ "decision": "block", "reason": reason });
     Some(output.to_string())
 }
@@ -362,6 +369,7 @@ pub fn read_port(path: &Path) -> Option<u16> {
 mod tests {
     use super::*;
     use crate::identity::PLUGIN_NAME;
+    use taco_protocol::PORT_FILE_NAME;
 
     const PIDS: [u32; 2] = [42, 7];
 
@@ -383,7 +391,7 @@ mod tests {
         let resumed = run(
             r#"{"hook_event_name":"SessionStart","session_id":"s1","cwd":"/work","source":"resume"}"#,
         );
-        assert_eq!(routes(&resumed), [START_ROUTE, HOOK_ROUTE]);
+        assert_eq!(routes(&resumed), [SESSION_START, AGENT_HOOK]);
         let expected = json!({
             "pids": [42, 7],
             "harness": "claude",
@@ -420,13 +428,13 @@ mod tests {
     #[test]
     fn state_events_carry_their_detail() {
         let tool = run(r#"{"hook_event_name":"PreToolUse","session_id":"s1","tool_name":"Bash"}"#);
-        assert_eq!(routes(&tool), [STATE_ROUTE, HOOK_ROUTE]);
+        assert_eq!(routes(&tool), [SESSION_STATE, AGENT_HOOK]);
         assert_eq!(tool[0].1["detail"], "Bash");
 
         let notification = run(
             r#"{"hook_event_name":"Notification","session_id":"s1","notification_type":"idle_prompt"}"#,
         );
-        assert_eq!(routes(&notification), [STATE_ROUTE, HOOK_ROUTE]);
+        assert_eq!(routes(&notification), [SESSION_STATE, AGENT_HOOK]);
         assert_eq!(notification[0].1["detail"], "idle_prompt");
 
         let prompt = run(r#"{"hook_event_name":"UserPromptSubmit","session_id":"s1"}"#);
@@ -447,7 +455,7 @@ mod tests {
         let failed = run(
             r#"{"hook_event_name":"PostToolUseFailure","session_id":"s1","tool_name":"Bash","error":"boom"}"#,
         );
-        assert_eq!(routes(&failed), [HOOK_ROUTE]);
+        assert_eq!(routes(&failed), [AGENT_HOOK]);
         assert_eq!(failed[0].1["payload"]["error"], "boom");
     }
 
@@ -530,7 +538,7 @@ mod tests {
     #[test]
     fn the_token_is_the_first_line_of_the_file_beside_the_port_file() {
         let directory = tempfile::tempdir().unwrap();
-        let port_path = directory.path().join("focus-port");
+        let port_path = directory.path().join(PORT_FILE_NAME);
         assert_eq!(read_token(&port_path), None);
 
         let token_path = directory.path().join(TOKEN_FILE_NAME);
@@ -542,7 +550,7 @@ mod tests {
     fn sending_stops_at_the_first_failure() {
         let posts: Vec<Post> = (0..3)
             .map(|index| Post {
-                route: STATE_ROUTE,
+                route: SESSION_STATE,
                 body: index.to_string(),
             })
             .collect();
@@ -577,23 +585,27 @@ mod tests {
             json!({"hook_event_name": "PreToolUse", "session_id": "s1", "tool_name": "Bash"});
 
         let started = question_for(&start, &PIDS).unwrap();
-        assert_eq!(started.route, CONTEXT_ROUTE);
+        assert_eq!(started.route, CONTEXT);
         let stopped = question_for(&stop, &PIDS).unwrap();
-        assert_eq!(stopped.route, STOP_ROUTE);
+        assert_eq!(stopped.route, STOP);
         assert_eq!(question_for(&looping, &PIDS), None);
         assert_eq!(question_for(&tool, &PIDS), None);
 
         let posts = posts_for(&start, &PIDS);
         let hook_post = posts.last().unwrap();
-        assert_eq!(hook_post.route, HOOK_ROUTE);
+        assert_eq!(hook_post.route, AGENT_HOOK);
         assert_eq!(started.body, hook_post.body);
     }
 
     #[test]
     fn the_session_start_output_hands_over_the_panel_text_and_the_apps_context() {
-        assert_eq!(session_start_output(&json!({})), None);
+        assert_eq!(session_start_output(&ContextAnswer::default()), None);
 
-        let bare = session_start_output(&json!({"yours": true})).unwrap();
+        let bare_answer = ContextAnswer {
+            yours: true,
+            context: None,
+        };
+        let bare = session_start_output(&bare_answer).unwrap();
         let parsed: Value = serde_json::from_str(&bare).unwrap();
         let expected = json!({"hookSpecificOutput": {
             "hookEventName": "SessionStart",
@@ -601,7 +613,11 @@ mod tests {
         }});
         assert_eq!(parsed, expected);
 
-        let with_context = session_start_output(&json!({"yours": true, "context": "Earlier: x"}));
+        let context_answer = ContextAnswer {
+            yours: true,
+            context: Some(String::from("Earlier: x")),
+        };
+        let with_context = session_start_output(&context_answer);
         let parsed: Value = serde_json::from_str(&with_context.unwrap()).unwrap();
         let text = format!("{PANEL_TEXT}\n\nEarlier: x");
         assert_eq!(parsed["hookSpecificOutput"]["additionalContext"], text);
@@ -609,10 +625,16 @@ mod tests {
 
     #[test]
     fn a_stop_is_blocked_only_with_a_reason() {
-        assert_eq!(stop_output(&json!({})), None);
-        assert_eq!(stop_output(&json!({"reason": ""})), None);
+        assert_eq!(stop_output(&StopAnswer::default()), None);
+        let empty = StopAnswer {
+            reason: Some(String::new()),
+        };
+        assert_eq!(stop_output(&empty), None);
 
-        let blocked = stop_output(&json!({"reason": "write a note"})).unwrap();
+        let note = StopAnswer {
+            reason: Some(String::from("write a note")),
+        };
+        let blocked = stop_output(&note).unwrap();
         let parsed: Value = serde_json::from_str(&blocked).unwrap();
         assert_eq!(
             parsed,

@@ -8,15 +8,15 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use taco_plugin::{PANEL_TEXT, PLUGIN_NAME};
-use taco_protocol::{APP_VARIABLE, PORT_FILE_VARIABLE};
+use taco_protocol::{APP_VARIABLE, PORT_FILE_NAME, PORT_FILE_VARIABLE, TOKEN_FILE_NAME, routes};
 
-const CONTEXT_ROUTE: &str = "/agent-session/context";
-const STOP_ROUTE: &str = "/agent-session/stop";
-const POST_ROUTES: [&str; 2] = ["/agent-session/state", "/agent-session/hook"];
+const CONTEXT_ROUTE: &str = routes::CONTEXT;
+const STOP_ROUTE: &str = routes::STOP;
+const POST_ROUTES: [&str; 2] = [routes::SESSION_STATE, routes::AGENT_HOOK];
 const HEAD_END: &[u8] = b"\r\n\r\n";
 const HELD_FOR: Duration = Duration::from_secs(6);
 const POLL_LIMIT: Duration = Duration::from_secs(3);
-const START_ROUTE: &str = "/agent-session/start";
+const START_ROUTE: &str = routes::SESSION_START;
 
 type Arrivals = Mutex<Vec<(usize, String)>>;
 
@@ -115,8 +115,8 @@ fn stand_in(reply: Reply) -> (u16, Arc<Arrivals>) {
 }
 
 fn write_port_files(directory: &Path, port: u16) {
-    std::fs::write(directory.join("focus-port"), format!("{port}\n")).unwrap();
-    std::fs::write(directory.join("focus-token"), "test-token\n").unwrap();
+    std::fs::write(directory.join(PORT_FILE_NAME), format!("{port}\n")).unwrap();
+    std::fs::write(directory.join(TOKEN_FILE_NAME), "test-token\n").unwrap();
 }
 
 fn run_hook(directory: &Path, payload: &Value) -> Output {
@@ -126,7 +126,7 @@ fn run_hook(directory: &Path, payload: &Value) -> Output {
         .env_clear()
         .env("PATH", path)
         .env("HOME", directory)
-        .env(PORT_FILE_VARIABLE, directory.join("focus-port"))
+        .env(PORT_FILE_VARIABLE, directory.join(PORT_FILE_NAME))
         .env(APP_VARIABLE, PLUGIN_NAME)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
