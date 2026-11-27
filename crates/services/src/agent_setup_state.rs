@@ -1,7 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use crate::claude_version::is_too_old;
-
 const STATUS_NOT_INSTALLED: &str = "Not installed";
 const STATUS_OFF: &str = "Off";
 const STATUS_OLD_SETUP: &str = "Set up the old way";
@@ -37,6 +35,7 @@ pub struct AgentSetupFacts {
     pub plugin_dirs: PluginDirs,
     pub home: PathBuf,
     pub version: Option<(u32, u32, u32)>,
+    pub minimum_version: (u32, u32, u32),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,10 +76,12 @@ pub fn agent_setup_state_of(facts: &AgentSetupFacts) -> AgentSetupState {
     }
     if facts.activity_on
         && let Some(version) = facts.version
-        && is_too_old(version)
     {
-        let shown = version_text(version);
-        return AgentSetupState::TooOld { version: shown };
+        let too_old = version < facts.minimum_version;
+        if too_old {
+            let shown = version_text(version);
+            return AgentSetupState::TooOld { version: shown };
+        }
     }
     if let PluginDirs::Hides { file } = &facts.plugin_dirs {
         let shown = shown_with_tilde(file, &facts.home);
@@ -168,6 +169,7 @@ mod tests {
             plugin_dirs: PluginDirs::Unset,
             home: PathBuf::from("/h"),
             version,
+            minimum_version: (2, 1, 280),
         }
     }
 

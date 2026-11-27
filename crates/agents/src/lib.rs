@@ -9,7 +9,7 @@ pub use claude::{
     activity_tool_of, activity_tool_prefix, reduced_payload,
 };
 pub use harness::{
-    AgentTitle, EntryRead, Found, Harness, HarnessSetup, PullRequestSeen, StepContext,
+    AgentTitle, EntryRead, Found, Harness, HarnessSetup, HookFields, PullRequestSeen, StepContext,
 };
 
 /// What ends a text the app cut to fit, in the log and in what it hands an agent.

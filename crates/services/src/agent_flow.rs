@@ -148,6 +148,7 @@ fn plugin_dirs_reading(agent: &Agent, user_text: Option<&str>) -> PluginDirs {
         managed_text.as_deref(),
         &agent.paths.plugin_folder,
         &agent.paths.home,
+        agent.setup.plugin_variable,
     )
 }
 
@@ -169,6 +170,7 @@ pub(crate) fn read_state(
         plugin_dirs,
         home: agent.paths.home.clone(),
         version,
+        minimum_version: agent.setup.minimum_version,
     };
     agent_setup_state_of(&facts)
 }
@@ -202,7 +204,8 @@ pub(crate) fn add_plugin_folder(
     };
     let folder = &agent.paths.plugin_folder;
     let home = &agent.paths.home;
-    let edit = append_folder(&text, folder, home, &file);
+    let variable = agent.setup.plugin_variable;
+    let edit = append_folder(&text, folder, home, &file, variable);
     let (changed, before, after) = match edit {
         Appended::Changed {
             text,
@@ -229,7 +232,7 @@ pub(crate) fn add_plugin_folder(
     Ok(Some(shown))
 }
 
-pub(crate) fn remove_plugin_folder(config_directory: &Path) -> Result<(), String> {
+pub(crate) fn remove_plugin_folder(config_directory: &Path, variable: &str) -> Result<(), String> {
     let Some(record) = read_record(config_directory) else {
         return Ok(());
     };
@@ -238,7 +241,7 @@ pub(crate) fn remove_plugin_folder(config_directory: &Path) -> Result<(), String
     let found = read.map_err(|reason| not_taken_out_problem(&file, &reason))?;
     let mut written = Ok(());
     if let Some(text) = found {
-        let edit = restore_value(&text, &record.before, &record.after, &file);
+        let edit = restore_value(&text, &record.before, &record.after, &file, variable);
         match edit {
             HookEdit::Changed(changed) => {
                 written = write_settings(&record.settings, Some(text.as_str()), &changed);

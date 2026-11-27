@@ -8,16 +8,14 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-pub const MINIMUM_VERSION: (u32, u32, u32) = (2, 1, 280);
+use taco_agents::Harness;
 
 const PASSED_VARIABLES: [&str; 5] = ["HOME", "USER", "PATH", "LANG", "TMPDIR"];
 const RUN_LIMIT: Duration = Duration::from_secs(3);
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
-pub fn parse_version(output: &str) -> Option<(u32, u32, u32)> {
-    let first_line = output.lines().next()?;
-    let first_word = first_line.split_whitespace().next()?;
-    let mut numbers = first_word.split('.');
+fn numbered_version(text: &str) -> Option<(u32, u32, u32)> {
+    let mut numbers = text.split('.');
     let major_text = numbers.next()?;
     let minor_text = numbers.next()?;
     let patch_text = numbers.next()?;
@@ -33,10 +31,6 @@ fn leading_digits(text: &str) -> &str {
     &text[..digit_count]
 }
 
-pub fn is_too_old(version: (u32, u32, u32)) -> bool {
-    version < MINIMUM_VERSION
-}
-
 fn is_executable_file(path: &Path) -> bool {
     let Ok(metadata) = fs::metadata(path) else {
         return false;
@@ -48,10 +42,10 @@ fn is_executable_file(path: &Path) -> bool {
 
 fn node_directory_version(name: &str) -> Option<(u32, u32, u32)> {
     let numbers = name.strip_prefix('v')?;
-    parse_version(numbers)
+    numbered_version(numbers)
 }
 
-fn newest_nvm_claude(nvm_folder: &Path) -> Option<PathBuf> {
+fn newest_nvm_program(nvm_folder: &Path, command: &str) -> Option<PathBuf> {
     let entries = fs::read_dir(nvm_folder).ok()?;
     let mut newest: Option<((u32, u32, u32), PathBuf)> = None;
     for entry in entries.flatten() {
@@ -69,9 +63,9 @@ fn newest_nvm_claude(nvm_folder: &Path) -> Option<PathBuf> {
         }
     }
     let (_, directory) = newest?;
-    let claude = directory.join("bin/claude");
-    if is_executable_file(&claude) {
-        return Some(claude);
+    let program = directory.join("bin").join(command);
+    if is_executable_file(&program) {
+        return Some(program);
     }
     None
 }
@@ -148,18 +142,19 @@ fn login_shell() -> Option<PathBuf> {
     Some(PathBuf::from(shell))
 }
 
-fn login_shell_claude() -> Option<PathBuf> {
+fn login_shell_program(command: &str) -> Option<PathBuf> {
     let shell = login_shell()?;
-    let output = run_for_output(&shell, &["-l", "-c", "command -v claude"], RUN_LIMIT)?;
+    let arguments = ["-l", "-c", "command -v \"$1\"", "taco-shells", command];
+    let output = run_for_output(&shell, &arguments, RUN_LIMIT)?;
     last_executable_line(&output)
 }
 
-pub fn find_claude(home: &Path) -> Option<PathBuf> {
+pub(crate) fn find_program(home: &Path, command: &str) -> Option<PathBuf> {
     let fixed = [
-        home.join(".local/bin/claude"),
-        PathBuf::from("/opt/homebrew/bin/claude"),
-        PathBuf::from("/usr/local/bin/claude"),
-        home.join(".npm-global/bin/claude"),
+        home.join(".local/bin").join(command),
+        Path::new("/opt/homebrew/bin").join(command),
+        Path::new("/usr/local/bin").join(command),
+        home.join(".npm-global/bin").join(command),
     ];
     for candidate in fixed {
         if is_executable_file(&candidate) {
@@ -168,29 +163,38 @@ pub fn find_claude(home: &Path) -> Option<PathBuf> {
     }
 
     let nvm_folder = home.join(".nvm/versions/node");
-    let nvm_claude = newest_nvm_claude(&nvm_folder);
-    if nvm_claude.is_some() {
-        return nvm_claude;
+    let nvm_program = newest_nvm_program(&nvm_folder, command);
+    if nvm_program.is_some() {
+        return nvm_program;
     }
 
-    login_shell_claude()
+    login_shell_program(command)
 }
 
-pub fn claude_version(claude: &Path) -> Option<(u32, u32, u32)> {
-    let direct = run_for_output(claude, &["--version"], RUN_LIMIT);
+pub(crate) fn program_version(program: &Path, harness: &Harness) -> Option<(u32, u32, u32)> {
+    let setup = harness.setup()?;
+    let flag = setup.version_flag;
+    let direct = run_for_output(program, &[flag], RUN_LIMIT);
     if let Some(output) = direct {
-        let version = parse_version(&output);
+        let version = harness.version_of(&output);
         if version.is_some() {
             return version;
         }
     }
 
-    // A claude installed through npm or nvm is a node script, and the app's own PATH may not reach node.
+    // An agent installed through npm or nvm is a node script, and the app's own PATH may not reach node.
     let shell = login_shell()?;
-    let claude_text = claude.to_str()?;
-    let arguments = ["-l", "-c", "\"$1\" --version", "taco-shells", claude_text];
+    let program_text = program.to_str()?;
+    let arguments = [
+        "-l",
+        "-c",
+        "\"$1\" \"$2\"",
+        "taco-shells",
+        program_text,
+        flag,
+    ];
     let through_shell = run_for_output(&shell, &arguments, RUN_LIMIT)?;
-    parse_version(&through_shell)
+    harness.version_of(&through_shell)
 }
 
 #[cfg(test)]
@@ -203,15 +207,6 @@ mod tests {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, text).unwrap();
         fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
-    }
-
-    #[test]
-    fn reads_the_leading_version() {
-        assert_eq!(parse_version("2.1.332 (Claude Code)"), Some((2, 1, 332)));
-        assert_eq!(parse_version("10.0.1\n"), Some((10, 0, 1)));
-        assert_eq!(parse_version("Claude Code"), None);
-        assert_eq!(parse_version(""), None);
-        assert_eq!(parse_version("2.1.332-beta.1"), Some((2, 1, 332)));
     }
 
     #[test]
@@ -229,21 +224,13 @@ mod tests {
     }
 
     #[test]
-    fn the_minimum_is_the_first_version_that_is_not_too_old() {
-        assert!(is_too_old((2, 1, 279)));
-        assert!(!is_too_old((2, 1, 280)));
-        assert!(!is_too_old((2, 2, 0)));
-        assert!(!is_too_old((3, 0, 0)));
-    }
-
-    #[test]
     fn nvm_versions_compare_as_numbers() {
         let home = tempfile::tempdir().unwrap();
         let nvm = home.path().join("versions/node");
         executable_file(&nvm.join("v9.0.0/bin/claude"), "");
         executable_file(&nvm.join("v18.2.0/bin/claude"), "");
 
-        let found = newest_nvm_claude(&nvm);
+        let found = newest_nvm_program(&nvm, "claude");
 
         assert_eq!(found, Some(nvm.join("v18.2.0/bin/claude")));
     }

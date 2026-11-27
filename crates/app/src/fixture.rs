@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 
 use serde_json::{Map, Value, json};
-use taco_agents::{activity_tool_prefix, reduced_payload};
+use taco_agents::{HarnessSetup, activity_tool_prefix, reduced_payload};
 use taco_protocol::{
     AgentSignal, DrawnState, HarnessId, HookCall, HookEvent, Panel, Peer, RequestReply, RowState,
     RuntimeReport, TabGroupId, TerminalId, WorkspaceRequest,
@@ -936,7 +936,8 @@ fn offer_kind() -> AgentSetupNoticeKind {
 }
 
 fn too_old_kind() -> AgentSetupNoticeKind {
-    let reason = too_old_reason(PRODUCT_NAME, OLD_VERSION);
+    let minimum = claude_setup().minimum_version;
+    let reason = too_old_reason(PRODUCT_NAME, minimum, OLD_VERSION);
     AgentSetupNoticeKind::Unavailable { reason }
 }
 
@@ -979,7 +980,13 @@ fn done_beside_agent(drawn: DrawnState, changed_file: Option<&str>) -> Shown {
 }
 
 fn plugin_dirs_offer_text() -> String {
-    plugin_dirs_hidden_text(PRODUCT_NAME, SETTINGS_FILE)
+    let variable = claude_setup().plugin_variable;
+    plugin_dirs_hidden_text(PRODUCT_NAME, variable, SETTINGS_FILE)
+}
+
+fn claude_setup() -> &'static HarnessSetup {
+    let setup = taco_agents::CLAUDE.setup();
+    setup.expect("Claude has a setup")
 }
 
 fn offered_setup() -> AgentSetupView {
