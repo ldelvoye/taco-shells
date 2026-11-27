@@ -2,10 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use taco_agents::{EntryRead, HARNESSES, default_harness, harness_of};
 use taco_protocol::{
-    ActivityEntry, ActivityEvent, ActivityRequest, AgentLabel, AgentSignal, Arrangement, Board,
-    ConfigFile, DrawnState, HarnessId, HookCall, HookEvent, Panels, RequestReply, Row, RowState,
-    RuntimeCommand, RuntimeReport, TabGroup, TabGroupId, TerminalId, TerminalSize, TerminalStart,
-    WorkspaceRequest,
+    ActivityEntry, ActivityEvent, ActivityKind, ActivityRequest, AgentLabel, AgentSignal,
+    Arrangement, Author, Board, ConfigFile, DrawnState, HarnessId, HookCall, HookEvent, Panels,
+    RequestReply, Row, RowState, RuntimeCommand, RuntimeReport, TabGroup, TabGroupId, TerminalId,
+    TerminalSize, TerminalStart, WorkspaceRequest,
 };
 use taco_rules::{
     add_row, add_row_to, apply_drop, can_fork, close_panel, close_row, create_tab_group,
@@ -14,7 +14,7 @@ use taco_rules::{
     ungroup_tab_group,
 };
 
-use crate::board::{NowLine, TerminalBoard};
+use crate::board::{NowLine, Sharing, TerminalBoard};
 use crate::log::{Log, line_of};
 use crate::rows::{
     AgentRows, Signalled, apply_idle_title, apply_on_screen, apply_question, apply_signal,
@@ -346,15 +346,17 @@ impl Workspace {
                     complete: page.complete,
                 }
             }
-            // no shared text is kept, so no body is sent
             ActivityRequest::Body { terminal, thing } => {
                 if !self.holds(&terminal) {
                     return Vec::new();
                 }
+                let board =
+                    loaded_board(&mut self.boards, self.options.storage.as_ref(), &terminal);
+                let body = board.body_of(thing);
                 ActivityEvent::Body {
                     terminal,
                     thing,
-                    body: None,
+                    body,
                 }
             }
         };
@@ -772,7 +774,41 @@ impl Workspace {
                 self.log_entry(terminal, out, |log| log.append_note(text, now_ms));
             }
             EntryRead::Now { text } => self.set_now(terminal, session_id, text, out),
+            EntryRead::Share {
+                kind,
+                title,
+                target,
+                body,
+            } => {
+                let sharing = Sharing {
+                    by: Author::Agent,
+                    kind,
+                    title,
+                    target,
+                    body,
+                    at_ms: now_ms,
+                };
+                self.share(terminal, sharing, out);
+            }
         }
+    }
+
+    // The thing goes to the top of Shared and gets a log line of its own; only a note closes the open stretch.
+    fn share(&mut self, terminal: &TerminalId, sharing: Sharing, out: &mut Vec<Outbound>) {
+        let shown_before = self.watched_board(terminal);
+        let at_ms = sharing.at_ms;
+        let board = loaded_board(&mut self.boards, self.options.storage.as_ref(), terminal);
+        let thing = board.share(sharing);
+        if let Some(text) = board.text() {
+            self.options.storage.write_state(terminal, &text);
+        }
+        self.board_changed(terminal, shown_before, out);
+        let by = thing.by.clone();
+        let kind = ActivityKind::Shared {
+            thing: thing.id,
+            title: thing.title,
+        };
+        self.log_entry(terminal, out, |log| log.append(by, kind, at_ms));
     }
 
     /// The board Agent Activity shows for a terminal: its now line only while the session that wrote it is the terminal's.
