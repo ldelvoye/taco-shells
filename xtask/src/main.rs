@@ -5,11 +5,13 @@ mod ghostty_bindings;
 mod identity;
 mod install;
 mod measure;
+mod promote;
 mod rehearse;
 mod release;
 mod repo;
 mod run;
 mod smoke;
+mod try_stable;
 mod version;
 
 use std::env;
@@ -19,7 +21,7 @@ use std::process::ExitCode;
 use build::{Channel, Profile};
 use bundle::Options;
 
-const USAGE: &str = "usage: cargo xtask <run [-- <app args>] | bundle [--release] [--stable] [--zip] [--config-dir <absolute path>] | install | rehearse-update [--electron <app> | --from-rust] [--until-ready] | smoke | measure [--terminals=N ...] | ghostty-bindings | release [--dry-run]>";
+const USAGE: &str = "usage: cargo xtask <run [-- <app args>] | bundle [--release] [--stable] [--zip] [--config-dir <absolute path>] | install | rehearse-update [--electron <app> | --from-rust] [--until-ready] | smoke | measure [--terminals=N ...] | ghostty-bindings | release [--dry-run] | promote [--publish] [--notes-file=<path>] [--key=<path>] | try-stable>";
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = env::args().skip(1).collect();
@@ -49,6 +51,11 @@ fn main() -> ExitCode {
             [flag] if flag == "--dry-run" => release::run(true),
             _ => return usage(),
         },
+        "promote" => match promote_options(rest) {
+            Some(options) => promote::run(&options),
+            None => return usage(),
+        },
+        "try-stable" if rest.is_empty() => try_stable::run(),
         _ => return usage(),
     };
 
@@ -64,6 +71,27 @@ fn main() -> ExitCode {
 fn usage() -> ExitCode {
     eprintln!("{USAGE}");
     ExitCode::from(2)
+}
+
+fn promote_options(rest: &[String]) -> Option<promote::Options> {
+    let mut options = promote::Options {
+        publish: false,
+        notes_file: None,
+        key: None,
+    };
+    for argument in rest {
+        if argument == "--publish" {
+            options.publish = true;
+            continue;
+        }
+        if let Some(path) = argument.strip_prefix("--notes-file=") {
+            options.notes_file = Some(PathBuf::from(path));
+            continue;
+        }
+        let key = argument.strip_prefix("--key=")?;
+        options.key = Some(PathBuf::from(key));
+    }
+    Some(options)
 }
 
 fn app_arguments(rest: &[String]) -> Option<&[String]> {

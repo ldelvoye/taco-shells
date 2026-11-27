@@ -1,19 +1,32 @@
 //! The tests that drive the real app: one launch of a development bundle, the checks in order, stopping at the first
-//! failure. Run through `cargo xtask smoke`, which builds the bundle and the config directory it starts from.
+//! failure. Run through `cargo xtask smoke`, which builds the bundle and the config directory it starts from. With
+//! `--stable`, only the checks a stable bundle can take, which is never launched here: `cargo xtask promote` runs them.
 
 mod bundle;
 mod plugin;
 mod window;
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use taco_smoke::driver::Driver;
 use taco_smoke::launch;
 
-const USAGE: &str = "usage: taco-smoke <path to the .app> <config directory to start from>";
+const USAGE: &str = "usage: taco-smoke <path to the .app> <config directory to start from> | taco-smoke --stable <path to the .app>";
+const STABLE_FLAG: &str = "--stable";
 const APP_LOG: &str = "app.log";
+
+const STABLE_BUNDLE: [Check; 2] = [
+    Check {
+        name: "the stable bundle holds only the stable app's names, carries the release key and no extra-key variable",
+        run: bundle::holds_only_stable_names_and_the_release_key,
+    },
+    Check {
+        name: "the bundled plugin program is the stable app's: it lists note, now and share for the stable name, none for the dev one, and approves its own tool",
+        run: plugin::is_built_for_the_stable_channel,
+    },
+];
 
 const BEFORE_LAUNCH: [Check; 2] = [
     Check {
@@ -75,9 +88,10 @@ pub struct Smoke {
     pub config: PathBuf,
 }
 
+/// A check that reads the bundle and never launches the app.
 struct Check {
     name: &'static str,
-    run: fn(&Smoke) -> Result<(), String>,
+    run: fn(&Path) -> Result<(), String>,
 }
 
 struct LaunchedCheck {
@@ -87,9 +101,13 @@ struct LaunchedCheck {
 
 fn main() -> ExitCode {
     let arguments: Vec<PathBuf> = env::args_os().skip(1).map(PathBuf::from).collect();
-    let [app, config] = arguments.as_slice() else {
-        eprintln!("{USAGE}");
-        return ExitCode::from(2);
+    let (app, config) = match arguments.as_slice() {
+        [flag, app] if flag == Path::new(STABLE_FLAG) => return checked_stable_bundle(app),
+        [app, config] => (app, config),
+        _ => {
+            eprintln!("{USAGE}");
+            return ExitCode::from(2);
+        }
     };
     let smoke = Smoke {
         app: app.clone(),
@@ -97,7 +115,7 @@ fn main() -> ExitCode {
     };
 
     for check in BEFORE_LAUNCH {
-        let outcome = (check.run)(&smoke);
+        let outcome = (check.run)(&smoke.app);
         if !reported(check.name, outcome) {
             return ExitCode::FAILURE;
         }
@@ -130,6 +148,17 @@ fn main() -> ExitCode {
     }
     let total = BEFORE_LAUNCH.len() + LAUNCHED.len();
     println!("{total} passed");
+    ExitCode::SUCCESS
+}
+
+fn checked_stable_bundle(app: &Path) -> ExitCode {
+    for check in STABLE_BUNDLE {
+        let outcome = (check.run)(app);
+        if !reported(check.name, outcome) {
+            return ExitCode::FAILURE;
+        }
+    }
+    println!("{} passed", STABLE_BUNDLE.len());
     ExitCode::SUCCESS
 }
 
