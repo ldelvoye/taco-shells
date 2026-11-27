@@ -74,13 +74,8 @@ pub enum ServicesOutput {
 /// Everything sent to the window's thread, in the order it is applied.
 pub enum WindowOutput {
     State(DrawnState),
-    Replied {
-        token: u64,
-        reply: RequestReply,
-    },
+    Replied { token: u64, reply: RequestReply },
     Activity(ActivityEvent),
-    /// The last terminal has gone, which ends the app.
-    Emptied,
     Services(ServicesOutput),
 }
 

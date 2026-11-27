@@ -378,10 +378,11 @@ fn a_close_goes_through_the_runtime_and_the_last_exit_ends_the_app_once() {
     );
     assert!(out.is_empty());
 
+    // the last terminal going is an ordinary change: the empty list is published, and nothing else goes out
     let out = exited(&mut workspace, "t2");
-    assert!(out.contains(&Outbound::Emptied));
-    let out = exited(&mut workspace, "t2");
-    assert!(!out.contains(&Outbound::Emptied));
+    let only_the_state = matches!(out.as_slice(), [Outbound::State(_)]);
+    assert!(only_the_state, "{out:?}");
+    assert_eq!(listed(&workspace), "");
 }
 
 #[test]
@@ -393,7 +394,6 @@ fn when_the_runtime_dies_every_terminal_goes_the_window_says_why_and_nothing_reo
     );
 
     let out = workspace.runtime_died("killed", 0);
-    assert!(!out.contains(&Outbound::Emptied));
     let drawn = published(&out).unwrap();
     assert!(drawn.problem.unwrap().contains("(killed)"));
     assert_eq!(listed(&workspace), "");

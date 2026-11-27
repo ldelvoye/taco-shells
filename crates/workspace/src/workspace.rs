@@ -47,8 +47,6 @@ pub struct Options {
 pub enum Outbound {
     Runtime(RuntimeCommand),
     State(DrawnState),
-    /// The last terminal has gone, which ends the app.
-    Emptied,
     /// For Agent Activity, on its own stream rather than in the state published whole.
     Activity(ActivityEvent),
 }
@@ -189,7 +187,6 @@ impl Workspace {
     /// Reopens the saved terminals, or opens a first one. Called once, after the app can carry what comes out.
     pub fn start(&mut self, now_ms: u64) -> Vec<Outbound> {
         let mut out = Vec::new();
-        let before = self.row_count();
         let mut saved = None;
         if self.options.restore_on_launch
             && let Some(text) = self.options.storage.read_save()
@@ -208,7 +205,7 @@ impl Workspace {
         if rows_are_known {
             self.drop_orphan_logs();
         }
-        self.finish(before, now_ms, &mut out);
+        self.finish(now_ms, &mut out);
         out
     }
 
@@ -270,9 +267,8 @@ impl Workspace {
         now_ms: u64,
     ) -> (RequestReply, Vec<Outbound>) {
         let mut out = Vec::new();
-        let before = self.row_count();
         let (ok, tab_group) = self.answer(request, &mut out);
-        self.finish(before, now_ms, &mut out);
+        self.finish(now_ms, &mut out);
         let reply = RequestReply {
             ok,
             tab_group,
@@ -283,7 +279,6 @@ impl Workspace {
 
     pub fn runtime_report(&mut self, report: RuntimeReport, now_ms: u64) -> Vec<Outbound> {
         let mut out = Vec::new();
-        let before = self.row_count();
         match report {
             RuntimeReport::Started { id, directory } => {
                 if self.holds(&id) {
@@ -300,17 +295,16 @@ impl Workspace {
             RuntimeReport::Titled { id, title } => self.titled(&id, title, now_ms),
             RuntimeReport::Submitted { .. } | RuntimeReport::Answer { .. } => {}
         }
-        self.finish(before, now_ms, &mut out);
+        self.finish(now_ms, &mut out);
         out
     }
 
     pub fn hook(&mut self, event: HookEvent, now_ms: u64) -> Vec<Outbound> {
         let mut out = Vec::new();
-        let before = self.row_count();
         if self.holds(&event.terminal) {
             self.apply_hook(&event.terminal, event.call, now_ms, &mut out);
         }
-        self.finish(before, now_ms, &mut out);
+        self.finish(now_ms, &mut out);
         out
     }
 
@@ -454,19 +448,17 @@ impl Workspace {
     /// The app came to the front: jump to the terminal that last asked for attention.
     pub fn app_activated(&mut self, now_ms: u64) -> Vec<Outbound> {
         let mut out = Vec::new();
-        let before = self.row_count();
         if let Some(waiting) = self.waiting.clone() {
             self.change_arrangement(|arrangement| select_row(arrangement, &waiting));
             self.refocus += 1;
         }
-        self.finish(before, now_ms, &mut out);
+        self.finish(now_ms, &mut out);
         out
     }
 
     /// Closes every terminal and tells the window why; the save is frozen first.
     pub fn runtime_died(&mut self, reason: &str, now_ms: u64) -> Vec<Outbound> {
         let mut out = Vec::new();
-        let before = self.row_count();
         self.freeze();
         self.runtime_gone = true;
         self.problem = Some(runtime_problem(reason));
@@ -474,7 +466,7 @@ impl Workspace {
         for terminal in &open {
             self.terminal_exited(terminal);
         }
-        self.finish(before, now_ms, &mut out);
+        self.finish(now_ms, &mut out);
         out
     }
 
@@ -482,13 +474,6 @@ impl Workspace {
     pub fn freeze(&mut self) {
         self.frozen = true;
         self.sessions.freeze();
-    }
-
-    fn row_count(&self) -> usize {
-        match &self.arrangement {
-            Some(arrangement) => arrangement.rows.len(),
-            None => 0,
-        }
     }
 
     fn base_arrangement(&self) -> Arrangement {
@@ -1046,18 +1031,12 @@ impl Workspace {
         }
     }
 
-    // Every input ends here: what follows from the selection, the last terminal going, and a publish only when the state changed.
-    fn finish(&mut self, rows_before: usize, now_ms: u64, out: &mut Vec<Outbound>) {
+    // Every input ends here: what follows from the selection, and a publish only when the state changed.
+    fn finish(&mut self, now_ms: u64, out: &mut Vec<Outbound>) {
         let selected = selected_terminal(self.arrangement.as_ref()).cloned();
         apply_on_screen(&mut self.rows, selected.as_ref(), now_ms);
         if self.waiting.is_some() && self.waiting == selected {
             self.waiting = None;
-        }
-
-        let emptied = rows_before > 0 && self.row_count() == 0;
-        // after the runtime died the window has to stay, to say so
-        if emptied && !self.runtime_gone {
-            out.push(Outbound::Emptied);
         }
 
         self.schedule_save(now_ms);
