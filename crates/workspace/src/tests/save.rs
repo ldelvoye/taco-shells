@@ -76,10 +76,8 @@ fn a_save_brings_back_the_same_rows_ids_collapsed_group_and_panel_edge_after_a_r
     let drawn = reopened.drawn();
     let arrangement = drawn.arrangement.unwrap();
     assert!(arrangement.tab_groups[0].collapsed);
-    assert_eq!(
-        drawn.panels.agent_activity.edge,
-        taco_protocol::Edge::Bottom
-    );
+    let activity = drawn.panels.place(taco_protocol::Panel::AgentActivity);
+    assert_eq!(activity.edge, taco_protocol::Edge::Bottom);
 }
 
 #[test]

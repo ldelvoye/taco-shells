@@ -396,8 +396,8 @@ mod tests {
         r#"{"id":"t1","directory":"/w","agent":{"harness":"claude","sessionId":"123e4567-e89b-12d3-a456-426614174000","cwd":"/w/tacos"},"tabGroup":0},"#,
         r#"{"id":"t2","directory":null,"agent":null,"tabGroup":null}"#,
         r#"],"selected":1,"tabGroups":[{"name":"Tacos","collapsed":true}],"panels":{"#,
-        r#""terminals":{"edge":"Left","open":true,"size":210.0},"#,
-        r#""agent_activity":{"edge":"Bottom","open":false,"size":340.5}}}"#,
+        r#""Terminals":{"edge":"Left","open":true,"size":210.0},"#,
+        r#""AgentActivity":{"edge":"Bottom","open":false,"size":340.5}}}"#,
     );
 
     #[test]

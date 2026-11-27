@@ -5,7 +5,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use taco_drive::{Appearance, Point, Rect};
-use taco_protocol::{DrawnState, Edge, TerminalId};
+use taco_protocol::{DrawnState, Edge, Panel, TerminalId};
 use taco_smoke::driver::Driver;
 
 use crate::Smoke;
@@ -84,7 +84,8 @@ pub fn a_dragged_panel_moves_to_the_edge_it_is_dropped_on(
     driver: &mut Driver,
 ) -> Result<(), String> {
     let before = drawn(driver)?;
-    if before.panels.terminals.edge == Edge::Right {
+    let terminals_before = before.panels.place(Panel::Terminals);
+    if terminals_before.edge == Edge::Right {
         return Err("the Terminals panel already starts on the right".to_string());
     }
     let title = required(driver, "panel:terminals:title")?;
@@ -101,10 +102,11 @@ pub fn a_dragged_panel_moves_to_the_edge_it_is_dropped_on(
     driver.drag(from, to)?;
 
     let after = settled(driver, before.revision)?;
-    if after.panels.terminals.edge != Edge::Right {
+    let terminals_after = after.panels.place(Panel::Terminals);
+    if terminals_after.edge != Edge::Right {
         return Err(format!(
             "the Terminals panel is on {:?} after a drop on the right edge",
-            after.panels.terminals.edge
+            terminals_after.edge
         ));
     }
     let panel = required(driver, "panel:terminals")?;

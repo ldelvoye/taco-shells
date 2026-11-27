@@ -17,7 +17,8 @@ impl WindowView {
     /// Watches the selected terminal's log while Agent Activity is open, and nothing while it is closed.
     pub(super) fn watch_activity(&mut self, drawn: &DrawnState) {
         let mut wanted = None;
-        if drawn.panels.agent_activity.open {
+        let activity = drawn.panels.place(taco_protocol::Panel::AgentActivity);
+        if activity.open {
             let selected = selected_terminal(drawn.arrangement.as_ref());
             wanted = selected.cloned();
         }

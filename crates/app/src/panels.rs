@@ -94,19 +94,12 @@ pub fn driver_name_of(panel: Panel) -> &'static str {
 
 /// The panel open on an edge, if any: at most one is, which `rules` keeps true.
 pub fn open_on(panels: &Panels, edge: Edge) -> Option<(Panel, &PanelPlace)> {
-    let places = [
-        (Panel::Terminals, &panels.terminals),
-        (Panel::AgentActivity, &panels.agent_activity),
-    ];
-    let mut all = places.into_iter();
-    all.find(|(_, place)| place.open && place.edge == edge)
+    let panel = taco_rules::open_on(panels, edge)?;
+    Some((panel, panels.place(panel)))
 }
 
 pub fn place_of(panels: &Panels, panel: Panel) -> &PanelPlace {
-    match panel {
-        Panel::Terminals => &panels.terminals,
-        Panel::AgentActivity => &panels.agent_activity,
-    }
+    panels.place(panel)
 }
 
 /// A panel's size with the pointer at `pointer` in a window of `window` size: at least a usable minimum, at most half the window.
