@@ -23,6 +23,7 @@ use taco_settings::{Config, KeymapChange, SettingChange};
 use crate::ports::{ServicesOutput, WindowOutput, WindowSender};
 use crate::runtime_client::RuntimeClient;
 use crate::supervised::spawn_supervised;
+use crate::terminal_settings::send_terminal_settings;
 use crate::workspace_host::WorkspaceHost;
 
 const PORTS_TAKEN: &str = "Every focus port is taken, so agents' hooks cannot reach this app.";
@@ -362,11 +363,14 @@ impl ServicesHost {
         let changed_ask_notes_on = Arc::clone(&ask_notes_on);
         let changed_setups = Arc::clone(&setups);
         let changed_window = window.clone();
+        let changed_runtime = runtime.clone();
         let on_change = move |config: Config| {
             let is_on = config.settings.agent_activity;
             changed_activity_on.store(is_on, Ordering::SeqCst);
             let asks_notes = config.settings.ask_for_activity_notes;
             changed_ask_notes_on.store(asks_notes, Ordering::SeqCst);
+            // New terminals start with this config's settings. Queued for the runtime: this thread waits only if the runtime has stopped reading, for at most `Patience::stalled`, once.
+            send_terminal_settings(&changed_runtime, &config);
             send_to_window(&changed_window, ServicesOutput::Config(config));
             let setups = locked(&changed_setups);
             if let Some(setups) = setups.as_ref() {

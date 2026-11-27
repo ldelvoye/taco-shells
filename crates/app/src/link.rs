@@ -6,16 +6,13 @@ use gpui::Entity;
 use taco_host::{ServicesPort, WindowReceiver, WorkspacePort};
 use taco_protocol::{DrawnState, TerminalId};
 use taco_rules::{locate_row, select_row};
-use taco_settings::Config;
 use taco_terminal_view::Terminals;
 
-/// What the window sends to, receives from, and tells of a new config.
+/// What the window sends to and receives from.
 pub struct Ports {
     pub workspace: Rc<dyn WorkspacePort>,
     pub services: Rc<dyn ServicesPort>,
     pub outputs: WindowReceiver,
-    /// Runs on the window's thread for each new config, after the window has taken it.
-    pub config_changed: Box<dyn Fn(&Config)>,
     /// The runtime's terminals, for the middle; none on fixtures.
     pub terminals: Option<Entity<Terminals>>,
 }

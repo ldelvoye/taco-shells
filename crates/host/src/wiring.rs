@@ -5,16 +5,14 @@ use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
-use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
+use crossbeam_channel::{Receiver, bounded, unbounded};
 use futures::channel::mpsc;
 use taco_identity::{CURRENT, config_directory};
-use taco_protocol::{ConfigFile, CursorShape, HarnessId, RuntimeCommand, RuntimeReport};
+use taco_protocol::{ConfigFile, HarnessId, RuntimeCommand, RuntimeReport};
 use taco_services::{
     AgentMenuAction, config_file_path, focus_port_path, plugin_directory_path, read_config_files,
 };
-use taco_settings::{
-    Config, CursorStyle, KeymapChange, SettingChange, palette_for, resolve_config,
-};
+use taco_settings::{Config, KeymapChange, SettingChange, resolve_config};
 use taco_wire::launch::ShellContext;
 use taco_workspace::{FileStorage, Options};
 
@@ -22,6 +20,7 @@ use crate::ports::{ServicesPort, WindowReceiver, WindowSender};
 use crate::runtime_client::{RuntimeClient, RuntimeEvent};
 use crate::services_host::ServicesHost;
 use crate::supervised::spawn_supervised;
+use crate::terminal_settings::send_terminal_settings;
 pub use crate::workspace_host::nothing_drawn;
 use crate::workspace_host::{RuntimeCommands, WorkspaceHost, new_terminal_id};
 
@@ -35,8 +34,6 @@ pub struct Hosts {
     pub runtime: RuntimeClient,
     pub workspace: WorkspaceHost,
     pub services: ServicesHost,
-    /// Where a new config goes to reach the runtime, in order, off the window's thread.
-    pub terminal_settings: Sender<Config>,
 }
 
 pub struct Started {
@@ -111,18 +108,16 @@ pub fn start(system_is_dark: bool) -> Result<Started, String> {
         workspace.clone(),
         window.clone(),
     );
-    let terminal_settings = terminal_settings_writer(runtime.clone());
     let hosts = Hosts {
         runtime,
         workspace,
         services,
-        terminal_settings,
     };
     forward_runtime_events(received, hosts.clone(), window);
     // The files can change while everything starts; the window and the runtime start from the same config.
     let first_config = hosts.services.config();
     if first_config != first {
-        let _ = hosts.terminal_settings.send(first_config.clone());
+        send_terminal_settings(&hosts.runtime, &first_config);
     }
     Ok(Started {
         hosts,
@@ -130,36 +125,6 @@ pub fn start(system_is_dark: bool) -> Result<Started, String> {
         first_config,
         terminals: started.terminals,
     })
-}
-
-pub fn send_terminal_settings(runtime: &RuntimeClient, config: &Config) {
-    let commands = terminal_settings_of(config);
-    for command in commands {
-        runtime.send(command);
-    }
-}
-
-/// The scrollback, the colors, the cursor and whether Agent Activity is on, which every new terminal starts with, from the config.
-fn terminal_settings_of(config: &Config) -> [RuntimeCommand; 4] {
-    let settings = &config.settings;
-    let palette = palette_for(config.appearance);
-    let shape = match settings.cursor_style {
-        CursorStyle::Block => CursorShape::Block,
-        CursorStyle::Bar => CursorShape::Bar,
-        CursorStyle::Underline => CursorShape::Underline,
-    };
-    let scrollback = RuntimeCommand::Scrollback {
-        lines: settings.scrollback,
-    };
-    let colors = RuntimeCommand::Colors(palette.terminal);
-    let cursor = RuntimeCommand::CursorDefaults {
-        shape,
-        blink: settings.cursor_blink,
-    };
-    let agent_plugin = RuntimeCommand::AgentPlugin {
-        on: settings.agent_activity,
-    };
-    [scrollback, colors, cursor, agent_plugin]
 }
 
 /// Saves, stops the services, then the runtime. Blocks for seconds at worst: never on gpui's thread.
@@ -213,23 +178,6 @@ fn workspace_options(directory: &Path, config: &Config) -> Options {
     }
 }
 
-// A write to the runtime blocks while it is not reading, which the window's thread must never wait on.
-fn terminal_settings_writer(runtime: RuntimeClient) -> Sender<Config> {
-    let (settings, received) = unbounded::<Config>();
-    let write = move || {
-        for config in received {
-            send_terminal_settings(&runtime, &config);
-        }
-    };
-    let spawned = thread::Builder::new()
-        .name("terminal settings".into())
-        .spawn(write);
-    if let Err(error) = spawned {
-        eprintln!("new terminal settings have no thread to reach the runtime through: {error}");
-    }
-    settings
-}
-
 /// Forwards on one thread so each report reaches the workspace, and the services, in arrival order.
 fn forward_runtime_events(events: Receiver<RuntimeEvent>, hosts: Hosts, window: WindowSender) {
     let forward = move || {
@@ -256,41 +204,5 @@ fn tell_services(services: &ServicesHost, report: &RuntimeReport) {
         RuntimeReport::Submitted { id, .. } => services.submitted(id.clone()),
         RuntimeReport::Exited { id, .. } => services.exited(id),
         _ => {}
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use taco_protocol::{CursorShape, RuntimeCommand};
-    use taco_settings::{Appearance, ConfigTexts, CursorStyle, palette_for, resolve_config};
-
-    use super::terminal_settings_of;
-
-    #[test]
-    fn the_runtime_starts_terminals_with_the_configs_cursor_theme_and_agent_plugin_switch() {
-        let no_files = ConfigTexts {
-            settings: None,
-            keybindings: None,
-        };
-        let mut config = resolve_config(&no_files, true);
-        config.settings.cursor_style = CursorStyle::Bar;
-        config.settings.cursor_blink = false;
-        config.settings.scrollback = 4321;
-        config.settings.agent_activity = true;
-
-        let commands = terminal_settings_of(&config);
-
-        let dark = palette_for(Appearance::Dark);
-        let expected = [
-            RuntimeCommand::Scrollback { lines: 4321 },
-            RuntimeCommand::Colors(dark.terminal),
-            RuntimeCommand::CursorDefaults {
-                shape: CursorShape::Bar,
-                blink: false,
-            },
-            RuntimeCommand::AgentPlugin { on: true },
-        ];
-        assert_eq!(config.appearance, Appearance::Dark);
-        assert_eq!(commands, expected);
     }
 }
