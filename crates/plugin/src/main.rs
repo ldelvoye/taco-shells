@@ -1,11 +1,11 @@
 use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use taco_plugin::{
-    ANCESTOR_LIMIT, CONFIG_DIRECTORY_VARIABLE, HOME_VARIABLE, Surroundings, ancestor_pids,
-    may_post, permission_answer, port_file, post, posts_for, read_port, read_token, send_posts,
-    serve, serves,
+    ANCESTOR_LIMIT, Surroundings, ancestor_pids, permission_answer, post, posts_for, read_port,
+    read_token, send_posts, serve, serves,
 };
 use taco_protocol::PORT_FILE_VARIABLE;
 
@@ -37,7 +37,7 @@ fn run_hook() -> std::io::Result<()> {
     std::io::stdin().read_to_string(&mut raw_payload)?;
 
     let surroundings = Surroundings::from_environment();
-    if !may_post(&surroundings) {
+    if !serves(&surroundings) {
         return Ok(());
     }
 
@@ -45,12 +45,10 @@ fn run_hook() -> std::io::Result<()> {
         return Ok(());
     };
 
-    let port_file_variable = std::env::var_os(PORT_FILE_VARIABLE);
-    let config_dir_variable = std::env::var_os(CONFIG_DIRECTORY_VARIABLE);
-    let home = std::env::var_os(HOME_VARIABLE);
-    let Some(path) = port_file(port_file_variable, config_dir_variable, home) else {
+    let Some(port_file) = std::env::var_os(PORT_FILE_VARIABLE) else {
         return Ok(());
     };
+    let path = PathBuf::from(port_file);
     let Some(port) = read_port(&path) else {
         return Ok(());
     };
