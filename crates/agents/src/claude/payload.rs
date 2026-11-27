@@ -1,7 +1,8 @@
 use serde_json::{Map, Value, json};
 
 use super::entries::{
-    MAX_FAILURE_CHARACTERS, MAX_NOW_CHARACTERS, MAX_WRITTEN_CHARACTERS, activity_tool_of,
+    CHANGED_PATHS, MAX_FAILURE_CHARACTERS, MAX_NOW_CHARACTERS, MAX_WRITTEN_CHARACTERS,
+    SUMMARY_FIELDS, activity_tool_of,
 };
 use super::shared::{MAX_BODY_CHARACTERS, MAX_TARGET_CHARACTERS, MAX_TITLE_CHARACTERS};
 use super::text::MAX_ENTRY_CHARACTERS;
@@ -29,15 +30,7 @@ const COMMON_KEYS: [&str; 6] = [
     "cwd",
     "source",
 ];
-const TOOL_SUMMARY_KEYS: [&str; 7] = [
-    "file_path",
-    "notebook_path",
-    "command",
-    "pattern",
-    "url",
-    "query",
-    "description",
-];
+const TOOL_INPUT_POINTER: &str = "/tool_input/";
 const POST_TOOL_KEYS: [&str; 3] = ["tool_name", "tool_use_id", "scratchpad_dir"];
 const ACTIVITY_INPUT_KEYS: [&str; 5] = ["text", "kind", "title", "target", "body"];
 
@@ -102,6 +95,22 @@ fn keep_pre_tool(payload: &Value, kept: &mut Map<String, Value>) {
     }
 }
 
+fn summary_input_keys() -> Vec<&'static str> {
+    let summary_pointers = SUMMARY_FIELDS.iter().map(|(_, pointer)| *pointer);
+    let changed_pointers = CHANGED_PATHS.iter().copied();
+    let pointers = summary_pointers.chain(changed_pointers);
+    let mut keys = Vec::new();
+    for pointer in pointers {
+        let Some(key) = pointer.strip_prefix(TOOL_INPUT_POINTER) else {
+            continue;
+        };
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    keys
+}
+
 fn keep_post_tool(payload: &Value, kept: &mut Map<String, Value>) {
     copy_keys(Some(payload), &POST_TOOL_KEYS, kept);
 
@@ -109,7 +118,8 @@ fn keep_post_tool(payload: &Value, kept: &mut Map<String, Value>) {
     let mut response = Map::new();
     let tool_input = payload.get("tool_input");
     let tool_response = payload.get("tool_response");
-    copy_keys(tool_input, &TOOL_SUMMARY_KEYS, &mut input);
+    let summary_keys = summary_input_keys();
+    copy_keys(tool_input, &summary_keys, &mut input);
 
     let tool_name = text_field(payload, "tool_name");
     if let Some(tool_name) = tool_name {
@@ -184,6 +194,48 @@ pub fn reduced_payload(payload: &Value) -> Value {
 mod tests {
     use super::super::entries::{NOTE_TOOL, activity_tool_prefix};
     use super::*;
+    use crate::{CLAUDE, EntryRead};
+    use taco_protocol::Step;
+
+    fn steps_after_the_trip(tool: &str, pointer: &str) -> Vec<Step> {
+        let key = pointer.strip_prefix(TOOL_INPUT_POINTER).unwrap();
+        let mut tool_input = Map::new();
+        tool_input.insert(key.to_string(), json!("what it did"));
+        let payload = json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": "s1",
+            "tool_name": tool,
+            "tool_input": tool_input,
+        });
+        let reduced = reduced_payload(&payload);
+        let sent = reduced.to_string();
+        let entries = CLAUDE.entries_of("PostToolUse", &sent);
+        let mut steps = Vec::new();
+        for entry in entries {
+            if let EntryRead::Step { step, .. } = entry {
+                steps.push(step);
+            }
+        }
+        steps
+    }
+
+    #[test]
+    fn every_field_a_step_is_read_from_survives_the_trimming() {
+        for (tool, pointer) in SUMMARY_FIELDS {
+            let steps = steps_after_the_trip(tool, pointer);
+            let summary = match steps.first() {
+                Some(Step::Did { summary, .. }) => summary.clone(),
+                _ => String::new(),
+            };
+            assert_eq!(summary, "what it did", "{tool} {pointer}");
+        }
+        for pointer in CHANGED_PATHS {
+            let steps = steps_after_the_trip("NotebookEdit", pointer);
+            let changed =
+                matches!(steps.first(), Some(Step::Changed { path, .. }) if !path.is_empty());
+            assert!(changed, "NotebookEdit {pointer}");
+        }
+    }
 
     #[test]
     fn the_reduced_payload_keeps_what_the_app_reads() {

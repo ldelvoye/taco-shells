@@ -35,9 +35,9 @@ const MESSAGE_TOOLS: &[&str] = &["SendMessage", "CrossSessionMessage"];
 const SESSION_ADDRESS_PREFIX: &str = "uds:";
 
 const CHANGING_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit"];
-const CHANGED_PATHS: &[&str] = &["/tool_input/file_path", "/tool_input/notebook_path"];
+pub(super) const CHANGED_PATHS: &[&str] = &["/tool_input/file_path", "/tool_input/notebook_path"];
 /// The input field that says, in one line, what each tool did.
-const SUMMARY_FIELDS: &[(&str, &str)] = &[
+pub(super) const SUMMARY_FIELDS: &[(&str, &str)] = &[
     ("Bash", "/tool_input/command"),
     ("Read", "/tool_input/file_path"),
     ("Grep", "/tool_input/pattern"),
@@ -439,12 +439,10 @@ mod tests {
             entry("PostToolUse", someone_elses),
             Some(did("mcp__plugin_other_activity__note", ""))
         );
-        let other_app_name =
-            if taco_identity::CURRENT.agent_app_name == taco_identity::STABLE.agent_app_name {
-                taco_identity::DEVELOPMENT.agent_app_name
-            } else {
-                taco_identity::STABLE.agent_app_name
-            };
+        let mut other_app_name = taco_identity::STABLE.agent_app_name;
+        if taco_identity::CURRENT.agent_app_name == other_app_name {
+            other_app_name = taco_identity::DEVELOPMENT.agent_app_name;
+        }
         let other_builds_tool =
             format!("mcp__plugin_{other_app_name}_{ACTIVITY_SERVER}__{NOTE_TOOL}");
         let other_builds =
@@ -632,6 +630,17 @@ mod tests {
             activity_tool_prefix()
         );
         assert!(read_entries("PostToolUseFailure", &refused).is_empty());
+    }
+
+    #[test]
+    fn every_share_kind_the_plugin_offers_has_its_own_label() {
+        for kind in SHARE_KINDS {
+            if kind == "other" {
+                continue;
+            }
+            let label = share_label(kind);
+            assert_ne!(label, NOTE_KIND, "{kind}");
+        }
     }
 
     #[test]
