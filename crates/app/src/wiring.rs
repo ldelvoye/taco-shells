@@ -143,7 +143,7 @@ pub fn send_terminal_settings(runtime: &RuntimeClient, config: &Config) {
     }
 }
 
-/// The scrollback, the colors, the cursor and the agent plugin switch every new terminal starts with, from the config.
+/// The scrollback, the colors, the cursor and whether Agent Activity is on, which every new terminal starts with, from the config.
 fn terminal_settings_of(config: &Config) -> [RuntimeCommand; 4] {
     let settings = &config.settings;
     let palette = palette_for(config.appearance);

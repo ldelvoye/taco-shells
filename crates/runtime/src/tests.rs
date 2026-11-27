@@ -26,6 +26,7 @@ struct FakeShells {
     busy: HashSet<TerminalId>,
     refuse: HashSet<TerminalId>,
     pids: HashMap<TerminalId, u32>,
+    agent_plugin: Option<bool>,
 }
 
 impl Shells for FakeShells {
@@ -66,7 +67,9 @@ impl Shells for FakeShells {
     fn shell_pid(&self, id: &TerminalId) -> Option<u32> {
         self.pids.get(id).copied()
     }
-    fn set_agent_plugin(&mut self, _on: bool) {}
+    fn set_agent_plugin(&mut self, on: bool) {
+        self.agent_plugin = Some(on);
+    }
 }
 
 fn id(name: &str) -> TerminalId {
@@ -642,6 +645,16 @@ fn cursor_of(terminal: &Terminal) -> (taco_ghostty::render::CursorShape, bool) {
     let frame = state.update(terminal).unwrap();
     let cursor = frame.cursor().unwrap();
     (cursor.shape, cursor.blinking)
+}
+
+#[test]
+fn the_agent_plugin_switch_reaches_the_shells_as_sent() {
+    let mut core = Core::new(FakeShells::default());
+    let now = Instant::now();
+    for on in [true, false] {
+        core.handle(Input::Command(RuntimeCommand::AgentPlugin { on }), now);
+        assert_eq!(core.shells_mut().agent_plugin, Some(on));
+    }
 }
 
 fn push_cursor_defaults(

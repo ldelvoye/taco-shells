@@ -47,7 +47,7 @@ pub struct ShellContext {
     pub app: String,
     /// The app's `focus-port` file.
     pub port_file: PathBuf,
-    /// The app's agent plugin, which shells load while the switch is on.
+    /// The app's agent plugin, which new shells load while Agent Activity is on.
     pub plugin_directory: PathBuf,
 }
 
@@ -360,8 +360,7 @@ impl Shells for PtyShells {
     }
 }
 
-/// The plugin folders a new shell gets: the inherited ones with the app's own added when `on`, or taken out when off,
-/// so an app opened from its own terminal can still switch it off. None when no folder is left.
+/// The plugin folders a new shell gets: the inherited ones with the app's own added when on and taken out when off; none if none is left.
 fn plugin_directories(inherited: Option<&OsStr>, own: &Path, on: bool) -> Option<OsString> {
     let own = own.as_os_str().as_bytes();
     let mut kept: Vec<&[u8]> = Vec::new();

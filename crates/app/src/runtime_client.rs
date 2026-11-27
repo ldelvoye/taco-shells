@@ -48,7 +48,7 @@ pub struct ShellContext {
     pub app: String,
     /// This app's `focus-port` file.
     pub port_file: PathBuf,
-    /// This app's agent plugin, which new shells load while the switch is on.
+    /// This app's agent plugin, which new shells load while Agent Activity is on.
     pub plugin_directory: PathBuf,
 }
 
