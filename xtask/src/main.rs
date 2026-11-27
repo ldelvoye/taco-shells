@@ -1,10 +1,12 @@
 mod build;
+mod bump;
 mod bundle;
 mod ghostty_bindings;
 mod identity;
 mod install;
 mod measure;
 mod rehearse;
+mod release;
 mod repo;
 mod run;
 mod smoke;
@@ -17,7 +19,7 @@ use std::process::ExitCode;
 use build::{Channel, Profile};
 use bundle::Options;
 
-const USAGE: &str = "usage: cargo xtask <run [-- <app args>] | bundle [--release] [--stable] [--zip] [--config-dir <absolute path>] | install | rehearse-update [--electron <app> | --from-rust] [--until-ready] | smoke | measure [--terminals=N ...] | ghostty-bindings>";
+const USAGE: &str = "usage: cargo xtask <run [-- <app args>] | bundle [--release] [--stable] [--zip] [--config-dir <absolute path>] | install | rehearse-update [--electron <app> | --from-rust] [--until-ready] | smoke | measure [--terminals=N ...] | ghostty-bindings | release [--dry-run]>";
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = env::args().skip(1).collect();
@@ -42,6 +44,11 @@ fn main() -> ExitCode {
         "smoke" if rest.is_empty() => smoke::run(),
         "measure" => measure::run(rest),
         "ghostty-bindings" if rest.is_empty() => ghostty_bindings::run(),
+        "release" => match rest {
+            [] => release::run(false),
+            [flag] if flag == "--dry-run" => release::run(true),
+            _ => return usage(),
+        },
         _ => return usage(),
     };
 
