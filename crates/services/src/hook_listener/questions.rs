@@ -103,7 +103,7 @@ pub(super) fn ask_question(
         write_response(&mut stream, 200, Some(NO_ANSWER));
         return;
     }
-    let Some(parsed) = parse_hook_message(body, sent_token, token) else {
+    let Some(parsed) = parse_hook_message(body) else {
         write_response(&mut stream, 200, Some(NO_ANSWER));
         return;
     };
