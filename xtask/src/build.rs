@@ -7,8 +7,10 @@ use crate::repo;
 
 pub const APP_EXECUTABLE: &str = "taco-shells";
 pub const RUNTIME_EXECUTABLE: &str = "taco-shells-runtime";
+pub const PLUGIN_EXECUTABLE: &str = "taco-shells-plugin";
 const APP_PACKAGE: &str = "taco-app";
 const RUNTIME_PACKAGE: &str = "taco-runtime";
+const PLUGIN_PACKAGE: &str = "taco-plugin";
 const DRIVE_FEATURE: &str = "taco-app/drive";
 const DEV_CONFIG_DIR_VARIABLE: &str = "TACO_SHELLS_DEV_CONFIG_DIR";
 
@@ -33,7 +35,7 @@ pub enum Channel {
     Stable,
 }
 
-/// What the two programs are built as. `config_dir` is compiled into a development build as its config directory.
+/// What the programs are built as. `config_dir` is compiled into a development build as its config directory.
 pub struct Build<'a> {
     pub profile: Profile,
     pub channel: Channel,
@@ -62,7 +64,16 @@ pub fn binaries(build: &Build) -> Result<PathBuf, String> {
 
 fn cargo_command(program: OsString, build: &Build, target_dir: &Path) -> Command {
     let mut cargo = Command::new(program);
-    cargo.args(["build", "-p", APP_PACKAGE, "-p", RUNTIME_PACKAGE]);
+    // One cargo command, so the plugin program is always built for the app's channel.
+    cargo.args([
+        "build",
+        "-p",
+        APP_PACKAGE,
+        "-p",
+        RUNTIME_PACKAGE,
+        "-p",
+        PLUGIN_PACKAGE,
+    ]);
     if build.drive {
         cargo.args(["--features", DRIVE_FEATURE]);
     }

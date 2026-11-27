@@ -9,7 +9,7 @@ const STABLE_BUNDLE_ID: &str = "com.ldelvoye.tacoshells";
 const DEV_ID_ENDING: &str = ".dev";
 const DEV_APPLICATION_NAME: &str = "Taco Shells Dev";
 const APP_EXECUTABLE: &str = "taco-shells";
-const EXECUTABLES: [&str; 2] = [APP_EXECUTABLE, "taco-shells-runtime"];
+const EXECUTABLES: [&str; 3] = [APP_EXECUTABLE, "taco-shells-runtime", "taco-shells-plugin"];
 
 /// A dev build that carried the stable app's identity would read and write the app in daily use.
 ///
