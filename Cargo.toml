@@ -34,7 +34,6 @@ ureq = "3"
 sha2 = "0.10"
 plist = "1"
 bindgen = "0.72"
-image = { version = "0.25", default-features = false, features = ["png"] }
 futures = "0.3"
 libc = "0.2"
 crossbeam-channel = "0.5"

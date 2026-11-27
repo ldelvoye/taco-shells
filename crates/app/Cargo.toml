@@ -18,14 +18,12 @@ required-features = ["render"]
 render = [
     "gpui/test-support",
     "gpui_platform/test-support",
-    "dep:image",
     "dep:serde_json",
 ]
 # The smoke tests' way into the running window. xtask never builds it into the stable app.
 drive = [
     "gpui/test-support",
     "gpui_platform/test-support",
-    "dep:image",
     "dep:taco-drive",
     "dep:serde_json",
 ]
@@ -44,6 +42,5 @@ futures.workspace = true
 libc.workspace = true
 unicode-segmentation.workspace = true
 chrono.workspace = true
-image = { workspace = true, optional = true }
 taco-drive = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
