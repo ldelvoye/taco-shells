@@ -51,9 +51,6 @@ const ITEM_PADDING: f32 = 9.;
 const RULE_GAP: f32 = 8.;
 const QUIET_PADDING: f32 = 6.;
 const SHARED_ALL_ID: &str = "activity-shared-all";
-/// Whether the Now card carries the logo's lettuce as a band along its top.
-const LETTUCE_BAND: bool = true;
-const LETTUCE_WIDTH: f32 = 3.;
 /// The ink on the shell orange, in both appearances: 6.53:1.
 const NOW_INK: u32 = 0x2B211C;
 const NOW_TEXT_SIZE: f32 = 13.5;
@@ -535,9 +532,6 @@ fn now_card(now: &str, row: &AgentRow, input: &ActivityInput) -> Div {
             .child(mark)
             .child(state);
         card = card.child(state_line);
-    }
-    if LETTUCE_BAND {
-        card = card.border_t(px(LETTUCE_WIDTH)).border_color(look.done);
     }
     card
 }
