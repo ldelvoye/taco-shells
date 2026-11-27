@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use taco_protocol::{
     ActivityEntry, ActivityKind, AgentLabel, AgentRow, Arrangement, Author, Board, DrawnState,
-    HarnessId, Peer, PrState, Row, RowState, SharedTarget, SharedThing, StartSource, Step,
+    HarnessId, Panel, Peer, PrState, Row, RowState, SharedTarget, SharedThing, StartSource, Step,
     TabGroup, TabGroupId, TerminalId,
 };
 use taco_rules::default_panels;
