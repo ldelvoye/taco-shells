@@ -88,6 +88,9 @@ enum Recorded {
 enum TimerMessage {
     Schedule(TerminalId, Instant),
     Cancel(TerminalId),
+    Refresh,
+    // Sent at shutdown, since a PluginHeard handle keeps a sender alive and the channel never closes.
+    Stop,
 }
 
 enum Next {
@@ -137,6 +140,7 @@ pub struct AgentSetups {
 #[derive(Clone)]
 pub struct PluginHeard {
     shared: Arc<Shared>,
+    timer: Option<Sender<TimerMessage>>,
 }
 
 fn real_env(name: &str) -> Option<String> {
@@ -477,6 +481,14 @@ fn run_due_checks(shared: &Shared, pending: &mut HashMap<TerminalId, Instant>) {
     }
 }
 
+fn run_refresh(shared: &Shared) {
+    if shared.stopping.load(Ordering::SeqCst) {
+        return;
+    }
+    let refreshing = std::panic::AssertUnwindSafe(|| refresh(shared));
+    let _ = std::panic::catch_unwind(refreshing);
+}
+
 fn timer_loop(shared: Arc<Shared>, messages: Receiver<TimerMessage>) {
     let mut pending: HashMap<TerminalId, Instant> = HashMap::new();
     loop {
@@ -492,6 +504,8 @@ fn timer_loop(shared: Arc<Shared>, messages: Receiver<TimerMessage>) {
             Next::Message(TimerMessage::Cancel(terminal)) => {
                 pending.remove(&terminal);
             }
+            Next::Message(TimerMessage::Refresh) => run_refresh(&shared),
+            Next::Message(TimerMessage::Stop) => return,
             Next::Due => run_due_checks(&shared, &mut pending),
             Next::Closed => return,
         }
@@ -765,6 +779,7 @@ impl AgentSetups {
     pub fn plugin_heard(&self) -> PluginHeard {
         PluginHeard {
             shared: Arc::clone(&self.shared),
+            timer: self.timer.clone(),
         }
     }
 
@@ -833,6 +848,9 @@ impl AgentSetups {
 
     fn shut_down(&mut self) {
         self.shared.stopping.store(true, Ordering::SeqCst);
+        if let Some(timer) = &self.timer {
+            let _ = timer.send(TimerMessage::Stop);
+        }
         self.timer = None;
         let thread = self.thread.take();
         if let Some(thread) = thread {
@@ -854,8 +872,12 @@ impl PluginHeard {
             }
             removed
         };
-        if removed {
-            refresh(&self.shared);
+        if !removed {
+            return;
+        }
+        // Handed to the timer thread: the hook route must never wait on a refresh and its settings-file reads.
+        if let Some(timer) = &self.timer {
+            let _ = timer.send(TimerMessage::Refresh);
         }
     }
 }
@@ -1472,9 +1494,44 @@ mod tests {
         assert_eq!(notice.kind, AgentSetupNoticeKind::Unavailable { reason });
         assert_eq!(notice.terminals, vec![id.clone()]);
 
-        setups.plugin_heard().note(id);
+        let held = lock(&setups.shared.refresh_order);
+        let heard = setups.plugin_heard();
+        let (returned, noted) = mpsc::channel();
+        let noting = thread::spawn(move || {
+            heard.note(id);
+            let _ = returned.send(());
+        });
+        let came_back = noted.recv_timeout(WAIT);
+        assert!(came_back.is_ok(), "note waited for a refresh in progress");
+        drop(held);
 
-        assert!(setups.view().notices.is_empty());
+        loop {
+            let received = views.recv_timeout(WAIT);
+            let view = received.expect("the notice was never cleared");
+            if view.notices.is_empty() {
+                break;
+            }
+        }
+        noting.join().unwrap();
+    }
+
+    #[test]
+    fn stopping_returns_while_the_route_still_holds_its_plugin_heard() {
+        let environment = environment();
+        let switch = switch(true);
+        let checked: Arc<Mutex<Vec<TerminalId>>> = Arc::default();
+        let (setups, _views) = start_timed(&environment, &switch, running_claude(&checked));
+        let kept_by_the_route = setups.plugin_heard();
+
+        let (stopped, came_back) = mpsc::channel();
+        let stopping = thread::spawn(move || {
+            setups.stop();
+            let _ = stopped.send(());
+        });
+        let returned = came_back.recv_timeout(WAIT);
+        assert!(returned.is_ok(), "stop never returned");
+        stopping.join().unwrap();
+        drop(kept_by_the_route);
     }
 
     #[test]
