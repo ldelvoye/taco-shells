@@ -4,9 +4,9 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use taco_plugin::{
-    ANCESTOR_LIMIT, Post, Question, Surroundings, ancestor_pids, ask, permission_answer, post,
-    posts_for, question_for, read_port, read_token, send_posts, serve, serves,
-    session_start_output, stop_output,
+    ANCESTOR_LIMIT, Request, Surroundings, ancestor_pids, ask, permission_answer, post, posts_for,
+    question_for, read_port, read_token, send_posts, serve, serves, session_start_output,
+    stop_output,
 };
 use taco_protocol::routes::CONTEXT;
 use taco_protocol::{ContextAnswer, PORT_FILE_VARIABLE, StopAnswer, deadlines};
@@ -32,12 +32,12 @@ fn run_allow() -> std::io::Result<()> {
     Ok(())
 }
 
-fn send_all(posts: &[Post], port: u16, token: Option<&str>) {
+fn send_all(posts: &[Request], port: u16, token: Option<&str>) {
     let deadline = Instant::now() + deadlines::POSTS;
     send_posts(posts, |request| post(port, request, token, deadline));
 }
 
-fn ask_question(port: u16, question: &Question, token: Option<&str>) -> Option<serde_json::Value> {
+fn ask_question(port: u16, question: &Request, token: Option<&str>) -> Option<serde_json::Value> {
     let deadline = Instant::now() + deadlines::QUESTION;
     ask(port, question.route, &question.body, token, deadline)
 }

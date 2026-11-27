@@ -21,13 +21,7 @@ const STATE_EVENTS: [&str; 6] = [
 ];
 
 #[derive(Debug, PartialEq)]
-pub struct Post {
-    pub route: &'static str,
-    pub body: String,
-}
-
-#[derive(Debug, PartialEq)]
-pub struct Question {
+pub struct Request {
     pub route: &'static str,
     pub body: String,
 }
@@ -45,7 +39,7 @@ fn harness_id() -> HarnessId {
     HarnessId(String::from(HARNESS))
 }
 
-fn event_post(payload: &Value, event: &str, session_id: &str, pids: &[u32]) -> Option<Post> {
+fn event_post(payload: &Value, event: &str, session_id: &str, pids: &[u32]) -> Option<Request> {
     if event == "SessionStart" {
         let cwd = text_field(payload, "cwd")?;
         let source = text_field(payload, "source");
@@ -62,7 +56,7 @@ fn event_post(payload: &Value, event: &str, session_id: &str, pids: &[u32]) -> O
             has_conversation,
         };
         let text = serde_json::to_string(&body).ok()?;
-        return Some(Post {
+        return Some(Request {
             route: SESSION_START,
             body: text,
         });
@@ -75,7 +69,7 @@ fn event_post(payload: &Value, event: &str, session_id: &str, pids: &[u32]) -> O
             session_id: String::from(session_id),
         };
         let text = serde_json::to_string(&body).ok()?;
-        return Some(Post {
+        return Some(Request {
             route: SESSION_END,
             body: text,
         });
@@ -103,13 +97,13 @@ fn event_post(payload: &Value, event: &str, session_id: &str, pids: &[u32]) -> O
         detail,
     };
     let text = serde_json::to_string(&body).ok()?;
-    Some(Post {
+    Some(Request {
         route: SESSION_STATE,
         body: text,
     })
 }
 
-pub fn posts_for(payload: &Value, pids: &[u32]) -> Vec<Post> {
+pub fn posts_for(payload: &Value, pids: &[u32]) -> Vec<Request> {
     let mut posts = Vec::new();
     let Some(event) = text_field(payload, "hook_event_name") else {
         return posts;
@@ -126,7 +120,7 @@ pub fn posts_for(payload: &Value, pids: &[u32]) -> Vec<Post> {
     }
 
     if let Some(body) = hook_body(payload, pids) {
-        posts.push(Post {
+        posts.push(Request {
             route: AGENT_HOOK,
             body,
         });
@@ -144,7 +138,7 @@ fn hook_body(payload: &Value, pids: &[u32]) -> Option<String> {
     serde_json::to_string(&body).ok()
 }
 
-pub fn question_for(payload: &Value, pids: &[u32]) -> Option<Question> {
+pub fn question_for(payload: &Value, pids: &[u32]) -> Option<Request> {
     let event = text_field(payload, "hook_event_name")?;
     let route = match event.as_str() {
         "SessionStart" => CONTEXT,
@@ -156,7 +150,7 @@ pub fn question_for(payload: &Value, pids: &[u32]) -> Option<Question> {
         return None;
     }
     let body = hook_body(payload, pids)?;
-    Some(Question { route, body })
+    Some(Request { route, body })
 }
 
 pub fn session_start_output(answer: &ContextAnswer) -> Option<String> {
@@ -188,7 +182,10 @@ pub fn stop_output(answer: &StopAnswer) -> Option<String> {
     Some(output.to_string())
 }
 
-pub fn send_posts(posts: &[Post], mut send: impl FnMut(&Post) -> Result<(), PostError>) -> usize {
+pub fn send_posts(
+    posts: &[Request],
+    mut send: impl FnMut(&Request) -> Result<(), PostError>,
+) -> usize {
     let mut attempted = 0;
     for next in posts {
         attempted += 1;
@@ -293,8 +290,8 @@ mod tests {
 
     #[test]
     fn sending_stops_at_the_first_failure() {
-        let posts: Vec<Post> = (0..3)
-            .map(|index| Post {
+        let posts: Vec<Request> = (0..3)
+            .map(|index| Request {
                 route: SESSION_STATE,
                 body: index.to_string(),
             })
