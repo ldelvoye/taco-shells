@@ -1,5 +1,7 @@
+use std::path::Path;
+
 use serde_json::Value;
-use taco_protocol::{AgentSignal, Peer, Step};
+use taco_protocol::{AgentSignal, Peer, PrState, SharedTarget, Step};
 
 use crate::harness::{AgentTitle, EntryRead, Harness, HarnessSetup, HookEntry, StepContext};
 
@@ -31,6 +33,23 @@ const MAX_NOW_CHARACTERS: usize = 300;
 // A failed step shows the first line of its error, this long at most.
 const MAX_FAILURE_CHARACTERS: usize = 200;
 const FAILED_WITHOUT_ERROR: &str = "Failed";
+// How a failed command's error starts, before its own message on the next line.
+const EXIT_CODE_PREFIX: &str = "Exit code ";
+// Character caps on what a share carries; a target that does not fit opens nothing.
+const MAX_TITLE_CHARACTERS: usize = 200;
+const MAX_TARGET_CHARACTERS: usize = 1_000;
+const MAX_BODY_CHARACTERS: usize = 20_000;
+// The share tool's kinds, as the Shared list labels them; any other kind is labelled as a note.
+const NOTE_KIND: &str = "Note";
+const SHARE_KINDS: &[(&str, &str)] = &[
+    ("document", "Document"),
+    ("image", "Image"),
+    ("pull_request", "Pull request"),
+    ("artifact", "Artifact"),
+    ("other", NOTE_KIND),
+];
+const LINK_PREFIX: &str = "https://";
+const PULL_REQUEST_PREFIX: &str = "https://github.com/";
 // Another session's message, as Claude Code hands it to the agent in a prompt.
 const MESSAGE_OPEN: &str = "<cross-session-message";
 const MESSAGE_CLOSE: &str = "</cross-session-message>";
@@ -278,8 +297,108 @@ fn activity_entry(name: &str, parsed: &Value) -> Option<EntryRead> {
             let text = written_at(parsed, "/tool_input/text", MAX_NOW_CHARACTERS)?;
             Some(EntryRead::Now { text })
         }
+        "share" => share_entry(parsed),
         _ => None,
     }
+}
+
+fn share_entry(parsed: &Value) -> Option<EntryRead> {
+    let title = written_at(parsed, "/tool_input/title", MAX_TITLE_CHARACTERS)?;
+    let named = text_at(parsed, "/tool_input/kind");
+    let mut kinds = SHARE_KINDS.iter();
+    let label = kinds.find(|(name, _)| Some(*name) == named.as_deref());
+    let kind = match label {
+        Some((_, label)) => label.to_string(),
+        None => NOTE_KIND.to_string(),
+    };
+    let mut target = None;
+    if let Some(given) = whole_text_at(parsed, "/tool_input/target", MAX_TARGET_CHARACTERS) {
+        let cwd = text_at(parsed, "/cwd");
+        target = target_of(&given, cwd.as_deref());
+    }
+    let body = written_at(parsed, "/tool_input/body", MAX_BODY_CHARACTERS);
+    if target.is_none() && body.is_none() {
+        return None;
+    }
+    Some(EntryRead::Share {
+        kind,
+        title,
+        target,
+        body,
+    })
+}
+
+// A text that is only any use whole, such as a path or a link: none when it is blank or longer than `limit`.
+fn whole_text_at(parsed: &Value, pointer: &str, limit: usize) -> Option<String> {
+    let text = parsed.pointer(pointer)?.as_str()?;
+    let trimmed = text.trim();
+    let length = trimmed.chars().count();
+    if trimmed.is_empty() || length > limit {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+// What a share's target opens: an https link, a pull request on GitHub, or a file, its path made absolute against
+// the agent's working directory. Anything else, such as another scheme or a home-relative path, opens nothing.
+fn target_of(target: &str, cwd: Option<&str>) -> Option<SharedTarget> {
+    if target.starts_with(LINK_PREFIX) {
+        if let Some((url, number)) = pull_request_of(target) {
+            // open until something checks it, which checked_ms records
+            return Some(SharedTarget::PullRequest {
+                url: Some(url),
+                number,
+                state: PrState::Open,
+                checked_ms: None,
+            });
+        }
+        let url = target.to_string();
+        return Some(SharedTarget::Link { url });
+    }
+    let has_a_scheme = target.contains("://");
+    if has_a_scheme || target.starts_with('~') {
+        return None;
+    }
+    let path = Path::new(target);
+    if path.is_absolute() {
+        let path = target.to_string();
+        return Some(SharedTarget::File { path });
+    }
+    let directory = Path::new(cwd?);
+    if !directory.is_absolute() {
+        return None;
+    }
+    let joined = directory.join(path);
+    let absolute = joined.to_str()?;
+    Some(SharedTarget::File {
+        path: absolute.to_string(),
+    })
+}
+
+// A pull request's plain link and number, ("https://github.com/o/r/pull/155", 155) from ".../pull/155#discussion",
+// so one pull request shared from two of its pages is the same thing.
+fn pull_request_of(url: &str) -> Option<(String, u64)> {
+    let rest = url.strip_prefix(PULL_REQUEST_PREFIX)?;
+    let mut parts = rest.split('/');
+    let owner = parts.next()?;
+    let repository = parts.next()?;
+    let pull = parts.next()?;
+    if owner.is_empty() || repository.is_empty() || pull != "pull" {
+        return None;
+    }
+    let number_part = parts.next()?;
+    let digits: String = number_part
+        .chars()
+        .take_while(|character| character.is_ascii_digit())
+        .collect();
+    let after = &number_part[digits.len()..];
+    let ends_the_number = after.is_empty() || after.starts_with(['#', '?']);
+    if !ends_the_number {
+        return None;
+    }
+    let number: u64 = digits.parse().ok()?;
+    let plain = format!("{PULL_REQUEST_PREFIX}{owner}/{repository}/pull/{number}");
+    Some((plain, number))
 }
 
 // The value of `name` among a tag's attributes: `code-83` for `from-name` in ` from="…" from-name="code-83"`.
@@ -391,11 +510,26 @@ fn tool_entry(parsed: &Value) -> Option<EntryRead> {
     Some(EntryRead::Step { step, context })
 }
 
+// The error's first line, and the next one too when the first only says the exit code: "Exit code 1: ls: no such file".
 fn first_error_line(parsed: &Value) -> Option<String> {
     let error = text_at(parsed, "/error")?;
     let mut lines = error.lines();
     let first = lines.next()?;
-    written(first, MAX_FAILURE_CHARACTERS)
+    let mut shown = first.to_string();
+    if is_exit_code(first)
+        && let Some(next) = lines.next()
+        && !next.trim().is_empty()
+    {
+        shown = format!("{first}: {}", next.trim());
+    }
+    written(&shown, MAX_FAILURE_CHARACTERS)
+}
+
+fn is_exit_code(line: &str) -> bool {
+    let Some(code) = line.trim().strip_prefix(EXIT_CODE_PREFIX) else {
+        return false;
+    };
+    !code.is_empty() && code.chars().all(|character| character.is_ascii_digit())
 }
 
 // A tool that failed, as a step that says so; an interrupted one is not logged.
@@ -670,8 +804,6 @@ mod tests {
             panic!("a long now line is read");
         };
         assert!(text.ends_with(CUT_MARK), "the now line is kept short");
-        let share = r#"{"tool_name":"mcp__plugin_taco-shells_activity__share","tool_input":{"kind":"other","title":"Plan","body":"x"}}"#;
-        assert_eq!(entry("PostToolUse", share), None);
         let someone_elses =
             r#"{"tool_name":"mcp__plugin_other_activity__note","tool_input":{"text":"x"}}"#;
         assert_eq!(
@@ -853,8 +985,25 @@ mod tests {
             failed
         };
         assert_eq!(
-            failed_with("Exit code 1\nerror[E0308]: mismatched types").as_deref(),
-            Some("Exit code 1")
+            failed_with("Exit code 1\nls: no-such-file: No such file or directory\nmore")
+                .as_deref(),
+            Some("Exit code 1: ls: no-such-file: No such file or directory"),
+            "an exit code alone takes the line that says what went wrong"
+        );
+        assert_eq!(
+            failed_with("Permission denied\nsecond line").as_deref(),
+            Some("Permission denied")
+        );
+        assert_eq!(failed_with("Exit code 2").as_deref(), Some("Exit code 2"));
+        assert_eq!(
+            failed_with("Exit code 1\n\nlater").as_deref(),
+            Some("Exit code 1"),
+            "a blank next line adds nothing"
+        );
+        assert_eq!(
+            failed_with("Exit code unknown\nmore").as_deref(),
+            Some("Exit code unknown"),
+            "only a numbered exit code takes the next line"
         );
         let long = failed_with(&"e".repeat(MAX_FAILURE_CHARACTERS + 1)).unwrap();
         assert!(long.ends_with(CUT_MARK), "a long error line is cut");
@@ -868,6 +1017,100 @@ mod tests {
             Some(AgentSignal::Working),
             "a tool that failed is the agent still at work"
         );
+    }
+
+    #[test]
+    fn a_share_opens_a_link_a_pull_request_an_absolute_file_or_its_text() {
+        let share = |input: serde_json::Value| {
+            let payload = serde_json::json!({
+                "tool_name": "mcp__plugin_taco-shells_activity__share",
+                "tool_input": input,
+                "cwd": "/work/tacos",
+            });
+            one_entry("PostToolUse", &payload.to_string())
+        };
+        let target_of_share = |kind: &str, target: &str| {
+            let input = serde_json::json!({ "kind": kind, "title": "T", "target": target });
+            let Some(EntryRead::Share { target, .. }) = share(input) else {
+                return None;
+            };
+            target
+        };
+        let file = |path: &str| SharedTarget::File { path: path.into() };
+
+        assert_eq!(
+            target_of_share("document", "docs/plan.md"),
+            Some(file("/work/tacos/docs/plan.md")),
+            "a relative path is made absolute against the agent's directory"
+        );
+        assert_eq!(
+            target_of_share("image", "/tmp/logo.png"),
+            Some(file("/tmp/logo.png"))
+        );
+        let pull_request = SharedTarget::PullRequest {
+            url: Some("https://github.com/ldelvoye/taco-shells/pull/155".into()),
+            number: 155,
+            state: PrState::Open,
+            checked_ms: None,
+        };
+        assert_eq!(
+            target_of_share(
+                "pull_request",
+                "https://github.com/ldelvoye/taco-shells/pull/155#discussion"
+            ),
+            Some(pull_request)
+        );
+        let link = SharedTarget::Link {
+            url: "https://claude.ai/artifact/abc".into(),
+        };
+        assert_eq!(
+            target_of_share("artifact", "https://claude.ai/artifact/abc"),
+            Some(link)
+        );
+        let issue = "https://github.com/ldelvoye/taco-shells/issues/12";
+        let issue_link = SharedTarget::Link { url: issue.into() };
+        assert_eq!(
+            target_of_share("other", issue),
+            Some(issue_link),
+            "an issue is a plain link"
+        );
+        let too_long = format!("/{}", "a".repeat(MAX_TARGET_CHARACTERS));
+        assert_eq!(
+            target_of_share("document", &too_long),
+            None,
+            "a cut path would open the wrong file"
+        );
+        assert_eq!(target_of("plan.md", Some("relative/dir")), None);
+        for opens_nothing in ["http://example.com", "file:///etc/hosts", "~/notes.md"] {
+            assert_eq!(
+                target_of_share("other", opens_nothing),
+                None,
+                "{opens_nothing}"
+            );
+        }
+
+        let text_only =
+            serde_json::json!({ "kind": "other", "title": " Findings ", "body": "The cause" });
+        let expected = EntryRead::Share {
+            kind: "Note".into(),
+            title: "Findings".into(),
+            target: None,
+            body: Some("The cause".into()),
+        };
+        assert_eq!(share(text_only), Some(expected));
+        let unknown_kind = serde_json::json!({ "kind": "poem", "title": "T", "body": "b" });
+        let Some(EntryRead::Share { kind, .. }) = share(unknown_kind) else {
+            panic!("a share of an unknown kind is kept");
+        };
+        assert_eq!(kind, NOTE_KIND);
+        let opens_nothing = serde_json::json!({ "kind": "other", "title": "T", "target": "~/x" });
+        assert_eq!(
+            share(opens_nothing),
+            None,
+            "nothing to open, nothing shared"
+        );
+        let untitled = serde_json::json!({ "kind": "other", "title": " ", "body": "b" });
+        assert_eq!(share(untitled), None);
     }
 
     fn one_entry(event: &str, payload: &str) -> Option<EntryRead> {

@@ -1142,6 +1142,90 @@ fn the_now_line_shows_for_its_own_session_through_a_compaction_and_a_relaunch() 
     );
 }
 
+fn shared_by_agent(workspace: &mut Workspace, input: serde_json::Value) -> Vec<Outbound> {
+    let tool = "mcp__plugin_taco-shells_activity__share";
+    let payload = serde_json::json!({ "tool_name": tool, "tool_input": input, "cwd": "/work" });
+    let call = HookCall::AgentHook {
+        harness: claude(),
+        session_id: SESSION.into(),
+        event: "PostToolUse".into(),
+        payload: payload.to_string(),
+    };
+    hook(workspace, "t1", call, 0)
+}
+
+/// Each thing in the board events, as "title (kind)", newest first, one list per event.
+fn shared_lists(out: &[Outbound]) -> Vec<Vec<String>> {
+    let boards = activity(out).into_iter().filter_map(|event| match event {
+        ActivityEvent::BoardChanged { board, .. } | ActivityEvent::Loaded { board, .. } => {
+            let things = board
+                .shared
+                .iter()
+                .map(|thing| format!("{} ({})", thing.title, thing.kind));
+            Some(things.collect())
+        }
+        _ => None,
+    });
+    boards.collect()
+}
+
+#[test]
+fn a_shared_thing_tops_shared_logs_a_line_of_its_own_and_opens_to_its_text() {
+    let disk = Disk::default();
+    let mut workspace = Workspace::new(options_on(&disk, 0));
+    workspace.start(0);
+    let watch = ActivityRequest::Watch {
+        terminal: Some(id("t1")),
+    };
+    workspace.activity(watch.clone());
+
+    ran(&mut workspace, "t1", "cargo test");
+    let plan = serde_json::json!({ "kind": "document", "title": "Plan", "target": "plan.md" });
+    let first = shared_by_agent(&mut workspace, plan.clone());
+    assert_eq!(shared_lists(&first), vec![vec!["Plan (Document)"]]);
+    let finding =
+        serde_json::json!({ "kind": "other", "title": "Finding", "body": "The font stops short." });
+    shared_by_agent(&mut workspace, finding);
+    let again = shared_by_agent(&mut workspace, plan);
+    assert_eq!(
+        shared_lists(&again),
+        vec![vec!["Plan (Document)", "Finding (Note)"]],
+        "sharing the same file again moves it up rather than listing it twice"
+    );
+    noted(&mut workspace, "t1", "Wrote the plan");
+    assert_eq!(
+        stretches(&mut workspace, "t1"),
+        [
+            "step 0 in 0",
+            "Shared { thing: 0, title: \"Plan\" }",
+            "Shared { thing: 1, title: \"Finding\" }",
+            "Shared { thing: 2, title: \"Plan\" }",
+            "note in 0"
+        ],
+        "a share is a line of its own and leaves the stretch for the note"
+    );
+
+    let opened = workspace.activity(ActivityRequest::Body {
+        terminal: id("t1"),
+        thing: 1,
+    });
+    let Some(ActivityEvent::Body { body, .. }) = activity(&opened).pop() else {
+        panic!("a body request is answered");
+    };
+    assert_eq!(body.as_deref(), Some("The font stops short."));
+
+    workspace.freeze();
+    exited(&mut workspace, "t1");
+    workspace.flush(1_000);
+    let (mut reopened, _) = launched(&disk);
+    let loaded = reopened.activity(watch);
+    assert_eq!(
+        shared_lists(&loaded),
+        vec![vec!["Plan (Document)", "Finding (Note)"]],
+        "Shared is kept through a relaunch"
+    );
+}
+
 #[test]
 fn a_log_whose_terminal_is_gone_at_launch_is_removed_once_the_restore_has_succeeded() {
     let disk = Disk::default();
