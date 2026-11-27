@@ -16,9 +16,9 @@ use taco_services::{AgentMenuAction, AgentSetupNotice, AgentSetupNoticeKind};
 
 use crate::activity_log::{ActivityLog, LogItem, Stretch, StretchStep, log_items, preview};
 use crate::assets::{
-    CLOSE_ICON, DOCUMENT_ICON, IMAGE_ICON, LINK_ICON, PULL_REQUEST_ICON, TEXT_ICON,
+    CLOSE_ICON, DOCUMENT_ICON, DONE_ICON, IMAGE_ICON, LINK_ICON, PULL_REQUEST_ICON, TEXT_ICON,
 };
-use crate::look::{Look, SMALL_TEXT_SIZE};
+use crate::look::{Look, MARK_SIZE, SMALL_TEXT_SIZE};
 use crate::shared_view::{is_image, opens};
 use crate::shell::shell_orange;
 use crate::terminal_list::state_mark;
@@ -73,6 +73,8 @@ const NO_LONGER_SHARED: &str = "no longer in Shared";
 const FAILED_MARK: &str = "×";
 const FAILED_WITHOUT_ERROR: &str = "It failed.";
 const CLOSE_SIZE: f32 = 14.;
+const DONE_LINE_HEIGHT: f32 = 18.;
+const DONE_CHECK_GAP: f32 = 7.;
 pub const MS_PER_MINUTE: u64 = 60_000;
 const MINUTES_PER_HOUR: u64 = 60;
 
@@ -91,7 +93,12 @@ pub enum NoAgentLine {
         text: String,
         reason: String,
     },
-    Outcome {
+    Done {
+        harness: HarnessId,
+        text: String,
+        detail: Option<String>,
+    },
+    Problem {
         harness: HarnessId,
         text: String,
     },
@@ -176,9 +183,15 @@ pub fn no_agent_line(terminal: &TerminalId, notices: &[AgentSetupNotice]) -> NoA
             let reason = reason.clone();
             NoAgentLine::Unavailable { text, reason }
         }
-        AgentSetupNoticeKind::Done | AgentSetupNoticeKind::Problem => {
-            NoAgentLine::Outcome { harness, text }
+        AgentSetupNoticeKind::Done => {
+            let detail = notice.detail.clone();
+            NoAgentLine::Done {
+                harness,
+                text,
+                detail,
+            }
         }
+        AgentSetupNoticeKind::Problem => NoAgentLine::Problem { harness, text },
     }
 }
 
@@ -495,12 +508,60 @@ fn no_agent_element(line: &NoAgentLine, look: &Look, cx: &mut Context<WindowView
                 .child(reason.clone());
             div().flex().flex_col().gap(px(4.)).child(shown).child(why)
         }
-        NoAgentLine::Outcome { harness, text } => {
+        NoAgentLine::Done {
+            harness,
+            text,
+            detail,
+        } => {
+            let said = done_said(text, detail.as_deref(), look);
+            let dismiss = dismiss_button(harness, look, cx);
+            row.items_start().child(said).child(dismiss)
+        }
+        NoAgentLine::Problem { harness, text } => {
             let shown = text_cell(text);
             let dismiss = dismiss_button(harness, look, cx);
             row.child(shown).child(dismiss)
         }
     }
+}
+
+// The check sits in a box one headline line tall, so it stays on the first line when the headline wraps.
+fn done_said(text: &str, detail: Option<&str>, look: &Look) -> Div {
+    let check = svg()
+        .path(DONE_ICON)
+        .size(px(MARK_SIZE))
+        .text_color(look.done);
+    let check_box = div()
+        .flex_none()
+        .h(px(DONE_LINE_HEIGHT))
+        .flex()
+        .items_center()
+        .child(check);
+    let words = div().min_w_0().child(text.to_string());
+    let headline = div()
+        .flex()
+        .items_start()
+        .gap(px(DONE_CHECK_GAP))
+        .line_height(px(DONE_LINE_HEIGHT))
+        .font_weight(FontWeight::SEMIBOLD)
+        .child(check_box)
+        .child(words);
+    let mut said = div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap(px(4.))
+        .child(headline);
+    if let Some(detail) = detail {
+        let quiet = div()
+            .min_w_0()
+            .text_size(px(SMALL_TEXT_SIZE))
+            .text_color(look.secondary_text)
+            .child(detail.to_string());
+        said = said.child(quiet);
+    }
+    said
 }
 
 fn setup_card(line: &NoAgentLine, look: &Look, cx: &mut Context<WindowView>) -> Div {
@@ -1154,6 +1215,7 @@ mod tests {
             harness: HarnessId("claude".to_string()),
             kind,
             text: "Set up Claude?".to_string(),
+            detail: None,
             terminals: vec![TerminalId(terminal.to_string())],
         }
     }
@@ -1293,14 +1355,23 @@ mod tests {
         assert_eq!(no_agent_line(&here, &[unavailable]), expected);
         assert!(shows_beside_agent(&expected));
 
-        for kind in [AgentSetupNoticeKind::Done, AgentSetupNoticeKind::Problem] {
-            let outcome = notice(kind, "here");
-            let expected = NoAgentLine::Outcome {
-                harness: harness.clone(),
-                text: text.clone(),
-            };
-            assert_eq!(no_agent_line(&here, &[outcome]), expected);
-            assert!(shows_beside_agent(&expected));
-        }
+        let detail = Some("One line changed in ~/.claude/settings.json.".to_string());
+        let mut done = notice(AgentSetupNoticeKind::Done, "here");
+        done.detail = detail.clone();
+        let expected = NoAgentLine::Done {
+            harness: harness.clone(),
+            text: text.clone(),
+            detail,
+        };
+        assert_eq!(no_agent_line(&here, &[done]), expected);
+        assert!(shows_beside_agent(&expected));
+
+        let problem = notice(AgentSetupNoticeKind::Problem, "here");
+        let expected = NoAgentLine::Problem {
+            harness: harness.clone(),
+            text: text.clone(),
+        };
+        assert_eq!(no_agent_line(&here, &[problem]), expected);
+        assert!(shows_beside_agent(&expected));
     }
 }

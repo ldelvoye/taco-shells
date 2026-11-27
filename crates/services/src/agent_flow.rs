@@ -9,7 +9,7 @@ use taco_protocol::HarnessId;
 
 use crate::agent_hooks::{HookEdit, has_managed_entries, remove_managed_entries};
 use crate::agent_setup_state::{
-    AgentSetupFacts, AgentSetupState, PluginDirs, agent_setup_state_of,
+    AgentSetupFacts, AgentSetupState, PluginDirs, agent_setup_state_of, shown_with_tilde,
 };
 use crate::config_files::plugin_directory_path;
 use crate::file_write::{read_text, write_if_unchanged};
@@ -231,12 +231,16 @@ fn not_taken_out_problem(file: &str, reason: &str) -> String {
     format!("This app's plugin folder could not be taken out of {file}: {reason}")
 }
 
-pub(crate) fn add_plugin_folder(agent: &Agent, config_directory: &Path) -> Result<bool, String> {
+/// The settings file the folder was added to, shown with `~`, or none when nothing needed writing.
+pub(crate) fn add_plugin_folder(
+    agent: &Agent,
+    config_directory: &Path,
+) -> Result<Option<String>, String> {
     let file = label_of(agent);
     let read = read_settings(&agent.paths.settings_path);
     let found = read.map_err(|reason| not_added_problem(&file, &reason))?;
     let Some(text) = found else {
-        return Ok(false);
+        return Ok(None);
     };
     let folder = &agent.paths.plugin_folder;
     let home = &agent.paths.home;
@@ -247,7 +251,7 @@ pub(crate) fn add_plugin_folder(agent: &Agent, config_directory: &Path) -> Resul
             before,
             after,
         } => (text, before, after),
-        Appended::Unchanged => return Ok(false),
+        Appended::Unchanged => return Ok(None),
         Appended::Refused(reason) => return Err(not_added_problem(&file, &reason)),
     };
     let record = PluginDirsRecord {
@@ -263,7 +267,8 @@ pub(crate) fn add_plugin_folder(agent: &Agent, config_directory: &Path) -> Resul
         let _ = remove_record(config_directory);
         return Err(not_added_problem(&file, &reason));
     }
-    Ok(true)
+    let shown = shown_with_tilde(&agent.paths.settings_path, home);
+    Ok(Some(shown))
 }
 
 pub(crate) fn remove_plugin_folder(config_directory: &Path) -> Result<(), String> {

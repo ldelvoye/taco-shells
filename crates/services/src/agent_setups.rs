@@ -24,9 +24,6 @@ use crate::sync::lock;
 const SUBMIT_CHECK_DELAY: Duration = Duration::from_secs(1);
 const NOT_LOADED_DELAY: Duration = Duration::from_secs(5);
 const NOT_LOADED_REASON: &str = "It may have been started before Agent Activity was on, or with its own plugin settings. Start it again in a new terminal.";
-const DONE_TEXT: &str =
-    "Agents already running stop reporting until you start them in a new terminal.";
-const APPENDED_TEXT: &str = "Your Claude Code settings now also list this app's plugin folder, so every Claude Code session shows the plugin; outside this app's terminals it does nothing.";
 const OLD_HOOKS_PROBLEM: &str = "settings.json still has the app's old hooks";
 const NO_TOKEN_PROBLEM: &str =
     "The app couldn't write its token file, so agents' activity can't reach it.";
@@ -50,6 +47,8 @@ pub struct AgentSetupNotice {
     pub harness: HarnessId,
     pub kind: AgentSetupNoticeKind,
     pub text: String,
+    /// A quieter second line: only a Done whose click changed the agent's settings file has one.
+    pub detail: Option<String>,
     pub terminals: Vec<TerminalId>,
 }
 
@@ -84,7 +83,7 @@ pub(crate) struct SetupFiles {
 #[derive(Clone)]
 enum Recorded {
     Problem(String),
-    Done { appended: bool },
+    Done { changed_file: Option<String> },
 }
 
 enum TimerMessage {
@@ -159,7 +158,7 @@ fn is_awaiting(state: &AgentSetupState) -> bool {
     )
 }
 
-fn plugin_dirs_hidden_text(product_name: &str, file: &str) -> String {
+pub fn plugin_dirs_hidden_text(product_name: &str, file: &str) -> String {
     format!(
         "{product_name} can't load this app's plugin, because {file} sets CLAUDE_CODE_PLUGIN_DIRS. Set up adds this app's folder to it."
     )
@@ -179,7 +178,7 @@ fn not_loaded_text(product_name: &str) -> String {
     format!("{product_name} here didn't load this app's plugin.")
 }
 
-fn offer_text(product_name: &str) -> String {
+pub fn offer_text(product_name: &str) -> String {
     format!("{product_name} is running here but isn't set up, so its activity can't show.")
 }
 
@@ -189,16 +188,24 @@ fn old_setup_text(product_name: &str) -> String {
     )
 }
 
-fn too_old_reason(product_name: &str, version: &str) -> String {
+pub fn too_old_reason(product_name: &str, version: &str) -> String {
     let (major, minor, patch) = MINIMUM_VERSION;
     format!(
         "Agent Activity needs {product_name} {major}.{minor}.{patch} or later; this Mac has {version}."
     )
 }
 
-fn recorded_of(problems: Vec<String>, appended: bool) -> Recorded {
+pub fn done_text(product_name: &str) -> String {
+    format!("Set up. Start {product_name} in a new terminal to see it here.")
+}
+
+pub fn changed_file_text(file: &str) -> String {
+    format!("One line changed in {file}.")
+}
+
+fn recorded_of(problems: Vec<String>, changed_file: Option<String>) -> Recorded {
     if problems.is_empty() {
-        return Recorded::Done { appended };
+        return Recorded::Done { changed_file };
     }
     let text = problems.join(" ");
     Recorded::Problem(text)
@@ -221,6 +228,7 @@ fn notice_of(
             harness: harness.clone(),
             kind,
             text,
+            detail: None,
             terminals: terminals.clone(),
         })
     };
@@ -234,14 +242,18 @@ fn notice_of(
             | AgentSetupState::TooOld { .. }
             | AgentSetupState::PluginDirsManaged
     );
-    if let Some(Recorded::Done { appended }) = recorded
+    if let Some(Recorded::Done { changed_file }) = recorded
         && !hides_done
     {
-        let mut text = DONE_TEXT.to_string();
-        if *appended {
-            text = format!("{DONE_TEXT} {APPENDED_TEXT}");
-        }
-        return notice(AgentSetupNoticeKind::Done, text);
+        let text = done_text(product_name);
+        let detail = changed_file.as_deref().map(changed_file_text);
+        return Some(AgentSetupNotice {
+            harness,
+            kind: AgentSetupNoticeKind::Done,
+            text,
+            detail,
+            terminals,
+        });
     }
     match &reading.state {
         AgentSetupState::Off => {
@@ -299,6 +311,7 @@ fn not_loaded_notice_of(
         harness: reading.agent.harness_id.clone(),
         kind: AgentSetupNoticeKind::Unavailable { reason },
         text,
+        detail: None,
         terminals,
     })
 }
@@ -542,10 +555,14 @@ fn prepare_hooks(shared: &Shared, activity_on: bool) -> Vec<String> {
     problems
 }
 
-fn set_up(shared: &Arc<Shared>, agent: &Agent, state: &AgentSetupState) -> (Vec<String>, bool) {
+fn set_up(
+    shared: &Arc<Shared>,
+    agent: &Agent,
+    state: &AgentSetupState,
+) -> (Vec<String>, Option<String>) {
     let mut problems = prepare_hooks(shared, true);
     if !problems.is_empty() {
-        return (problems, false);
+        return (problems, None);
     }
     // The click is the user's own consent, so a development build may make this one write into the agent's settings.
     if *state == AgentSetupState::OldSetup {
@@ -554,15 +571,15 @@ fn set_up(shared: &Arc<Shared>, agent: &Agent, state: &AgentSetupState) -> (Vec<
             problems.push(format!("{OLD_HOOKS_PROBLEM}: {reason}"));
         }
     }
-    let mut appended = false;
+    let mut changed_file = None;
     if hides_plugin_folder(agent) {
         // Claude Code applies a settings env block over the shell's, so the folder must be in the user's own value to load.
         let added = add_plugin_folder(agent, &shared.files.config_directory);
         match added {
-            Ok(did_append) => appended = did_append,
+            Ok(written) => changed_file = written,
             Err(problem) => {
                 problems.push(problem);
-                return (problems, false);
+                return (problems, None);
             }
         }
     }
@@ -577,7 +594,7 @@ fn set_up(shared: &Arc<Shared>, agent: &Agent, state: &AgentSetupState) -> (Vec<
         problems.push(NO_TOKEN_PROBLEM.to_string());
     }
     check_version(shared);
-    (problems, appended)
+    (problems, changed_file)
 }
 
 impl AgentSetups {
@@ -798,8 +815,8 @@ impl AgentSetups {
         let fresh = agent_menu_of(&state, product_name);
         // The menu may have changed since it was drawn, so a click acts only if it would still be offered.
         if fresh.enabled && fresh.action == clicked {
-            let (problems, appended) = set_up(&self.shared, agent, &state);
-            let recorded = recorded_of(problems, appended);
+            let (problems, changed_file) = set_up(&self.shared, agent, &state);
+            let recorded = recorded_of(problems, changed_file);
             let mut shared_state = lock(&self.shared.state);
             shared_state.recorded.insert(harness.clone(), recorded);
         }
@@ -1193,7 +1210,9 @@ mod tests {
 
         let after = fs::read(&settings_path).unwrap();
         assert_eq!(after, before);
-        assert_eq!(only_notice(&fixture).kind, AgentSetupNoticeKind::Done);
+        let done = only_notice(&fixture);
+        assert_eq!(done.kind, AgentSetupNoticeKind::Done);
+        assert_eq!(done.detail, None);
     }
 
     fn hidden_environment() -> Environment {
@@ -1243,7 +1262,7 @@ mod tests {
         assert_eq!(switch.turned_on.load(Ordering::SeqCst), 1);
         let done = setups.view().notices[0].clone();
         assert_eq!(done.kind, AgentSetupNoticeKind::Done);
-        assert!(done.text.contains(APPENDED_TEXT), "{}", done.text);
+        assert_eq!(done.detail, Some(changed_file_text(&shown)));
         setups.refresh();
         assert_eq!(setups.view().menus[0].menu.status, "On");
 

@@ -10,7 +10,10 @@ use taco_protocol::{
     TabGroup, TabGroupId, TerminalId,
 };
 use taco_rules::default_panels;
-use taco_services::{AgentMenuAction, AgentSetupNotice, AgentSetupNoticeKind, AgentSetupView};
+use taco_services::{
+    AgentMenuAction, AgentSetupNotice, AgentSetupNoticeKind, AgentSetupView, changed_file_text,
+    done_text, offer_text, plugin_dirs_hidden_text, too_old_reason,
+};
 use taco_settings::{
     Binding, ConfigTexts, SettingChange, Settings, ShellRowName, UnreadSettings, resolve_config,
 };
@@ -24,12 +27,9 @@ const CLAUDE: &str = "claude";
 const STATE_MINUTES_AGO: u64 = 52;
 const FONT_SIZE_PROBLEM: &str = "settings.json: \"fontSize\" must be a number between 1 and 72";
 const KEYBINDINGS_PROBLEM: &str = "keybindings.json: expected a comma at line 7";
-const OFFER_TEXT: &str =
-    "Claude Code is running here but isn't set up, so its activity can't show.";
-const TOO_OLD_REASON: &str =
-    "Agent Activity needs Claude Code 2.1.280 or later; this Mac has 2.1.212.";
-const DONE_TEXT: &str =
-    "Agents already running stop reporting until you start them in a new terminal.";
+pub(crate) const PRODUCT_NAME: &str = "Claude Code";
+const OLD_VERSION: &str = "2.1.212";
+const SETTINGS_FILE: &str = "~/.claude/settings.json";
 const PLAIN_SHELL_ROW: usize = 4;
 
 const PLACEHOLDER_SCREEN: [&str; 8] = [
@@ -95,7 +95,6 @@ const FULL_LOG_PAGE: usize = 200;
 // The newest page must start inside a noted stretch: here, the nudged fix's second step.
 const CUT_LOG_PAGE: usize = 18;
 const NARROW_PANEL: f32 = 140.;
-const PLUGIN_DIRS_OFFER_TEXT: &str = "Claude Code can't load this app's plugin, because ~/.claude/settings.json sets CLAUDE_CODE_PLUGIN_DIRS. Set up adds this app's folder to it.";
 const PLAN_NOTE: &str = "Wrote PLAN-sigkill.md. Today a closed terminal or a stopping runtime gets one SIGHUP and \
 nothing after it, so a shell that ignores it keeps running with its children. The plan adds a SIGKILL to the whole \
 shell session, 2 s after a terminal is closed and 500 ms after the runtime is told to stop, and a test for each. It \
@@ -179,6 +178,8 @@ pub enum Fixture {
     SetupTooOld,
     /// The activity one just after Set up, with the hint above the running agent's log.
     SetupDone,
+    /// The same after a Set up that changed the agent's settings file.
+    SetupDoneChanged,
     /// Agent Activity off, and an agent known only by its title, with nothing in its log: the offer shows beside it.
     SetupOffAgent,
     /// Agent Activity on, and an agent known only by its title, with nothing in its log yet.
@@ -220,6 +221,7 @@ impl Fixture {
             "setupoff" => Some(Self::SetupOff),
             "setuptooold" => Some(Self::SetupTooOld),
             "setupdone" => Some(Self::SetupDone),
+            "setupdonechanged" => Some(Self::SetupDoneChanged),
             "setupoffagent" => Some(Self::SetupOffAgent),
             "agentnolog" => Some(Self::AgentNoLog),
             "setupplugindirs" => Some(Self::SetupPluginDirs),
@@ -242,10 +244,11 @@ impl Fixture {
             Self::ActivityNarrow => narrow_activity(),
             Self::SetupOff => setup_on_shell(offer_kind()),
             Self::SetupTooOld => setup_on_shell(too_old_kind()),
-            Self::SetupDone => setup_beside_agent(AgentSetupNoticeKind::Done, DONE_TEXT),
-            Self::SetupOffAgent => setup_beside_agent(offer_kind(), OFFER_TEXT),
+            Self::SetupDone => done_beside_agent(None),
+            Self::SetupDoneChanged => done_beside_agent(Some(SETTINGS_FILE)),
+            Self::SetupOffAgent => setup_beside_agent(offer_kind(), &offer_text(PRODUCT_NAME)),
             Self::AgentNoLog => quiet(),
-            Self::SetupPluginDirs => setup_beside_agent(offer_kind(), PLUGIN_DIRS_OFFER_TEXT),
+            Self::SetupPluginDirs => setup_beside_agent(offer_kind(), &plugin_dirs_offer_text()),
             Self::SetupPluginDirsNarrow => narrow_plugin_dirs_offer(),
         }
     }
@@ -258,11 +261,17 @@ impl Fixture {
     pub(crate) fn activity(self) -> StandInActivity {
         let full = matches!(
             self,
-            Self::Activity | Self::ActivityNarrow | Self::Paged | Self::SetupDone
+            Self::Activity
+                | Self::ActivityNarrow
+                | Self::Paged
+                | Self::SetupDone
+                | Self::SetupDoneChanged
         );
         let page = match self {
             Self::Paged => CUT_LOG_PAGE,
-            Self::Activity | Self::ActivityNarrow | Self::SetupDone => FULL_LOG_PAGE,
+            Self::Activity | Self::ActivityNarrow | Self::SetupDone | Self::SetupDoneChanged => {
+                FULL_LOG_PAGE
+            }
             _ => SHORT_LOG_PAGE,
         };
         let mut boards = BTreeMap::new();
@@ -798,7 +807,7 @@ fn offer_kind() -> AgentSetupNoticeKind {
 }
 
 fn too_old_kind() -> AgentSetupNoticeKind {
-    let reason = TOO_OLD_REASON.to_string();
+    let reason = too_old_reason(PRODUCT_NAME, OLD_VERSION);
     AgentSetupNoticeKind::Unavailable { reason }
 }
 
@@ -807,6 +816,7 @@ fn one_notice(kind: AgentSetupNoticeKind, text: &str, terminal: &str) -> AgentSe
         harness: HarnessId(CLAUDE.to_string()),
         kind,
         text: text.to_string(),
+        detail: None,
         terminals: vec![TerminalId(terminal.to_string())],
     };
     AgentSetupView {
@@ -819,7 +829,7 @@ fn one_notice(kind: AgentSetupNoticeKind, text: &str, terminal: &str) -> AgentSe
 fn setup_on_shell(kind: AgentSetupNoticeKind) -> Shown {
     let mut shown = quiet();
     let terminal = format!("t{PLAIN_SHELL_ROW}");
-    shown.setups = one_notice(kind, OFFER_TEXT, &terminal);
+    shown.setups = one_notice(kind, &offer_text(PRODUCT_NAME), &terminal);
     if let Some(arrangement) = &mut shown.drawn.arrangement {
         arrangement.selected = PLAIN_SHELL_ROW;
     }
@@ -832,8 +842,21 @@ fn setup_beside_agent(kind: AgentSetupNoticeKind, text: &str) -> Shown {
     shown
 }
 
+fn done_beside_agent(changed_file: Option<&str>) -> Shown {
+    let mut shown = setup_beside_agent(AgentSetupNoticeKind::Done, &done_text(PRODUCT_NAME));
+    let detail = changed_file.map(changed_file_text);
+    for notice in &mut shown.setups.notices {
+        notice.detail = detail.clone();
+    }
+    shown
+}
+
+fn plugin_dirs_offer_text() -> String {
+    plugin_dirs_hidden_text(PRODUCT_NAME, SETTINGS_FILE)
+}
+
 fn narrow_plugin_dirs_offer() -> Shown {
-    let mut shown = setup_beside_agent(offer_kind(), PLUGIN_DIRS_OFFER_TEXT);
+    let mut shown = setup_beside_agent(offer_kind(), &plugin_dirs_offer_text());
     shown.drawn.panels.agent_activity.size = NARROW_PANEL;
     shown
 }
@@ -844,7 +867,8 @@ fn offered_setup() -> AgentSetupView {
         kind: AgentSetupNoticeKind::Offer {
             action: AgentMenuAction::SetUp,
         },
-        text: OFFER_TEXT.to_string(),
+        text: offer_text(PRODUCT_NAME),
+        detail: None,
         terminals: vec![TerminalId("t4".to_string())],
     };
     AgentSetupView {

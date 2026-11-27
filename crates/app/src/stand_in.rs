@@ -15,9 +15,10 @@ use taco_rules::{
     add_row_to, apply_drop, close_panel, close_row, create_tab_group, fork_row, move_panel,
     open_panel, rename_tab_group, resize_panel, select_row, toggle_tab_group, ungroup_tab_group,
 };
-use taco_services::{AgentMenuAction, AgentSetupNoticeKind, AgentSetupView};
+use taco_services::{AgentMenuAction, AgentSetupNoticeKind, AgentSetupView, done_text};
 use taco_settings::{Appearance, Config, KeymapChange, SettingChange, apply_settings_layer};
 
+use crate::fixture::PRODUCT_NAME;
 use crate::link::{Ports, ServicesOutput, ServicesPort, WindowOutput, WindowSender, WorkspacePort};
 use crate::window::Shown;
 
@@ -26,8 +27,6 @@ const CHECKOUT_HOOKS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../hooks")
 const REFUSED_WRITE: &str = "settings.json is read-only, so nothing was changed.";
 const STAND_IN_LABEL: &str = "stand-in";
 const REFUSED_KEYMAP_WRITE: &str = "keybindings.json is read-only, so nothing was changed.";
-const SET_UP_TEXT: &str =
-    "Agents already running stop reporting until you start them in a new terminal.";
 
 /// The agent logs and boards the stand-in answers from, by terminal.
 pub struct StandInActivity {
@@ -271,7 +270,7 @@ impl ServicesPort for StandIn {
             let is_offer = matches!(notice.kind, AgentSetupNoticeKind::Offer { .. });
             if &notice.harness == harness && is_offer {
                 notice.kind = AgentSetupNoticeKind::Done;
-                notice.text = SET_UP_TEXT.to_string();
+                notice.text = done_text(PRODUCT_NAME);
             }
         }
         drop(setups);
