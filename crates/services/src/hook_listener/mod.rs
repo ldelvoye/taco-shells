@@ -144,23 +144,19 @@ impl Drop for HookListener {
     }
 }
 
+fn replace_token_file(temporary: &Path, path: &Path, token: &str) -> std::io::Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true).mode(0o600);
+    let mut file = options.open(temporary)?;
+    file.write_all(token.as_bytes())?;
+    fs::rename(temporary, path)
+}
+
 fn write_token_file(path: &Path, token: &str) {
     let temporary_name = format!(".{TOKEN_FILE_NAME}.{}.tmp", std::process::id());
     let temporary = path.with_file_name(temporary_name);
     let _ = fs::remove_file(&temporary);
-    let opened = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&temporary);
-    let written = match opened {
-        Ok(mut file) => file.write_all(token.as_bytes()),
-        Err(problem) => Err(problem),
-    };
-    let replaced = match written {
-        Ok(()) => fs::rename(&temporary, path),
-        Err(problem) => Err(problem),
-    };
+    let replaced = replace_token_file(&temporary, path, token);
     if replaced.is_err() {
         let _ = fs::remove_file(&temporary);
         let _ = fs::remove_file(path);
