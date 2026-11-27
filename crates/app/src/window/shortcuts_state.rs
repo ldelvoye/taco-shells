@@ -7,11 +7,10 @@ use taco_settings::{Chord, CommandId, KeymapChange};
 
 use super::keyboard::is_bare_escape;
 use super::{PageKeyboard, WindowView};
+use crate::capture::{Capture, Pressed, capture_still_open, change_for, pressed};
 use crate::keys::chord_of;
 use crate::look::Look;
-use crate::shortcuts_page::{
-    Capture, Pressed, SEARCH_PLACEHOLDER, capture_still_open, change_for, pressed,
-};
+use crate::shortcuts_page::SEARCH_PLACEHOLDER;
 use crate::text_field::{TextField, TextFieldEvent};
 
 /// The shortcuts page's search and the shortcut being set.
