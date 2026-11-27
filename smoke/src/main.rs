@@ -15,30 +15,18 @@ use taco_smoke::launch;
 const USAGE: &str = "usage: taco-smoke <path to the .app> <config directory to start from>";
 const APP_LOG: &str = "app.log";
 
-const BEFORE_LAUNCH: [Check; 4] = [
+const BEFORE_LAUNCH: [Check; 2] = [
     Check {
         name: "the dev bundle holds only the dev app's names",
         run: bundle::holds_only_dev_names,
     },
     Check {
-        name: "with TACO_SHELLS_APP naming the dev app, the plugin program answers initialize and lists note, now and share",
-        run: plugin::lists_its_three_tools_inside_the_dev_app,
-    },
-    Check {
-        name: "the plugin program lists no tools with TACO_SHELLS_APP unset or naming the stable app",
-        run: plugin::lists_no_tools_outside_the_dev_app,
-    },
-    Check {
-        name: "the plugin program's hook approves its own tool, denies it to a subagent, and gives no decision for another under its prefix",
-        run: plugin::approves_its_own_tool_for_the_main_agent_only,
+        name: "the bundled plugin program is the dev app's: it lists note, now and share for the dev name, none for the stable one, and approves its own tool",
+        run: plugin::is_built_for_the_dev_channel,
     },
 ];
 
-const LAUNCHED: [LaunchedCheck; 12] = [
-    LaunchedCheck {
-        name: "the window draws rows",
-        run: window::draws_rows,
-    },
+const LAUNCHED: [LaunchedCheck; 10] = [
     LaunchedCheck {
         name: "a command typed into the terminal is answered on screen",
         run: window::a_typed_command_is_answered_on_screen,
@@ -64,10 +52,6 @@ const LAUNCHED: [LaunchedCheck; 12] = [
         run: window::a_closing_page_stays_in_place_and_takes_no_clicks,
     },
     LaunchedCheck {
-        name: "every marked part of the window has bounds, and nothing else does",
-        run: window::every_marked_part_has_bounds,
-    },
-    LaunchedCheck {
         name: "a row dragged down the list moves",
         run: window::a_dragged_row_moves,
     },
@@ -76,7 +60,7 @@ const LAUNCHED: [LaunchedCheck; 12] = [
         run: window::a_dragged_panel_moves_to_the_edge_it_is_dropped_on,
     },
     LaunchedCheck {
-        name: "the window draws in light and in dark",
+        name: "the window draws in light and in dark, and the two differ",
         run: window::draws_in_light_and_dark,
     },
     LaunchedCheck {

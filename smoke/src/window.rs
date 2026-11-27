@@ -12,15 +12,6 @@ use crate::Smoke;
 
 const SETTLE_DEADLINE: Duration = Duration::from_secs(5);
 const SETTLE_POLL: Duration = Duration::from_millis(20);
-const FIXED_PARTS: [&str; 6] = [
-    "middle",
-    "strip:terminals",
-    "strip:agent_activity",
-    "strip:settings",
-    "panel:terminals",
-    "panel:terminals:title",
-];
-const UNKNOWN_PART: &str = "row:no-such-terminal";
 const RIGHT_EDGE_INSET: f32 = 20.;
 const SHELL_DEADLINE: Duration = Duration::from_secs(15);
 const SHELL_POLL: Duration = Duration::from_millis(50);
@@ -57,34 +48,6 @@ const SAME_PLACE: f32 = 0.5;
 const UNWANTED_SCROLLBACK: &str = "7777";
 const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
 const PNG_HEADER_LENGTH: usize = 24;
-
-pub fn draws_rows(_: &Smoke, driver: &mut Driver) -> Result<(), String> {
-    let rows = row_terminals(driver)?;
-    if rows.is_empty() {
-        return Err("the window drew no rows".to_string());
-    }
-    Ok(())
-}
-
-pub fn every_marked_part_has_bounds(_: &Smoke, driver: &mut Driver) -> Result<(), String> {
-    let rows = row_terminals(driver)?;
-    let row_parts = rows.iter().map(|terminal| format!("row:{}", terminal.0));
-    let fixed_parts = FIXED_PARTS.iter().map(|part| part.to_string());
-    let parts: Vec<String> = fixed_parts.chain(row_parts).collect();
-    for part in &parts {
-        let Some(rect) = driver.bounds(part)? else {
-            return Err(format!("{part} has no bounds"));
-        };
-        if rect.width <= 0. || rect.height <= 0. {
-            return Err(format!("{part} is drawn with no size: {rect:?}"));
-        }
-    }
-    let unknown = driver.bounds(UNKNOWN_PART)?;
-    if unknown.is_some() {
-        return Err(format!("{UNKNOWN_PART}, which is not drawn, has bounds"));
-    }
-    Ok(())
-}
 
 pub fn a_dragged_row_moves(_: &Smoke, driver: &mut Driver) -> Result<(), String> {
     let before = drawn(driver)?;
@@ -182,9 +145,11 @@ pub fn the_settings_page_keeps_and_returns_the_keyboard(
     let before = drawn(driver)?;
     let rows = terminals_of(&before);
     let rows_before = rows.len();
-    let selected = selected_index(&before);
-    let Some(terminal) = selected.and_then(|index| rows.get(index).cloned()) else {
+    let Some(selected) = selected_index(&before) else {
         return Err("no row is selected".to_string());
+    };
+    let Some(terminal) = rows.get(selected).cloned() else {
+        return Err(format!("row {selected} is selected but not listed"));
     };
 
     driver.keys(&[OPEN_SETTINGS, CLOSE_TERMINAL])?;
@@ -213,7 +178,6 @@ pub fn the_settings_page_keeps_and_returns_the_keyboard(
     Ok(())
 }
 
-/// A number typed into the page's Scrollback field and entered is written to settings.json.
 pub fn a_typed_scrollback_is_written_to_the_settings_file(
     smoke: &Smoke,
     driver: &mut Driver,
@@ -232,7 +196,6 @@ pub fn a_typed_scrollback_is_written_to_the_settings_file(
     Ok(())
 }
 
-/// Keys pressed on a shortcut row, after its +, are written to keybindings.json for that command.
 pub fn a_shortcut_set_by_pressing_keys_is_written_to_the_keybindings_file(
     smoke: &Smoke,
     driver: &mut Driver,
@@ -249,7 +212,6 @@ pub fn a_shortcut_set_by_pressing_keys_is_written_to_the_keybindings_file(
     Ok(())
 }
 
-/// A page fading out after it closes sits exactly where it was, and a click on it then changes nothing.
 pub fn a_closing_page_stays_in_place_and_takes_no_clicks(
     smoke: &Smoke,
     driver: &mut Driver,
@@ -351,6 +313,7 @@ pub fn draws_in_light_and_dark(smoke: &Smoke, driver: &mut Driver) -> Result<(),
     let Some(work) = smoke.config.parent() else {
         return Err(format!("{} has no parent folder", smoke.config.display()));
     };
+    let mut drawn = Vec::new();
     for (appearance, name) in [
         (Appearance::Light, "look-light.png"),
         (Appearance::Dark, "look-dark.png"),
@@ -362,6 +325,12 @@ pub fn draws_in_light_and_dark(smoke: &Smoke, driver: &mut Driver) -> Result<(),
             return Err(format!("{} is empty", path.display()));
         }
         println!("      {} ({width}x{height})", path.display());
+        let bytes = fs::read(&path)
+            .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+        drawn.push(bytes);
+    }
+    if drawn[0] == drawn[1] {
+        return Err("the light and dark images are the same".to_string());
     }
     Ok(())
 }

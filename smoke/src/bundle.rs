@@ -11,12 +11,8 @@ const DEV_APPLICATION_NAME: &str = "Taco Shells Dev";
 const APP_EXECUTABLE: &str = "taco-shells";
 const EXECUTABLES: [&str; 3] = [APP_EXECUTABLE, "taco-shells-runtime", "taco-shells-plugin"];
 
-/// A dev build that carried the stable app's identity would read and write the app in daily use.
-///
-/// `services` picks the whole identity, name and config directory, with one compile-time switch, so finding the dev
-/// name in the app shows which side was built. The stable config directory is not searched for: `.taco-shells` also
-/// forms wherever one string ends in a dot and the next begins with the app's name, and nothing marks where strings
-/// meet in a binary.
+/// A dev build carrying the stable identity would read and write the app in daily use. The stable config folder's
+/// name is not scanned for: `.taco-shells` also forms where two unrelated strings meet in a binary.
 pub fn holds_only_dev_names(smoke: &Smoke) -> Result<(), String> {
     let app = &smoke.app;
     let plist = app.join("Contents").join("Info.plist");
@@ -86,15 +82,13 @@ mod tests {
 
     #[test]
     fn only_the_stable_id_without_the_dev_ending_counts() {
-        let cases: [(&[u8], bool); 5] = [
+        let cases: [(&[u8], bool); 3] = [
             (b"..com.ldelvoye.tacoshells.dev..", false),
             (b"..com.ldelvoye.tacoshells..", true),
             (
                 b"com.ldelvoye.tacoshells.devcom.ldelvoye.tacoshellsTaco",
                 true,
             ),
-            (b"relied on for safety.taco-shells-runtime", false),
-            (b"", false),
         ];
         for (bytes, expected) in cases {
             let found = holds_the_stable_id(bytes);

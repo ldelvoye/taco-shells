@@ -10,6 +10,3 @@ default-run = "taco-smoke"
 taco-drive.workspace = true
 taco-protocol.workspace = true
 serde_json.workspace = true
-
-[dev-dependencies]
-tempfile.workspace = true
