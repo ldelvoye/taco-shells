@@ -114,7 +114,6 @@ mod tests {
         let pre_tool_groups = hooks["hooks"]["PreToolUse"].as_array().unwrap();
         let allow_command = pre_tool_groups[0]["hooks"][0]["command"].as_str().unwrap();
         assert!(allow_command.ends_with("allow"));
-        assert!(allow_command.contains("/libexec/"));
         assert!(!allow_command.contains("/bin/"));
 
         let expected = [

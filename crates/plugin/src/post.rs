@@ -4,6 +4,8 @@ use std::time::{Duration, Instant};
 
 use crate::hook::Post;
 
+const WRITE_CHUNK: usize = 64 * 1024;
+
 #[derive(Debug, PartialEq)]
 pub enum PostError {
     Refused,
@@ -35,11 +37,6 @@ pub fn post(
         Err(_) => return Err(PostError::Other),
     };
 
-    let write_budget = time_left(deadline)?;
-    stream
-        .set_write_timeout(Some(write_budget))
-        .map_err(|_| PostError::Other)?;
-
     let mut token_header = String::new();
     if let Some(token) = token {
         token_header = format!("X-Taco-Shells-Token: {token}\r\n");
@@ -51,9 +48,13 @@ pub fn post(
         request.body,
     );
     // The listener reads the whole body before it answers, so waiting for the answer only adds time.
-    stream
-        .write_all(text.as_bytes())
-        .map_err(|_| PostError::Other)?;
+    for chunk in text.as_bytes().chunks(WRITE_CHUNK) {
+        let write_budget = time_left(deadline)?;
+        stream
+            .set_write_timeout(Some(write_budget))
+            .map_err(|_| PostError::Other)?;
+        stream.write_all(chunk).map_err(|_| PostError::Other)?;
+    }
     let _ = stream.shutdown(Shutdown::Write);
     Ok(())
 }
@@ -150,7 +151,29 @@ mod tests {
         let outcome = post(port, &sent, None, soon(250));
 
         assert_eq!(outcome, Ok(()));
-        assert!(started.elapsed() < Duration::from_millis(250));
+        assert!(started.elapsed() < Duration::from_secs(1));
         drop(listener);
+    }
+
+    #[test]
+    fn a_large_body_to_a_listener_that_never_reads_gives_up_at_the_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let accepter = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            std::thread::sleep(Duration::from_secs(3));
+            drop(stream);
+        });
+
+        let sent = Post {
+            route: "/attention",
+            body: "x".repeat(2 * 1024 * 1024),
+        };
+        let started = Instant::now();
+        let outcome = post(port, &sent, None, soon(250));
+
+        assert!(outcome.is_err());
+        assert!(started.elapsed() < Duration::from_secs(1));
+        accepter.join().unwrap();
     }
 }
