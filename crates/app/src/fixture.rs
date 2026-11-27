@@ -26,6 +26,12 @@ const FONT_SIZE_PROBLEM: &str = "settings.json: \"fontSize\" must be a number be
 const KEYBINDINGS_PROBLEM: &str = "keybindings.json: expected a comma at line 7";
 const OFFER_TEXT: &str =
     "Claude Code is running here but isn't set up, so its activity can't show.";
+const TOO_OLD_REASON: &str =
+    "Agent Activity needs Claude Code 2.1.280 or later; this Mac has 2.1.212.";
+const DONE_TEXT: &str =
+    "Agents already running stop reporting until you start them in a new terminal.";
+// The plain shell in the mixed rows that a setup line is drawn on.
+const SHELL_ROW: usize = 4;
 
 const PLACEHOLDER_SCREEN: [&str; 8] = [
     "~/code/getsentry % claude",
@@ -167,6 +173,14 @@ pub enum Fixture {
     ActivityNarrow,
     /// The same log sent a page at a time, the newest page starting inside a noted stretch.
     Paged,
+    /// The quiet one on a plain shell where Claude Code runs but Agent Activity is off.
+    SetupOff,
+    /// The activity one with the old hooks still set up, so the offer shows beside a running agent.
+    SetupOld,
+    /// The quiet one on a plain shell where Claude Code is too old for Agent Activity.
+    SetupTooOld,
+    /// The activity one just after Set up, with the hint above the running agent's log.
+    SetupDone,
 }
 
 struct FixtureRow {
@@ -197,6 +211,10 @@ impl Fixture {
             "activity" => Some(Self::Activity),
             "activitynarrow" => Some(Self::ActivityNarrow),
             "paged" => Some(Self::Paged),
+            "setupoff" => Some(Self::SetupOff),
+            "setupold" => Some(Self::SetupOld),
+            "setuptooold" => Some(Self::SetupTooOld),
+            "setupdone" => Some(Self::SetupDone),
             _ => None,
         }
     }
@@ -213,6 +231,10 @@ impl Fixture {
             Self::Writable => switches(),
             Self::Activity | Self::Paged => quiet(),
             Self::ActivityNarrow => narrow_activity(),
+            Self::SetupOff => setup_on_shell(offer_kind()),
+            Self::SetupTooOld => setup_on_shell(too_old_kind()),
+            Self::SetupOld => setup_beside_agent(offer_kind(), OFFER_TEXT),
+            Self::SetupDone => setup_beside_agent(AgentSetupNoticeKind::Done, DONE_TEXT),
         }
     }
 
@@ -222,10 +244,15 @@ impl Fixture {
 
     /// The agent logs and boards the stand-in answers from.
     pub(crate) fn activity(self) -> StandInActivity {
-        let full = matches!(self, Self::Activity | Self::ActivityNarrow | Self::Paged);
+        let full = matches!(
+            self,
+            Self::Activity | Self::ActivityNarrow | Self::Paged | Self::SetupOld | Self::SetupDone
+        );
         let page = match self {
             Self::Paged => CUT_LOG_PAGE,
-            Self::Activity | Self::ActivityNarrow => FULL_LOG_PAGE,
+            Self::Activity | Self::ActivityNarrow | Self::SetupOld | Self::SetupDone => {
+                FULL_LOG_PAGE
+            }
             _ => SHORT_LOG_PAGE,
         };
         let mut boards = BTreeMap::new();
@@ -742,6 +769,48 @@ fn default_bindings() -> Vec<Binding> {
     };
     let config = resolve_config(&no_files, false);
     config.bindings
+}
+
+fn offer_kind() -> AgentSetupNoticeKind {
+    AgentSetupNoticeKind::Offer {
+        action: AgentMenuAction::SetUp,
+    }
+}
+
+fn too_old_kind() -> AgentSetupNoticeKind {
+    let reason = TOO_OLD_REASON.to_string();
+    AgentSetupNoticeKind::Unavailable { reason }
+}
+
+fn one_notice(kind: AgentSetupNoticeKind, text: &str, terminal: &str) -> AgentSetupView {
+    let notice = AgentSetupNotice {
+        harness: HarnessId(CLAUDE.to_string()),
+        kind,
+        text: text.to_string(),
+        terminals: vec![TerminalId(terminal.to_string())],
+    };
+    AgentSetupView {
+        menus: Vec::new(),
+        notices: vec![notice],
+    }
+}
+
+/// The quiet one with a plain shell selected and a setup notice naming it.
+fn setup_on_shell(kind: AgentSetupNoticeKind) -> Shown {
+    let mut shown = quiet();
+    let terminal = format!("t{SHELL_ROW}");
+    shown.setups = one_notice(kind, OFFER_TEXT, &terminal);
+    if let Some(arrangement) = &mut shown.drawn.arrangement {
+        arrangement.selected = SHELL_ROW;
+    }
+    shown
+}
+
+/// The quiet one, whose working agent is selected, with a setup notice naming its terminal.
+fn setup_beside_agent(kind: AgentSetupNoticeKind, text: &str) -> Shown {
+    let mut shown = quiet();
+    shown.setups = one_notice(kind, text, "t0");
+    shown
 }
 
 fn offered_setup() -> AgentSetupView {
