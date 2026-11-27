@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -16,6 +17,9 @@ pub const UNREADABLE_COPY_FILE: &str = "workspace.unreadable.json";
 pub const ACTIVITY_DIRECTORY: &str = "activity";
 const LOG_SUFFIX: &str = ".jsonl";
 const LOG_TEMPORARY_EXTENSION: &str = "jsonl.tmp";
+const STATE_SUFFIX: &str = ".state.json";
+const STATE_TEMPORARY_EXTENSION: &str = "json.tmp";
+const ACTIVITY_SUFFIXES: [&str; 2] = [LOG_SUFFIX, STATE_SUFFIX];
 #[cfg(unix)]
 const PRIVATE_FILE_MODE: u32 = 0o600;
 #[cfg(unix)]
@@ -34,8 +38,13 @@ pub trait Storage: Send {
     /// Replaces a terminal's log with these lines, and says whether it did.
     fn rewrite_log(&mut self, terminal: &TerminalId, lines: &[String]) -> bool;
     fn delete_log(&mut self, terminal: &TerminalId);
-    /// Every terminal that has a log.
-    fn logs(&self) -> Vec<TerminalId>;
+    /// The text of a terminal's activity state file, which holds its now line, or none when it has none.
+    fn read_state(&self, terminal: &TerminalId) -> Option<String>;
+    /// Replaces a terminal's state file, and says whether it did.
+    fn write_state(&mut self, terminal: &TerminalId, text: &str) -> bool;
+    fn delete_state(&mut self, terminal: &TerminalId);
+    /// Every terminal that has a log or a state file.
+    fn activity_terminals(&self) -> Vec<TerminalId>;
 }
 
 /// Storage in the app's config directory.
@@ -43,8 +52,8 @@ pub struct FileStorage {
     directory: PathBuf,
 }
 
-/// A terminal's log file name, or none for an id that is unsafe as a file name.
-fn log_file_name(terminal: &TerminalId) -> Option<String> {
+/// A terminal's activity file name with this suffix, or none for an id that is unsafe as a file name.
+fn activity_file_name(terminal: &TerminalId, suffix: &str) -> Option<String> {
     let TerminalId(id) = terminal;
     let safe = id
         .chars()
@@ -52,7 +61,25 @@ fn log_file_name(terminal: &TerminalId) -> Option<String> {
     if id.is_empty() || !safe {
         return None;
     }
-    Some(format!("{id}{LOG_SUFFIX}"))
+    Some(format!("{id}{suffix}"))
+}
+
+fn replace_privately(path: &Path, temporary: &Path, text: &str) -> bool {
+    // a file's mode is set only when it is created, so a temporary file left by a crash goes first
+    let _ = fs::remove_file(temporary);
+    let mut writing = private_file();
+    writing.write(true).create_new(true);
+    let Ok(mut file) = writing.open(temporary) else {
+        return false;
+    };
+    if file.write_all(text.as_bytes()).is_err() {
+        return false;
+    }
+    let renamed = fs::rename(temporary, path).is_ok();
+    if !renamed {
+        let _ = fs::remove_file(temporary);
+    }
+    renamed
 }
 
 // A log holds what the user typed to an agent and the commands it ran, so on Unix only their own account can read it.
@@ -110,10 +137,18 @@ impl FileStorage {
         FileStorage { directory }
     }
 
-    fn log_path(&self, terminal: &TerminalId) -> Option<PathBuf> {
-        let name = log_file_name(terminal)?;
+    fn activity_path(&self, terminal: &TerminalId, suffix: &str) -> Option<PathBuf> {
+        let name = activity_file_name(terminal, suffix)?;
         let folder = self.directory.join(ACTIVITY_DIRECTORY);
         Some(folder.join(name))
+    }
+
+    fn log_path(&self, terminal: &TerminalId) -> Option<PathBuf> {
+        self.activity_path(terminal, LOG_SUFFIX)
+    }
+
+    fn state_path(&self, terminal: &TerminalId) -> Option<PathBuf> {
+        self.activity_path(terminal, STATE_SUFFIX)
     }
 }
 
@@ -193,21 +228,7 @@ impl Storage for FileStorage {
             text.push_str(line);
             text.push('\n');
         }
-        // a file's mode is set only when it is created, so a temporary file left by a crash goes first
-        let _ = fs::remove_file(&temporary);
-        let mut writing = private_file();
-        writing.write(true).create_new(true);
-        let Ok(mut file) = writing.open(&temporary) else {
-            return false;
-        };
-        if file.write_all(text.as_bytes()).is_err() {
-            return false;
-        }
-        let renamed = fs::rename(&temporary, path).is_ok();
-        if !renamed {
-            let _ = fs::remove_file(&temporary);
-        }
-        renamed
+        replace_privately(&path, &temporary, &text)
     }
 
     fn delete_log(&mut self, terminal: &TerminalId) {
@@ -216,17 +237,42 @@ impl Storage for FileStorage {
         }
     }
 
-    fn logs(&self) -> Vec<TerminalId> {
+    fn read_state(&self, terminal: &TerminalId) -> Option<String> {
+        let path = self.state_path(terminal)?;
+        fs::read_to_string(path).ok()
+    }
+
+    fn write_state(&mut self, terminal: &TerminalId, text: &str) -> bool {
+        let Some(path) = self.state_path(terminal) else {
+            return false;
+        };
+        let folder = self.directory.join(ACTIVITY_DIRECTORY);
+        let _ = create_private_folder(&folder);
+        let temporary = path.with_extension(STATE_TEMPORARY_EXTENSION);
+        replace_privately(&path, &temporary, text)
+    }
+
+    fn delete_state(&mut self, terminal: &TerminalId) {
+        if let Some(path) = self.state_path(terminal) {
+            let _ = fs::remove_file(path);
+        }
+    }
+
+    fn activity_terminals(&self) -> Vec<TerminalId> {
         let folder = self.directory.join(ACTIVITY_DIRECTORY);
         let Ok(entries) = fs::read_dir(folder) else {
             return Vec::new();
         };
-        let names = entries.filter_map(|entry| {
-            let name = entry.ok()?.file_name().into_string().ok()?;
-            let id = name.strip_suffix(LOG_SUFFIX)?;
-            Some(TerminalId(id.to_string()))
-        });
-        names.collect()
+        let names = entries.filter_map(|entry| entry.ok()?.file_name().into_string().ok());
+        let mut terminals = BTreeSet::new();
+        for name in names {
+            for suffix in ACTIVITY_SUFFIXES {
+                if let Some(id) = name.strip_suffix(suffix) {
+                    terminals.insert(TerminalId(id.to_string()));
+                }
+            }
+        }
+        terminals.into_iter().collect()
     }
 }
 
@@ -303,7 +349,7 @@ mod tests {
         assert_eq!(modes(), (0o700, 0o600), "and still after a rewrite");
         assert!(storage.append_log(&terminal, "three"));
         assert_eq!(storage.read_log(&terminal), vec!["two", "three"]);
-        assert_eq!(storage.logs(), vec![terminal.clone()]);
+        assert_eq!(storage.activity_terminals(), vec![terminal.clone()]);
 
         // a crash can cut the last line short, even inside a character
         let mut torn = fs::read(&file).unwrap();
@@ -321,6 +367,40 @@ mod tests {
         assert!(!directory.path().join("escaped.jsonl").exists());
 
         storage.delete_log(&terminal);
-        assert!(storage.logs().is_empty());
+        assert!(storage.activity_terminals().is_empty());
+    }
+
+    #[test]
+    fn a_state_file_is_private_replaced_whole_and_listed_with_the_logs() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut storage = FileStorage::new(directory.path().to_path_buf());
+        let with_log = TerminalId("t1".into());
+        let state_only = TerminalId("t2".into());
+        let file = directory
+            .path()
+            .join(ACTIVITY_DIRECTORY)
+            .join("t2.state.json");
+
+        assert!(storage.append_log(&with_log, "one"));
+        assert!(storage.write_state(&with_log, r#"{"now":null}"#));
+        assert!(storage.write_state(&state_only, "first"));
+        assert!(storage.write_state(&state_only, "second"));
+        assert_eq!(storage.read_state(&state_only).as_deref(), Some("second"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "readable by the user's own account only");
+        }
+        assert_eq!(
+            storage.activity_terminals(),
+            vec![with_log.clone(), state_only.clone()],
+            "each terminal once, with a log or only a state file"
+        );
+
+        assert!(!storage.write_state(&TerminalId("../escaped".into()), "lost"));
+        storage.delete_state(&state_only);
+        assert_eq!(storage.read_state(&state_only), None);
+        assert_eq!(storage.activity_terminals(), vec![with_log]);
     }
 }

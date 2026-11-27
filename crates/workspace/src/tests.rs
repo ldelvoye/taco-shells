@@ -19,6 +19,7 @@ struct Disk {
     writes: Arc<Mutex<usize>>,
     failing: Arc<Mutex<bool>>,
     logs: Arc<Mutex<BTreeMap<TerminalId, Vec<String>>>>,
+    states: Arc<Mutex<BTreeMap<TerminalId, String>>>,
 }
 
 impl Disk {
@@ -86,9 +87,34 @@ impl Storage for Disk {
         self.logs.lock().unwrap().remove(terminal);
     }
 
-    fn logs(&self) -> Vec<TerminalId> {
+    fn read_state(&self, terminal: &TerminalId) -> Option<String> {
+        let states = self.states.lock().unwrap();
+        states.get(terminal).cloned()
+    }
+
+    fn write_state(&mut self, terminal: &TerminalId, text: &str) -> bool {
+        if *self.failing.lock().unwrap() {
+            return false;
+        }
+        let mut states = self.states.lock().unwrap();
+        states.insert(terminal.clone(), text.to_string());
+        true
+    }
+
+    fn delete_state(&mut self, terminal: &TerminalId) {
+        self.states.lock().unwrap().remove(terminal);
+    }
+
+    fn activity_terminals(&self) -> Vec<TerminalId> {
         let logs = self.logs.lock().unwrap();
-        logs.keys().cloned().collect()
+        let states = self.states.lock().unwrap();
+        let mut terminals: Vec<TerminalId> = logs.keys().cloned().collect();
+        for terminal in states.keys() {
+            if !terminals.contains(terminal) {
+                terminals.push(terminal.clone());
+            }
+        }
+        terminals
     }
 }
 
@@ -934,15 +960,117 @@ fn quitting_with_terminals_open_keeps_their_logs_and_closing_a_terminal_deletes_
 
     exited(&mut reopened, "t2");
     assert!(
-        !disk.logs().contains(&id("t2")),
+        !disk.activity_terminals().contains(&id("t2")),
         "a terminal that closes takes its log with it"
     );
-    assert!(disk.logs().contains(&id("t1")));
+    assert!(disk.activity_terminals().contains(&id("t1")));
 
     reopened.runtime_died("killed", 2_000);
     reopened.flush(3_000);
     let (mut after_crash, _) = launched(&disk);
     assert_eq!(logged(&mut after_crash, "t1"), vec!["kept through a quit"]);
+}
+
+fn now_set(workspace: &mut Workspace, terminal: &str, text: &str) -> Vec<Outbound> {
+    let tool = "mcp__plugin_taco-shells_activity__now";
+    let payload = serde_json::json!({ "tool_name": tool, "tool_input": { "text": text } });
+    let call = HookCall::AgentHook {
+        harness: claude(),
+        session_id: SESSION.into(),
+        event: "PostToolUse".into(),
+        payload: payload.to_string(),
+    };
+    hook(workspace, terminal, call, 0)
+}
+
+fn session_starts(workspace: &mut Workspace, terminal: &str, session_id: &str) -> Vec<Outbound> {
+    let call = HookCall::AgentStart {
+        harness: claude(),
+        session_id: session_id.into(),
+        cwd: "/work/tacos".into(),
+        has_conversation: false,
+    };
+    hook(workspace, terminal, call, 0)
+}
+
+/// The now line each board event carries, in order.
+fn now_lines(out: &[Outbound]) -> Vec<Option<String>> {
+    let boards = activity(out).into_iter().filter_map(|event| match event {
+        ActivityEvent::BoardChanged { board, .. } => Some(board.now),
+        ActivityEvent::Loaded { board, .. } => Some(board.now),
+        _ => None,
+    });
+    boards.collect()
+}
+
+fn watched_now(workspace: &mut Workspace, terminal: &str) -> Option<String> {
+    let watch = ActivityRequest::Watch {
+        terminal: Some(id(terminal)),
+    };
+    let out = workspace.activity(watch);
+    let mut lines = now_lines(&out);
+    lines.pop().flatten()
+}
+
+#[test]
+fn the_now_line_shows_for_its_own_session_through_a_compaction_and_a_relaunch() {
+    let disk = Disk::default();
+    let mut unreadable = disk.clone();
+    unreadable.write_state(&id("t1"), "not json");
+    let mut workspace = Workspace::new(options_on(&disk, 0));
+    workspace.start(0);
+    ask(
+        &mut workspace,
+        WorkspaceRequest::OpenTerminal { file: None },
+    );
+    session_starts(&mut workspace, "t1", SESSION);
+    assert_eq!(
+        watched_now(&mut workspace, "t1"),
+        None,
+        "an unreadable state file is an empty board"
+    );
+
+    let set = now_set(&mut workspace, "t1", "Reading the PTY code");
+    assert_eq!(
+        now_lines(&set),
+        vec![Some("Reading the PTY code".to_string())]
+    );
+    let replaced = now_set(&mut workspace, "t1", "Writing the plan");
+    assert_eq!(
+        now_lines(&replaced),
+        vec![Some("Writing the plan".to_string())]
+    );
+    let again = now_set(&mut workspace, "t1", "Writing the plan");
+    assert!(
+        now_lines(&again).is_empty(),
+        "the same line again sends nothing"
+    );
+    session_starts(&mut workspace, "t2", SESSION);
+    let unwatched = now_set(&mut workspace, "t2", "Elsewhere");
+    assert!(
+        activity(&unwatched).is_empty(),
+        "only the watched terminal's board goes out"
+    );
+    let compacted = session_starts(&mut workspace, "t1", SESSION);
+    assert!(now_lines(&compacted).is_empty(), "a compaction keeps it");
+
+    workspace.freeze();
+    exited(&mut workspace, "t1");
+    exited(&mut workspace, "t2");
+    workspace.flush(1_000);
+    let (mut reopened, _) = launched(&disk);
+    assert_eq!(
+        watched_now(&mut reopened, "t1"),
+        Some("Writing the plan".to_string())
+    );
+
+    let cleared = session_starts(&mut reopened, "t1", "223e4567-e89b-12d3-a456-426614174000");
+    assert_eq!(now_lines(&cleared), vec![None], "a new session hides it");
+    exited(&mut reopened, "t1");
+    assert!(
+        disk.read_state(&id("t1")).is_none(),
+        "a terminal that closes takes its state file with it"
+    );
 }
 
 #[test]
@@ -954,18 +1082,20 @@ fn a_log_whose_terminal_is_gone_at_launch_is_removed_once_the_restore_has_succee
     workspace.flush(1_000);
     let mut stray = disk.clone();
     stray.append_log(&id("closed-while-crashing"), "{}");
+    stray.write_state(&id("closed-while-crashing"), "{}");
+    stray.write_state(&id("only-a-state-file"), "{}");
 
     let unreadable = Disk::holding("not a save");
     let mut kept = unreadable.clone();
     kept.append_log(&id("t9"), "{}");
     launched(&unreadable);
     assert!(
-        unreadable.logs().contains(&id("t9")),
+        unreadable.activity_terminals().contains(&id("t9")),
         "no restore, so nothing is known to be gone"
     );
 
     launched(&disk);
-    assert_eq!(disk.logs(), vec![id("t1")]);
+    assert_eq!(disk.activity_terminals(), vec![id("t1")]);
 
     // with the restore turned off, no earlier terminal can come back, so none keeps its log
     let mut fresh = Workspace::new(Options {
@@ -973,5 +1103,5 @@ fn a_log_whose_terminal_is_gone_at_launch_is_removed_once_the_restore_has_succee
         ..options_on(&disk, 100)
     });
     fresh.start(0);
-    assert!(disk.logs().is_empty());
+    assert!(disk.activity_terminals().is_empty());
 }

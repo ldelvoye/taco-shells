@@ -26,6 +26,8 @@ const MAX_QUESTION_CHARACTERS: usize = 1000;
 const MAX_ENTRY_CHARACTERS: usize = 1000;
 // A prompt or a note keeps this many characters, then CUT_MARK.
 const MAX_WRITTEN_CHARACTERS: usize = 8_000;
+// The agent's line on what it is doing now is shown above the log, so it stays short.
+const MAX_NOW_CHARACTERS: usize = 300;
 const CUT_MARK: &str = "… (cut)";
 // The tool-name prefixes of the app's activity server, for the stable app and for Dev.
 const ACTIVITY_SERVERS: &[&str] = &[
@@ -230,18 +232,18 @@ fn summary_of(tool: &str, parsed: &Value) -> String {
     }
 }
 
-// Prose someone wrote (a prompt, a note): trimmed, none when blank, and ending in CUT_MARK when cut.
-fn written_at(parsed: &Value, pointer: &str) -> Option<String> {
+// Prose someone wrote (a prompt, a note, a now line): trimmed, none when blank, and ending in CUT_MARK when cut.
+fn written_at(parsed: &Value, pointer: &str, limit: usize) -> Option<String> {
     let text = parsed.pointer(pointer)?.as_str()?;
-    let kept = cut_to(text, MAX_WRITTEN_CHARACTERS + 1);
+    let kept = cut_to(text, limit + 1);
     if kept.is_empty() {
         return None;
     }
     let length = kept.chars().count();
-    if length <= MAX_WRITTEN_CHARACTERS {
+    if length <= limit {
         return Some(kept);
     }
-    let shortened: String = kept.chars().take(MAX_WRITTEN_CHARACTERS).collect();
+    let shortened: String = kept.chars().take(limit).collect();
     Some(format!("{shortened}{CUT_MARK}"))
 }
 
@@ -255,10 +257,13 @@ fn activity_tool(tool: &str) -> Option<&str> {
 fn activity_entry(name: &str, parsed: &Value) -> Option<EntryRead> {
     match name {
         "note" => {
-            let text = written_at(parsed, "/tool_input/text")?;
+            let text = written_at(parsed, "/tool_input/text", MAX_WRITTEN_CHARACTERS)?;
             Some(EntryRead::Note { text })
         }
-        // the other activity tools add no log entry
+        "now" => {
+            let text = written_at(parsed, "/tool_input/text", MAX_NOW_CHARACTERS)?;
+            Some(EntryRead::Now { text })
+        }
         _ => None,
     }
 }
@@ -267,7 +272,7 @@ fn entry_of(event: &str, payload: &str) -> Option<EntryRead> {
     let parsed: Value = serde_json::from_str(payload).ok()?;
     match event {
         "UserPromptSubmit" => {
-            let text = written_at(&parsed, "/prompt")?;
+            let text = written_at(&parsed, "/prompt", MAX_WRITTEN_CHARACTERS)?;
             let turn = text_at(&parsed, "/prompt_id");
             Some(EntryRead::Asked { text, turn })
         }
@@ -493,8 +498,21 @@ mod tests {
             text: "Found it".into(),
         };
         assert_eq!(entry("PostToolUse", note), Some(written));
-        let now = r#"{"tool_name":"mcp__plugin_taco-shells-dev_activity__now","tool_input":{"text":"Reading"}}"#;
-        assert_eq!(entry("PostToolUse", now), None);
+        let now = r#"{"tool_name":"mcp__plugin_taco-shells-dev_activity__now","tool_input":{"text":"Reading the PTY code"}}"#;
+        let line = EntryRead::Now {
+            text: "Reading the PTY code".into(),
+        };
+        assert_eq!(entry("PostToolUse", now), Some(line));
+        let long_now = format!(
+            r#"{{"tool_name":"mcp__plugin_taco-shells_activity__now","tool_input":{{"text":"{}"}}}}"#,
+            "n".repeat(MAX_NOW_CHARACTERS + 1)
+        );
+        let Some(EntryRead::Now { text }) = entry("PostToolUse", &long_now) else {
+            panic!("a long now line is read");
+        };
+        assert!(text.ends_with(CUT_MARK), "the now line is kept short");
+        let share = r#"{"tool_name":"mcp__plugin_taco-shells_activity__share","tool_input":{"kind":"other","title":"Plan","body":"x"}}"#;
+        assert_eq!(entry("PostToolUse", share), None);
         let someone_elses =
             r#"{"tool_name":"mcp__plugin_other_activity__note","tool_input":{"text":"x"}}"#;
         assert_eq!(
