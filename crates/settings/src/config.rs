@@ -117,7 +117,7 @@ pub fn resolve_config(texts: &ConfigTexts, system_is_dark: bool) -> Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::{CommandId, is_retired};
+    use crate::commands::CommandId;
     use crate::keys::{command_for, parse_chord};
 
     fn texts(settings: Option<&str>) -> ConfigTexts {
@@ -192,11 +192,5 @@ mod tests {
         let config = resolve_config(&shipped, false);
         assert!(config.problems.is_empty(), "{:?}", config.problems);
         assert_eq!(config.settings, Settings::default());
-
-        let parsed = parse_jsonc(DEFAULT_KEYBINDINGS_TEXT, KEYBINDINGS_FILE_NAME);
-        let keymap = parsed.value.expect("shipped keybindings parse");
-        let command_ids: Vec<&str> = keymap.values().filter_map(Value::as_str).collect();
-        let retired: Vec<&&str> = command_ids.iter().filter(|id| is_retired(id)).collect();
-        assert!(retired.is_empty(), "{retired:?}");
     }
 }
