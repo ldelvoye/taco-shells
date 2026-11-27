@@ -182,18 +182,12 @@ pub fn stop_output(answer: &StopAnswer) -> Option<String> {
     Some(output.to_string())
 }
 
-pub fn send_posts(
-    posts: &[Request],
-    mut send: impl FnMut(&Request) -> Result<(), PostError>,
-) -> usize {
-    let mut attempted = 0;
+pub fn send_posts(posts: &[Request], mut send: impl FnMut(&Request) -> Result<(), PostError>) {
     for next in posts {
-        attempted += 1;
         if send(next).is_err() {
             break;
         }
     }
-    attempted
 }
 
 #[cfg(test)]
@@ -298,22 +292,20 @@ mod tests {
             .collect();
 
         let mut sent = Vec::new();
-        let attempted = send_posts(&posts, |post| {
+        send_posts(&posts, |post| {
             sent.push(post.body.clone());
             Ok(())
         });
-        assert_eq!(attempted, 3);
         assert_eq!(sent, ["0", "1", "2"]);
 
         let mut sent = Vec::new();
-        let attempted = send_posts(&posts, |post| {
+        send_posts(&posts, |post| {
             sent.push(post.body.clone());
             if sent.len() == 2 {
-                return Err(PostError::Other);
+                return Err(PostError);
             }
             Ok(())
         });
-        assert_eq!(attempted, 2);
         assert_eq!(sent, ["0", "1"]);
     }
 
