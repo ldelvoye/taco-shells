@@ -50,10 +50,9 @@ mod tests {
 
     #[test]
     fn serves_only_interactive_runs_inside_its_own_app() {
-        let other_channel = if PLUGIN_NAME == "taco-shells" {
-            "taco-shells-dev"
-        } else {
-            "taco-shells"
+        let other_channel = match PLUGIN_NAME {
+            "taco-shells" => "taco-shells-dev",
+            _ => "taco-shells",
         };
 
         assert!(serves(&surroundings(Some(PLUGIN_NAME), None)));

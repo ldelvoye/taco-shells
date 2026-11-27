@@ -105,7 +105,8 @@ fn answer(method: &str, params: &Value, serving: bool) -> Result<Value, Failure>
 }
 
 fn initialize_result(params: &Value) -> Value {
-    let requested = params.get("protocolVersion").and_then(Value::as_str);
+    let requested_value = params.get("protocolVersion");
+    let requested = requested_value.and_then(Value::as_str);
     let version = match requested {
         Some(version) if SUPPORTED_PROTOCOL_VERSIONS.contains(&version) => version,
         _ => DEFAULT_PROTOCOL_VERSION,
@@ -123,12 +124,11 @@ fn initialize_result(params: &Value) -> Value {
 
 fn tools_list_result(serving: bool) -> Value {
     // Every session loads the plugin, so outside its own app's terminals it lists nothing.
-    if serving {
-        let listed = tools();
-        json!({"tools": listed})
-    } else {
-        json!({"tools": []})
+    if !serving {
+        return json!({"tools": []});
     }
+    let listed = tools();
+    json!({"tools": listed})
 }
 
 fn is_non_empty_string(value: Option<&Value>) -> bool {
@@ -155,13 +155,20 @@ fn share_problem(arguments: Option<&Value>) -> Option<String> {
         return Some(String::from("share needs a title"));
     }
 
-    for field in ["target", "body"] {
-        let value = arguments.and_then(|arguments| arguments.get(field));
+    let target = arguments.and_then(|arguments| arguments.get("target"));
+    let body = arguments.and_then(|arguments| arguments.get("body"));
+    for (field, value) in [("target", target), ("body", body)] {
         if let Some(value) = value
             && !value.is_string()
         {
             return Some(format!("share {field} must be a string"));
         }
+    }
+
+    let has_target = is_non_empty_string(target);
+    let has_body = is_non_empty_string(body);
+    if !has_target && !has_body {
+        return Some(String::from("share needs a target or a body"));
     }
     None
 }
@@ -171,10 +178,9 @@ fn argument_problem(name: &str, arguments: Option<&Value>) -> Option<String> {
         NOTE | NOW => {
             let text = arguments.and_then(|arguments| arguments.get("text"));
             if is_non_empty_string(text) {
-                None
-            } else {
-                Some(format!("{name} needs a text"))
+                return None;
             }
+            Some(format!("{name} needs a text"))
         }
         SHARE => share_problem(arguments),
         _ => None,
@@ -182,7 +188,8 @@ fn argument_problem(name: &str, arguments: Option<&Value>) -> Option<String> {
 }
 
 fn call_result(params: &Value, serving: bool) -> Result<Value, Failure> {
-    let requested = params.get("name").and_then(Value::as_str);
+    let requested_value = params.get("name");
+    let requested = requested_value.and_then(Value::as_str);
     let Some(name) = requested else {
         return Err(Failure {
             code: INVALID_PARAMS,
@@ -239,9 +246,12 @@ mod tests {
         let mut output = Vec::new();
         serve(input, &mut output, serving).unwrap();
         let text = String::from_utf8(output).unwrap();
-        text.lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect()
+        let mut replies = Vec::new();
+        for line in text.lines() {
+            let reply = serde_json::from_str(line).unwrap();
+            replies.push(reply);
+        }
+        replies
     }
 
     #[test]
@@ -254,16 +264,29 @@ mod tests {
         assert_eq!(replies[1]["error"]["code"], -32700);
         assert_eq!(replies[1]["id"], Value::Null);
         let listed = replies[2]["result"]["tools"].as_array().unwrap();
-        let names: Vec<&str> = listed
-            .iter()
-            .map(|tool| tool["name"].as_str().unwrap())
-            .collect();
+        let mut names: Vec<&str> = Vec::new();
+        for tool in listed {
+            let name = tool["name"].as_str().unwrap();
+            names.push(name);
+        }
         assert_eq!(names, TOOL_NAMES);
         assert_eq!(replies[3]["result"]["content"][0]["text"], "Noted.");
         assert_eq!(replies[4]["error"]["code"], -32602);
         assert_eq!(replies[5]["result"]["protocolVersion"], "2025-06-18");
         assert_eq!(replies[6]["id"], 7);
         assert_eq!(replies[6]["result"]["isError"], true);
+    }
+
+    #[test]
+    fn a_share_needs_something_to_open() {
+        let title_only = json!({"kind": "document", "title": "Plan"});
+        let with_target = json!({"kind": "document", "title": "Plan", "target": "PLAN.md"});
+        let with_body = json!({"kind": "other", "title": "Summary", "body": "Done."});
+
+        let refused = share_problem(Some(&title_only));
+        assert_eq!(refused.as_deref(), Some("share needs a target or a body"));
+        assert_eq!(share_problem(Some(&with_target)), None);
+        assert_eq!(share_problem(Some(&with_body)), None);
     }
 
     #[test]

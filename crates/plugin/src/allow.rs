@@ -5,7 +5,8 @@ use crate::tools::TOOL_NAMES;
 
 pub fn allow_answer(hook_input: &str) -> Option<String> {
     let parsed = serde_json::from_str::<Value>(hook_input).ok()?;
-    let tool_name = parsed.get("tool_name")?.as_str()?;
+    let tool_value = parsed.get("tool_name")?;
+    let tool_name = tool_value.as_str()?;
 
     let prefix = tool_name_prefix();
     let is_approved = TOOL_NAMES.iter().any(|name| {
@@ -37,10 +38,9 @@ mod tests {
 
     #[test]
     fn allows_only_this_channels_activity_tools() {
-        let other_name = if PLUGIN_NAME == "taco-shells" {
-            "taco-shells-dev"
-        } else {
-            "taco-shells"
+        let other_name = match PLUGIN_NAME {
+            "taco-shells" => "taco-shells-dev",
+            _ => "taco-shells",
         };
         let own_tool = format!("mcp__plugin_{PLUGIN_NAME}_activity__note");
         let other_tool = format!("mcp__plugin_{other_name}_activity__note");
