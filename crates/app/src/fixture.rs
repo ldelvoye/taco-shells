@@ -470,13 +470,13 @@ fn full_log() -> Vec<ActivityEntry> {
     log.entries
 }
 
-/// A file of this checkout by its absolute path, so a fixture can open something real.
 fn checkout_file(relative: &str) -> String {
     let joined = Path::new(CHECKOUT).join(relative);
-    let mut path = joined.clone();
-    if let Ok(resolved) = fs::canonicalize(&joined) {
-        path = resolved;
-    }
+    let resolved = fs::canonicalize(&joined);
+    let path = match resolved {
+        Ok(resolved) => resolved,
+        Err(_) => joined,
+    };
     path.to_string_lossy().into_owned()
 }
 
