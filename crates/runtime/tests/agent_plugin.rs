@@ -46,7 +46,6 @@ fn a_new_shell_loads_the_apps_plugin_beside_the_inherited_ones_only_while_the_sw
     assert_eq!(only_ours_off, "unset");
 }
 
-/// What a newly started shell reports for the variable.
 fn reported(shells: &mut PtyShells, received: &Receiver<Input>, name: &str) -> String {
     let id = TerminalId(name.into());
     shells.start(&id, None, SIZE);
