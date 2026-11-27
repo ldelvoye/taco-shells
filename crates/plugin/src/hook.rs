@@ -17,8 +17,8 @@ const STOP_ROUTE: &str = "/agent-session/stop";
 const HARNESS: &str = "claude";
 const TOKEN_FILE_NAME: &str = "focus-token";
 const FAILURE_EVENT: &str = "PostToolUseFailure";
-// One character over the workspace's own cap, so a text cut here still shows as cut.
-const STRING_CAP: usize = 8001;
+// One character over the largest limit the readers keep (a shared body), so a text cut here still shows as cut.
+const STRING_CAP: usize = 20_001;
 const COMMON_KEYS: [&str; 6] = [
     "hook_event_name",
     "session_id",
@@ -518,12 +518,15 @@ mod tests {
             json!({"questions": [{"question": "First?"}]})
         );
 
-        let long_prompt = "é".repeat(9000);
+        let long_prompt = "é".repeat(STRING_CAP + 500);
         let prompt = reduced_payload(&json!({
             "hook_event_name": "UserPromptSubmit",
             "prompt": long_prompt,
         }));
-        assert_eq!(prompt["prompt"].as_str().unwrap().chars().count(), 8001);
+        assert_eq!(
+            prompt["prompt"].as_str().unwrap().chars().count(),
+            STRING_CAP
+        );
 
         let failure = reduced_payload(&json!({
             "hook_event_name": "PostToolUseFailure",
