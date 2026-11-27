@@ -3,6 +3,7 @@
 mod ports;
 mod runtime_client;
 mod services_host;
+mod supervised;
 pub mod wiring;
 mod workspace_host;
 

@@ -22,11 +22,13 @@ use taco_settings::{Config, KeymapChange, SettingChange};
 
 use crate::ports::{ServicesOutput, WindowOutput, WindowSender};
 use crate::runtime_client::RuntimeClient;
+use crate::supervised::spawn_supervised;
 use crate::workspace_host::WorkspaceHost;
 
 const PORTS_TAKEN: &str = "Every focus port is taken, so agents' hooks cannot reach this app.";
 const ROUTE_NOT_STARTED: &str =
     "Agents' hooks cannot reach the terminals: the thread that routes them did not start.";
+const ROUTE_STOPPED: &str = "Agents' hooks stopped reaching the terminals after an internal error. Quit and reopen Taco Shells.";
 // A runtime that is alive but never answers must not hold a hook, a setup check or quitting for ever.
 const RUNTIME_ANSWER_WAIT: Duration = Duration::from_secs(2);
 const FORWARD_WAIT: Duration = Duration::from_secs(1);
@@ -324,19 +326,18 @@ fn start_hook_route(
         ask_workspace(question, terminal, notes_on, &asking);
     };
     let is_on = move || activity_on.load(Ordering::SeqCst);
-    let spawned = thread::Builder::new()
-        .name("hook-route".into())
-        .spawn(move || {
-            route_hooks(
-                messages,
-                RUNTIME_ANSWER_WAIT,
-                taco_protocol::deadlines::QUESTION_PLACE,
-                resolve,
-                deliver,
-                ask,
-                is_on,
-            )
-        });
+    let route = move || {
+        route_hooks(
+            messages,
+            RUNTIME_ANSWER_WAIT,
+            taco_protocol::deadlines::QUESTION_PLACE,
+            resolve,
+            deliver,
+            ask,
+            is_on,
+        )
+    };
+    let spawned = spawn_supervised("hook-route", ROUTE_STOPPED, window.clone(), route);
     if spawned.is_err() {
         let problem = ROUTE_NOT_STARTED.to_string();
         send_to_window(window, ServicesOutput::Problem(problem));
