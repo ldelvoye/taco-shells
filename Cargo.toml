@@ -29,6 +29,7 @@ postcard = { version = "1", default-features = false, features = ["use-std"] }
 notify = "9"
 tempfile = "3"
 ureq = "3"
+sha2 = "0.10"
 plist = "1"
 bindgen = "0.72"
 image = { version = "0.25", default-features = false, features = ["png"] }
