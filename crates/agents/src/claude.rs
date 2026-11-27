@@ -87,6 +87,8 @@ const SUMMARY_FIELDS: &[(&str, &str)] = &[
     ("WebSearch", "/tool_input/query"),
     ("Task", "/tool_input/description"),
     ("Agent", "/tool_input/description"),
+    ("Skill", "/tool_input/skill"),
+    ("ToolSearch", "/tool_input/query"),
 ];
 
 const UUID_LENGTH: usize = 36;
