@@ -24,5 +24,8 @@
   "shellRowName": "folder",
 
   // Let the app offer and keep up the hooks coding agents need. Turn off to wire them by hand.
-  "manageAgentHooks": true
+  "manageAgentHooks": true,
+
+  // Give Claude Code the Agent Activity panel's tools and hooks in this app's terminals. Set up turns it on.
+  "agentActivity": false
 }

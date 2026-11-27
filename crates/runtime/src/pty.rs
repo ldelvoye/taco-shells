@@ -1,8 +1,9 @@
 use std::collections::HashMap;
-use std::ffi::CStr;
+use std::ffi::{CStr, OsStr, OsString};
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -27,6 +28,8 @@ const SIGNAL_EXIT_BASE: i32 = 128;
 const UNKNOWN_EXIT_CODE: i32 = 1;
 /// The most read after a shell has exited, before its exit is reported anyway.
 const DRAIN_BYTES: usize = 1024 * 1024;
+/// The plugin folders Claude Code loads for one session, joined with `:`.
+const PLUGIN_DIRECTORIES_VARIABLE: &str = "CLAUDE_CODE_PLUGIN_DIRS";
 
 /// The program each terminal runs, and where it starts when no directory is given or the one given is not a directory.
 pub struct ShellProgram {
@@ -44,6 +47,8 @@ pub struct ShellContext {
     pub app: String,
     /// The app's `focus-port` file.
     pub port_file: PathBuf,
+    /// The app's agent plugin, which shells load while the switch is on.
+    pub plugin_directory: PathBuf,
 }
 
 struct Shell {
@@ -60,6 +65,7 @@ pub struct PtyShells {
     inputs: Sender<Input>,
     budgets: Arc<Budgets>,
     shells: HashMap<TerminalId, Shell>,
+    agent_plugin: bool,
 }
 
 impl ShellProgram {
@@ -108,6 +114,7 @@ impl PtyShells {
             inputs,
             budgets,
             shells: HashMap::new(),
+            agent_plugin: false,
         }
     }
 
@@ -139,6 +146,14 @@ impl PtyShells {
         // Overrides what the runtime inherited: a Dev app opened from a stable app's terminal would otherwise pass on the stable app's.
         command.env(APP_VARIABLE, &self.program.context.app);
         command.env(PORT_FILE_VARIABLE, &self.program.context.port_file);
+        let inherited_plugins = std::env::var_os(PLUGIN_DIRECTORIES_VARIABLE);
+        let own_plugin = &self.program.context.plugin_directory;
+        let plugins =
+            plugin_directories(inherited_plugins.as_deref(), own_plugin, self.agent_plugin);
+        match plugins {
+            Some(plugins) => command.env(PLUGIN_DIRECTORIES_VARIABLE, plugins),
+            None => command.env_remove(PLUGIN_DIRECTORIES_VARIABLE),
+        };
         let shell_side = slave.try_clone()?;
         command.stdin(Stdio::from(slave.try_clone()?));
         command.stdout(Stdio::from(slave.try_clone()?));
@@ -339,6 +354,33 @@ impl Shells for PtyShells {
         let shell = self.shells.get(id)?;
         Some(shell.pid)
     }
+
+    fn set_agent_plugin(&mut self, on: bool) {
+        self.agent_plugin = on;
+    }
+}
+
+/// The plugin folders a new shell gets: the inherited ones with the app's own added when `on`, or taken out when off,
+/// so an app opened from its own terminal can still switch it off. None when no folder is left.
+fn plugin_directories(inherited: Option<&OsStr>, own: &Path, on: bool) -> Option<OsString> {
+    let own = own.as_os_str().as_bytes();
+    let mut kept: Vec<&[u8]> = Vec::new();
+    if let Some(inherited) = inherited {
+        let entries = inherited.as_bytes().split(|byte| *byte == b':');
+        for entry in entries {
+            if !entry.is_empty() && entry != own {
+                kept.push(entry);
+            }
+        }
+    }
+    if on {
+        kept.push(own);
+    }
+    if kept.is_empty() {
+        return None;
+    }
+    let joined = kept.join(&b':');
+    Some(OsString::from_vec(joined))
 }
 
 /// One shell's output, read in order and then its exit, so the exit always follows the last output.
@@ -578,6 +620,38 @@ mod tests {
         ShellContext {
             app: "taco-shells-test".into(),
             port_file: "/nonexistent/focus-port".into(),
+            plugin_directory: "/nonexistent/claude-plugin".into(),
+        }
+    }
+
+    #[test]
+    fn the_apps_plugin_is_added_to_the_inherited_ones_when_on_and_only_it_is_taken_out_when_off() {
+        let own = Path::new("/ours/claude-plugin");
+        let cases: [(Option<&str>, bool, Option<&str>); 9] = [
+            (None, false, None),
+            (Some("/theirs"), false, Some("/theirs")),
+            (None, true, Some("/ours/claude-plugin")),
+            (Some(""), true, Some("/ours/claude-plugin")),
+            (Some("/theirs"), true, Some("/theirs:/ours/claude-plugin")),
+            (
+                Some("/ours/claude-plugin:/theirs"),
+                true,
+                Some("/theirs:/ours/claude-plugin"),
+            ),
+            (Some("/ours/claude-plugin"), false, None),
+            (Some("/a:/ours/claude-plugin:/b"), false, Some("/a:/b")),
+            // Only the exact folder is ours.
+            (
+                Some("/ours/claude-plugin-old"),
+                false,
+                Some("/ours/claude-plugin-old"),
+            ),
+        ];
+        for (inherited, on, expected) in cases {
+            let inherited = inherited.map(OsStr::new);
+            let given = plugin_directories(inherited, own, on);
+            let expected = expected.map(OsString::from);
+            assert_eq!(given, expected, "inherited {inherited:?}, on {on}");
         }
     }
 

@@ -8,6 +8,7 @@ use taco_settings::{ConfigTexts, DEFAULT_KEYBINDINGS_TEXT, DEFAULT_SETTINGS_TEXT
 const SETTINGS_FILE: &str = "settings.json";
 const KEYBINDINGS_FILE: &str = "keybindings.json";
 const FOCUS_PORT_FILE: &str = "focus-port";
+const PLUGIN_DIRECTORY: &str = "claude-plugin";
 
 pub fn config_file_path(directory: &Path, which: ConfigFile) -> PathBuf {
     let file_name = match which {
@@ -19,6 +20,11 @@ pub fn config_file_path(directory: &Path, which: ConfigFile) -> PathBuf {
 
 pub fn focus_port_path(directory: &Path) -> PathBuf {
     directory.join(FOCUS_PORT_FILE)
+}
+
+/// The app's agent plugin, which its shells load while Agent Activity is on.
+pub fn plugin_directory_path(directory: &Path) -> PathBuf {
+    directory.join(PLUGIN_DIRECTORY)
 }
 
 fn read_config_file(path: &Path) -> Option<String> {

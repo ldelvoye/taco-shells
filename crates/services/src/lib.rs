@@ -31,7 +31,8 @@ pub use agent_setups::{
     AgentSetupsHost,
 };
 pub use config_files::{
-    config_file_path, focus_port_path, read_config_texts, seed_config_files, unreadable_problems,
+    config_file_path, focus_port_path, plugin_directory_path, read_config_texts, seed_config_files,
+    unreadable_problems,
 };
 pub use config_store::ConfigStore;
 pub use config_writer::{ConfigChange, ConfigWriter, Refusal};

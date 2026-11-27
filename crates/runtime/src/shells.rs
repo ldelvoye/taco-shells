@@ -21,4 +21,6 @@ pub trait Shells {
     /// The command lines in the terminal's foreground process group.
     fn foreground_commands(&self, id: &TerminalId) -> Vec<String>;
     fn shell_pid(&self, id: &TerminalId) -> Option<u32>;
+    /// Whether shells started from now on are told to load the app's agent plugin.
+    fn set_agent_plugin(&mut self, on: bool);
 }
