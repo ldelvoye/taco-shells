@@ -24,6 +24,7 @@ mod row_name;
 pub mod runtime_client;
 pub mod services_host;
 mod settings_page;
+mod shared_view;
 mod shell;
 mod shortcuts_page;
 mod slot;

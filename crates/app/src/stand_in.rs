@@ -32,6 +32,8 @@ const SET_UP_TEXT: &str = "Claude Code is set up. Its activity shows here from i
 pub struct StandInActivity {
     pub logs: BTreeMap<TerminalId, Vec<ActivityEntry>>,
     pub boards: BTreeMap<TerminalId, Board>,
+    /// The body of each shared text, by the thing's id.
+    pub bodies: BTreeMap<u64, String>,
     /// How many entries one page of a log holds.
     pub page: usize,
 }
@@ -245,11 +247,14 @@ impl WorkspacePort for StandIn {
                     complete,
                 }
             }
-            ActivityRequest::Body { terminal, thing } => ActivityEvent::Body {
-                terminal,
-                thing,
-                body: None,
-            },
+            ActivityRequest::Body { terminal, thing } => {
+                let body = self.activity.bodies.get(&thing).cloned();
+                ActivityEvent::Body {
+                    terminal,
+                    thing,
+                    body,
+                }
+            }
         };
         self.publish(WindowOutput::Activity(event));
     }
